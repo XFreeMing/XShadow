@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Goal, GoalPlanGeneration } from "@multica/core/types";
+import type { Goal, GoalPlanEdge, GoalPlanGeneration } from "@multica/core/types";
 import { goalKeys, goalPlanOptions, useSaveGoalPlan } from "@multica/core/goals";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -11,7 +11,7 @@ import {
   memberListOptions,
   squadListOptions,
 } from "@multica/core/workspace/queries";
-import { ApiError } from "@multica/core/api";
+import { ApiError, errorCode } from "@multica/core/api";
 import { CircleAlert } from "@multica/ui/icons";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -24,6 +24,7 @@ import {
   isGenerationProjectConflict,
   mergeCandidate,
   planConflictRevision,
+  planEdgeKey,
   validatePlanDraft,
   type PlanDraft,
   type PlanDraftContent,
@@ -64,8 +65,14 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
   const [draft, setDraft] = useState<PlanDraft | null>(null);
+  // Which project the local draft was read from and edited against. A goal can
+  // move projects; its old draft must never be submitted as the new project's
+  // plan, even when both plans happen to be at revision 0.
+  const [draftProjectId, setDraftProjectId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [editedItemIds, setEditedItemIds] = useState<ReadonlySet<string>>(new Set());
+  const [removedItemIds, setRemovedItemIds] = useState<ReadonlySet<string>>(new Set());
+  const [removedEdgeKeys, setRemovedEdgeKeys] = useState<ReadonlySet<string>>(new Set());
   const [conflictRevision, setConflictRevision] = useState<number | null>(null);
   const [pendingGenerationId, setPendingGenerationId] = useState<string | null>(null);
   const [projectConflictNotice, setProjectConflictNotice] = useState(false);
@@ -80,6 +87,15 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     if (!plan) return;
     if (!draft) {
       setDraft(draftFromPlan(plan));
+      setDraftProjectId(plan.project_id);
+      return;
+    }
+    // A different project's plan is a different plan, even at the same
+    // revision: hold the old draft and require an explicit reload.
+    if (draftProjectId !== plan.project_id) {
+      setProjectConflictNotice(true);
+      setConflictRevision(null);
+      setPendingGenerationId(null);
       return;
     }
     if (plan.revision === draft.revision) return;
@@ -90,9 +106,21 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
       return;
     }
     setConflictRevision(plan.revision);
-  }, [plan, draft, dirty, projectConflictNotice]);
+  }, [plan, draft, draftProjectId, dirty, projectConflictNotice]);
+
+  // The goal prop can move to another project before the plan refetch lands.
+  // Isolate the old draft immediately rather than waiting for the new plan,
+  // which may still be cached from the previous project.
+  useEffect(() => {
+    if (!draft) return;
+    if (draftProjectId === goal.project_id) return;
+    setProjectConflictNotice(true);
+    setConflictRevision(null);
+    setPendingGenerationId(null);
+  }, [goal.project_id, draft, draftProjectId]);
 
   const planRevision = plan?.revision ?? 0;
+  const draftIsCurrentProject = draft === null || draftProjectId === goal.project_id;
 
   const handleContentChange = (next: PlanContent) => {
     setDraft((current) =>
@@ -108,6 +136,26 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
       if (current.has(itemId)) return current;
       const next = new Set(current);
       next.add(itemId);
+      return next;
+    });
+  };
+
+  // Deletions are user decisions a late candidate must not undo.
+  const handleItemRemoved = (itemId: string) => {
+    setRemovedItemIds((current) => {
+      if (current.has(itemId)) return current;
+      const next = new Set(current);
+      next.add(itemId);
+      return next;
+    });
+  };
+
+  const handleEdgeRemoved = (edge: GoalPlanEdge) => {
+    const key = planEdgeKey(edge);
+    setRemovedEdgeKeys((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
       return next;
     });
   };
@@ -129,8 +177,11 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
         },
       });
       setDraft(draftFromPlan(saved));
+      setDraftProjectId(saved.project_id);
       setDirty(false);
       setEditedItemIds(new Set());
+      setRemovedItemIds(new Set());
+      setRemovedEdgeKeys(new Set());
       setConflictRevision(null);
       setPendingGenerationId(null);
       setSaveError(null);
@@ -154,13 +205,36 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
         void planQuery.refetch();
         return "revision_conflict";
       }
+      // Server-side refusals of an apply are distinct outcomes the user can
+      // act on; the raw English code message would not read as UI copy.
+      const code = errorCode(err);
+      if (code === "generation_not_ready" || code === "generation_already_applied") {
+        setPendingGenerationId(null);
+        setSaveError(
+          t(($) =>
+            code === "generation_not_ready"
+              ? $.plan.generation_not_ready
+              : $.plan.generation_already_applied,
+          ),
+        );
+        return "failed";
+      }
+      // A refused write can mean this viewer lost the goal or its project.
+      // Re-read both before showing the raw failure; the section hides itself
+      // if the plan read is terminated, instead of keeping a cached editor.
+      if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+        void queryClient.invalidateQueries({ queryKey: goalKeys.detail(wsId, goal.id) });
+        void planQuery.refetch();
+      }
       setSaveError(saveFailureMessage(err, t(($) => $.plan.save_failed)));
       return "failed";
     }
   };
 
   const handleSave = () => {
-    if (!draft || conflictRevision !== null || projectConflictNotice) return;
+    if (!draft || !draftIsCurrentProject || conflictRevision !== null || projectConflictNotice) {
+      return;
+    }
     const issue = validatePlanDraft(draft);
     if (issue) {
       setValidationIssue(issue);
@@ -182,34 +256,45 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   const handleLoadLatest = useCallback(async (): Promise<boolean> => {
     const result = await planQuery.refetch();
     void queryClient.invalidateQueries({ queryKey: goalKeys.detail(wsId, goal.id) });
-    if (!result.data) {
+    // A cached payload from the old project is not a successful reload, and
+    // nothing is cleared until the current project's plan is in hand.
+    if (result.isError || !result.data || result.data.project_id !== goal.project_id) {
       setSaveError(t(($) => $.plan.load_failed));
       return false;
     }
     setDraft(draftFromPlan(result.data));
+    setDraftProjectId(result.data.project_id);
     setDirty(false);
     setEditedItemIds(new Set());
+    setRemovedItemIds(new Set());
+    setRemovedEdgeKeys(new Set());
     setConflictRevision(null);
     setPendingGenerationId(null);
     setProjectConflictNotice(false);
     setValidationIssue(null);
     setSaveError(null);
     return true;
-  }, [planQuery, queryClient, wsId, goal.id, t]);
+  }, [planQuery, queryClient, wsId, goal.id, goal.project_id, t]);
 
   const handleApplyCandidate = async (
     generation: GoalPlanGeneration,
   ): Promise<ApplyCandidateOutcome> => {
     if (!draft || !generation.candidate) return "failed";
-    const merged = mergeCandidate(draft, generation.candidate, editedItemIds);
+    // A revision conflict is an unresolved choice between two saved versions.
+    // Applying a candidate must not count as the user choosing to overwrite
+    // the other one; the banner's explicit action stays the only way.
+    if (conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject) {
+      return "failed";
+    }
+    const merged = mergeCandidate(draft, generation.candidate, editedItemIds, {
+      itemIds: removedItemIds,
+      edgeKeys: removedEdgeKeys,
+    });
     setDraft((current) => (current ? { ...current, ...merged } : current));
     setDirty(true);
     setPendingGenerationId(generation.id);
     setValidationIssue(null);
-    // Applying a candidate is an explicit user action, so it may compare
-    // against a revision the user already chose to overwrite in the banner.
-    const expectedRevision = conflictRevision ?? planRevision;
-    const outcome = await persist(merged, expectedRevision, generation.id);
+    const outcome = await persist(merged, planRevision, generation.id);
     if (outcome === "saved") return "applied";
     if (outcome === "generation_project_conflict") return "conflict";
     return "failed";
@@ -219,6 +304,14 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     setProjectConflictNotice(true);
     setPendingGenerationId(null);
     setConflictRevision(null);
+    void queryClient.invalidateQueries({ queryKey: goalKeys.detail(wsId, goal.id) });
+    void planQuery.refetch();
+  };
+
+  // A refused generation read/write is revalidated against the goal and plan;
+  // a real permission loss then hides the section instead of exposing cached
+  // payloads. A missing agent alone is not a reason to declare the goal gone.
+  const handleRunUnavailable = () => {
     void queryClient.invalidateQueries({ queryKey: goalKeys.detail(wsId, goal.id) });
     void planQuery.refetch();
   };
@@ -287,6 +380,7 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
           onClick={handleSave}
           disabled={
             !draft ||
+            !draftIsCurrentProject ||
             savePlan.isPending ||
             conflictRevision !== null ||
             projectConflictNotice
@@ -407,16 +501,18 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
         planRevision={planRevision}
         dirty={dirty}
         generationNonce={generationNonce}
+        applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
         onApplyCandidate={handleApplyCandidate}
         onProjectConflict={handleProjectConflict}
         onRevisionConflict={handleStartRevisionConflict}
+        onUnavailable={handleRunUnavailable}
         onReloadPlan={async () => {
           await handleLoadLatest();
         }}
         onStartNewGeneration={handleStartNewGeneration}
       />
 
-      {draft ? (
+      {draft && draftIsCurrentProject && !projectConflictNotice ? (
         <>
           <GoalPlanEditor
             goal={goal}
@@ -424,6 +520,8 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
             edges={draft.edges}
             onChange={handleContentChange}
             onItemEdited={handleItemEdited}
+            onItemRemoved={handleItemRemoved}
+            onEdgeRemoved={handleEdgeRemoved}
             ownerLabel={ownerLabel}
           />
           {Object.keys(draft.context_snapshot).length > 0 ? (

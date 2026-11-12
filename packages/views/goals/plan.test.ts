@@ -14,6 +14,7 @@ import {
   isProjectConflict,
   mergeCandidate,
   planConflictRevision,
+  planEdgeKey,
   readActualBasis,
   readInputContext,
   validatePlanDraft,
@@ -111,6 +112,52 @@ describe("mergeCandidate", () => {
       context_snapshot: {},
     });
     expect(merged.edges).toEqual([edge("b", "a", "candidate reason")]);
+  });
+
+  it("does not resurrect a node or dependency the user deleted", () => {
+    const draft = {
+      items: [item("a"), item("b")],
+      edges: [],
+      context_snapshot: {},
+    };
+    const removedEdge = edge("b", "a", "candidate reason");
+    const merged = mergeCandidate(
+      draft,
+      {
+        items: [item("a"), item("b"), item("deleted")],
+        edges: [removedEdge, edge("deleted", "a")],
+        context_snapshot: {},
+      },
+      new Set(),
+      {
+        itemIds: new Set(["deleted"]),
+        edgeKeys: new Set([planEdgeKey(removedEdge)]),
+      },
+    );
+
+    expect(merged.items.map((entry) => entry.id)).toEqual(["a", "b"]);
+    expect(merged.edges).toEqual([]);
+  });
+
+  it("still adds an untouched candidate node and dependency", () => {
+    const draft = {
+      items: [item("a")],
+      edges: [],
+      context_snapshot: {},
+    };
+    const merged = mergeCandidate(
+      draft,
+      {
+        items: [item("a"), item("new")],
+        edges: [edge("new", "a")],
+        context_snapshot: {},
+      },
+      new Set(),
+      { itemIds: new Set(), edgeKeys: new Set() },
+    );
+
+    expect(merged.items.map((entry) => entry.id)).toEqual(["a", "new"]);
+    expect(merged.edges).toEqual([edge("new", "a")]);
   });
 });
 

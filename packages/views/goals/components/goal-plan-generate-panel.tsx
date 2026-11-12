@@ -37,6 +37,7 @@ import {
 import { Spinner } from "@multica/ui/components/ui/spinner";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useT } from "../../i18n";
+import { isGoalUnavailableError } from "../status";
 import {
   isCandidateUsable,
   isGenerationProjectConflict,
@@ -68,9 +69,11 @@ export function GoalPlanGenerationPanel({
   planRevision,
   dirty,
   generationNonce,
+  applyBlocked,
   onApplyCandidate,
   onProjectConflict,
   onRevisionConflict,
+  onUnavailable,
   onReloadPlan,
   onStartNewGeneration,
 }: {
@@ -78,9 +81,11 @@ export function GoalPlanGenerationPanel({
   planRevision: number;
   dirty: boolean;
   generationNonce: number;
+  applyBlocked: boolean;
   onApplyCandidate: (generation: GoalPlanGeneration) => Promise<ApplyCandidateOutcome>;
   onProjectConflict: () => void;
   onRevisionConflict: (revision: number | null) => void;
+  onUnavailable: () => void;
   onReloadPlan: () => Promise<void>;
   onStartNewGeneration: () => Promise<void>;
 }) {
@@ -94,9 +99,18 @@ export function GoalPlanGenerationPanel({
   const [agentId, setAgentId] = useState("");
   const [generationId, setGenerationId] = useState<string | null>(null);
   const [projectConflict, setProjectConflict] = useState(false);
+  const [runUnavailable, setRunUnavailable] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const requestKeyRef = useRef<string | null>(null);
+  // The body that belongs to the stored request_key. A retry must replay the
+  // original request, not whatever the form happens to say later: the server
+  // resolves a key to the run it may already have created.
+  const requestBodyRef = useRef<{
+    intent: string;
+    agentId: string;
+    expectedRevision: number;
+  } | null>(null);
   const handledNonceRef = useRef(0);
 
   const activeAgents = useMemo(
@@ -113,11 +127,41 @@ export function GoalPlanGenerationPanel({
   const generationQuery = useQuery(
     goalPlanGenerationOptions(wsId, goal.id, generationId),
   );
+  // A terminal read refusal means this viewer can no longer read the run. A
+  // cached candidate and its basis must not stay on screen just because the
+  // Query cache still holds them.
+  const generationUnavailable =
+    generationQuery.isError && isGoalUnavailableError(generationQuery.error);
   const generation =
-    generationId && generationQuery.data?.id ? generationQuery.data : null;
+    generationId && !generationUnavailable && generationQuery.data?.id
+      ? generationQuery.data
+      : null;
   const pending = generation ? isGoalPlanGenerationPending(generation.state) : false;
   const terminal = generation ? isGoalPlanGenerationTerminal(generation.state) : false;
   const starting = createGeneration.isPending;
+
+  useEffect(() => {
+    if (!generationQuery.isError) return;
+    if (!isGoalUnavailableError(generationQuery.error)) return;
+    if (!generationId) return;
+    queryClient.removeQueries({
+      queryKey: goalKeys.planGeneration(wsId, goal.id, generationId),
+    });
+    setGenerationId(null);
+    setConfirmOpen(false);
+    setRunUnavailable(true);
+    // Re-read the goal and plan; if the goal is truly gone the section stops
+    // rendering instead of leaving a cached editor behind.
+    onUnavailable();
+  }, [
+    generationQuery.isError,
+    generationQuery.error,
+    generationId,
+    queryClient,
+    wsId,
+    goal.id,
+    onUnavailable,
+  ]);
 
   // A run started in another project is not a late candidate. Drop its cached
   // payload, stop polling, and let the user reload before starting anything.
@@ -161,7 +205,9 @@ export function GoalPlanGenerationPanel({
       setConfirmOpen(false);
     }
     setStartError(null);
+    setRunUnavailable(false);
     requestKeyRef.current = null;
+    requestBodyRef.current = null;
     // `generationId` is read once per project change; re-running on every
     // state tick would erase a run the user just started.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -171,8 +217,15 @@ export function GoalPlanGenerationPanel({
     const code = errorCode(err);
     if (code === "generation_request_conflict") return t(($) => $.plan.request_conflict);
     if (code === "goal_project_required") return t(($) => $.plan.project_required);
-    if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+    if (err instanceof ApiError && err.status === 403) {
+      // The auth refusal this endpoint returns is "no access to this agent";
+      // it says nothing about the goal or its project.
       return t(($) => $.plan.no_permission);
+    }
+    if (err instanceof ApiError && err.status === 404) {
+      // Either the goal/project is no longer visible or the agent is gone.
+      // Revalidate; do not blame the agent for a goal this viewer lost.
+      return t(($) => $.plan.start_unavailable);
     }
     return t(($) => $.plan.start_failed);
   };
@@ -182,19 +235,35 @@ export function GoalPlanGenerationPanel({
     if (!trimmed || !agentId || starting) return;
     if (freshKey) {
       requestKeyRef.current = null;
+      requestBodyRef.current = null;
       setProjectConflict(false);
+      setRunUnavailable(false);
     }
-    if (!requestKeyRef.current) requestKeyRef.current = newRequestKey();
+    if (!requestKeyRef.current) {
+      requestKeyRef.current = newRequestKey();
+      requestBodyRef.current = {
+        intent: trimmed,
+        agentId,
+        expectedRevision: planRevision,
+      };
+    }
     const requestKey = requestKeyRef.current;
+    // Replay the body recorded with this key. A retry after a lost response
+    // must resolve to the same server run even if the form changed since.
+    const body = requestBodyRef.current ?? {
+      intent: trimmed,
+      agentId,
+      expectedRevision: planRevision,
+    };
     setStartError(null);
     try {
       const started = await createGeneration.mutateAsync({
         goalId: goal.id,
         data: {
-          intent: trimmed,
+          intent: body.intent,
           request_key: requestKey,
-          expected_revision: planRevision,
-          agent_id: agentId,
+          expected_revision: body.expectedRevision,
+          agent_id: body.agentId,
         },
       });
       setGenerationId(started.id);
@@ -220,6 +289,7 @@ export function GoalPlanGenerationPanel({
         setConfirmOpen(false);
         setStartError(null);
         requestKeyRef.current = null;
+        requestBodyRef.current = null;
         setProjectConflict(true);
         onProjectConflict();
         return;
@@ -233,6 +303,7 @@ export function GoalPlanGenerationPanel({
         onRevisionConflict(revision);
         return;
       }
+      if (err instanceof ApiError && err.status === 404) onUnavailable();
       // Keep the same request_key: retrying this exact request must resolve
       // to the run the server may already have created.
       setStartError(startErrorMessage(err));
@@ -255,7 +326,7 @@ export function GoalPlanGenerationPanel({
   }, [generationNonce]);
 
   const handleApply = async () => {
-    if (!generation) return;
+    if (!generation || applyBlocked) return;
     const outcome = await onApplyCandidate(generation);
     if (outcome === "conflict") {
       queryClient.removeQueries({
@@ -264,6 +335,7 @@ export function GoalPlanGenerationPanel({
       setGenerationId(null);
       setProjectConflict(true);
       requestKeyRef.current = null;
+      requestBodyRef.current = null;
     }
   };
 
@@ -272,7 +344,9 @@ export function GoalPlanGenerationPanel({
     setProjectConflict(false);
     setGenerationId(null);
     setStartError(null);
+    setRunUnavailable(false);
     requestKeyRef.current = null;
+    requestBodyRef.current = null;
   };
 
   const handleNewGeneration = async () => {
@@ -385,7 +459,11 @@ export function GoalPlanGenerationPanel({
         ) : null}
       </div>
 
-      {generationQuery.isError && !isGenerationProjectConflict(generationQuery.error) ? (
+      {runUnavailable || generationUnavailable ? (
+        <p className="text-caption text-destructive" role="alert" data-testid="plan-run-unavailable">
+          {t(($) => $.plan.generation_unavailable)}
+        </p>
+      ) : generationQuery.isError && !isGenerationProjectConflict(generationQuery.error) ? (
         <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
           <span>{t(($) => $.plan.load_failed)}</span>
           <Button size="sm" variant="outline" onClick={() => void generationQuery.refetch()}>
@@ -508,7 +586,7 @@ export function GoalPlanGenerationPanel({
                 <Button
                   size="sm"
                   onClick={() => setConfirmOpen(true)}
-                  disabled={!usable || starting}
+                  disabled={!usable || starting || applyBlocked}
                 >
                   {t(($) => $.plan.apply_action)}
                 </Button>

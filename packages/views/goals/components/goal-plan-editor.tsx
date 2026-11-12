@@ -67,6 +67,8 @@ export function GoalPlanEditor({
   disabled = false,
   onChange,
   onItemEdited,
+  onItemRemoved,
+  onEdgeRemoved,
   ownerLabel,
 }: {
   goal: Goal;
@@ -75,11 +77,22 @@ export function GoalPlanEditor({
   disabled?: boolean;
   onChange: (next: PlanContent) => void;
   onItemEdited: (itemId: string) => void;
+  onItemRemoved: (itemId: string) => void;
+  onEdgeRemoved: (edge: GoalPlanEdge) => void;
   ownerLabel: (item: GoalPlanItem) => string | null;
 }) {
   const { t } = useT("goals");
   const [pickingFor, setPickingFor] = useState<string | null>(null);
   const [issueLabels, setIssueLabels] = useState<Record<string, string>>({});
+
+  // A binding type this client does not know must never read as "new task":
+  // its value stays intact in the draft, and the user only changes it by
+  // explicitly choosing a known type.
+  const bindingLabel = (binding: GoalPlanItem["binding"]): string => {
+    if (binding.type === "existing") return t(($) => $.plan.binding_existing);
+    if (binding.type === "new") return t(($) => $.plan.binding_new);
+    return t(($) => $.plan.binding_unknown, { type: binding.type || "?" });
+  };
 
   const updateItem = (id: string, patch: ItemPatch) => {
     onChange({ items: items.map((item) => (item.id === id ? { ...item, ...patch } : item)), edges });
@@ -91,6 +104,7 @@ export function GoalPlanEditor({
   };
 
   const removeItem = (id: string) => {
+    onItemRemoved(id);
     onChange({
       items: items.filter((item) => item.id !== id),
       edges: edges.filter(
@@ -107,6 +121,7 @@ export function GoalPlanEditor({
   };
 
   const removeEdge = (edge: GoalPlanEdge) => {
+    onEdgeRemoved(edge);
     onChange({
       items,
       edges: edges.filter(
@@ -152,6 +167,8 @@ export function GoalPlanEditor({
           const boundLabel = item.binding.issue_id
             ? (issueLabels[item.binding.issue_id] ?? `#${item.binding.issue_id.slice(0, 8)}`)
             : null;
+          const bindingKnown =
+            item.binding.type === "new" || item.binding.type === "existing";
           return (
             <li
               key={item.id}
@@ -251,27 +268,28 @@ export function GoalPlanEditor({
                       items={[
                         { value: "new", label: t(($) => $.plan.binding_new) },
                         { value: "existing", label: t(($) => $.plan.binding_existing) },
+                        ...(bindingKnown
+                          ? []
+                          : [{ value: "unknown", label: bindingLabel(item.binding) }]),
                       ]}
-                      value={item.binding.type === "existing" ? "existing" : "new"}
+                      value={bindingKnown ? item.binding.type : "unknown"}
                       disabled={disabled}
                       onValueChange={(next) => {
                         if (next === "existing") {
                           if (!item.binding.issue_id) setPickingFor(item.id);
-                        } else {
+                        } else if (next === "new") {
                           updateItem(item.id, { binding: { type: "new", issue_id: null } });
                         }
                       }}
                     >
                       <SelectTrigger size="sm" className="w-40">
-                        <SelectValue>
-                          {item.binding.type === "existing"
-                            ? t(($) => $.plan.binding_existing)
-                            : t(($) => $.plan.binding_new)}
-                        </SelectValue>
+                        <SelectValue>{bindingLabel(item.binding)}</SelectValue>
                       </SelectTrigger>
                       <SelectContent align="start">
                         <SelectItem value="new">{t(($) => $.plan.binding_new)}</SelectItem>
-                        <SelectItem value="existing">{t(($) => $.plan.binding_existing)}</SelectItem>
+                        <SelectItem value="existing">
+                          {t(($) => $.plan.binding_existing)}
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                     {boundLabel ? (

@@ -18,6 +18,23 @@ export interface PlanDraft extends PlanDraftContent {
   revision: number;
 }
 
+/** Local deletions that a late candidate must not resurrect. */
+export interface RemovedPlanContent {
+  itemIds: ReadonlySet<string>;
+  edgeKeys: ReadonlySet<string>;
+}
+
+const EMPTY_REMOVED: RemovedPlanContent = {
+  itemIds: new Set<string>(),
+  edgeKeys: new Set<string>(),
+};
+
+export function planEdgeKey(
+  edge: Pick<GoalPlanEdge, "dependent_item_id" | "prerequisite_item_id">,
+): string {
+  return `${edge.dependent_item_id}\u0000${edge.prerequisite_item_id}`;
+}
+
 export function clonePlanContent(content: PlanDraftContent): PlanDraftContent {
   return JSON.parse(JSON.stringify(content)) as PlanDraftContent;
 }
@@ -37,18 +54,21 @@ export function draftFromPlan(plan: GoalPlan): PlanDraft {
  * Merges a generated candidate into the local draft. Node identity is the
  * UUID, never the title: a node the user edited keeps their version, a node
  * the user bound to an existing task keeps that binding, and a node added
- * after the run started is not dropped. Edges are the union of both sides and
- * are pruned to nodes that still exist; the server still validates the graph
- * on save (cycles, duplicates, reasons).
+ * after the run started is not dropped. A node or dependency the user deleted
+ * while the run was in flight stays deleted. Edges are the union of both sides
+ * and are pruned to nodes that still exist; the server still validates the
+ * graph on save (cycles, duplicates, reasons).
  */
 export function mergeCandidate(
   draft: PlanDraftContent,
   candidate: GoalPlanCandidate,
   editedItemIds: ReadonlySet<string> = new Set(),
+  removed: RemovedPlanContent = EMPTY_REMOVED,
 ): PlanDraftContent {
   const draftById = new Map(draft.items.map((item) => [item.id, item]));
-  const candidateIds = new Set(candidate.items.map((item) => item.id));
-  const merged: GoalPlanItem[] = candidate.items.map((incoming) => {
+  const incomingItems = candidate.items.filter((item) => !removed.itemIds.has(item.id));
+  const candidateIds = new Set(incomingItems.map((item) => item.id));
+  const merged: GoalPlanItem[] = incomingItems.map((incoming) => {
     const local = draftById.get(incoming.id);
     if (!local) return incoming;
     // The user changed this node while the run was in flight: their text wins.
@@ -73,7 +93,8 @@ export function mergeCandidate(
   for (const edge of [...candidate.edges, ...draft.edges]) {
     if (!keptIds.has(edge.dependent_item_id) || !keptIds.has(edge.prerequisite_item_id)) continue;
     if (edge.dependent_item_id === edge.prerequisite_item_id) continue;
-    const key = `${edge.dependent_item_id}\u0000${edge.prerequisite_item_id}`;
+    const key = planEdgeKey(edge);
+    if (removed.edgeKeys.has(key)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     edges.push(edge);
@@ -175,7 +196,7 @@ export function validatePlanDraft(content: PlanDraftContent): PlanValidationIssu
     }
     if (edge.dependent_item_id === edge.prerequisite_item_id) return "dependency_invalid";
     if (!edge.reason.trim()) return "dependency_reason_required";
-    const key = `${edge.dependent_item_id}\u0000${edge.prerequisite_item_id}`;
+    const key = planEdgeKey(edge);
     if (seen.has(key)) return "dependency_invalid";
     seen.add(key);
   }
