@@ -10,8 +10,9 @@ import { renderWithI18n } from "../../test/i18n";
 import { GoalFormDialog } from "./goal-form-dialog";
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+const projects = vi.hoisted(() => [] as { id: string; title: string }[]);
 vi.mock("@multica/core/projects/queries", () => ({
-  projectListOptions: () => ({ queryKey: ["projects"], queryFn: async () => [] }),
+  projectListOptions: () => ({ queryKey: ["projects"], queryFn: async () => projects }),
 }));
 vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [] }),
@@ -58,15 +59,25 @@ describe("GoalFormDialog", () => {
     qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    createGoal.mockClear();
+    updateGoal.mockClear();
     createGoal.mockResolvedValue(goal({ id: "goal-2" }));
     updateGoal.mockResolvedValue(goal());
     onSaved.mockReset();
     onOpenChange.mockReset();
     setApiInstance({ createGoal, updateGoal } as unknown as ApiClient);
     vi.mocked(toast.success).mockClear();
+    projects.length = 0;
   });
 
   afterEach(() => qc.clear());
+
+  /** A row inside an open picker; the trigger's label repeats the row text. */
+  function pickerRow(label: string) {
+    return Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button[data-picker-item]"),
+    ).find((row) => row.textContent?.includes(label));
+  }
 
   function renderForm(
     props: Partial<React.ComponentProps<typeof GoalFormDialog>> = {},
@@ -126,6 +137,31 @@ describe("GoalFormDialog", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Workspace/ }));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("warns before a project goal is saved as workspace-visible", async () => {
+    const scopeWarning =
+      "This goal now has no project, so everyone in the workspace can see it.";
+    projects.push({ id: "project-1", title: "Apollo" });
+    renderForm({ goal: goal({ project_id: "project-1" }) });
+    const user = userEvent.setup();
+
+    // The goal still belongs to its project on open.
+    expect(await screen.findByRole("button", { name: /Apollo/ })).toBeInTheDocument();
+    expect(screen.queryByText(scopeWarning)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Apollo/ }));
+    pickerRow("Workspace")!.click();
+    expect(await screen.findByText(scopeWarning)).toBeInTheDocument();
+
+    // Returning to the original project withdraws the warning.
+    await user.click(screen.getByRole("button", { name: /Workspace/ }));
+    pickerRow("Apollo")!.click();
+    await waitFor(() => expect(screen.queryByText(scopeWarning)).not.toBeInTheDocument());
+
+    // Cancelling leaves the server untouched.
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(updateGoal).not.toHaveBeenCalled();
   });
 
   it("does not offer a status select for a completed goal", () => {

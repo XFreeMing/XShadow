@@ -12,7 +12,6 @@ import {
   Unlink,
 } from "@multica/ui/icons";
 import { toast } from "sonner";
-import { ApiError } from "@multica/core/api";
 import {
   goalDetailOptions,
   goalIssuesPagesOptions,
@@ -46,7 +45,7 @@ import { GoalStatusBadge } from "./goal-status-badge";
 import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
-import { isGoalCompleted } from "../status";
+import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
 const LAYOUT_ID = "multica_goal_detail_layout";
 
@@ -92,6 +91,10 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const goal = goalQuery.data && goalQuery.data.id ? goalQuery.data : null;
+  // React Query keeps the last successful payload after a refetch fails. A
+  // terminal 4xx means this viewer can no longer see the goal, so the cached
+  // title must stop appearing in the breadcrumb; offline/5xx keep it.
+  const unavailable = goalQuery.isError && isGoalUnavailableError(goalQuery.error);
   const linkedIssues = issuesQuery.data?.pages.flatMap((page) => page.issues) ?? [];
   const linkedIssueCount = issuesQuery.data?.pages[0]?.total ?? 0;
   const project = goal?.project_id
@@ -99,7 +102,11 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
     : null;
 
   const segments = [{ href: wsPaths.goals(), label: tLayout(($) => $.nav.goals) }];
-  const leaf = goal ? (
+  const leaf = unavailable ? (
+    <span className="min-w-0 truncate text-muted-foreground">
+      {tLayout(($) => $.tab.goal)}
+    </span>
+  ) : goal ? (
     <span className="min-w-0 truncate">{goal.title}</span>
   ) : (
     <Skeleton className="h-4 w-40" />
@@ -122,8 +129,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   }
 
   if (goalQuery.isError || !goal) {
-    const status = goalQuery.error instanceof ApiError ? goalQuery.error.status : 0;
-    const gone = status === 400 || status === 403 || status === 404;
+    const gone = unavailable;
     return shell(
       <CollectionPageState
         icon={FileQuestion}
