@@ -1367,6 +1367,17 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceIssueRoots(ctx, requester.WorkspaceID) },
 		},
 		{
+			// goal and goal_issue carry no foreign keys by project rule, so
+			// both are swept explicitly. Links go first so no relation to a
+			// goal outlives the goal row.
+			name: "delete goal links",
+			run:  func() error { return qtx.DeleteWorkspaceGoalIssues(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete goals",
+			run:  func() error { return qtx.DeleteWorkspaceGoals(ctx, requester.WorkspaceID) },
+		},
+		{
 			// issue_status carries no foreign key by project rule, so its rows
 			// are swept explicitly. Placed after the issue deletes so no issue
 			// row outlives the catalog its status key resolves against.
