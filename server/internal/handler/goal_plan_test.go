@@ -7,12 +7,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Goal plan coverage for DEV-6: draft persistence, request-key dedupe,
@@ -48,35 +54,55 @@ func planTestGoal(t *testing.T, projectID string) GoalResponse {
 func getPlan(t *testing.T, goalID string) (int, GoalPlanResponse) {
 	t.Helper()
 	var resp GoalPlanResponse
-	rec := testutil.Call(t, testHandler.GetGoalPlan,
-		goalRequest(http.MethodGet, "/api/goals/"+goalID+"/plan", testUserID, nil, map[string]string{"id": goalID}))
+	rec := getPlanRaw(t, goalID)
 	if rec.Code == http.StatusOK {
-		rec.JSON(&resp)
+		decodePlanJSON(t, rec, &resp)
 	}
 	return rec.Code, resp
+}
+
+func getPlanRaw(t *testing.T, goalID string) *httptest.ResponseRecorder {
+	t.Helper()
+	res := testutil.Call(t, testHandler.GetGoalPlan,
+		goalRequest(http.MethodGet, "/api/goals/"+goalID+"/plan", testUserID, nil, map[string]string{"id": goalID}))
+	return res.ResponseRecorder
 }
 
 func putPlan(t *testing.T, goalID string, body map[string]any) (int, GoalPlanResponse) {
 	t.Helper()
 	var resp GoalPlanResponse
-	rec := testutil.Call(t, testHandler.PutGoalPlan,
-		goalRequest(http.MethodPut, "/api/goals/"+goalID+"/plan", testUserID, body, map[string]string{"id": goalID}))
+	rec := putPlanRaw(t, goalID, body)
 	if rec.Code == http.StatusOK {
-		rec.JSON(&resp)
+		decodePlanJSON(t, rec, &resp)
 	}
 	return rec.Code, resp
+}
+
+func putPlanRaw(t *testing.T, goalID string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	res := testutil.Call(t, testHandler.PutGoalPlan,
+		goalRequest(http.MethodPut, "/api/goals/"+goalID+"/plan", testUserID, body, map[string]string{"id": goalID}))
+	return res.ResponseRecorder
 }
 
 func postGeneration(t *testing.T, goalID string, body map[string]any) (int, GoalPlanGenerationResponse) {
 	t.Helper()
 	var resp GoalPlanGenerationResponse
-	rec := testutil.Call(t, testHandler.CreateGoalPlanGeneration,
-		goalRequest(http.MethodPost, "/api/goals/"+goalID+"/plan/generations", testUserID, body,
-			map[string]string{"id": goalID}))
+	rec := postGenerationRaw(goalID, body)
 	if rec.Code == http.StatusAccepted || rec.Code == http.StatusOK {
-		rec.JSON(&resp)
+		decodePlanJSON(t, rec, &resp)
 	}
 	return rec.Code, resp
+}
+
+// postGenerationRaw is goroutine-safe: it never touches testing.T, so the
+// two-transaction tests can call it while another transaction holds a lock.
+func postGenerationRaw(goalID string, body map[string]any) *httptest.ResponseRecorder {
+	req := goalRequest(http.MethodPost, "/api/goals/"+goalID+"/plan/generations", testUserID, body,
+		map[string]string{"id": goalID})
+	rec := httptest.NewRecorder()
+	testHandler.CreateGoalPlanGeneration(rec, req)
+	return rec
 }
 
 func TestGoalPlanEmptyShapeAndProjectRequirement(t *testing.T) {
@@ -246,7 +272,8 @@ func TestGoalPlanGenerationDedupeLateCandidateAndApply(t *testing.T) {
 		"edges":            []map[string]any{},
 		"context_snapshot": map[string]any{"repo_sha": "deadbeef", "read_at": "2026-11-12T00:00:00Z"},
 	}
-	code, submitted := submitPlanResultAsTask(t, goal.ID, created.ID, *created.TaskID, agentID, resultBody)
+	code, submitted := submitPlanResultAsRun(t,
+		mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID), goal.ID, created.ID, resultBody)
 	if code != http.StatusOK {
 		t.Fatalf("SubmitGoalPlanGenerationResult = %d, want 200", code)
 	}
@@ -319,7 +346,8 @@ func TestGoalPlanGenerationDedupeLateCandidateAndApply(t *testing.T) {
 		},
 		"edges": []map[string]any{},
 	}
-	code, late := submitPlanResultAsTask(t, goal.ID, second.ID, *second.TaskID, agentID, lateBody)
+	code, late := submitPlanResultAsRun(t,
+		mintGoalPlanTaskToken(t, testWorkspaceID, *second.TaskID, agentID), goal.ID, second.ID, lateBody)
 	if code != http.StatusOK {
 		t.Fatalf("late result = %d, want 200", code)
 	}
@@ -359,26 +387,53 @@ func TestGoalPlanResultOwnershipAndValidation(t *testing.T) {
 		testPool.Exec(ctx, `DELETE FROM goal_plan_generation WHERE goal_id = $1`, goal.ID)
 	})
 
-	// A member session cannot submit a plan for a run: the endpoint requires
-	// the run's own task token.
-	memberReq := goalRequest(http.MethodPost,
-		"/api/goals/"+goal.ID+"/plan/generations/"+created.ID+"/result", testUserID,
-		map[string]any{"items": []map[string]any{}},
-		map[string]string{"id": goal.ID, "generationId": created.ID})
-	if code := testutil.Call(t, testHandler.SubmitGoalPlanGenerationResult, memberReq).Code; code != http.StatusForbidden {
-		t.Fatalf("member result submission = %d, want 403", code)
+	body := map[string]any{"items": []map[string]any{{"title": "x", "binding": map[string]any{"type": "new"}}}}
+
+	// A member session cannot submit a plan for a run, and hand-set task
+	// headers do not make it one: the real Auth middleware strips the
+	// client-supplied X-Actor-Source/X-Task-ID/X-Agent-ID and only its own
+	// mat_ branch is allowed to re-stamp them. No handler-header shortcut is
+	// involved here.
+	memberRec := postPlanResultRaw(memberSessionToken(t, testUserID), testWorkspaceID, goal.ID, created.ID, body,
+		map[string]string{
+			"X-Actor-Source": "task_token",
+			"X-Task-ID":      *created.TaskID,
+			"X-Agent-ID":     agentID,
+		})
+	if memberRec.Code != http.StatusForbidden || !strings.Contains(memberRec.Body.String(), "task_token_required") {
+		t.Fatalf("member forging task headers = %d %s, want 403 task_token_required",
+			memberRec.Code, memberRec.Body.String())
 	}
 
 	// A task that does not own this generation cannot write it.
 	otherTask := createHandlerTestTaskForAgent(t, agentID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, otherTask) })
-	body := map[string]any{"items": []map[string]any{{"title": "x", "binding": map[string]any{"type": "new"}}}}
-	if code, _ := submitPlanResultAsTask(t, goal.ID, created.ID, otherTask, agentID, body); code != http.StatusNotFound {
+	otherToken := mintGoalPlanTaskToken(t, testWorkspaceID, otherTask, agentID)
+	if code, _ := submitPlanResultAsRun(t, otherToken, goal.ID, created.ID, body); code != http.StatusNotFound {
 		t.Fatalf("foreign task result = %d, want 404", code)
 	}
 
-	// An explicit failure report closes the run without inventing a plan.
-	code, failed := submitPlanResultAsTask(t, goal.ID, created.ID, *created.TaskID, agentID,
+	// A run in another workspace cannot reach this goal either: the token's
+	// workspace binding scopes the task lookup, so it answers the same 404
+	// instead of leaking that a generation exists.
+	foreignWorkspace := dbfx.Workspace(t, "Goal Plan Foreign WS "+t.Name(),
+		fmt.Sprintf("goal-plan-foreign-%d", time.Now().UnixNano()))
+	dbfx.Member(t, foreignWorkspace, testUserID, "owner")
+	foreignFixture := testutil.New(testPool, foreignWorkspace, testUserID)
+	foreignAgent := foreignFixture.Agent(t, "Goal Plan Foreign Agent", handlerTestRuntimeID(t), nil)
+	foreignTask := foreignFixture.Task(t, foreignAgent, testutil.Cols{
+		"runtime_id": handlerTestRuntimeID(t),
+		"status":     "running",
+		"started_at": testutil.Raw("now()"),
+	})
+	foreignToken := mintGoalPlanTaskToken(t, foreignWorkspace, foreignTask, foreignAgent)
+	if code, _ := submitPlanResultAsRun(t, foreignToken, goal.ID, created.ID, body); code != http.StatusNotFound {
+		t.Fatalf("cross-workspace task result = %d, want 404", code)
+	}
+
+	// The run's own token is the one credential that may submit.
+	ownerToken := mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID)
+	code, failed := submitPlanResultAsRun(t, ownerToken, goal.ID, created.ID,
 		map[string]any{"error": "the project has no readable resources"})
 	if code != http.StatusOK {
 		t.Fatalf("failure result = %d, want 200", code)
@@ -389,7 +444,7 @@ func TestGoalPlanResultOwnershipAndValidation(t *testing.T) {
 
 	// Once failed, an idempotent retry returns the stored failure rather than
 	// reviving the run.
-	if code, again := submitPlanResultAsTask(t, goal.ID, created.ID, *created.TaskID, agentID, body); code != http.StatusOK || again.State != "failed" {
+	if code, again := submitPlanResultAsRun(t, ownerToken, goal.ID, created.ID, body); code != http.StatusOK || again.State != "failed" {
 		t.Fatalf("retry after failure = %d state=%q, want 200 failed", code, again.State)
 	}
 }
@@ -434,29 +489,91 @@ func TestGoalPlanProjectMoveBlockedAndGoalDeleteCleanup(t *testing.T) {
 	}
 }
 
-// submitPlanResultAsTask posts a result as the run's task token would. It is
-// separate from submitPlanResult because every case here has to control the
-// exact task/agent headers.
-func submitPlanResultAsTask(t *testing.T, goalID, generationID, taskID, agentID string, body map[string]any) (int, GoalPlanGenerationResponse) {
+// goalPlanResultRouter mounts the result endpoint behind the real Auth and
+// workspace-member middleware, the same stack the production router uses.
+func goalPlanResultRouter() http.Handler {
+	router := chi.NewRouter()
+	router.Use(middleware.Auth(testHandler.Queries, nil, nil, nil))
+	router.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+	router.Post("/api/goals/{id}/plan/generations/{generationId}/result", testHandler.SubmitGoalPlanGenerationResult)
+	return router
+}
+
+// mintGoalPlanTaskToken mints the short-lived mat_ credential the daemon
+// injects into the run's agent process. Requests carry only this token: the
+// actor headers are written by Auth from the token row, never by the caller.
+func mintGoalPlanTaskToken(t *testing.T, workspaceID, taskID, agentID string) string {
 	t.Helper()
-	req := newRequest(http.MethodPost,
-		"/api/goals/"+goalID+"/plan/generations/"+generationID+"/result", body)
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-Task-ID", taskID)
-	req.Header.Set("X-Agent-ID", agentID)
-	// withURLParam replaces the route context, so both params go in one context.
-	chiCtx := chi.NewRouteContext()
-	chiCtx.URLParams.Add("id", goalID)
-	chiCtx.URLParams.Add("generationId", generationID)
-	rctx := req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
-	var resp GoalPlanGenerationResponse
-	rec := testutil.Call(t, testHandler.SubmitGoalPlanGenerationResult, rctx)
-	if rec.Code != http.StatusOK {
-		t.Logf("submit result status=%d body=%s", rec.Code, rec.Body.String())
-		return rec.Code, resp
+	token := fmt.Sprintf("mat_goalplan_%s_%d", taskID, time.Now().UnixNano())
+	if _, err := testHandler.Queries.CreateTaskToken(context.Background(), db.CreateTaskTokenParams{
+		TokenHash:   auth.HashToken(token),
+		TaskID:      parseUUID(taskID),
+		AgentID:     parseUUID(agentID),
+		WorkspaceID: parseUUID(workspaceID),
+		UserID:      parseUUID(testUserID),
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	}); err != nil {
+		t.Fatalf("mint task token: %v", err)
 	}
-	rec.JSON(&resp)
+	t.Cleanup(func() {
+		testHandler.Queries.DeleteTaskTokensByTask(context.Background(), parseUUID(taskID))
+	})
+	return token
+}
+
+// memberSessionToken signs an interactive member session for userID.
+func memberSessionToken(t *testing.T, userID string) string {
+	t.Helper()
+	claims := jwt.MapClaims{
+		"sub": userID,
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(auth.JWTSecret())
+	if err != nil {
+		t.Fatalf("sign session token: %v", err)
+	}
+	return signed
+}
+
+func submitPlanResultAsRun(t *testing.T, token, goalID, generationID string, body map[string]any) (int, GoalPlanGenerationResponse) {
+	t.Helper()
+	rec := postPlanResultRaw(token, "", goalID, generationID, body, nil)
+	var resp GoalPlanGenerationResponse
+	if rec.Code == http.StatusOK {
+		decodePlanJSON(t, rec, &resp)
+	}
 	return rec.Code, resp
+}
+
+// postPlanResultRaw sends a result through the Auth stack. workspaceQuery
+// identifies the workspace for a member session; a task token ignores it and
+// is scoped by its binding. It never touches testing.T so concurrent tests can
+// call it from another goroutine.
+func postPlanResultRaw(token, workspaceQuery, goalID, generationID string, body map[string]any, forged map[string]string) *httptest.ResponseRecorder {
+	path := "/api/goals/" + goalID + "/plan/generations/" + generationID + "/result"
+	if workspaceQuery != "" {
+		path += "?workspace_id=" + workspaceQuery
+	}
+	req := newRequest(http.MethodPost, path, body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	// Identity must come from the credential, not the transport: these are
+	// exactly the headers a forging client would supply.
+	req.Header.Del("X-User-ID")
+	req.Header.Del("X-Workspace-ID")
+	for key, value := range forged {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	goalPlanResultRouter().ServeHTTP(rec, req)
+	return rec
+}
+
+func decodePlanJSON(t *testing.T, rec *httptest.ResponseRecorder, out any) {
+	t.Helper()
+	if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
 }
 
 func jsonUnmarshalStrict(raw []byte, out any) error {
@@ -589,13 +706,19 @@ func planRowsByWorkspace(t *testing.T, workspaceID, goalID string) (plans, gener
 func getGeneration(t *testing.T, goalID, generationID string) (int, GoalPlanGenerationResponse) {
 	t.Helper()
 	var resp GoalPlanGenerationResponse
-	rec := testutil.Call(t, testHandler.GetGoalPlanGeneration,
-		goalRequest(http.MethodGet, "/api/goals/"+goalID+"/plan/generations/"+generationID, testUserID, nil,
-			map[string]string{"id": goalID, "generationId": generationID}))
+	rec := getGenerationRaw(t, goalID, generationID)
 	if rec.Code == http.StatusOK {
-		rec.JSON(&resp)
+		decodePlanJSON(t, rec, &resp)
 	}
 	return rec.Code, resp
+}
+
+func getGenerationRaw(t *testing.T, goalID, generationID string) *httptest.ResponseRecorder {
+	t.Helper()
+	res := testutil.Call(t, testHandler.GetGoalPlanGeneration,
+		goalRequest(http.MethodGet, "/api/goals/"+goalID+"/plan/generations/"+generationID, testUserID, nil,
+			map[string]string{"id": goalID, "generationId": generationID}))
+	return res.ResponseRecorder
 }
 
 func getGenerationState(t *testing.T, goalID, generationID string) string {
