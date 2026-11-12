@@ -549,6 +549,36 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 				"this goal still has linked issues; unlink them before changing its project")
 			return
 		}
+		// A plan is read and generated against the goal's project. Moving the
+		// goal would leave the saved draft and any in-flight run describing the
+		// old project, so the move waits until the plan is deleted and no
+		// generation is still running.
+		hasPlan, err := qtx.GoalPlanExists(r.Context(), db.GoalPlanExistsParams{
+			WorkspaceID: locked.WorkspaceID,
+			GoalID:      locked.ID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update goal")
+			return
+		}
+		if hasPlan {
+			writeErrorCode(w, http.StatusConflict, "goal_has_plan",
+				"this goal has a plan saved against its current project; delete the plan before changing its project")
+			return
+		}
+		active, err := qtx.CountActiveGoalPlanGenerations(r.Context(), db.CountActiveGoalPlanGenerationsParams{
+			WorkspaceID: locked.WorkspaceID,
+			GoalID:      locked.ID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update goal")
+			return
+		}
+		if active > 0 {
+			writeErrorCode(w, http.StatusConflict, "goal_generation_in_progress",
+				"a plan generation is still running for this goal; wait for it before changing its project")
+			return
+		}
 	}
 	goal, err := qtx.UpdateGoal(r.Context(), params)
 	if err != nil {
@@ -599,6 +629,24 @@ func (h *Handler) DeleteGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	// Links go first; the tasks themselves are never touched.
 	if err := qtx.DeleteGoalIssuesByGoal(r.Context(), db.DeleteGoalIssuesByGoalParams{
+		WorkspaceID: goal.WorkspaceID,
+		GoalID:      goal.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete goal")
+		return
+	}
+	// Plan data is goal-scoped with no foreign key to enforce it (repo rule),
+	// so it is removed explicitly. A generation row that is still running keeps
+	// its task (the task is never deleted) but loses its goal; a later result
+	// submission then answers 404.
+	if err := qtx.DeleteGoalPlanGenerationsByGoal(r.Context(), db.DeleteGoalPlanGenerationsByGoalParams{
+		WorkspaceID: goal.WorkspaceID,
+		GoalID:      goal.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete goal")
+		return
+	}
+	if err := qtx.DeleteGoalPlansByGoal(r.Context(), db.DeleteGoalPlansByGoalParams{
 		WorkspaceID: goal.WorkspaceID,
 		GoalID:      goal.ID,
 	}); err != nil {

@@ -833,6 +833,23 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project goals")
 		return
 	}
+	// Plan drafts and their generations are project-scoped too, with no foreign
+	// key to cascade (repo rule). They go before the project row disappears;
+	// generations already deleted with their goals above are simply absent.
+	if err := qtx.DeleteGoalPlanGenerationsByProject(r.Context(), db.DeleteGoalPlanGenerationsByProjectParams{
+		WorkspaceID: project.WorkspaceID,
+		ProjectID:   project.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project plan generations")
+		return
+	}
+	if err := qtx.DeleteGoalPlansByProject(r.Context(), db.DeleteGoalPlansByProjectParams{
+		WorkspaceID: project.WorkspaceID,
+		ProjectID:   project.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project plans")
+		return
+	}
 	if err := qtx.DeleteProject(r.Context(), db.DeleteProjectParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,
