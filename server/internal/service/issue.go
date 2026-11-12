@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/multica-ai/multica/server/internal/attribution"
 	"log/slog"
 	"sort"
 	"time"
@@ -608,7 +607,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 			// AssignedAgentRunFireAt currently belongs to channel /issue, which
 			// always resolves an agent assignee. Preserve the ordinary squad path
 			// for any future caller that supplies the option with a squad.
-			s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, p.CreatorType, actorID)
+			s.enqueueSquadLeaderTask(ctx, issue)
 		}
 	}
 
@@ -616,13 +615,6 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
 	if opts.AssignedAgentRunFireAt.IsZero() {
 		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
-	}
-	// Creating an issue already assigned to an agent is the member delegating
-	// work. The run itself is attributed through the creator fallback, which
-	// system wakeups share, so record the action here, at the create, for both
-	// the immediate and the deferred (channel media) path.
-	if assignedTaskID.Valid && p.CreatorType == "member" {
-		s.TaskService.RecordHumanDelegation(ctx, attribution.DirectHumanRun(p.CreatorID, attribution.EvidenceIssueAssignment, issue.ID))
 	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
@@ -970,7 +962,7 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		}
 	}
 	if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID)
+		s.enqueueSquadLeaderTask(ctx, issue)
 	}
 	return pgtype.UUID{}
 }
@@ -1050,7 +1042,7 @@ func (s *IssueService) isSquadLeaderReady(ctx context.Context, issue db.Issue) b
 	return verdict.Ready()
 }
 
-func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string) {
+func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue) {
 	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -1067,18 +1059,11 @@ func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issu
 	if err != nil || hasPending {
 		return
 	}
-	if _, err := s.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, squad.ID, triggerCommentID, OriginDerived); err != nil {
+	if _, err := s.TaskService.EnqueueTaskForSquadLeader(ctx, issue, squad.LeaderID, squad.ID, pgtype.UUID{}, OriginDerived); err != nil {
 		slog.Warn("enqueue squad leader task on create failed",
 			"issue_id", util.UUIDToString(issue.ID),
 			"squad_id", util.UUIDToString(squad.ID),
 			"leader_id", util.UUIDToString(squad.LeaderID),
 			"error", err)
-		return
-	}
-	// A member creating an issue assigned to a squad delegates the same way as
-	// one assigned to an agent (see Create). A trigger comment, when present,
-	// already recorded its author at enqueue.
-	if !triggerCommentID.Valid && authorType == "member" {
-		s.TaskService.RecordHumanDelegation(ctx, attribution.DirectHumanRun(issue.CreatorID, attribution.EvidenceIssueAssignment, issue.ID))
 	}
 }
