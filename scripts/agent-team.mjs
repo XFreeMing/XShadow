@@ -1,33 +1,49 @@
 #!/usr/bin/env node
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { buildContext, formatContext, resolveProfile } from "./agent-team-context.mjs";
+import { agentInstructions, localPath, renderReferences, skillFiles, validateTemplateObject } from "./agent-team-template.mjs";
+import { applySyncPlan, formatSyncReport, prepareSync } from "./agent-team-sync.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const HELP = `Usage: make agent init [ARGS="options"]
+const HELP = `Usage: make agent <init|context|sync> [ARGS="options"]
 
-Without --profile: start this checkout's managed API and daemon, then initialize its workspace.
+init without --profile: start this checkout's managed API and daemon, then initialize its workspace.
+context is read-only: show template, live roster and drift without starting services or models.
+sync is read-only on the live workspace: export the initializable team back into the template
+files. It never starts services, writes the live workspace or reads model catalogs.
   --profile NAME           Use an already authenticated CLI profile; do not start services
   --profiles-dir PATH      Profile root (default ~/.multica/profiles)
-  --runtime PROVIDER=ID    Explicit target runtime; repeat for claude, codex, grok
+  --runtime PROVIDER=ID    init: explicit target runtime; sync: explicit bound runtime when
+                           one provider has several bound runtimes with the same capacity
   --template PATH          Template JSON (default agent-team/team.json)
-  --check                  Preflight only; requires an existing environment/profile
+  --check                  init: preflight only; sync: show a summary and write nothing
+  --offline                context: template only, no profile or network access
+  --tasks                  context: also read unfinished issues, active runs and wakeups (read-only)
+  --json                   context: machine-readable output
   --help                   Show this help
 
-Synchronizes template-owned fields of same-named skills, agents and squads.
+init synchronizes template-owned fields of same-named skills, agents and squads.
 Keeps unrelated objects, extra agent skill bindings and extra squad members.
+sync exports this account's non-archived private agents, the skills bound to them and
+their squads. It validates the full snapshot before writing and fails on configuration
+the template cannot represent.
 Does not import credentials, create projects or start model tasks.`;
 
 export function parseArgs(args) {
-  const options = { runtimeIds: {}, check: false };
-  if (args.shift() !== "init") throw new Error(HELP);
+  const options = { command: args.shift(), runtimeIds: {}, check: false };
+  if (!["init", "context", "sync"].includes(options.command)) throw new Error(HELP);
   while (args.length) {
     const flag = args.shift();
     if (flag === "--help") { options.help = true; continue; }
     if (flag === "--check") { options.check = true; continue; }
+    if (flag === "--offline") { options.offline = true; continue; }
+    if (flag === "--json") { options.json = true; continue; }
+    if (flag === "--tasks") { options.tasks = true; continue; }
     const key = { "--profile": "profile", "--profiles-dir": "profilesDir", "--template": "template", "--runtime": "runtime" }[flag];
     if (!key || !args[0] || args[0].startsWith("--")) throw new Error(`Invalid option: ${flag}\n${HELP}`);
     const value = args.shift();
@@ -38,48 +54,16 @@ export function parseArgs(args) {
     } else options[key] = value;
   }
   if (options.profile && !/^[\w.-]+$/.test(options.profile)) throw new Error("Invalid profile name");
+  if (options.command !== "context" && (options.offline || options.json || options.tasks)) throw new Error("--offline, --json and --tasks apply only to context");
+  if (options.command === "context" && options.tasks && options.offline) throw new Error("--tasks needs a live profile; remove --offline");
+  if (options.command === "context" && (options.check || Object.keys(options.runtimeIds).length)) throw new Error("context reads existing bindings; --check and --runtime apply only to init and sync");
   return options;
-}
-
-function localPath(root, path) {
-  if (typeof path !== "string" || isAbsolute(path)) throw new Error(`Expected relative template path: ${path}`);
-  const full = resolve(root, path);
-  if (relative(root, full).split(/[\\/]/).includes("..")) throw new Error(`Path escapes template: ${path}`);
-  return full;
-}
-
-function skillFiles(dir, prefix = "") {
-  return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((entry) => {
-    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) return skillFiles(dir, path);
-    if (!entry.isFile()) throw new Error(`Skill bundles require regular files: ${path}`);
-    if (path === "SKILL.md") return [];
-    return [{ path, content: readFileSync(join(dir, path), "utf8") }];
-  }).sort((a, b) => a.path.localeCompare(b.path));
 }
 
 export function loadTemplate(path) {
   const root = dirname(path);
   const template = JSON.parse(readFileSync(path, "utf8"));
-  if (template.version !== 1) throw new Error("Unsupported team template version");
-  for (const kind of ["agents", "skills", "squads"]) {
-    const keys = new Set(), names = new Set();
-    if (!Array.isArray(template[kind]) || !template[kind].length) throw new Error(`Missing ${kind}`);
-    for (const item of template[kind]) {
-      if (!/^[a-z][a-z0-9-]*$/.test(item.key) || !item.name || keys.has(item.key) || names.has(item.name)) throw new Error(`Duplicate/invalid ${kind} key or name`);
-      keys.add(item.key); names.add(item.name);
-    }
-  }
-  const agentKeys = new Set(template.agents.map((a) => a.key));
-  const skillKeys = new Set(template.skills.map((s) => s.key));
-  for (const agent of template.agents) {
-    if (!(agent.provider in template.runtime_limits) || !agent.model || !agent.thinking_level || agent.permission_mode !== "private" || !Array.isArray(agent.skills) || agent.skills.some((s) => !skillKeys.has(s))) throw new Error(`Invalid agent configuration: ${agent.name}`);
-  }
-  for (const squad of template.squads) {
-    if (!agentKeys.has(squad.leader) || squad.members.some((m) => !agentKeys.has(m.agent))) throw new Error(`Unknown agent in squad ${squad.name}`);
-  }
-  const squadIds = Object.fromEntries(template.squads.map((s) => [s.key, s.key]));
-  for (const squad of template.squads) renderReferences(squad.instructions, squadIds);
+  validateTemplateObject(template);
   return {
     ...template,
     common: readFileSync(localPath(root, template.common_instructions), "utf8").trimEnd(),
@@ -88,13 +72,6 @@ export function loadTemplate(path) {
       return { ...s, content: readFileSync(join(dir, "SKILL.md"), "utf8"), files: skillFiles(dir) };
     }),
   };
-}
-
-export function renderReferences(text, squadIds) {
-  return text.replace(/\{\{squad:([^}]+)\}\}/g, (_, key) => {
-    if (!squadIds[key]) throw new Error(`Unknown squad reference: ${key}`);
-    return squadIds[key];
-  });
 }
 
 export function apiClient(config) {
@@ -187,7 +164,7 @@ export async function initializeTeam(api, template, { runtimeIds = {}, daemonId,
   }
   for (const agent of template.agents) {
     const body = Object.fromEntries(["name", "description", "model", "thinking_level", "service_tier", "max_concurrent_tasks", "conversation_starters", "permission_mode"].map((key) => [key, agent[key]]));
-    body.instructions = `${template.common}\n${agent.instructions}`;
+    body.instructions = agentInstructions(template.common, agent);
     body.runtime_id = runtimes[agent.provider].id;
     let current = byName(agentList, agent.name);
     if (current) {
@@ -229,7 +206,7 @@ export async function initializeTeam(api, template, { runtimeIds = {}, daemonId,
   for (const a of template.agents) {
     const current = await api("GET", `/api/agents/${agents[a.key]}`);
     const expected = Object.fromEntries(["name", "description", "model", "thinking_level", "service_tier", "max_concurrent_tasks", "conversation_starters", "permission_mode"].map((key) => [key, a[key]]));
-    verifyFields(current, { ...expected, runtime_id: runtimes[a.provider].id, instructions: `${template.common}\n${a.instructions}` }, a.name);
+    verifyFields(current, { ...expected, runtime_id: runtimes[a.provider].id, instructions: agentInstructions(template.common, a) }, a.name);
     const assigned = await api("GET", `/api/agents/${agents[a.key]}/skills`);
     if (a.skills.some((s) => !assigned.some((x) => x.id === skills[s]))) throw new Error(`Missing skill binding: ${a.name}`);
   }
@@ -251,6 +228,19 @@ export async function main(args, env = process.env) {
   const options = parseArgs([...args]);
   if (options.help) { console.log(HELP); return; }
   const template = loadTemplate(resolve(options.template ?? join(ROOT, "agent-team/team.json")));
+  if (options.command === "context") {
+    const report = await buildContext(template, options, { root: ROOT, env, client: apiClient });
+    console.log(options.json ? JSON.stringify(report, null, 2) : formatContext(report));
+    return report;
+  }
+  if (options.command === "sync") {
+    const target = resolveProfile(options, { root: ROOT, env });
+    const templatePath = resolve(options.template ?? join(ROOT, "agent-team/team.json"));
+    const plan = await prepareSync(apiClient(target.config), { template, templatePath, runtimeIds: options.runtimeIds, displayRoot: ROOT });
+    const report = applySyncPlan(plan, { check: options.check });
+    console.log(formatSyncReport(report, target.target));
+    return report;
+  }
   if (!options.profile && !env.MULTICA_DEV_PROFILE) {
     const run = (argv) => {
       const result = spawnSync("bash", [join(ROOT, "scripts/dev-env.sh"), ...argv], { cwd: ROOT, env, stdio: "inherit" });

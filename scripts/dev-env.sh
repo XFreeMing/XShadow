@@ -411,6 +411,11 @@ rewrite_env_ports() {
 
 # ---------------------------------------------------------------- database ---
 
+require_psql() {
+  command -v psql >/dev/null 2>&1 \
+    || die "Missing PostgreSQL client (psql). Install postgresql-client (Ubuntu/Debian) or libpq (Homebrew, then add its bin directory to PATH). Docker's psql does not provide a host client."
+}
+
 admin_database_url() {
   node -e '
     const url = new URL(process.argv[1]);
@@ -443,8 +448,9 @@ diagnose_database() {
 }
 
 ensure_database() {
+  require_psql
   local admin_url=""
-  if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
+  if [ -n "${DATABASE_URL:-}" ]; then
     admin_url="$(admin_database_url "$DATABASE_URL")"
   fi
 
@@ -494,17 +500,28 @@ component_pid() {
   printf '%s' "$pid"
 }
 
-# set -m puts the launcher in its own process group, so stopping can signal the
-# whole tree (make → go run → server) with one kill, and the child's own
-# `trap 'kill 0'` can never reach back into this shell.
+# A separate session prevents terminal job control from suspending descendants
+# such as Electron's login shell. The launcher also owns its process group so
+# stop_component can signal it without reaching the calling shell.
 launch_detached() {
   local name=$1
   shift
-  (
-    set -m
-    nohup "${CLEAN_ENV[@]}" "$@" > "$(log_file "$name")" 2>&1 < /dev/null &
-    printf '%s\n' "$!" > "$(pid_file "$name")"
-  )
+  node - "$(log_file "$name")" "$(pid_file "$name")" "${CLEAN_ENV[@]}" "$@" <<'NODE'
+const { spawn } = require('node:child_process');
+const { openSync, closeSync, writeFileSync } = require('node:fs');
+const [logPath, pidPath, command, ...args] = process.argv.slice(2);
+const log = openSync(logPath, 'w');
+const child = spawn(command, args, { detached: true, stdio: ['ignore', log, log] });
+closeSync(log);
+child.once('error', (error) => {
+  console.error(`Failed to launch ${command}: ${error.message}`);
+  process.exitCode = 1;
+});
+child.once('spawn', () => {
+  writeFileSync(pidPath, `${child.pid}\n`);
+  child.unref();
+});
+NODE
 }
 
 health_json() { curl -sf --max-time 3 "http://localhost:${BACKEND_PORT}/health" 2>/dev/null; }
@@ -1390,10 +1407,6 @@ cmd_up() {
   case " $requested " in *" api "*) ;; *) requested="api $requested" ;; esac
   COMPONENTS="$requested"
 
-  # No resident cleanup service is required: every future environment start is
-  # a safe opportunity to collect expired or directory-less environments.
-  cmd_gc --auto
-
   step "Prerequisites"
   local missing=() tool needed="node go curl"
   # pnpm is only required by the components that actually build JavaScript, so
@@ -1403,12 +1416,16 @@ cmd_up() {
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
   [ ${#missing[@]} -eq 0 ] || die "Missing prerequisites: ${missing[*]}"
+  require_psql
   mkdir -p "$DEV_TMPDIR"
   if [ "${TMPDIR:-}" != "$DEV_TMPDIR" ]; then
     info "TMPDIR pinned to $DEV_TMPDIR (was ${TMPDIR:-<unset>}) so builds outlive the run that made them."
     export TMPDIR="$DEV_TMPDIR" TMP="$DEV_TMPDIR" TEMP="$DEV_TMPDIR"
   fi
-  ok "node, go, curl found"
+  ok "node, go, curl, psql found"
+
+  # Cleanup needs the same host database client as startup.
+  cmd_gc --auto
 
   step "Environment"
   ENV_FILE="$(detect_env_file)"
@@ -1580,6 +1597,7 @@ cmd_destroy() {
     case "$reply" in y|Y|yes|YES) ;; *) printf 'Cancelled.\n'; return 0 ;; esac
   fi
 
+  require_psql
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
   step "Destroying $NAME"
   local comp desktop_stopped=1
@@ -1590,21 +1608,16 @@ cmd_destroy() {
     fi
   done
 
-  if command -v psql >/dev/null 2>&1; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
-    if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-      if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
-        ok "dropped database $DB_NAME"
-      else
-        warn "failed to drop database $DB_NAME; keeping its manifest"
-        failures=$((failures + 1))
-      fi
+  admin_url="$(admin_database_url "$DATABASE_URL")"
+  if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
+    if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
+      ok "dropped database $DB_NAME"
     else
-      warn "Nothing answered on the database host; $DB_NAME was left in place."
+      warn "failed to drop database $DB_NAME; keeping its manifest"
       failures=$((failures + 1))
     fi
   else
-    warn "psql not found; $DB_NAME was left in place."
+    warn "Nothing answered on the database host; $DB_NAME was left in place."
     failures=$((failures + 1))
   fi
 
