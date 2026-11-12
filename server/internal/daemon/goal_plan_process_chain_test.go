@@ -56,12 +56,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -818,45 +821,139 @@ type proxyRecord struct {
 // chainCandidate is the submitted plan read back from the server. The fake
 // executor fills it from the checkout and the task it actually read.
 type chainCandidate struct {
-	Items []struct {
-		ID           string `json:"id"`
-		Title        string `json:"title"`
-		EvidenceRefs []struct {
-			Kind    string `json:"kind"`
-			Ref     string `json:"ref"`
-			Version string `json:"version"`
-		} `json:"evidence_refs"`
-		Binding struct {
-			Type    string `json:"type"`
-			IssueID string `json:"issue_id"`
-		} `json:"binding"`
-		Coordination *struct {
-			ParallelReason string `json:"parallel_reason"`
-		} `json:"coordination"`
-	} `json:"items"`
-	Edges []struct {
-		DependentItemID    string `json:"dependent_item_id"`
-		PrerequisiteItemID string `json:"prerequisite_item_id"`
-		Reason             string `json:"reason"`
-	} `json:"edges"`
-	ContextSnapshot struct {
-		RepoSHA string `json:"repo_sha"`
-		Files   []struct {
-			Path    string `json:"path"`
-			Summary string `json:"summary"`
-			SHA256  string `json:"sha256"`
-		} `json:"files"`
-		Tasks []struct {
-			IssueID  string `json:"issue_id"`
-			Revision int64  `json:"revision"`
-			ReadAt   string `json:"read_at"`
-		} `json:"tasks"`
-		Resources []struct {
-			ID   string `json:"id"`
-			Read bool   `json:"read"`
-		} `json:"resources"`
-		ReadAt string `json:"read_at"`
-	} `json:"context_snapshot"`
+	Items           []chainItem   `json:"items"`
+	Edges           []chainEdge   `json:"edges"`
+	ContextSnapshot chainSnapshot `json:"context_snapshot"`
+}
+
+type chainItem struct {
+	ID           string             `json:"id"`
+	Title        string             `json:"title"`
+	EvidenceRefs []chainEvidenceRef `json:"evidence_refs"`
+	Binding      chainBinding       `json:"binding"`
+	Coordination *chainCoordination `json:"coordination"`
+}
+
+type chainEvidenceRef struct {
+	Kind    string `json:"kind"`
+	Ref     string `json:"ref"`
+	Version string `json:"version"`
+}
+
+type chainBinding struct {
+	Type    string `json:"type"`
+	IssueID string `json:"issue_id"`
+}
+
+type chainCoordination struct {
+	ParallelReason string `json:"parallel_reason"`
+}
+
+type chainEdge struct {
+	DependentItemID    string `json:"dependent_item_id"`
+	PrerequisiteItemID string `json:"prerequisite_item_id"`
+	Reason             string `json:"reason"`
+}
+
+type chainSnapshot struct {
+	RepoSHA string `json:"repo_sha"`
+	Files   []struct {
+		Path    string `json:"path"`
+		Summary string `json:"summary"`
+		SHA256  string `json:"sha256"`
+	} `json:"files"`
+	Tasks []struct {
+		IssueID  string `json:"issue_id"`
+		Revision int64  `json:"revision"`
+		ReadAt   string `json:"read_at"`
+	} `json:"tasks"`
+	Resources []struct {
+		ID   string `json:"id"`
+		Read bool   `json:"read"`
+	} `json:"resources"`
+	ReadAt string `json:"read_at"`
+}
+
+// The fake executor submits exactly this graph. The assertions below compare
+// stable node ids and the agreed strings, so a different edge direction, an
+// extra chained edge, or a missing parallel reason fails the run.
+const (
+	chainItemA = "a1111111-1111-4111-8111-111111111111"
+	chainItemB = "b2222222-2222-4222-8222-222222222222"
+	chainItemC = "c3333333-3333-4333-8333-333333333333"
+
+	chainItemATitle = "Controlled checkout item"
+	chainItemBTitle = "Existing task item"
+	chainItemCTitle = "Dependent item"
+
+	chainParallelReasonA = "Independent of the seeded existing task; both can start together."
+	chainParallelReasonB = "Read-only task evidence; independent of the checkout item."
+	chainEdgeReason      = "The dependent item consumes the context the controlled checkout item reads first."
+)
+
+// validateChainCandidateGraph accepts only the agreed fixture graph: the three
+// stable nodes, one C-depends-on-A edge with the agreed reason, and the agreed
+// parallel reasons on A and B. It is deliberately a fixture assertion, not a
+// general dependency-graph engine.
+func validateChainCandidateGraph(c chainCandidate, seededTaskID string, seededRevision int64) error {
+	wantTitles := map[string]string{
+		chainItemA: chainItemATitle,
+		chainItemB: chainItemBTitle,
+		chainItemC: chainItemCTitle,
+	}
+	wantParallel := map[string]string{
+		chainItemA: chainParallelReasonA,
+		chainItemB: chainParallelReasonB,
+	}
+	if len(c.Items) != len(wantTitles) {
+		return fmt.Errorf("candidate has %d items, want exactly %d", len(c.Items), len(wantTitles))
+	}
+	seen := map[string]bool{}
+	for _, item := range c.Items {
+		wantTitle, ok := wantTitles[item.ID]
+		if !ok {
+			return fmt.Errorf("candidate has unexpected item id %q", item.ID)
+		}
+		if seen[item.ID] {
+			return fmt.Errorf("candidate repeats item id %q", item.ID)
+		}
+		seen[item.ID] = true
+		if item.Title != wantTitle {
+			return fmt.Errorf("item %s title = %q, want %q", item.ID, item.Title, wantTitle)
+		}
+		if want, required := wantParallel[item.ID]; required {
+			if item.Coordination == nil || item.Coordination.ParallelReason != want {
+				return fmt.Errorf("item %s parallel_reason = %+v, want %q", item.ID, item.Coordination, want)
+			}
+		}
+		if item.ID == chainItemB {
+			if item.Binding.Type != "existing" || item.Binding.IssueID != seededTaskID {
+				return fmt.Errorf("item B binding = %+v, want existing %s", item.Binding, seededTaskID)
+			}
+			wantVersion := fmt.Sprintf("revision %d", seededRevision)
+			found := false
+			for _, ref := range item.EvidenceRefs {
+				if ref.Kind == "task" && ref.Ref == seededTaskID && ref.Version == wantVersion {
+					found = true
+				}
+			}
+			if !found {
+				return fmt.Errorf("item B has no task evidence %s at %q", seededTaskID, wantVersion)
+			}
+		}
+	}
+	if len(c.Edges) != 1 {
+		return fmt.Errorf("candidate has %d edges, want exactly one C-depends-on-A edge", len(c.Edges))
+	}
+	edge := c.Edges[0]
+	if edge.DependentItemID != chainItemC || edge.PrerequisiteItemID != chainItemA {
+		return fmt.Errorf("candidate edge = %s -> %s, want %s -> %s",
+			edge.DependentItemID, edge.PrerequisiteItemID, chainItemC, chainItemA)
+	}
+	if edge.Reason != chainEdgeReason {
+		return fmt.Errorf("candidate edge reason = %q, want %q", edge.Reason, chainEdgeReason)
+	}
+	return nil
 }
 
 type recorder struct {
@@ -1201,6 +1298,34 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		"project_id":          project.ID,
 	}, &goal, http.StatusCreated)
 
+	// The database assertions compare complete row sets, not just the ids the
+	// API already reported. Every stage records its SQL, parameters, rows and
+	// query status; a failed query fails the test.
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, cfg.dbURL)
+	if err != nil {
+		t.Fatalf("connect to the isolated test database: %v", err)
+	}
+	t.Cleanup(func() { conn.Close(context.Background()) })
+
+	var dbStages []dbStageEvidence
+	recordStage := func(ev dbStageEvidence) {
+		dbStages = append(dbStages, ev)
+		writeArtifact(t, cfg.artifacts, "db-stages.json", dbStages)
+	}
+	runStage := func(stage, sql string, params []string, args ...any) []map[string]string {
+		rows, queryErr := queryStageRows(ctx, conn, sql, args...)
+		ev := dbStageEvidence{Stage: stage, SQL: sql, Params: params, Rows: rows, Count: len(rows), OK: queryErr == nil}
+		if queryErr != nil {
+			ev.Error = queryErr.Error()
+		}
+		recordStage(ev)
+		if queryErr != nil {
+			t.Fatalf("database stage %q failed: %v", stage, queryErr)
+		}
+		return rows
+	}
+
 	requestKey := fmt.Sprintf("chain-%d", time.Now().UnixNano())
 	generationBody := map[string]any{
 		"intent":            "生成一份包含受控文件依据的计划草稿",
@@ -1208,6 +1333,22 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		"expected_revision": 0,
 		"agent_id":          agent.ID,
 	}
+	issuePath := "/api/issues?project_id=" + project.ID + "&limit=100"
+	var issuesBefore projectIssues
+	api.mustJSON(t, http.MethodGet, issuePath, nil, &issuesBefore, http.StatusOK)
+	writeArtifact(t, cfg.artifacts, "issues-before-generation.json", issuesBefore)
+	if len(issuesBefore.Issues) != 1 || issuesBefore.Issues[0].ID != seededTask.ID {
+		t.Fatalf("project issues before the run = %+v, want only the seeded task", issuesBefore.Issues)
+	}
+	if rows := runStage("before-generation/generations", generationRowSQL,
+		[]string{profile.WorkspaceID, goal.ID}, profile.WorkspaceID, goal.ID); len(rows) != 0 {
+		t.Fatalf("generation rows before the run = %d, want none", len(rows))
+	}
+	if rows := runStage("before-generation/tasks", taskRowSQL,
+		[]string{agent.ID}, agent.ID); len(rows) != 0 {
+		t.Fatalf("queue task rows before the run = %d, want none", len(rows))
+	}
+
 	var created struct {
 		ID     string `json:"id"`
 		State  string `json:"state"`
@@ -1294,43 +1435,21 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		t.Fatalf("candidate task snapshot = %+v, want issue %s at revision %d with a read time",
 			submitted.ContextSnapshot.Tasks, seededTask.ID, seededTask.Revision)
 	}
-	foundTaskEvidence, foundExistingBinding := false, false
-	for _, item := range submitted.Items {
-		if item.Binding.Type == "existing" && item.Binding.IssueID == seededTask.ID {
-			foundExistingBinding = true
-		}
-		for _, ref := range item.EvidenceRefs {
-			if ref.Kind == "task" && ref.Ref == seededTask.ID &&
-				strings.Contains(ref.Version, strconv.FormatInt(seededTask.Revision, 10)) {
-				foundTaskEvidence = true
-			}
-		}
+	// The exact graph is asserted twice: on the plan the fake executor actually
+	// submitted, and on the candidate the server stored and handed back.
+	planRaw, err := os.ReadFile(filepath.Join(fakeDir, "plan.json"))
+	if err != nil {
+		t.Fatalf("fake executor submitted no plan: %v", err)
 	}
-	if !foundTaskEvidence {
-		t.Fatalf("candidate has no task evidence naming %s at revision %d",
-			seededTask.ID, seededTask.Revision)
+	var planCandidate chainCandidate
+	if err := json.Unmarshal(planRaw, &planCandidate); err != nil {
+		t.Fatalf("decode submitted plan: %v", err)
 	}
-	if !foundExistingBinding {
-		t.Fatalf("candidate does not bind an item to the seeded existing task %s", seededTask.ID)
+	if err := validateChainCandidateGraph(planCandidate, seededTask.ID, seededTask.Revision); err != nil {
+		t.Fatalf("submitted plan graph: %v", err)
 	}
-	if len(submitted.Edges) == 0 || strings.TrimSpace(submitted.Edges[0].Reason) == "" {
-		t.Fatalf("candidate has no must-wait edge with a reason: %+v", submitted.Edges)
-	}
-	edgePairs := map[string]bool{}
-	for _, edge := range submitted.Edges {
-		edgePairs[edge.DependentItemID+"|"+edge.PrerequisiteItemID] = true
-		edgePairs[edge.PrerequisiteItemID+"|"+edge.DependentItemID] = true
-	}
-	foundParallel := false
-	for i := 0; i < len(submitted.Items); i++ {
-		for j := i + 1; j < len(submitted.Items); j++ {
-			if !edgePairs[submitted.Items[i].ID+"|"+submitted.Items[j].ID] {
-				foundParallel = true
-			}
-		}
-	}
-	if !foundParallel {
-		t.Fatalf("candidate has no pair of items without a dependency edge: %+v", submitted.Items)
+	if err := validateChainCandidateGraph(submitted, seededTask.ID, seededTask.Revision); err != nil {
+		t.Fatalf("read-back candidate graph: %v", err)
 	}
 
 	promptRaw, err := os.ReadFile(filepath.Join(fakeDir, "prompt.txt"))
@@ -1391,22 +1510,29 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		t.Fatalf("unexpected CLI output: %q", string(cliOut))
 	}
 
-	// The planning run must not create an execution issue: the project still
-	// holds exactly the task seeded before the run.
-	type projectIssues struct {
-		Issues []struct {
-			ID       string `json:"id"`
-			Revision int64  `json:"revision"`
-			Title    string `json:"title"`
-		} `json:"issues"`
-		Total int `json:"total"`
+	// After the first run the database must hold exactly one generation and one
+	// queue task for this fixture. The generation query is scoped to this
+	// fixture's workspace and goal, the task query to this run's agent, so any
+	// additional row with an unknown id is visible. The project must still hold
+	// exactly the task seeded before the run.
+	genAfterRun := runStage("after-first-run/generations", generationRowSQL,
+		[]string{profile.WorkspaceID, goal.ID}, profile.WorkspaceID, goal.ID)
+	if err := assertGenerationRowSet(genAfterRun, created.ID, created.TaskID, requestKey); err != nil {
+		t.Fatalf("after the first run, the generation row set is wrong: %v", err)
 	}
-	issuePath := "/api/issues?project_id=" + project.ID + "&limit=100"
+	sessionID := genAfterRun[0]["chat_session_id"]
+	if sessionID == "" {
+		t.Fatalf("the generation row carries no chat_session_id: %v", genAfterRun[0])
+	}
+	taskAfterRun := runStage("after-first-run/tasks", taskRowSQL, []string{agent.ID}, agent.ID)
+	if err := assertTaskRowSet(taskAfterRun, created.TaskID, sessionID); err != nil {
+		t.Fatalf("after the first run, the queue task row set is wrong: %v", err)
+	}
 	var afterRun projectIssues
 	api.mustJSON(t, http.MethodGet, issuePath, nil, &afterRun, http.StatusOK)
 	writeArtifact(t, cfg.artifacts, "issues-after-run.json", afterRun)
-	if len(afterRun.Issues) != 1 || afterRun.Issues[0].ID != seededTask.ID {
-		t.Fatalf("planning run changed the project's issues: %+v", afterRun.Issues)
+	if err := compareIssueSets(issuesBefore, afterRun); err != nil {
+		t.Fatalf("the first run changed the project's issue set: %v", err)
 	}
 
 	// A same-key retry must replay the existing generation instead of starting
@@ -1428,12 +1554,103 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		t.Fatalf("same-key retry did not replay the original generation: %+v vs %s/%s",
 			replayed, created.ID, created.TaskID)
 	}
+	// The same-key retry must leave the row sets unchanged: still exactly the
+	// original generation with the original task, and the same project issues.
+	genAfterReplay := runStage("after-same-key-retry/generations", generationRowSQL,
+		[]string{profile.WorkspaceID, goal.ID}, profile.WorkspaceID, goal.ID)
+	if err := assertGenerationRowSet(genAfterReplay, created.ID, created.TaskID, requestKey); err != nil {
+		t.Fatalf("after the same-key retry, the generation row set is wrong: %v", err)
+	}
+	if got := genAfterReplay[0]["chat_session_id"]; got != sessionID {
+		t.Fatalf("same-key retry changed the generation session: %q -> %q", sessionID, got)
+	}
+	taskAfterReplay := runStage("after-same-key-retry/tasks", taskRowSQL, []string{agent.ID}, agent.ID)
+	if err := assertTaskRowSet(taskAfterReplay, created.TaskID, sessionID); err != nil {
+		t.Fatalf("after the same-key retry, the queue task row set is wrong: %v", err)
+	}
 	var afterReplay projectIssues
 	api.mustJSON(t, http.MethodGet, issuePath, nil, &afterReplay, http.StatusOK)
 	writeArtifact(t, cfg.artifacts, "issues-after-replay.json", afterReplay)
-	if len(afterReplay.Issues) != len(afterRun.Issues) || afterReplay.Issues[0].ID != seededTask.ID {
-		t.Fatalf("same-key retry changed the project's issues: %+v", afterReplay.Issues)
+	if err := compareIssueSets(issuesBefore, afterReplay); err != nil {
+		t.Fatalf("the same-key retry changed the project's issue set: %v", err)
 	}
+
+	// Negative proof for both row-set assertions: insert one extra row inside
+	// this fixture's scope while the original id stays present, rerun the same
+	// query, and require the row-set assertion to fail. The probe row is then
+	// removed and the restored row set is re-checked. Probes only touch this
+	// test's own database.
+	probeAndCheck := func(stage, sql string, params []string, args []any,
+		insert string, insertArgs []any, assertion func([]map[string]string) error, deleteSQL string) {
+		t.Helper()
+		var probeID string
+		if err := conn.QueryRow(ctx, insert, insertArgs...).Scan(&probeID); err != nil {
+			t.Fatalf("%s: insert probe row: %v", stage, err)
+		}
+		t.Cleanup(func() {
+			_, _ = conn.Exec(context.Background(), deleteSQL, probeID)
+		})
+		rows, queryErr := queryStageRows(ctx, conn, sql, args...)
+		mutation := fmt.Sprintf("extra row inserted by: %s; probe id=%s", strings.Join(strings.Fields(insert), " "), probeID)
+		detection := dbStageEvidence{Stage: stage + "/detection", SQL: sql, Params: params, Rows: rows, Count: len(rows), OK: queryErr == nil, Mutation: mutation}
+		if queryErr != nil {
+			detection.Error = queryErr.Error()
+			recordStage(detection)
+			t.Fatalf("%s: probe query failed: %v", stage, queryErr)
+		}
+		assertionErr := assertion(rows)
+		if assertionErr == nil {
+			detection.Error = "the extra probe row was not detected"
+			recordStage(detection)
+			t.Fatalf("%s: an extra row was not detected: %v", stage, rows)
+		}
+		detection.AssertionError = assertionErr.Error()
+		detection.Detected = true
+		recordStage(detection)
+		if _, err := conn.Exec(ctx, deleteSQL, probeID); err != nil {
+			t.Fatalf("%s: remove probe row: %v", stage, err)
+		}
+		restored, queryErr := queryStageRows(ctx, conn, sql, args...)
+		cleanup := dbStageEvidence{
+			Stage: stage + "/cleanup", SQL: sql, Params: params, Rows: restored, Count: len(restored), OK: queryErr == nil,
+			Cleanup: fmt.Sprintf("probe %s deleted with %s", probeID, deleteSQL),
+		}
+		if queryErr == nil {
+			if err := assertion(restored); err != nil {
+				cleanup.AssertionError = err.Error()
+			}
+		} else {
+			cleanup.Error = queryErr.Error()
+		}
+		recordStage(cleanup)
+		if queryErr != nil {
+			t.Fatalf("%s: cleanup query failed: %v", stage, queryErr)
+		}
+		if cleanup.AssertionError != "" {
+			t.Fatalf("%s: row set not restored after cleanup: %s", stage, cleanup.AssertionError)
+		}
+	}
+	probeAndCheck("negative-extra-generation", generationRowSQL,
+		[]string{profile.WorkspaceID, goal.ID}, []any{profile.WorkspaceID, goal.ID},
+		`INSERT INTO goal_plan_generation (workspace_id, goal_id, project_id, request_key, intent, agent_id)
+		 SELECT workspace_id, goal_id, project_id, $2, 'row-set probe', agent_id
+		 FROM goal_plan_generation WHERE id = $1::uuid
+		 RETURNING id::text`,
+		[]any{created.ID, requestKey + "-probe"},
+		func(rows []map[string]string) error {
+			return assertGenerationRowSet(rows, created.ID, created.TaskID, requestKey)
+		},
+		`DELETE FROM goal_plan_generation WHERE id = $1::uuid`)
+	probeAndCheck("negative-extra-task", taskRowSQL, []string{agent.ID}, []any{agent.ID},
+		`INSERT INTO agent_task_queue (agent_id, issue_id, chat_session_id, status, completed_at)
+		 SELECT agent_id, issue_id, chat_session_id, 'completed', now()
+		 FROM agent_task_queue WHERE id = $1::uuid
+		 RETURNING id::text`,
+		[]any{created.TaskID},
+		func(rows []map[string]string) error {
+			return assertTaskRowSet(rows, created.TaskID, sessionID)
+		},
+		`DELETE FROM agent_task_queue WHERE id = $1::uuid`)
 
 	records := rec.snapshot()
 	writeArtifact(t, cfg.artifacts, "proxy.json", records)
@@ -1518,6 +1735,192 @@ func initControlledCheckout(t *testing.T, dir string) string {
 		t.Fatalf("controlled checkout HEAD = %q, want a 40-character commit SHA", head)
 	}
 	return head
+}
+
+// TestChainCandidateGraphRejectsWrongShapes is the minimal negative proof for
+// validateChainCandidateGraph: an inverted edge, a chained pair instead of the
+// single C->A wait, a missing parallel reason, and a task-evidence version that
+// merely shares the revision digit are all rejected.
+func TestChainCandidateGraphRejectsWrongShapes(t *testing.T) {
+	const taskID = "01a1d077-cdb4-79bc-9781-05ea9b56b861"
+	const taskRevision int64 = 1
+
+	base := func() chainCandidate {
+		return chainCandidate{
+			Items: []chainItem{
+				{
+					ID: chainItemA, Title: chainItemATitle,
+					Coordination: &chainCoordination{ParallelReason: chainParallelReasonA},
+				},
+				{
+					ID: chainItemB, Title: chainItemBTitle,
+					Binding: chainBinding{Type: "existing", IssueID: taskID},
+					EvidenceRefs: []chainEvidenceRef{{
+						Kind: "task", Ref: taskID, Version: "revision 1",
+					}},
+					Coordination: &chainCoordination{ParallelReason: chainParallelReasonB},
+				},
+				{ID: chainItemC, Title: chainItemCTitle},
+			},
+			Edges: []chainEdge{{
+				DependentItemID: chainItemC, PrerequisiteItemID: chainItemA, Reason: chainEdgeReason,
+			}},
+		}
+	}
+	if err := validateChainCandidateGraph(base(), taskID, taskRevision); err != nil {
+		t.Fatalf("baseline fixture must pass: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*chainCandidate)
+	}{
+		{"inverted A depends on B", func(c *chainCandidate) {
+			c.Edges[0] = chainEdge{DependentItemID: chainItemA, PrerequisiteItemID: chainItemB, Reason: chainEdgeReason}
+		}},
+		{"chained A depends on B and B depends on C", func(c *chainCandidate) {
+			c.Edges = []chainEdge{
+				{DependentItemID: chainItemA, PrerequisiteItemID: chainItemB, Reason: chainEdgeReason},
+				{DependentItemID: chainItemB, PrerequisiteItemID: chainItemC, Reason: chainEdgeReason},
+			}
+		}},
+		{"missing parallel reason on A", func(c *chainCandidate) {
+			c.Items[0].Coordination = nil
+		}},
+		{"task evidence revision 11 for revision 1", func(c *chainCandidate) {
+			c.Items[1].EvidenceRefs[0].Version = "revision 11"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := base()
+			tc.mutate(&candidate)
+			if err := validateChainCandidateGraph(candidate, taskID, taskRevision); err == nil {
+				t.Fatalf("mutated graph %q was accepted", tc.name)
+			} else {
+				t.Logf("rejected as expected: %v", err)
+			}
+		})
+	}
+}
+
+type issueRow struct {
+	ID       string `json:"id"`
+	Revision int64  `json:"revision"`
+	Title    string `json:"title"`
+}
+
+type projectIssues struct {
+	Issues []issueRow `json:"issues"`
+	Total  int        `json:"total"`
+}
+
+// issueSetKey compares the fixture project's issues by identity and revision,
+// so either a new issue or an in-place revision change is visible.
+func issueSetKey(issues projectIssues) []string {
+	keys := make([]string, 0, len(issues.Issues))
+	for _, issue := range issues.Issues {
+		keys = append(keys, fmt.Sprintf("%s|rev=%d|%s", issue.ID, issue.Revision, issue.Title))
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func compareIssueSets(before, after projectIssues) error {
+	beforeKeys, afterKeys := issueSetKey(before), issueSetKey(after)
+	if len(beforeKeys) != len(afterKeys) {
+		return fmt.Errorf("issue set changed: before %v, after %v", beforeKeys, afterKeys)
+	}
+	for i := range beforeKeys {
+		if beforeKeys[i] != afterKeys[i] {
+			return fmt.Errorf("issue set changed at %d: before %v, after %v", i, beforeKeys, afterKeys)
+		}
+	}
+	return nil
+}
+
+type dbStageEvidence struct {
+	Stage          string              `json:"stage"`
+	SQL            string              `json:"sql"`
+	Params         []string            `json:"params"`
+	Rows           []map[string]string `json:"rows"`
+	Count          int                 `json:"count"`
+	OK             bool                `json:"ok"`
+	Error          string              `json:"error,omitempty"`
+	Mutation       string              `json:"mutation,omitempty"`
+	AssertionError string              `json:"assertion_error,omitempty"`
+	Detected       bool                `json:"mutation_detected,omitempty"`
+	Cleanup        string              `json:"cleanup,omitempty"`
+}
+
+const generationRowSQL = `SELECT id::text, workspace_id::text, goal_id::text, request_key, task_id::text, chat_session_id::text, state
+FROM goal_plan_generation
+WHERE workspace_id = $1::uuid AND goal_id = $2::uuid
+ORDER BY id`
+
+const taskRowSQL = `SELECT id::text, agent_id::text, chat_session_id::text, status
+FROM agent_task_queue
+WHERE agent_id = $1::uuid
+ORDER BY id`
+
+func queryStageRows(ctx context.Context, conn *pgx.Conn, sql string, args ...any) ([]map[string]string, error) {
+	rows, err := conn.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	fields := rows.FieldDescriptions()
+	out := []map[string]string{}
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			return nil, err
+		}
+		row := make(map[string]string, len(fields))
+		for i, field := range fields {
+			if values[i] == nil {
+				row[string(field.Name)] = ""
+				continue
+			}
+			row[string(field.Name)] = fmt.Sprint(values[i])
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func assertGenerationRowSet(rows []map[string]string, wantID, wantTaskID, wantRequestKey string) error {
+	if len(rows) != 1 {
+		return fmt.Errorf("generation row set has %d rows, want exactly 1: %v", len(rows), rows)
+	}
+	row := rows[0]
+	if row["id"] != wantID {
+		return fmt.Errorf("generation row id = %q, want %q", row["id"], wantID)
+	}
+	if row["task_id"] != wantTaskID {
+		return fmt.Errorf("generation row task_id = %q, want %q", row["task_id"], wantTaskID)
+	}
+	if row["request_key"] != wantRequestKey {
+		return fmt.Errorf("generation row request_key = %q, want %q", row["request_key"], wantRequestKey)
+	}
+	if row["state"] == "" {
+		return fmt.Errorf("generation row has no state: %v", row)
+	}
+	return nil
+}
+
+func assertTaskRowSet(rows []map[string]string, wantID, wantSession string) error {
+	if len(rows) != 1 {
+		return fmt.Errorf("queue task row set has %d rows, want exactly 1: %v", len(rows), rows)
+	}
+	row := rows[0]
+	if row["id"] != wantID {
+		return fmt.Errorf("queue task row id = %q, want %q", row["id"], wantID)
+	}
+	if wantSession == "" || row["chat_session_id"] != wantSession {
+		return fmt.Errorf("queue task chat_session_id = %q, want %q", row["chat_session_id"], wantSession)
+	}
+	return nil
 }
 
 func mustMarshal(t *testing.T, v any) []byte {
