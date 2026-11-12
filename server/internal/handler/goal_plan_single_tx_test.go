@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -993,4 +994,259 @@ func TestGoalPlanCommittedRunReachableThroughEmptyClaimCache(t *testing.T) {
 	if claimed == nil || uuidToString(claimed.ID) != *created.TaskID {
 		t.Fatalf("claimed task = %+v, want %s", claimed, *created.TaskID)
 	}
+}
+
+// planCommitOutcome selects what the first Commit of a request does before it
+// reports the injected error. Later commits (the replay's read-only
+// transaction) must commit normally, so only the first call is special.
+type planCommitOutcome int
+
+const (
+	planCommitLandsThenErrors planCommitOutcome = iota
+	planCommitRollsBackThenErrors
+)
+
+func planFirstCommitHook(outcome planCommitOutcome) func(context.Context, pgx.Tx) error {
+	var used atomic.Bool
+	return func(ctx context.Context, tx pgx.Tx) error {
+		if !used.CompareAndSwap(false, true) {
+			return tx.Commit(ctx)
+		}
+		switch outcome {
+		case planCommitRollsBackThenErrors:
+			if err := tx.Rollback(ctx); err != nil {
+				return err
+			}
+		default:
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+		}
+		return errInjectedPlanFault
+	}
+}
+
+// planByKeyFailOnceDB fails the handler's first non-transactional generation
+// re-read, simulating a re-read that cannot yet confirm a commit that landed.
+// The in-transaction lookup uses the transaction's own queries and is not
+// affected.
+type planByKeyFailOnceDB struct {
+	db.DBTX
+	mu   sync.Mutex
+	used bool
+}
+
+func (d *planByKeyFailOnceDB) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	if strings.Contains(query, "-- name: GetGoalPlanGenerationByRequestKey") {
+		d.mu.Lock()
+		fail := !d.used
+		d.used = true
+		d.mu.Unlock()
+		if fail {
+			return planFaultRow{err: errInjectedPlanFault}
+		}
+	}
+	return d.DBTX.QueryRow(ctx, query, args...)
+}
+
+type planWakeup struct{ calls atomic.Int64 }
+
+func (w *planWakeup) NotifyTaskAvailable(string, string) { w.calls.Add(1) }
+
+// newPlanClaimHandler builds one handler whose TaskService owns both the
+// post-commit notification and the poll claim, as router.go does.
+func newPlanClaimHandler(t *testing.T, starter txStarter) (*Handler, *service.TaskService, *service.EmptyClaimCache, *planWakeup) {
+	t.Helper()
+	wakeup := &planWakeup{}
+	svc := service.NewTaskService(testHandler.Queries, testHandler.TxStarter,
+		testHandler.TaskService.Hub, testHandler.TaskService.Bus, wakeup)
+	cache := service.NewEmptyClaimCache(newPlanClaimRedis())
+	svc.EmptyClaim = cache
+	h := *testHandler
+	h.TaskService = svc
+	h.TxStarter = starter
+	return &h, svc, cache, wakeup
+}
+
+func postPlanGenerationTo(h *Handler, goalID string, body map[string]any) *httptest.ResponseRecorder {
+	req := goalRequest(http.MethodPost, "/api/goals/"+goalID+"/plan/generations", testUserID, body,
+		map[string]string{"id": goalID})
+	rec := httptest.NewRecorder()
+	h.CreateGoalPlanGeneration(rec, req)
+	return rec
+}
+
+// TestGoalPlanCommittedRunClaimabilityAfterUncertainCommit covers the combined
+// behavior a separately-passing commit-uncertainty test and empty-cache test
+// cannot: one TaskService caches an empty verdict for the runtime, then the
+// planning transaction commits but reports an error. Whatever the response
+// path, a run the database proves committed must invalidate that verdict and
+// wake the runtime exactly once, from the persisted task, while an unconfirmed
+// or rolled-back attempt must not announce anything.
+func TestGoalPlanCommittedRunClaimabilityAfterUncertainCommit(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	newFixture := func(t *testing.T) (goal GoalResponse, runtimeID, agentID string) {
+		t.Helper()
+		project := createTestProjectForResources(t, "Plan claimability project "+t.Name())
+		goal = planTestGoal(t, project.ID)
+		runtimeID, agentID = planTestRuntimeAndAgent(t, "Plan claimability "+t.Name())
+		cleanupPlanRun(t, goal.ID, agentID)
+		return goal, runtimeID, agentID
+	}
+	idleClaim := func(t *testing.T, svc *service.TaskService, cache *service.EmptyClaimCache, runtimeID string) {
+		t.Helper()
+		claimed, err := svc.ClaimTaskForRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("idle claim: %v", err)
+		}
+		if claimed != nil {
+			t.Fatalf("idle claim returned a task: %+v", claimed)
+		}
+		if !cache.IsEmpty(ctx, runtimeID) {
+			t.Fatal("precondition: an idle poll must cache the runtime's empty verdict")
+		}
+	}
+	decode := func(t *testing.T, rec *httptest.ResponseRecorder) GoalPlanGenerationResponse {
+		t.Helper()
+		var resp GoalPlanGenerationResponse
+		decodePlanJSON(t, rec, &resp)
+		return resp
+	}
+
+	t.Run("commit_lands_then_reports_error", func(t *testing.T) {
+		goal, runtimeID, agentID := newFixture(t)
+		h, svc, cache, wakeup := newPlanClaimHandler(t, &planFaultStarter{
+			base: testHandler.TxStarter, commit: planFirstCommitHook(planCommitLandsThenErrors),
+		})
+		idleClaim(t, svc, cache, runtimeID)
+
+		body := planGenerationBody("uncertain-lands", "plan on a committed but unconfirmed run", agentID, 0)
+		rec := postPlanGenerationTo(h, goal.ID, body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("CreateGoalPlanGeneration = %d: %s", rec.Code, rec.Body.String())
+		}
+		created := decode(t, rec)
+		if created.TaskID == nil || created.ChatSessionID == nil {
+			t.Fatalf("generation response = %+v, want a task and session", created)
+		}
+		if cache.IsEmpty(ctx, runtimeID) {
+			t.Fatal("a run the database proves committed must invalidate the cached empty verdict")
+		}
+		if wakeup.calls.Load() == 0 {
+			t.Fatal("a confirmed committed run must wake its runtime once")
+		}
+		claimed, err := svc.ClaimTaskForRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("claim after confirmed commit: %v", err)
+		}
+		if claimed == nil || uuidToString(claimed.ID) != *created.TaskID {
+			t.Fatalf("claimed task = %+v, want %s", claimed, *created.TaskID)
+		}
+
+		// The same key may be retried after the unconfirmed response; it must
+		// resolve to the original run and must not create a second one.
+		replay := postPlanGenerationTo(h, goal.ID, body)
+		if replay.Code != http.StatusOK {
+			t.Fatalf("same-key replay = %d: %s", replay.Code, replay.Body.String())
+		}
+		if replayed := decode(t, replay); replayed.ID != created.ID {
+			t.Fatalf("same-key replay generation = %s, want %s", replayed.ID, created.ID)
+		}
+		countPlanRun(t, goal.ID, agentID).assertOneRun(t, "after same-key replay")
+	})
+
+	t.Run("first_recheck_unconfirmed_then_replay_confirms", func(t *testing.T) {
+		goal, runtimeID, agentID := newFixture(t)
+		h, svc, cache, wakeup := newPlanClaimHandler(t, &planFaultStarter{
+			base: testHandler.TxStarter, commit: planFirstCommitHook(planCommitLandsThenErrors),
+		})
+		h.Queries = db.New(&planByKeyFailOnceDB{DBTX: testPool})
+		idleClaim(t, svc, cache, runtimeID)
+
+		body := planGenerationBody("uncertain-replay", "plan confirmed only by the next replay", agentID, 0)
+		rec := postPlanGenerationTo(h, goal.ID, body)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("unconfirmed generation = %d: %s, want 503", rec.Code, rec.Body.String())
+		}
+		if !cache.IsEmpty(ctx, runtimeID) {
+			t.Fatal("an unconfirmed attempt must not invalidate the empty verdict")
+		}
+		if wakeup.calls.Load() != 0 {
+			t.Fatalf("an unconfirmed attempt must not wake the runtime, got %d wakeups", wakeup.calls.Load())
+		}
+		// The transaction did commit, so the replay has a persisted run to
+		// resolve; the first attempt must not have created a second one.
+		countPlanRun(t, goal.ID, agentID).assertOneRun(t, "after unconfirmed response")
+
+		replay := postPlanGenerationTo(h, goal.ID, body)
+		if replay.Code != http.StatusOK {
+			t.Fatalf("same-key replay = %d: %s", replay.Code, replay.Body.String())
+		}
+		created := decode(t, replay)
+		if created.TaskID == nil {
+			t.Fatalf("replay response = %+v, want the persisted task", created)
+		}
+		if cache.IsEmpty(ctx, runtimeID) {
+			t.Fatal("a replay that confirms the commit must invalidate the cached empty verdict")
+		}
+		if wakeup.calls.Load() != 1 {
+			t.Fatalf("confirmed replay wakeups = %d, want exactly 1", wakeup.calls.Load())
+		}
+		claimed, err := svc.ClaimTaskForRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("claim after confirmed replay: %v", err)
+		}
+		if claimed == nil || uuidToString(claimed.ID) != *created.TaskID {
+			t.Fatalf("claimed task = %+v, want %s", claimed, *created.TaskID)
+		}
+		countPlanRun(t, goal.ID, agentID).assertOneRun(t, "after confirmed replay")
+	})
+
+	t.Run("commit_rolls_back_then_retry_enqueues_once", func(t *testing.T) {
+		goal, runtimeID, agentID := newFixture(t)
+		h, svc, cache, wakeup := newPlanClaimHandler(t, &planFaultStarter{
+			base: testHandler.TxStarter, commit: planFirstCommitHook(planCommitRollsBackThenErrors),
+		})
+		idleClaim(t, svc, cache, runtimeID)
+
+		body := planGenerationBody("rolled-back", "plan whose first commit rolled back", agentID, 0)
+		rec := postPlanGenerationTo(h, goal.ID, body)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("rolled-back generation = %d: %s, want 503", rec.Code, rec.Body.String())
+		}
+		if !cache.IsEmpty(ctx, runtimeID) {
+			t.Fatal("a rolled-back attempt must not invalidate the empty verdict")
+		}
+		if wakeup.calls.Load() != 0 {
+			t.Fatalf("a rolled-back attempt must not wake the runtime, got %d wakeups", wakeup.calls.Load())
+		}
+		countPlanRun(t, goal.ID, agentID).assertEmpty(t, "after rolled-back commit")
+
+		retry := postPlanGenerationTo(h, goal.ID, body)
+		if retry.Code != http.StatusAccepted {
+			t.Fatalf("same-key retry = %d: %s, want 202", retry.Code, retry.Body.String())
+		}
+		created := decode(t, retry)
+		if created.TaskID == nil {
+			t.Fatalf("retry response = %+v, want a task", created)
+		}
+		if cache.IsEmpty(ctx, runtimeID) {
+			t.Fatal("the committed retry must invalidate the cached empty verdict")
+		}
+		if wakeup.calls.Load() != 1 {
+			t.Fatalf("committed retry wakeups = %d, want exactly 1", wakeup.calls.Load())
+		}
+		claimed, err := svc.ClaimTaskForRuntime(ctx, parseUUID(runtimeID))
+		if err != nil {
+			t.Fatalf("claim after retry: %v", err)
+		}
+		if claimed == nil || uuidToString(claimed.ID) != *created.TaskID {
+			t.Fatalf("claimed task = %+v, want %s", claimed, *created.TaskID)
+		}
+		countPlanRun(t, goal.ID, agentID).assertOneRun(t, "after committed retry")
+	})
 }

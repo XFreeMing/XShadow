@@ -896,6 +896,11 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 // exists — either a saved request_key replay or a commit that landed despite a
 // failed commit call — without writing anything.
 func (h *Handler) writeGoalPlanGenerationReplay(w http.ResponseWriter, r *http.Request, goal db.Goal, generation db.GoalPlanGeneration) {
+	// A replay is also the only confirmation a caller gets when the original
+	// commit reported an error. The run is durable, so its runtime must be told
+	// that queued work exists; otherwise a cached empty verdict hides it until
+	// that verdict expires.
+	h.announceCommittedGoalPlanRun(generation)
 	current, _, revErr := h.goalPlanRevision(r.Context(), h.Queries, goal)
 	if revErr != nil {
 		current = generation.BaseRevision
@@ -903,6 +908,34 @@ func (h *Handler) writeGoalPlanGenerationReplay(w http.ResponseWriter, r *http.R
 	state := h.effectiveGoalPlanGenerationState(r.Context(), generation)
 	generation.Error = h.generationFailureText(r.Context(), generation, state)
 	writeJSON(w, http.StatusOK, goalPlanGenerationToResponse(generation, state, current))
+}
+
+// announceCommittedGoalPlanRun makes a run that a replay proved committed
+// reachable to its runtime. The task is loaded from the database: the stored
+// generation is the evidence of the commit, while the request's in-memory
+// preparation object may belong to a different call. Only a still-queued run
+// with a still-queued task is announced, so replaying running, finished,
+// unbound or rolled-back work cannot enqueue or wake anything.
+func (h *Handler) announceCommittedGoalPlanRun(generation db.GoalPlanGeneration) {
+	if generation.State != "queued" || !generation.TaskID.Valid {
+		return
+	}
+	// The notification must outlive the request, as it does after a normal
+	// commit: the daemon may claim this task after the client is gone.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	task, err := h.Queries.GetAgentTask(ctx, generation.TaskID)
+	if err != nil {
+		slog.Warn("load committed goal plan task failed",
+			"generation_id", uuidToString(generation.ID),
+			"task_id", uuidToString(generation.TaskID),
+			"error", err)
+		return
+	}
+	if task.Status != "queued" {
+		return
+	}
+	h.TaskService.NotifyTaskEnqueued(ctx, task)
 }
 
 // goalPlanGenerationCommittedByKey re-reads the request key after an uncertain
