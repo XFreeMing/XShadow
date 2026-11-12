@@ -30,10 +30,12 @@ package daemon_test
 //	MULTICA_CHAIN_STABLE_PROFILE  profile of the stable daemon that CLI reports
 //	MULTICA_CHAIN_STABLE_HOME  real home holding that CLI's profile
 //
-// Before any child is signalled, the test asks the runtime CLI for the stable
-// daemon's pid and records it in cleanup.json; a child whose pid matches is not
-// stopped. Children are only ever stopped through the exact process group this
-// test started, never by executable name.
+// Immediately before every signal, the test asks the runtime CLI for the stable
+// daemon's current pid/status. A failed query, invalid JSON, non-running
+// status, or a pid that matches the child refuses the signal and records the
+// unstopped pid, process group, log and reason. The answer is never cached
+// between signals. Children are only ever stopped through the exact process
+// group this test started, never by executable name.
 //
 // Child processes are started with an explicit environment (exec.Cmd.Env), so
 // no ambient MULTICA_* value, task token, or host PATH entry reaches them.
@@ -352,57 +354,82 @@ type childProc struct {
 	// an early failure never stops the same process twice.
 	stopOnce   sync.Once
 	stopResult map[string]any
+
+	// expectRefusal is set only by regression tests that drive an unverified
+	// stop on purpose. Everywhere else a refusal fails the run.
+	expectRefusal bool
 }
 
-// stableDaemonGuard queries the runtime CLI's `daemon status --output json`
-// once and caches the answer. It never infers the stable pid from a file.
+// stableDaemonGuard asks the runtime CLI for the stable daemon's current
+// identity. It holds no cached answer: stopProcess calls it immediately before
+// every signal, because an answer from an earlier signal says nothing about
+// the process group about to be signalled.
 type stableDaemonGuard struct {
 	cliBin  string
 	profile string
 	home    string
 	workDir string
-	once    sync.Once
-	result  map[string]any
+
+	// query replaces the runtime CLI in tests. It returns the same shape as the
+	// CLI path: stable_daemon_pid/stable_daemon_status on a verified answer, or
+	// an "error" entry when the daemon cannot be identified.
+	query func(context.Context) map[string]any
 }
 
+func newStableDaemonGuard(cliBin, profile, home, workDir string) *stableDaemonGuard {
+	return &stableDaemonGuard{cliBin: cliBin, profile: profile, home: home, workDir: workDir}
+}
+
+// check performs a fresh query. Runtime CLI failures, timeouts and unparsable
+// output all come back as an "error" entry, which the caller must treat as a
+// refusal to signal rather than as a missing answer to ignore.
 func (g *stableDaemonGuard) check() map[string]any {
-	g.once.Do(func() {
-		out := map[string]any{"cli": g.cliBin, "profile": g.profile}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, g.cliBin, "daemon", "status", "--profile", g.profile, "--output", "json")
-		cmd.Dir = g.workDir
-		cmd.Env = []string{
-			"HOME=" + g.home,
-			"PATH=/usr/bin:/bin",
-			"TMPDIR=" + g.workDir,
-		}
-		raw, err := cmd.Output()
-		if err != nil {
-			out["error"] = err.Error()
-			g.result = out
-			return
-		}
-		var rec struct {
-			PID    int    `json:"pid"`
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			out["error"] = "decode daemon status: " + err.Error()
-			g.result = out
-			return
-		}
-		out["stable_daemon_pid"] = rec.PID
-		out["stable_daemon_status"] = rec.Status
-		if rec.PID <= 0 || rec.Status != "running" {
-			out["error"] = fmt.Sprintf("daemon status=%q pid=%d", rec.Status, rec.PID)
-		}
-		g.result = out
-	})
-	return g.result
+	if g.query != nil {
+		return g.query(context.Background())
+	}
+	out := map[string]any{"cli": g.cliBin, "profile": g.profile}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, g.cliBin, "daemon", "status", "--profile", g.profile, "--output", "json")
+	cmd.Dir = g.workDir
+	cmd.Env = []string{
+		"HOME=" + g.home,
+		"PATH=/usr/bin:/bin",
+		"TMPDIR=" + g.workDir,
+	}
+	raw, err := cmd.Output()
+	if err != nil {
+		out["error"] = err.Error()
+		return out
+	}
+	for key, value := range decodeDaemonStatus(raw) {
+		out[key] = value
+	}
+	return out
 }
 
-func startChild(t *testing.T, name, workDir, bin string, args, env []string, logPath string) *childProc {
+// decodeDaemonStatus turns one CLI response into the guard result. Invalid
+// JSON, a missing pid, or a status other than running all become an "error"
+// entry, which stops the caller from sending a signal.
+func decodeDaemonStatus(raw []byte) map[string]any {
+	out := map[string]any{}
+	var rec struct {
+		PID    int    `json:"pid"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		out["error"] = "decode daemon status: " + err.Error()
+		return out
+	}
+	out["stable_daemon_pid"] = rec.PID
+	out["stable_daemon_status"] = rec.Status
+	if rec.PID <= 0 || rec.Status != "running" {
+		out["error"] = fmt.Sprintf("daemon status=%q pid=%d", rec.Status, rec.PID)
+	}
+	return out
+}
+
+func startChild(t *testing.T, name, workDir, bin string, args, env []string, logPath string, guard *stableDaemonGuard) *childProc {
 	t.Helper()
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -421,7 +448,7 @@ func startChild(t *testing.T, name, workDir, bin string, args, env []string, log
 		logFile.Close()
 		t.Fatalf("start %s: %v", name, err)
 	}
-	p := &childProc{name: name, cmd: cmd, log: logFile, done: make(chan error, 1)}
+	p := &childProc{name: name, cmd: cmd, log: logFile, done: make(chan error, 1), guard: guard}
 	// Register cleanup before anything else can fail. Every later t.Fatal or
 	// panic path (health check, PID validation, daemon log creation or start)
 	// then unwinds through this stop without a separate defer having to be
@@ -434,7 +461,8 @@ func startChild(t *testing.T, name, workDir, bin string, args, env []string, log
 
 // stop terminates exactly the process group this test started (Setpgid makes
 // the child pid the group id) and records how it exited. Repeated calls return
-// the first result and send no further signal.
+// the first result and send no further signal. Each individual signal is gated
+// by its own fresh stable-daemon query.
 func (p *childProc) stop(t *testing.T, timeout time.Duration) map[string]any {
 	t.Helper()
 	p.stopOnce.Do(func() { p.stopResult = p.stopProcess(t, timeout) })
@@ -443,31 +471,33 @@ func (p *childProc) stop(t *testing.T, timeout time.Duration) map[string]any {
 
 func (p *childProc) stopProcess(t *testing.T, timeout time.Duration) map[string]any {
 	result := map[string]any{"name": p.name, "signals_sent": 0}
+	checks := []map[string]any{}
+	finish := func() map[string]any {
+		result["stop_time_checks"] = checks
+		p.log.Close()
+		return result
+	}
 	if p.cmd.Process == nil {
 		result["pid"] = 0
 		result["stopped_by"] = "not-started"
-		return result
+		return finish()
 	}
 	pid := p.cmd.Process.Pid
 	result["pid"] = pid
+	result["process_group"] = -pid
+	result["log"] = p.log.Name()
 	if pid <= 0 {
 		result["stopped_by"] = "not-started"
-		return result
+		return finish()
 	}
-	if p.guard != nil {
-		check := p.guard.check()
-		result["stop_time_check"] = check
-		if msg, _ := check["error"].(string); msg != "" {
-			// Keep the exact-pid stop below (the handle is ours), but fail the
-			// run: without the runtime answer the safety of the stop is
-			// unverified and must be reported as such, not assumed.
-			t.Errorf("stop-time daemon status check for %s failed: %s", p.name, msg)
-		}
-		if stablePID, _ := check["stable_daemon_pid"].(int); stablePID > 0 && stablePID == pid {
-			result["stopped_by"] = "refused-stable-daemon-pid"
-			t.Errorf("refusing to signal %s pid %d: the runtime CLI reports it as the stable daemon", p.name, pid)
-			return result
-		}
+
+	// The runtime CLI answer immediately before SIGTERM. No answer, an
+	// unparsable answer, or an answer naming this pid refuses the signal.
+	if !p.verifyBeforeSignal(t, pid, "before SIGTERM", &checks, result) {
+		result["stopped_by"] = "refused-unverified-SIGTERM"
+		result["unstopped_pid"] = pid
+		result["alive_at_refusal"] = processAlive(pid)
+		return finish()
 	}
 	result["signals_sent"] = 1
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
@@ -477,13 +507,59 @@ func (p *childProc) stopProcess(t *testing.T, timeout time.Duration) map[string]
 	case <-p.done:
 		result["stopped_by"] = "SIGTERM"
 	case <-time.After(timeout):
+		// Escalating to SIGKILL is a second signal, so it needs its own fresh
+		// verification. If that query fails, the process is deliberately left
+		// running and reported: signalling on an unverified answer is not an
+		// option, and neither is an unverified kill.
+		if !p.verifyBeforeSignal(t, pid, "before SIGKILL", &checks, result) {
+			result["stopped_by"] = "refused-unverified-SIGKILL"
+			result["unstopped_pid"] = pid
+			result["alive_at_refusal"] = processAlive(pid)
+			return finish()
+		}
 		result["signals_sent"] = 2
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+			result["signal_error"] = err.Error()
+		}
 		<-p.done
 		result["stopped_by"] = "SIGKILL"
 	}
-	p.log.Close()
-	return result
+	return finish()
+}
+
+// verifyBeforeSignal asks the guard for the stable daemon's current identity
+// and records the answer. It returns false, and fails the run, whenever the
+// answer cannot establish that this exact pid is safe to signal.
+func (p *childProc) verifyBeforeSignal(t *testing.T, pid int, signal string, checks *[]map[string]any, result map[string]any) bool {
+	t.Helper()
+	entry := map[string]any{"signal": signal}
+	if p.guard == nil {
+		entry["error"] = "no runtime CLI guard configured"
+	} else {
+		for key, value := range p.guard.check() {
+			entry[key] = value
+		}
+		if msg, _ := entry["error"].(string); msg == "" {
+			stablePID, _ := entry["stable_daemon_pid"].(int)
+			status, _ := entry["stable_daemon_status"].(string)
+			switch {
+			case stablePID <= 0 || status != "running":
+				entry["error"] = fmt.Sprintf("unverifiable daemon status=%q pid=%d", status, stablePID)
+			case stablePID == pid:
+				entry["error"] = fmt.Sprintf("runtime CLI reports own pid %d as the stable daemon", pid)
+			}
+		}
+	}
+	*checks = append(*checks, entry)
+	msg, _ := entry["error"].(string)
+	if msg == "" {
+		return true
+	}
+	result["refusal"] = signal + ": " + msg
+	if !p.expectRefusal {
+		t.Errorf("refusing to signal %s pid %d (%s): %s", p.name, pid, signal, msg)
+	}
+	return false
 }
 
 // chainCleanup collects every child started by the chain test. The report is
@@ -519,7 +595,7 @@ func (c *chainCleanup) write(t *testing.T, artifacts, pat string) {
 	}
 	report["processes"] = processes
 	report["stable_daemon_touched"] = touched
-	report["stop_time_verification"] = "runtime CLI daemon status --output json before each signal"
+	report["stop_time_verification"] = "fresh runtime CLI daemon status --output json immediately before every SIGTERM and SIGKILL; no signal on an unverified answer"
 	for _, name := range []string{"server", "daemon"} {
 		if res, ok := report[name].(map[string]any); ok {
 			report[name+"_pid"] = res["pid"]
@@ -769,12 +845,10 @@ func TestGoalPlanProcessChain(t *testing.T) {
 	cleanup := &chainCleanup{stablePID: stablePID, profileDir: daemonHomeConfigDir}
 	t.Cleanup(func() { cleanup.write(t, cfg.artifacts, profile.Token) })
 
-	// Every signal is preceded by this runtime CLI check, including the ones
-	// t.Cleanup sends on an early failure.
-	guard := &stableDaemonGuard{cliBin: cfg.stableCLIBin, profile: cfg.stableProfile, home: cfg.stableHome, workDir: root}
-
-	server := startChild(t, "server", root, cfg.serverBin, nil, serverEnv, filepath.Join(cfg.artifacts, "server.log"))
-	server.guard = guard
+	// Each child owns its guard; the guard itself is stateless, so every signal
+	// performs a new runtime CLI query rather than reusing an earlier answer.
+	serverGuard := newStableDaemonGuard(cfg.stableCLIBin, cfg.stableProfile, cfg.stableHome, root)
+	server := startChild(t, "server", root, cfg.serverBin, nil, serverEnv, filepath.Join(cfg.artifacts, "server.log"), serverGuard)
 	cleanup.add(server)
 	if !waitHTTPOK(httpc, serverBase+"/health", 90*time.Second) {
 		t.Fatalf("server did not become healthy; see %s", filepath.Join(cfg.artifacts, "server.log"))
@@ -817,8 +891,8 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		"--no-auto-update",
 		"--no-auto-reload",
 	}
-	daemon := startChild(t, "daemon", root, cfg.cliBin, daemonArgs, daemonEnv, filepath.Join(cfg.artifacts, "daemon.log"))
-	daemon.guard = guard
+	daemonGuard := newStableDaemonGuard(cfg.stableCLIBin, cfg.stableProfile, cfg.stableHome, root)
+	daemon := startChild(t, "daemon", root, cfg.cliBin, daemonArgs, daemonEnv, filepath.Join(cfg.artifacts, "daemon.log"), daemonGuard)
 	cleanup.add(daemon)
 
 	if stablePID != 0 && (stablePID == daemon.cmd.Process.Pid || stablePID == server.cmd.Process.Pid) {
