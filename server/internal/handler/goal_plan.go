@@ -630,10 +630,10 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	if agent.ArchivedAt.Valid {
-		writeError(w, http.StatusBadRequest, "agent is archived")
-		return
-	}
+	// The agent's archived/no-runtime state is checked during preparation below
+	// instead of here: a replay of an already accepted request_key must keep
+	// resolving to the run it created even when the agent became unavailable
+	// afterwards. A genuinely new request still refuses with 409.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	if !h.canInvokeAgent(r.Context(), agent, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
@@ -643,11 +643,27 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// One transaction fixes the run's input and records it, then creates the
-	// chat session it will run in. The locks are taken in the order the delete
-	// paths take them — workspace delete locks the workspace first, project
-	// delete locks the project before its goals — so this path cannot deadlock
-	// with either: a generation never waits for a project while holding a goal.
+	// The whole run — the fixed input record, its chat session, the task, the
+	// user message that carries the prompt and the generation -> task binding —
+	// is written in one transaction with a single commit. A crash therefore
+	// leaves either a complete queued run or nothing at all: no generation
+	// stuck in 'preparing' without a task, and no task whose generation row
+	// never learns it exists.
+	//
+	// Preparation does network I/O (the Composio overlay) and reads the
+	// attribution policy, so it runs before the transaction. Its error is
+	// stashed and only reported for a genuinely new request, after the in-lock
+	// replay check: an accepted request keeps resolving to its original run
+	// even when a later precondition would refuse a new one.
+	sessionID := dbid.NewV7()
+	prepared, prepErr := h.TaskService.PrepareDirectChatSend(
+		r.Context(), sessionID, agent, parseUUID(userID),
+	)
+
+	// The locks are taken in the order the delete paths take them — workspace
+	// delete locks the workspace first, project delete locks the project before
+	// its goals — so this path cannot deadlock with either: a generation never
+	// waits for a project while holding a goal.
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
@@ -729,17 +745,27 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to load generation")
 			return
 		}
-		current, _, revErr := h.goalPlanRevision(r.Context(), h.Queries, lockedGoal)
-		if revErr != nil {
-			current = existing.BaseRevision
-		}
-		state := h.effectiveGoalPlanGenerationState(r.Context(), existing)
-		existing.Error = h.generationFailureText(r.Context(), existing, state)
-		writeJSON(w, http.StatusOK, goalPlanGenerationToResponse(existing, state, current))
+		h.writeGoalPlanGenerationReplay(w, r, lockedGoal, existing)
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
+		return
+	}
+
+	// Only a genuinely new request needs the preparation work; a failure here is
+	// the user-facing refusal, and nothing has been written yet.
+	if prepErr != nil {
+		switch {
+		case errors.Is(prepErr, service.ErrChatTaskAgentArchived):
+			writeError(w, http.StatusConflict, "agent is archived")
+		case errors.Is(prepErr, service.ErrChatTaskAgentNoRuntime):
+			writeError(w, http.StatusConflict, "agent has no runtime")
+		default:
+			slog.Warn("prepare goal plan run failed",
+				append(logger.RequestAttrs(r), "goal_id", uuidToString(lockedGoal.ID), "error", prepErr)...)
+			writeError(w, http.StatusInternalServerError, "failed to start planning run")
+		}
 		return
 	}
 
@@ -779,8 +805,11 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// The session id was preallocated before the transaction so the attribution
+	// evidence ref written with the task names the session this transaction
+	// creates.
 	session, err := qtx.CreateChatSession(r.Context(), db.CreateChatSessionParams{
-		ID:          dbid.NewV7(),
+		ID:          sessionID,
 		WorkspaceID: lockedGoal.WorkspaceID,
 		AgentID:     agentID,
 		CreatorID:   parseUUID(userID),
@@ -795,61 +824,115 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
-		return
-	}
 
+	// The prompt is built from the same in-memory read that produced the stored
+	// input; it performs no database access. The task, its self-owned input
+	// batch and the prompt message are written into this transaction, not a
+	// nested one.
 	prompt := buildGoalPlanPrompt(lockedGoal, generation, input)
-	sent, err := h.TaskService.SendDirectChatMessage(
-		r.Context(), session, agent, parseUUID(userID), prompt, nil, actorType, parseUUID(actorID),
+	sent, sendErr := h.TaskService.SendPreparedDirectChatMessageInTx(
+		r.Context(), tx, session, parseUUID(userID), prompt, nil,
+		actorType, parseUUID(actorID), prepared,
 	)
-	if err != nil {
-		h.failGoalPlanGeneration(generation, "failed to enqueue the planning run")
-		// The session has no message or task: SendDirectChatMessage rolls back
-		// atomically, so remove the empty shell rather than leaving it in the
-		// user's chat list.
-		_ = h.Queries.DeleteChatSession(r.Context(), db.DeleteChatSessionParams{
-			ID:          session.ID,
-			WorkspaceID: session.WorkspaceID,
-		})
+	if sendErr != nil {
+		// The whole transaction rolls back: a preparation or enqueue failure
+		// leaves no accepted request, so a retry with the same request_key may
+		// start a fresh run.
 		switch {
-		case errors.Is(err, service.ErrChatTaskAgentArchived):
+		case errors.Is(sendErr, service.ErrChatTaskAgentArchived):
 			writeError(w, http.StatusConflict, "agent is archived")
-		case errors.Is(err, service.ErrChatTaskAgentNoRuntime):
+		case errors.Is(sendErr, service.ErrChatTaskAgentNoRuntime):
 			writeError(w, http.StatusConflict, "agent has no runtime")
+		case errors.Is(sendErr, service.ErrChatSessionArchived):
+			writeError(w, http.StatusConflict, "chat session is archived")
 		default:
 			slog.Warn("enqueue goal plan run failed",
-				append(logger.RequestAttrs(r), "generation_id", uuidToString(generation.ID), "error", err)...)
+				append(logger.RequestAttrs(r), "generation_id", uuidToString(generation.ID), "error", sendErr)...)
 			writeError(w, http.StatusInternalServerError, "failed to start planning run")
 		}
 		return
 	}
 
-	started, err := h.Queries.SetGoalPlanGenerationRun(r.Context(), db.SetGoalPlanGenerationRunParams{
+	started, err := qtx.SetGoalPlanGenerationRun(r.Context(), db.SetGoalPlanGenerationRunParams{
 		ChatSessionID: session.ID,
 		TaskID:        sent.Task.ID,
 		ID:            generation.ID,
 		WorkspaceID:   generation.WorkspaceID,
 	})
 	if err != nil {
-		h.failGoalPlanGeneration(generation, "failed to record the planning run")
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
+		// Zero rows means the row left 'preparing' (or was already bound) while
+		// this transaction held the goal lock. Never commit a task no generation
+		// points at, and never revive a finished run: the whole transaction
+		// fails.
+		slog.Warn("bind goal plan generation failed",
+			append(logger.RequestAttrs(r), "generation_id", uuidToString(generation.ID), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to record the planning run")
 		return
 	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		// The commit outcome is unknown. Never write a failure or delete the
+		// session here: re-read the request key on a new connection, which only
+		// finds the row if the commit actually landed, and let a retry with the
+		// same key resolve to that run.
+		if committed, ok := h.goalPlanGenerationCommittedByKey(lockedGoal, requestKey, intent, agentID, *req.ExpectedRevision); ok {
+			h.writeGoalPlanGenerationReplay(w, r, lockedGoal, committed)
+			return
+		}
+		slog.Warn("commit goal plan run unconfirmed",
+			append(logger.RequestAttrs(r), "generation_id", uuidToString(generation.ID), "error", err)...)
+		writeErrorCode(w, http.StatusServiceUnavailable, "goal_plan_generation_retryable",
+			"the planning run could not be confirmed; retry with the same request_key")
+		return
+	}
+
+	// Only after the single commit: the run is durable, so the queued task can
+	// be announced.
+	h.TaskService.FinalizeDirectChatSend(r.Context(), session, sent)
 	writeJSON(w, http.StatusAccepted, goalPlanGenerationToResponse(started, "queued", generation.BaseRevision))
 }
 
-// failGoalPlanGeneration marks a generation whose run could not be started. It
-// is best effort: the HTTP error is the user-facing answer.
-func (h *Handler) failGoalPlanGeneration(gen db.GoalPlanGeneration, message string) {
-	if err := h.Queries.FailGoalPlanGeneration(context.Background(), db.FailGoalPlanGenerationParams{
-		ID:          gen.ID,
-		WorkspaceID: gen.WorkspaceID,
-		Error:       message,
-	}); err != nil {
-		slog.Warn("mark goal plan generation failed", "generation_id", uuidToString(gen.ID), "error", err)
+// writeGoalPlanGenerationReplay answers a request whose generation already
+// exists — either a saved request_key replay or a commit that landed despite a
+// failed commit call — without writing anything.
+func (h *Handler) writeGoalPlanGenerationReplay(w http.ResponseWriter, r *http.Request, goal db.Goal, generation db.GoalPlanGeneration) {
+	current, _, revErr := h.goalPlanRevision(r.Context(), h.Queries, goal)
+	if revErr != nil {
+		current = generation.BaseRevision
 	}
+	state := h.effectiveGoalPlanGenerationState(r.Context(), generation)
+	generation.Error = h.generationFailureText(r.Context(), generation, state)
+	writeJSON(w, http.StatusOK, goalPlanGenerationToResponse(generation, state, current))
+}
+
+// goalPlanGenerationCommittedByKey re-reads the request key after an uncertain
+// commit. A matching row that already carries its task and session is proof
+// that the transaction committed; a legacy unbound 'preparing' row (written by
+// the pre-single-transaction code) is not.
+func (h *Handler) goalPlanGenerationCommittedByKey(
+	goal db.Goal, requestKey, intent string, agentID pgtype.UUID, baseRevision int32,
+) (db.GoalPlanGeneration, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	existing, err := h.Queries.GetGoalPlanGenerationByRequestKey(ctx, db.GetGoalPlanGenerationByRequestKeyParams{
+		WorkspaceID: goal.WorkspaceID,
+		GoalID:      goal.ID,
+		RequestKey:  requestKey,
+	})
+	if err != nil {
+		return db.GoalPlanGeneration{}, false
+	}
+	if existing.Intent != intent || uuidToString(existing.AgentID) != uuidToString(agentID) ||
+		existing.BaseRevision != baseRevision {
+		return db.GoalPlanGeneration{}, false
+	}
+	if uuidToString(existing.ProjectID) != uuidToString(goal.ProjectID) {
+		return db.GoalPlanGeneration{}, false
+	}
+	if existing.State == "preparing" || !existing.TaskID.Valid || !existing.ChatSessionID.Valid {
+		return db.GoalPlanGeneration{}, false
+	}
+	return existing, true
 }
 
 func (h *Handler) GetGoalPlanGeneration(w http.ResponseWriter, r *http.Request) {
