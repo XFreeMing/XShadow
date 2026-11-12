@@ -115,6 +115,16 @@ func goalRows(t *testing.T, goalID string) int {
 	return n
 }
 
+// goalOwnerRow reads the stored owner pair, rendering SQL NULL as "".
+func goalOwnerRow(t *testing.T, goalID string) (ownerType, ownerID string) {
+	t.Helper()
+	dbfx.QueryRow(t, `
+		SELECT COALESCE(owner_type, ''), COALESCE(owner_id::text, '')
+		FROM goal WHERE id = $1 AND workspace_id = $2
+	`, goalID, testWorkspaceID).Scan(&ownerType, &ownerID)
+	return ownerType, ownerID
+}
+
 // goalChangedCounter counts empty-payload goal:changed broadcasts.
 func goalChangedCounter(t *testing.T) func() int {
 	t.Helper()
@@ -395,12 +405,52 @@ func TestGoalOwnerIsAssignmentOnly(t *testing.T) {
 		t.Fatalf("agent_task_queue rows after owner update = %d, want %d (no run)", afterPatch, before)
 	}
 
-	// Half an owner pair is rejected, as is an archived or foreign target.
-	if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "agent"}); code != http.StatusBadRequest {
-		t.Fatalf("half owner pair = %d, want 400", code)
+	// A partial owner write must not turn the omitted half into a clear. Every
+	// malformed pair is rejected and the stored member owner is left intact.
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"lone owner_id null", map[string]any{"owner_id": nil}},
+		{"lone owner_type null", map[string]any{"owner_type": nil}},
+		{"lone owner_id", map[string]any{"owner_id": testUserID}},
+		{"lone owner_type", map[string]any{"owner_type": "agent"}},
+		{"null type with id", map[string]any{"owner_type": nil, "owner_id": testUserID}},
+		{"type with null id", map[string]any{"owner_type": "member", "owner_id": nil}},
+		{"empty id", map[string]any{"owner_type": "member", "owner_id": ""}},
+	} {
+		if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, tc.body); code != http.StatusBadRequest {
+			t.Fatalf("%s = %d, want 400", tc.name, code)
+		}
+		if gotType, gotID := goalOwnerRow(t, goal.ID); gotType != "member" || gotID != testUserID {
+			t.Fatalf("%s changed stored owner to %q/%q, want member/%s", tc.name, gotType, gotID, testUserID)
+		}
 	}
-	if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "member", "owner_id": ""}); code != http.StatusBadRequest {
-		t.Fatalf("empty owner id = %d, want 400", code)
+
+	// Omitting both keys keeps the current owner (a normal field update).
+	if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"title": "renamed agent-owned goal"}); code != http.StatusOK {
+		t.Fatalf("update without owner keys = %d, want 200", code)
+	}
+	if gotType, gotID := goalOwnerRow(t, goal.ID); gotType != "member" || gotID != testUserID {
+		t.Fatalf("owner keys omitted changed owner to %q/%q, want member/%s", gotType, gotID, testUserID)
+	}
+
+	// A paired null is the contract's clear; a paired valid value sets it back.
+	if code, got := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": nil, "owner_id": nil}); code != http.StatusOK {
+		t.Fatalf("paired clear = %d, want 200", code)
+	} else if got.OwnerType != nil || got.OwnerID != nil {
+		t.Fatalf("paired clear response owner = %v/%v, want nil/nil", got.OwnerType, got.OwnerID)
+	}
+	if gotType, gotID := goalOwnerRow(t, goal.ID); gotType != "" || gotID != "" {
+		t.Fatalf("paired clear left owner %q/%q, want empty", gotType, gotID)
+	}
+	if code, got := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "agent", "owner_id": agentID}); code != http.StatusOK {
+		t.Fatalf("paired set = %d, want 200", code)
+	} else if got.OwnerType == nil || *got.OwnerType != "agent" || got.OwnerID == nil || *got.OwnerID != agentID {
+		t.Fatalf("paired set owner = %v/%v, want agent/%s", got.OwnerType, got.OwnerID, agentID)
+	}
+	if gotType, gotID := goalOwnerRow(t, goal.ID); gotType != "agent" || gotID != agentID {
+		t.Fatalf("paired set stored owner %q/%q, want agent/%s", gotType, gotID, agentID)
 	}
 }
 
