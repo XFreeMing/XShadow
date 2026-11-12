@@ -22,7 +22,10 @@ vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({
     queryKey: ["agents"],
-    queryFn: async () => [{ id: "agent-1", name: "Planner", archived_at: null }],
+    queryFn: async () => [
+      { id: "agent-1", name: "Planner", archived_at: null },
+      { id: "agent-2", name: "Reviewer", archived_at: null },
+    ],
   }),
   memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [] }),
   squadListOptions: () => ({ queryKey: ["squads"], queryFn: async () => [] }),
@@ -895,6 +898,115 @@ describe("GoalPlanSection", () => {
     expect(third.intent).toBe("Second intent");
     expect(third.agent_id).toBe(second.agent_id);
     expect(third.expected_revision).toBe(second.expected_revision);
+  });
+
+  it("replays a committed failed-card request after the authoritative revision advances", async () => {
+    // The first run is terminal. The failed-card retry is accepted by the
+    // server but its response is lost, so the client cannot tell whether the
+    // request became a run. The replay below resolves to that same saved run.
+    const failedG1 = generation({ state: "failed", error: "Planner broke" });
+    const recoveredG2 = generation({
+      id: "gen-2",
+      intent: "Second intent",
+      agent_id: "agent-1",
+      base_revision: 1,
+      state: "succeeded",
+      candidate: {
+        items: [item("11111111-1111-4111-8111-111111111111", "Recovered candidate")],
+        edges: [],
+        context_snapshot: {},
+      },
+    });
+    const explicitG3 = generation({ id: "gen-3", state: "failed" });
+    api.getGoalPlan.mockResolvedValue(plan({ revision: 1 }));
+    // The run read follows the requested id: an always-G1 fixture could not
+    // prove that the recovered snapshot is the one now rendered.
+    api.getGoalPlanGeneration.mockImplementation(async (_goalId, generationId) => {
+      if (generationId === "gen-1") return failedG1;
+      if (generationId === "gen-2") return recoveredG2;
+      return explicitG3;
+    });
+    api.createGoalPlanGeneration
+      .mockResolvedValueOnce(failedG1)
+      // A committed request whose response never arrives has an unknown
+      // outcome; this is not the same as a refused or unforwarded request.
+      .mockRejectedValueOnce(new Error("response lost after commit"))
+      .mockResolvedValueOnce(recoveredG2)
+      .mockResolvedValueOnce(explicitG3);
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const top = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(top).toBeEnabled());
+    await user.click(top);
+    const status = await screen.findByTestId("plan-generation-status");
+    expect(await within(status).findByText("Planner broke")).toBeInTheDocument();
+
+    const intent = screen.getByLabelText("What should the plan deliver?");
+    await user.clear(intent);
+    await user.type(intent, "Second intent");
+    await user.click(within(status).getByRole("button", { name: "Generate again" }));
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    expect(second).toMatchObject({
+      intent: "Second intent",
+      agent_id: "agent-1",
+      expected_revision: 1,
+    });
+
+    // Before recovery the reader changes the form and another writer moves the
+    // plan forward. The revision arrives through a plan refetch, not a save;
+    // the page must not turn that authority change into a PUT.
+    await user.clear(intent);
+    await user.type(intent, "Third intent");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: "Reviewer" }));
+    api.getGoalPlan.mockResolvedValue(plan({ revision: 2 }));
+    await qc.refetchQueries({ queryKey: goalKeys.plan("ws-1", "goal-1") });
+    expect(await screen.findByText("Revision 2")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toHaveTextContent("Reviewer");
+    expect(intent).toHaveValue("Third intent");
+    expect(screen.queryByTestId("plan-revision-conflict")).not.toBeInTheDocument();
+
+    // K2 is still unconfirmed, so the failed-card retry replays its recorded
+    // snapshot instead of the changed form and the new revision.
+    await user.click(
+      within(screen.getByTestId("plan-generation-status")).getByRole("button", {
+        name: "Generate again",
+      }),
+    );
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(3));
+    const third = api.createGoalPlanGeneration.mock.calls[2]![1];
+    expect(third).toEqual(second);
+
+    // The replay is read by its own id and renders G2, not the old terminal G1.
+    expect(api.getGoalPlanGeneration).toHaveBeenCalledWith("goal-1", "gen-2");
+    expect(recoveredG2).toMatchObject({
+      id: "gen-2",
+      intent: second.intent,
+      agent_id: second.agent_id,
+      base_revision: second.expected_revision,
+      state: "succeeded",
+    });
+    expect(await screen.findByText("Plan ready")).toBeInTheDocument();
+    expect(screen.getByTestId("plan-candidate")).toBeInTheDocument();
+    expect(screen.queryByText("Planner broke")).not.toBeInTheDocument();
+
+    // Only after G2 is terminal may an explicit new run use the current input.
+    const resumed = await screen.findByRole("button", { name: "Generate again" });
+    await waitFor(() => expect(resumed).toBeEnabled());
+    await user.click(resumed);
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(4));
+    const fourth = api.createGoalPlanGeneration.mock.calls[3]![1];
+    expect(fourth.request_key).not.toBe(second.request_key);
+    expect(fourth.intent).toBe("Third intent");
+    expect(fourth.agent_id).toBe("agent-2");
+    expect(fourth.expected_revision).toBe(2);
+
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
   });
 
   it("uses a new key and body only for an explicit new run", async () => {
