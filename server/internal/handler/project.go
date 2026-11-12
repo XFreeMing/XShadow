@@ -808,6 +808,31 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project subscribers")
 		return
 	}
+	// Goals belong to the project. Lock them first so a concurrent link or
+	// goal move cannot slip between the link cleanup and the goal delete; the
+	// FOR UPDATE conflicts with the link's FOR SHARE. Links go before goals,
+	// and the linked tasks are not touched.
+	if _, err := qtx.LockGoalsByProjectForDelete(r.Context(), db.LockGoalsByProjectForDeleteParams{
+		WorkspaceID: project.WorkspaceID,
+		ProjectID:   project.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock project goals")
+		return
+	}
+	if err := qtx.DeleteGoalIssuesByProject(r.Context(), db.DeleteGoalIssuesByProjectParams{
+		WorkspaceID: project.WorkspaceID,
+		ProjectID:   project.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project goal links")
+		return
+	}
+	if err := qtx.DeleteGoalsByProject(r.Context(), db.DeleteGoalsByProjectParams{
+		WorkspaceID: project.WorkspaceID,
+		ProjectID:   project.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project goals")
+		return
+	}
 	if err := qtx.DeleteProject(r.Context(), db.DeleteProjectParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,
@@ -820,6 +845,7 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventProjectDeleted, workspaceID, "member", userID, map[string]any{"project_id": uuidToString(project.ID)})
+	h.publishGoalChanged(workspaceID, "member", userID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

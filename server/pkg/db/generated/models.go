@@ -886,6 +886,30 @@ type GithubPullRequestCheckSuite struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Goal struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	Title              string             `json:"title"`
+	Intent             string             `json:"intent"`
+	Scope              string             `json:"scope"`
+	AcceptanceCriteria string             `json:"acceptance_criteria"`
+	OwnerType          pgtype.Text        `json:"owner_type"`
+	OwnerID            pgtype.UUID        `json:"owner_id"`
+	Status             string             `json:"status"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GoalIssue struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	GoalID      pgtype.UUID        `json:"goal_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
