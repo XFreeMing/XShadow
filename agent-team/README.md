@@ -59,6 +59,27 @@ make agent init ARGS="--profile my-team --runtime claude=运行时UUID --runtime
 
 `--check` 只验证模板、目标身份、运行时和模型；不修改军团配置。不指定 profile 时，它要求当前检出的托管环境已启动。
 
+## 从实时工作区导出模板
+
+`make agent sync` 与初始化方向相反：读取当前账号在工作区中的可初始化配置，写回本仓库的 `team.json` 和技能目录，供之后 `make agent init` 使用。目标选择与 `make agent context` 相同（`--profile`、`agent-team/local.json`、`MULTICA_DEV_PROFILE`、托管环境 profile），只发 GET 请求，不启动服务、不修改实时工作区、不探测模型目录。
+
+```bash
+make agent sync ARGS="--profile my-team --check"
+make agent sync ARGS="--profile my-team"
+```
+
+导出范围：
+
+- 本人所有未归档智能体；已归档角色列入跳过摘要。
+- 可初始化的技能库：本人创建的全部技能（含尚未绑定到任何智能体的技能）、模板中已有的同名技能，以及被导出智能体绑定的技能。仅因其他账号共享而可见、且不属于以上范围的技能会列入跳过摘要，不会静默丢弃。
+- 至少有一名导出智能体参与的小队，包括成员角色；没有导出成员的小队跳过。
+
+`--check` 只输出文件路径与增改删数量，不打印完整提示词、技能正文或配置，也不写文件。正式导出会先完成全部读取和校验，再写入技能文件和 `team.json`（`team.json` 最后写入）；校验失败时保持文件不变。无法便携表达的配置会按字段报错，例如非 private 权限、调用授权、自定义环境变量、MCP 配置、非 local 运行时、共享技能归属，以及提示词中的实例 UUID、机器路径或凭据；报错只给字段和原因，不回显具体值。无效、越界或符号链接的技能附件不会写出模板目录。
+
+同一 provider 绑定多个运行时且并发上限不同时，必须用 `--runtime provider=运行时UUID` 明确选择；不会猜测。导出会保留模板既有对象的顺序和 key；新增对象生成稳定的合法 key。无 common 前缀的智能体指令（例如界面中新建或改写的角色）以 `include_common: false` 原样保留，初始化不会额外拼接 `common.md`；其余角色仍默认使用共同前缀。重复执行应报告零变更并保持字节稳定。
+
+`make agent sync` 只维护本仓库模板，不迁移执行位置、凭据或会话；换电脑接入共享工作区仍按上文连接同一服务与账号。
+
 ## 模板维护
 
 - `team.json`：角色、模型、小队关系、聊天入口和并发。
@@ -73,6 +94,7 @@ make agent init ARGS="--profile my-team --runtime claude=运行时UUID --runtime
 node --test scripts/agent-team.test.mjs
 pnpm test:scripts
 make agent init ARGS="--profile my-team --check"
+make agent sync ARGS="--profile my-team --check"
 ```
 
 这些检查不启动真实模型任务。真实调用、工具授权及跨智能体交付需另行验收。

@@ -3,12 +3,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { agentInstructions } from "./agent-team-template.mjs";
 
 function changedFields(actual, expected) {
   return Object.keys(expected).filter((key) => !isDeepStrictEqual(actual[key] ?? (typeof expected[key] === "string" ? "" : null), expected[key]));
 }
 
 const sorted = (values) => [...values].sort();
+
 const select = (object, fields) => Object.fromEntries(fields.map((key) => [key, object[key] ?? null]));
 const AGENT_FIELDS = ["name", "description", "model", "thinking_level", "service_tier", "max_concurrent_tasks", "conversation_starters", "permission_mode"];
 
@@ -40,7 +42,7 @@ export async function readLiveContext(api, template) {
     if (!actual) continue;
     agentIds[a.key] = actual.id;
     const runtime = runtimes.find((r) => r.id === actual.runtime_id);
-    const expected = { ...select(a, AGENT_FIELDS), instructions: `${template.common}\n${a.instructions}`, provider: a.provider };
+    const expected = { ...select(a, AGENT_FIELDS), instructions: agentInstructions(template.common, a), provider: a.provider };
     const fields = changedFields({ ...actual, provider: runtime?.provider }, expected);
     const assigned = bindingMap[actual.id].map((s) => skills.find((x) => x.id === s.id)?.name ?? s.name ?? s.id);
     const expectedSkills = a.skills.map((key) => template.skills.find((s) => s.key === key).name);
@@ -88,6 +90,32 @@ export async function readLiveContext(api, template) {
   };
 }
 
+export function resolveProfile(options, { root, env = process.env, discoverProfile } = {}) {
+  let profile = options.profile;
+  if (!profile) {
+    let local;
+    try { local = JSON.parse(readFileSync(join(root, "agent-team/local.json"), "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") throw new Error("Invalid agent-team/local.json; expected a JSON object with profile."); }
+    if (local && (!local.profile || typeof local.profile !== "string")) throw new Error("agent-team/local.json needs a profile name.");
+    profile = local?.profile ?? env.MULTICA_DEV_PROFILE;
+  }
+  if (!profile) {
+    if (discoverProfile) profile = discoverProfile();
+    else {
+      const result = spawnSync("bash", [join(root, "scripts/dev-env.sh"), "status", "--json"], { cwd: root, env, encoding: "utf8", timeout: 15000 });
+      if (result.status === 0) profile = JSON.parse(result.stdout).profile;
+    }
+  }
+  if (!profile) throw new Error("No target profile. Pass --profile NAME, or set agent-team/local.json. No service was started.");
+  if (!/^[\w.-]+$/.test(profile)) throw new Error("Invalid profile name");
+  const dir = options.profilesDir ?? env.MULTICA_DEV_PROFILES_HOME ?? join(homedir(), ".multica/profiles");
+  let config;
+  try { config = JSON.parse(readFileSync(join(dir, profile, "config.json"), "utf8")); }
+  catch { throw new Error(`Cannot read authenticated profile ${profile}; sign in and select the intended workspace.`); }
+  const url = new URL(config.server_url);
+  return { profile, config, target: { profile, server_url: url.origin + url.pathname, workspace_id: config.workspace_id } };
+}
+
 export async function buildContext(template, options, { root, env = process.env, client, discoverProfile } = {}) {
   const report = {
     version: 1, observed_at: new Date().toISOString(),
@@ -105,30 +133,9 @@ export async function buildContext(template, options, { root, env = process.env,
   }
   let api;
   try {
-    let profile = options.profile;
-    if (!profile) {
-      let local;
-      try { local = JSON.parse(readFileSync(join(root, "agent-team/local.json"), "utf8")); }
-      catch (error) { if (error.code !== "ENOENT") throw new Error("Invalid agent-team/local.json; expected a JSON object with profile."); }
-      if (local && (!local.profile || typeof local.profile !== "string")) throw new Error("agent-team/local.json needs a profile name.");
-      profile = local?.profile ?? env.MULTICA_DEV_PROFILE;
-    }
-    if (!profile) {
-      if (discoverProfile) profile = discoverProfile();
-      else {
-        const result = spawnSync("bash", [join(root, "scripts/dev-env.sh"), "status", "--json"], { cwd: root, env, encoding: "utf8", timeout: 15000 });
-        if (result.status === 0) profile = JSON.parse(result.stdout).profile;
-      }
-    }
-    if (!profile) throw new Error("No target profile. Pass --profile NAME, or set agent-team/local.json. No service was started.");
-    if (!/^[\w.-]+$/.test(profile)) throw new Error("Invalid profile name");
-    const dir = options.profilesDir ?? env.MULTICA_DEV_PROFILES_HOME ?? join(homedir(), ".multica/profiles");
-    let config;
-    try { config = JSON.parse(readFileSync(join(dir, profile, "config.json"), "utf8")); }
-    catch { throw new Error(`Cannot read authenticated profile ${profile}; sign in and select the intended workspace.`); }
-    const url = new URL(config.server_url);
-    report.target = { profile, server_url: url.origin + url.pathname, workspace_id: config.workspace_id };
-    api = client(config);
+    const resolved = resolveProfile(options, { root, env, discoverProfile });
+    report.target = resolved.target;
+    api = client(resolved.config);
     report.live = await readLiveContext(api, template);
   } catch (error) {
     report.live = { status: "unavailable", reason: error.message };

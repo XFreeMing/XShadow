@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,11 +8,12 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { apiClient, initializeTeam, loadTemplate, main, parseArgs, selectRuntimes } from "./agent-team.mjs";
 import { buildContext, formatContext, readLiveContext, readTaskDiagnosis } from "./agent-team-context.mjs";
+import { applySyncPlan, formatSyncReport, prepareSync } from "./agent-team-sync.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const template = loadTemplate(join(ROOT, "agent-team/team.json"));
 
-function fixture() {
+function fixture(idPrefix = "destination") {
   let next = 1;
   const state = {
     agents: [], skills: [], squads: [], members: {}, bindings: {}, calls: [],
@@ -52,7 +53,7 @@ function fixture() {
       if (method === "GET") return structuredClone(rows);
       if (method === "POST") {
         assert.ok(!rows.some((r) => r.name === body.name), `Duplicate ${kind}: ${body.name}`);
-        const item = { id: `destination-${next++}`, owner_id: "owner", ...structuredClone(body) };
+        const item = { id: `${idPrefix}-${next++}`, owner_id: "owner", ...structuredClone(body) };
         rows.push(item);
         if (kind === "agents") state.bindings[item.id] = [...(body.skill_ids ?? [])];
         if (kind === "squads") state.members[item.id] = [{ member_id: body.leader_id, member_type: "agent", role: "leader" }];
@@ -466,8 +467,12 @@ test("Make dispatches init exactly once including parallel make and never combin
   assert.throws(() => parseArgs(["init", "--runtime", "codex=one", "--runtime", "codex=two"]), /repeated runtime/);
   const context = execFileSync("make", ["-n", "-j", "agent", "context", "ARGS=--offline"], { cwd: ROOT, encoding: "utf8" });
   assert.equal(context.split("\n").filter((line) => line.includes("node scripts/agent-team.mjs context")).length, 1);
+  const sync = execFileSync("make", ["-n", "-j", "agent", "sync", "ARGS=--check"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(sync.split("\n").filter((line) => line.includes("node scripts/agent-team.mjs sync")).length, 1);
   assert.throws(() => execFileSync("make", ["-n", "agent", "init", "context"], { cwd: ROOT, stdio: "pipe" }));
+  assert.throws(() => execFileSync("make", ["-n", "agent", "sync", "context"], { cwd: ROOT, stdio: "pipe" }));
   assert.throws(() => parseArgs(["init", "--offline"]), /only to context/);
+  assert.throws(() => parseArgs(["sync", "--tasks"]), /only to context/);
   assert.throws(() => parseArgs(["context", "--runtime", "grok=one"]), /reads existing bindings/);
 });
 
@@ -544,4 +549,218 @@ test("local profile selection is explicit, overrideable and unavailable state st
   assert.match(formatContext(down), /无法比较/);
   const missing = await buildContext(template, { profile: "missing", profilesDir: dir }, deps);
   assert.equal(missing.live.status, "unavailable");
+});
+
+function scratchTeam(t) {
+  const dir = mkdtempSync(join(tmpdir(), "agent-team-sync-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  copyFileSync(join(ROOT, "agent-team/common.md"), join(dir, "common.md"));
+  return dir;
+}
+
+async function syncInto(f, dir, runtimeIds = {}) {
+  const current = loadTemplate(join(ROOT, "agent-team/team.json"));
+  const plan = await prepareSync(f.api, { template: current, templatePath: join(dir, "team.json"), runtimeIds, displayRoot: dir });
+  const report = applySyncPlan(plan, { check: false });
+  return { plan, report, template: loadTemplate(join(dir, "team.json")) };
+}
+
+test("sync round-trips live agents, skills and squads into a template that init recreates", async (t) => {
+  const source = fixture("source");
+  const ids = await initializeTeam(source.api, template, options);
+  const dir = scratchTeam(t);
+
+  // Changes a user can make in the UI after initialization: a bound new skill
+  // whose name is not a legal key, an unbound own skill, a shared skill, a
+  // custom-instruction agent, concurrency drift and a squad role edit.
+  const reactName = template.agents.find((a) => a.provider === "claude").name;
+  const react = source.state.agents.find((a) => a.name === reactName);
+  react.max_concurrent_tasks = 2;
+  const uiAgent = {
+    id: "ui-agent", owner_id: "owner", name: "UI 专项工程师", description: "现场新建", status: "active",
+    runtime_id: react.runtime_id, model: react.model, thinking_level: "high", service_tier: "",
+    max_concurrent_tasks: 2, conversation_starters: [{ label: "开始", prompt: "先读代码" }],
+    permission_mode: "private", instructions: "只改 UI，不碰后端。",
+  };
+  source.state.agents.push(uiAgent);
+  source.state.bindings[uiAgent.id] = [];
+  const newSkill = { id: "skill-release", name: "Release Notes", description: "发布说明", config: {}, created_by: "owner", content: "# Release Notes\n用于发布说明。", files: [{ path: "notes/template.txt", content: "template" }] };
+  const unboundSkill = { id: "skill-unbound", name: "Unbound Helper", description: "", config: {}, created_by: "owner", content: "未被绑定也要保留。", files: [] };
+  const sharedSkill = { id: "skill-shared", name: "Shared Handbook", description: "other", config: {}, created_by: "someone-else", content: "来自其他账号。", files: [] };
+  source.state.skills.push(newSkill, unboundSkill, sharedSkill);
+  source.state.bindings[uiAgent.id].push(newSkill.id);
+  const squadKey = template.squads[0].key;
+  const member = source.state.members[ids.squads[squadKey]].find((m) => m.role !== "leader");
+  member.role = "reviewer";
+  const memberName = source.state.agents.find((a) => a.id === member.member_id).name;
+
+  const start = source.state.calls.length;
+  const { report, template: exported } = await syncInto(source, dir);
+  assert.ok(source.state.calls.slice(start).every(([method]) => method === "GET"), "sync must only read");
+
+  const exportedUi = exported.agents.find((a) => a.name === uiAgent.name);
+  assert.match(exportedUi.key, /^ui/);
+  assert.equal(exportedUi.include_common, false);
+  assert.equal(exportedUi.instructions, uiAgent.instructions);
+  assert.equal(exportedUi.conversation_starters[0].prompt, "先读代码");
+  assert.equal(exported.agents.find((a) => a.name === react.name).include_common, undefined);
+  assert.equal(exported.agents.find((a) => a.name === react.name).max_concurrent_tasks, 2);
+  assert.equal(exported.agents.find((a) => a.name === react.name).key, template.agents.find((a) => a.name === react.name).key);
+
+  const release = exported.skills.find((s) => s.name === newSkill.name);
+  assert.equal(release.key, "release-notes");
+  assert.notEqual(release.key, release.name);
+  assert.ok(exported.skills.some((s) => s.name === unboundSkill.name));
+  assert.ok(!exported.skills.some((s) => s.name === sharedSkill.name));
+  assert.ok(report.skipped.some((s) => s.kind === "skill" && s.name === sharedSkill.name));
+  assert.ok(exportedUi.skills.every((key) => exported.skills.some((s) => s.key === key)));
+  assert.ok(exportedUi.skills.includes(release.key));
+  assert.deepEqual(exported.skills.find((s) => s.key === release.key).files, newSkill.files);
+
+  const exportedSquad = exported.squads.find((s) => s.key === squadKey);
+  assert.match(exportedSquad.instructions, /\{\{squad:/);
+  assert.doesNotMatch(exportedSquad.instructions, /[0-9a-f]{8}-[0-9a-f]{4}/);
+  const memberKey = exported.agents.find((a) => a.name === memberName).key;
+  assert.equal(exportedSquad.members.find((m) => m.agent === memberKey).role, "reviewer");
+  assert.ok(exported.squads.some((s) => s.key === template.squads[4].key));
+
+  // A second sync plans nothing and writes identical bytes.
+  const before = readFileSync(join(dir, "team.json"), "utf8");
+  const replan = await prepareSync(source.api, { template: loadTemplate(join(dir, "team.json")), templatePath: join(dir, "team.json"), displayRoot: dir });
+  assert.deepEqual(replan.writes, []);
+  assert.deepEqual(replan.deletions, []);
+  const rereport = applySyncPlan(replan, { check: false });
+  assert.equal(readFileSync(join(dir, "team.json"), "utf8"), before);
+  assert.match(formatSyncReport(rereport, null), new RegExp(`${exported.agents.length} in template; 0 added, 0 changed, 0 removed`));
+
+  // A fresh instance initialized from the exported template recreates the same
+  // team, and a rerun writes nothing.
+  const dest = fixture("recreated");
+  const rebased = loadTemplate(join(dir, "team.json"));
+  await initializeTeam(dest.api, rebased, options);
+  const writes = dest.mutations().length;
+  await initializeTeam(dest.api, rebased, options);
+  assert.equal(dest.mutations().length, writes, "rerun init must not write");
+  assert.equal(dest.state.agents.find((a) => a.name === uiAgent.name).instructions, uiAgent.instructions);
+  assert.equal(dest.state.agents.find((a) => a.name === react.name).instructions, `${rebased.common}\n${rebased.agents.find((a) => a.name === react.name).instructions}`);
+  assert.deepEqual(dest.state.skills.find((s) => s.name === newSkill.name).files, newSkill.files);
+  const destSquad = dest.state.squads.find((s) => s.name === exportedSquad.name);
+  assert.doesNotMatch(destSquad.instructions, /\{\{squad:/);
+  assert.notEqual(destSquad.id, ids.squads[squadKey]);
+  assert.ok(destSquad.instructions.includes(destSquad.id), "references must point at the new instance");
+  assert.ok(!destSquad.instructions.includes(ids.squads[squadKey]), "source instance references must not survive");
+});
+
+test("sync fails before writing on unexpressible configuration and never leaks values", async (t) => {
+  const source = fixture();
+  await initializeTeam(source.api, template, options);
+  const dir = scratchTeam(t);
+  copyFileSync(join(ROOT, "agent-team/team.json"), join(dir, "team.json"));
+  const before = readFileSync(join(dir, "team.json"), "utf8");
+  const load = () => loadTemplate(join(ROOT, "agent-team/team.json"));
+
+  const agent = source.state.agents[0];
+  agent.has_custom_env = true;
+  agent.custom_env_key_count = 1;
+  agent.mcp_config = { token: "secret-value-never-output" };
+  await assert.rejects(
+    prepareSync(source.api, { template: load(), templatePath: join(dir, "team.json"), displayRoot: dir }),
+    (error) => /custom_env/.test(error.message) && /mcp_config/.test(error.message) && !/secret-value-never-output/.test(error.message),
+  );
+  assert.equal(readFileSync(join(dir, "team.json"), "utf8"), before);
+  assert.deepEqual(readdirSync(dir).sort(), ["common.md", "team.json"]);
+
+  agent.mcp_config = {};
+  agent.has_custom_env = false;
+  agent.custom_env_key_count = 0;
+  agent.mcp_config_redacted = false;
+  source.state.skills.push({ id: "bad-skill", name: "Bad Files", description: "", config: {}, created_by: "owner", content: "x", files: [{ path: "../../escape.txt", content: "x" }] });
+  await assert.rejects(
+    prepareSync(source.api, { template: load(), templatePath: join(dir, "team.json"), displayRoot: dir }),
+    /path outside the skill directory/,
+  );
+  assert.equal(readFileSync(join(dir, "team.json"), "utf8"), before);
+
+  // Portable-text scanning is not limited to prompt bodies.
+  agent.conversation_starters = [{ label: "开始", prompt: "交给 123e4567-e89b-12d3-a456-426614174000 处理" }];
+  source.state.skills.push({
+    id: "leaky-skill", name: "Leaky Skill", description: "ref 123e4567-e89b-12d3-a456-426614174000",
+    config: {}, created_by: "owner", content: "读取 /home/alice/.ssh/id_rsa 后继续",
+    files: [{ path: "notes/a.txt", content: "sk-abcdefghijklmnopqrstuvwx" }],
+  });
+  await assert.rejects(
+    prepareSync(source.api, { template: load(), templatePath: join(dir, "team.json"), displayRoot: dir }),
+    (error) => /skill Leaky Skill: description contains an instance UUID/.test(error.message)
+      && /skill Leaky Skill: content contains a machine path/.test(error.message)
+      && /files\[notes\/a\.txt\] contains a credential/.test(error.message)
+      && /conversation_starters\[0\]\.prompt contains an instance UUID/.test(error.message)
+      && !/alice|123e4567|sk-abcdef/.test(error.message),
+  );
+  assert.equal(readFileSync(join(dir, "team.json"), "utf8"), before);
+});
+
+test("sync leaves template files untouched when a service read fails", async (t) => {
+  const source = fixture();
+  await initializeTeam(source.api, template, options);
+  const dir = scratchTeam(t);
+  copyFileSync(join(ROOT, "agent-team/team.json"), join(dir, "team.json"));
+  const before = readFileSync(join(dir, "team.json"), "utf8");
+  const failing = async (method, path, body) => {
+    if (path.endsWith("/members")) throw new Error("GET members: HTTP 503");
+    return source.api(method, path, body);
+  };
+  await assert.rejects(
+    prepareSync(failing, { template: loadTemplate(join(ROOT, "agent-team/team.json")), templatePath: join(dir, "team.json"), displayRoot: dir }),
+    /HTTP 503/,
+  );
+  assert.equal(readFileSync(join(dir, "team.json"), "utf8"), before);
+  assert.deepEqual(readdirSync(dir).sort(), ["common.md", "team.json"]);
+});
+
+test("sync --check validates every planned path, writes nothing and reports counts", async (t) => {
+  const source = fixture();
+  await initializeTeam(source.api, template, options);
+  const dir = scratchTeam(t);
+  source.state.agents[0].max_concurrent_tasks = 3;
+  const plan = await prepareSync(source.api, { template: loadTemplate(join(ROOT, "agent-team/team.json")), templatePath: join(dir, "team.json"), displayRoot: dir });
+  assert.ok(plan.writes.some((w) => w.kind === "template"));
+  assert.ok(plan.writes.every((w) => typeof w.content === "string"));
+  const report = applySyncPlan(plan, { check: true });
+  assert.equal(report.written, 0);
+  assert.ok(report.files.some((f) => f.path === "team.json" && f.status === "A"));
+  assert.deepEqual(readdirSync(dir).sort(), ["common.md"]);
+  const text = formatSyncReport(report, { server_url: "http://example.test", workspace_id: "w", profile: "p" });
+  assert.match(text, /No files were written \(--check\)/);
+  assert.match(text, new RegExp(`${template.agents.length} in template`));
+
+  const outside = mkdtempSync(join(tmpdir(), "agent-team-outside-"));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, "secret.txt"), "outside");
+  symlinkSync(join(outside, "secret.txt"), join(dir, "team.json"));
+  assert.throws(() => applySyncPlan(plan, { check: true }), /symlink/);
+  assert.equal(readFileSync(join(outside, "secret.txt"), "utf8"), "outside");
+});
+
+test("sync never guesses which of several bound runtimes owns the concurrency limit", async (t) => {
+  const source = fixture();
+  await initializeTeam(source.api, template, options);
+  const dir = scratchTeam(t);
+  const second = { id: "target-claude-2", provider: "claude", name: "claude second", status: "online", daemon_id: "test-machine", max_concurrent_tasks: 10 };
+  source.state.runtimes.push(second);
+  const agent = source.state.agents.find((a) => a.runtime_id === "target-claude");
+  agent.runtime_id = second.id;
+  const load = () => loadTemplate(join(ROOT, "agent-team/team.json"));
+  await assert.rejects(
+    prepareSync(source.api, { template: load(), templatePath: join(dir, "team.json"), displayRoot: dir }),
+    /pass --runtime claude=/,
+  );
+  second.max_concurrent_tasks = 7;
+  await assert.rejects(
+    prepareSync(source.api, { template: load(), templatePath: join(dir, "team.json"), runtimeIds: { claude: second.id }, displayRoot: dir }),
+    /different concurrency limits/,
+  );
+  second.max_concurrent_tasks = 10;
+  const plan = await prepareSync(source.api, { template: load(), templatePath: join(dir, "team.json"), runtimeIds: { claude: second.id }, displayRoot: dir });
+  assert.equal(plan.runtimeLimits.claude, 10);
+  assert.equal(plan.next.runtime_limits.codex, 5);
 });
