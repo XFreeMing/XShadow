@@ -26,7 +26,12 @@ import (
 
 func TestProcessCleanupAfterStartupFailure(t *testing.T) {
 	root := t.TempDir()
-	artifacts := filepath.Join(root, "artifacts")
+	// A caller that wants durable evidence can point this at a real directory;
+	// the default keeps the usual t.TempDir cleanup.
+	artifacts := os.Getenv("MULTICA_LIFECYCLE_ARTIFACTS")
+	if artifacts == "" {
+		artifacts = filepath.Join(root, "artifacts")
+	}
 	home := filepath.Join(root, "home")
 	tmp := filepath.Join(root, "tmp")
 	for _, dir := range []string{artifacts, home, tmp} {

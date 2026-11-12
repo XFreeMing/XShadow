@@ -25,12 +25,22 @@ package daemon_test
 //	MULTICA_CHAIN_EXPECT_DB    optional exact database name assertion
 //	MULTICA_CHAIN_STABLE_DAEMON_PORT_FILE  host daemon.port record to prove the
 //	                           started PIDs are not the stable daemon's
+//	MULTICA_CHAIN_STABLE_CLI_BIN  runtime CLI used for the stop-time
+//	                           `daemon status --output json` check
+//	MULTICA_CHAIN_STABLE_PROFILE  profile of the stable daemon that CLI reports
+//	MULTICA_CHAIN_STABLE_HOME  real home holding that CLI's profile
+//
+// Before any child is signalled, the test asks the runtime CLI for the stable
+// daemon's pid and records it in cleanup.json; a child whose pid matches is not
+// stopped. Children are only ever stopped through the exact process group this
+// test started, never by executable name.
 //
 // Child processes are started with an explicit environment (exec.Cmd.Env), so
 // no ambient MULTICA_* value, task token, or host PATH entry reaches them.
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -62,6 +72,9 @@ type chainConfig struct {
 	profileConfig string
 	artifacts     string
 	expectDB      string
+	stableCLIBin  string
+	stableProfile string
+	stableHome    string
 }
 
 type httpResult struct {
@@ -82,6 +95,9 @@ func loadChainConfig(t *testing.T) chainConfig {
 		profileConfig: os.Getenv("MULTICA_CHAIN_PROFILE_CONFIG"),
 		artifacts:     os.Getenv("MULTICA_CHAIN_ARTIFACTS"),
 		expectDB:      os.Getenv("MULTICA_CHAIN_EXPECT_DB"),
+		stableCLIBin:  os.Getenv("MULTICA_CHAIN_STABLE_CLI_BIN"),
+		stableProfile: os.Getenv("MULTICA_CHAIN_STABLE_PROFILE"),
+		stableHome:    os.Getenv("MULTICA_CHAIN_STABLE_HOME"),
 	}
 	for name, value := range map[string]string{
 		"MULTICA_CHAIN_SERVER_BIN":     cfg.serverBin,
@@ -90,6 +106,9 @@ func loadChainConfig(t *testing.T) chainConfig {
 		"MULTICA_CHAIN_PORT":           cfg.apiPort,
 		"MULTICA_CHAIN_PROFILE_CONFIG": cfg.profileConfig,
 		"MULTICA_CHAIN_ARTIFACTS":      cfg.artifacts,
+		"MULTICA_CHAIN_STABLE_CLI_BIN": cfg.stableCLIBin,
+		"MULTICA_CHAIN_STABLE_PROFILE": cfg.stableProfile,
+		"MULTICA_CHAIN_STABLE_HOME":    cfg.stableHome,
 	} {
 		if strings.TrimSpace(value) == "" {
 			t.Fatalf("%s is required", name)
@@ -324,11 +343,63 @@ type childProc struct {
 	log  *os.File
 	done chan error
 
+	// guard, when set, is consulted immediately before this process receives a
+	// signal: it asks the runtime CLI which daemon is the stable one.
+	guard *stableDaemonGuard
+
 	// stopOnce makes cleanup single-shot: the t.Cleanup registered right after a
 	// successful start and any explicit stop call share one signal sequence, so
 	// an early failure never stops the same process twice.
 	stopOnce   sync.Once
 	stopResult map[string]any
+}
+
+// stableDaemonGuard queries the runtime CLI's `daemon status --output json`
+// once and caches the answer. It never infers the stable pid from a file.
+type stableDaemonGuard struct {
+	cliBin  string
+	profile string
+	home    string
+	workDir string
+	once    sync.Once
+	result  map[string]any
+}
+
+func (g *stableDaemonGuard) check() map[string]any {
+	g.once.Do(func() {
+		out := map[string]any{"cli": g.cliBin, "profile": g.profile}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, g.cliBin, "daemon", "status", "--profile", g.profile, "--output", "json")
+		cmd.Dir = g.workDir
+		cmd.Env = []string{
+			"HOME=" + g.home,
+			"PATH=/usr/bin:/bin",
+			"TMPDIR=" + g.workDir,
+		}
+		raw, err := cmd.Output()
+		if err != nil {
+			out["error"] = err.Error()
+			g.result = out
+			return
+		}
+		var rec struct {
+			PID    int    `json:"pid"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			out["error"] = "decode daemon status: " + err.Error()
+			g.result = out
+			return
+		}
+		out["stable_daemon_pid"] = rec.PID
+		out["stable_daemon_status"] = rec.Status
+		if rec.PID <= 0 || rec.Status != "running" {
+			out["error"] = fmt.Sprintf("daemon status=%q pid=%d", rec.Status, rec.PID)
+		}
+		g.result = out
+	})
+	return g.result
 }
 
 func startChild(t *testing.T, name, workDir, bin string, args, env []string, logPath string) *childProc {
@@ -383,6 +454,21 @@ func (p *childProc) stopProcess(t *testing.T, timeout time.Duration) map[string]
 		result["stopped_by"] = "not-started"
 		return result
 	}
+	if p.guard != nil {
+		check := p.guard.check()
+		result["stop_time_check"] = check
+		if msg, _ := check["error"].(string); msg != "" {
+			// Keep the exact-pid stop below (the handle is ours), but fail the
+			// run: without the runtime answer the safety of the stop is
+			// unverified and must be reported as such, not assumed.
+			t.Errorf("stop-time daemon status check for %s failed: %s", p.name, msg)
+		}
+		if stablePID, _ := check["stable_daemon_pid"].(int); stablePID > 0 && stablePID == pid {
+			result["stopped_by"] = "refused-stable-daemon-pid"
+			t.Errorf("refusing to signal %s pid %d: the runtime CLI reports it as the stable daemon", p.name, pid)
+			return result
+		}
+	}
 	result["signals_sent"] = 1
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
 		result["signal_error"] = err.Error()
@@ -433,6 +519,7 @@ func (c *chainCleanup) write(t *testing.T, artifacts, pat string) {
 	}
 	report["processes"] = processes
 	report["stable_daemon_touched"] = touched
+	report["stop_time_verification"] = "runtime CLI daemon status --output json before each signal"
 	for _, name := range []string{"server", "daemon"} {
 		if res, ok := report[name].(map[string]any); ok {
 			report[name+"_pid"] = res["pid"]
@@ -682,7 +769,12 @@ func TestGoalPlanProcessChain(t *testing.T) {
 	cleanup := &chainCleanup{stablePID: stablePID, profileDir: daemonHomeConfigDir}
 	t.Cleanup(func() { cleanup.write(t, cfg.artifacts, profile.Token) })
 
+	// Every signal is preceded by this runtime CLI check, including the ones
+	// t.Cleanup sends on an early failure.
+	guard := &stableDaemonGuard{cliBin: cfg.stableCLIBin, profile: cfg.stableProfile, home: cfg.stableHome, workDir: root}
+
 	server := startChild(t, "server", root, cfg.serverBin, nil, serverEnv, filepath.Join(cfg.artifacts, "server.log"))
+	server.guard = guard
 	cleanup.add(server)
 	if !waitHTTPOK(httpc, serverBase+"/health", 90*time.Second) {
 		t.Fatalf("server did not become healthy; see %s", filepath.Join(cfg.artifacts, "server.log"))
@@ -726,6 +818,7 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		"--no-auto-reload",
 	}
 	daemon := startChild(t, "daemon", root, cfg.cliBin, daemonArgs, daemonEnv, filepath.Join(cfg.artifacts, "daemon.log"))
+	daemon.guard = guard
 	cleanup.add(daemon)
 
 	if stablePID != 0 && (stablePID == daemon.cmd.Process.Pid || stablePID == server.cmd.Process.Pid) {
