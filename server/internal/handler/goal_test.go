@@ -52,10 +52,10 @@ func getGoalViaAPI(t *testing.T, userID, goalID string) (int, GoalResponse) {
 	return rec.Code, resp
 }
 
-func patchGoalViaAPI(t *testing.T, userID, goalID string, body map[string]any) (int, GoalResponse) {
+func updateGoalViaAPI(t *testing.T, userID, goalID string, body map[string]any) (int, GoalResponse) {
 	t.Helper()
 	rec := testutil.Call(t, testHandler.UpdateGoal,
-		goalRequest(http.MethodPatch, "/api/goals/"+goalID, userID, body, map[string]string{"id": goalID}))
+		goalRequest(http.MethodPut, "/api/goals/"+goalID, userID, body, map[string]string{"id": goalID}))
 	var resp GoalResponse
 	if rec.Code == http.StatusOK {
 		rec.JSON(&resp)
@@ -338,7 +338,7 @@ func TestGoalProjectChangeRequiresUnlink(t *testing.T) {
 		t.Fatalf("link = %d, want 204", code)
 	}
 
-	if code, _ := patchGoalViaAPI(t, testUserID, goal.ID, map[string]any{"project_id": p2}); code != http.StatusConflict {
+	if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"project_id": p2}); code != http.StatusConflict {
 		t.Fatalf("move linked goal = %d, want 409", code)
 	}
 	// The rejected write rolled back: still in p1, and the link is intact.
@@ -353,14 +353,14 @@ func TestGoalProjectChangeRequiresUnlink(t *testing.T) {
 	if code := unlinkGoalIssueViaAPI(t, testUserID, goal.ID, issueID); code != http.StatusNoContent {
 		t.Fatalf("unlink = %d, want 204", code)
 	}
-	if code, got := patchGoalViaAPI(t, testUserID, goal.ID, map[string]any{"project_id": p2}); code != http.StatusOK {
+	if code, got := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"project_id": p2}); code != http.StatusOK {
 		t.Fatalf("move unlinked goal = %d, want 200", code)
 	} else if got.ProjectID == nil || *got.ProjectID != p2 {
 		t.Fatalf("goal project = %v, want p2", got.ProjectID)
 	}
 
 	// Explicit null clears the project; an omitted key keeps it.
-	if code, got := patchGoalViaAPI(t, testUserID, goal.ID, map[string]any{"project_id": nil}); code != http.StatusOK || got.ProjectID != nil {
+	if code, got := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"project_id": nil}); code != http.StatusOK || got.ProjectID != nil {
 		t.Fatalf("clear project = %d project=%v, want 200 null", code, got.ProjectID)
 	}
 }
@@ -384,7 +384,7 @@ func TestGoalOwnerIsAssignmentOnly(t *testing.T) {
 		t.Fatalf("agent_task_queue rows after owner create = %d, want %d (no run)", afterCreate, before)
 	}
 
-	if code, got := patchGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "member", "owner_id": testUserID}); code != http.StatusOK {
+	if code, got := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "member", "owner_id": testUserID}); code != http.StatusOK {
 		t.Fatalf("reassign owner = %d, want 200", code)
 	} else if got.OwnerType == nil || *got.OwnerType != "member" {
 		t.Fatalf("owner_type = %v, want member", got.OwnerType)
@@ -396,10 +396,10 @@ func TestGoalOwnerIsAssignmentOnly(t *testing.T) {
 	}
 
 	// Half an owner pair is rejected, as is an archived or foreign target.
-	if code, _ := patchGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "agent"}); code != http.StatusBadRequest {
+	if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "agent"}); code != http.StatusBadRequest {
 		t.Fatalf("half owner pair = %d, want 400", code)
 	}
-	if code, _ := patchGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "member", "owner_id": ""}); code != http.StatusBadRequest {
+	if code, _ := updateGoalViaAPI(t, testUserID, goal.ID, map[string]any{"owner_type": "member", "owner_id": ""}); code != http.StatusBadRequest {
 		t.Fatalf("empty owner id = %d, want 400", code)
 	}
 }
