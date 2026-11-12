@@ -5,29 +5,35 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { buildContext, formatContext } from "./agent-team-context.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const HELP = `Usage: make agent init [ARGS="options"]
+const HELP = `Usage: make agent <init|context> [ARGS="options"]
 
-Without --profile: start this checkout's managed API and daemon, then initialize its workspace.
+init without --profile: start this checkout's managed API and daemon, then initialize its workspace.
+context is read-only: show template, live roster and drift without starting services or models.
   --profile NAME           Use an already authenticated CLI profile; do not start services
   --profiles-dir PATH      Profile root (default ~/.multica/profiles)
   --runtime PROVIDER=ID    Explicit target runtime; repeat for claude, codex, grok
   --template PATH          Template JSON (default agent-team/team.json)
   --check                  Preflight only; requires an existing environment/profile
+  --offline                context: template only, no profile or network access
+  --json                   context: machine-readable output
   --help                   Show this help
 
-Synchronizes template-owned fields of same-named skills, agents and squads.
+init synchronizes template-owned fields of same-named skills, agents and squads.
 Keeps unrelated objects, extra agent skill bindings and extra squad members.
 Does not import credentials, create projects or start model tasks.`;
 
 export function parseArgs(args) {
-  const options = { runtimeIds: {}, check: false };
-  if (args.shift() !== "init") throw new Error(HELP);
+  const options = { command: args.shift(), runtimeIds: {}, check: false };
+  if (!["init", "context"].includes(options.command)) throw new Error(HELP);
   while (args.length) {
     const flag = args.shift();
     if (flag === "--help") { options.help = true; continue; }
     if (flag === "--check") { options.check = true; continue; }
+    if (flag === "--offline") { options.offline = true; continue; }
+    if (flag === "--json") { options.json = true; continue; }
     const key = { "--profile": "profile", "--profiles-dir": "profilesDir", "--template": "template", "--runtime": "runtime" }[flag];
     if (!key || !args[0] || args[0].startsWith("--")) throw new Error(`Invalid option: ${flag}\n${HELP}`);
     const value = args.shift();
@@ -38,6 +44,8 @@ export function parseArgs(args) {
     } else options[key] = value;
   }
   if (options.profile && !/^[\w.-]+$/.test(options.profile)) throw new Error("Invalid profile name");
+  if (options.command === "init" && (options.offline || options.json)) throw new Error("--offline and --json apply only to context");
+  if (options.command === "context" && (options.check || Object.keys(options.runtimeIds).length)) throw new Error("context reads existing bindings; --check and --runtime apply only to init");
   return options;
 }
 
@@ -251,6 +259,11 @@ export async function main(args, env = process.env) {
   const options = parseArgs([...args]);
   if (options.help) { console.log(HELP); return; }
   const template = loadTemplate(resolve(options.template ?? join(ROOT, "agent-team/team.json")));
+  if (options.command === "context") {
+    const report = await buildContext(template, options, { root: ROOT, env, client: apiClient });
+    console.log(options.json ? JSON.stringify(report, null, 2) : formatContext(report));
+    return report;
+  }
   if (!options.profile && !env.MULTICA_DEV_PROFILE) {
     const run = (argv) => {
       const result = spawnSync("bash", [join(ROOT, "scripts/dev-env.sh"), ...argv], { cwd: ROOT, env, stdio: "inherit" });
