@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
+import { goalKeys } from "@multica/core/goals";
 import type { Goal, Issue } from "@multica/core/types";
 import { toast } from "sonner";
 import { renderWithI18n } from "../../test/i18n";
@@ -218,6 +219,45 @@ describe("GoalDetailPage", () => {
       "/test/goals",
     );
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("drops the cached goal identity when a later load loses access", async () => {
+    renderPage();
+    expect(await screen.findByText("Ship goal management")).toBeInTheDocument();
+
+    // React Query keeps the last successful payload when a refetch fails.
+    // Losing project visibility must still clear the stale title.
+    api.getGoal.mockRejectedValue(new ApiError("Forbidden", 403, "Forbidden"));
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: goalKeys.detail("ws-1", "goal-1") });
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText("Ship goal management")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("This goal doesn't exist or you don't have access to it."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to goals" })).toHaveAttribute(
+      "href",
+      "/test/goals",
+    );
+    // The breadcrumb falls back to the neutral label, not the old title.
+    expect(screen.getByText("Goal")).toBeInTheDocument();
+  });
+
+  it("keeps the last known title when a refetch fails transiently", async () => {
+    renderPage();
+    expect(await screen.findByText("Ship goal management")).toBeInTheDocument();
+
+    api.getGoal.mockRejectedValue(new ApiError("Server error", 500, "Internal Server Error"));
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: goalKeys.detail("ws-1", "goal-1") });
+    });
+
+    expect(await screen.findByText("Couldn't load this goal.")).toBeInTheDocument();
+    expect(screen.getByText("Ship goal management")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("offers a retry on a transport failure", async () => {
