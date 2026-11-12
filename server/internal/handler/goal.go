@@ -463,11 +463,17 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
 	}
 
-	// Owner: the resulting pair is validated as a whole, so a request can
-	// replace it or clear it (both null), but never write half of it.
+	// Owner: a partial update must not turn an omitted half of the pair into
+	// an implicit clear. Both keys absent keeps the owner; both keys present
+	// replaces it (both null clears) or is rejected as a mixed/empty pair; a
+	// lone key, including a lone null, is a malformed request.
 	_, touchedOwnerType := rawFields["owner_type"]
 	_, touchedOwnerID := rawFields["owner_id"]
-	if touchedOwnerType || touchedOwnerID {
+	if touchedOwnerType != touchedOwnerID {
+		writeError(w, http.StatusBadRequest, "owner_type and owner_id must be provided together")
+		return
+	}
+	if touchedOwnerType {
 		var newOwnerType pgtype.Text
 		var newOwnerID pgtype.UUID
 		if req.OwnerType != nil && *req.OwnerType != "" {
@@ -479,6 +485,12 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			newOwnerID = id
+		}
+		// Both sides must agree: one null/empty alongside a value is neither
+		// a replacement nor the paired clear the API accepts.
+		if newOwnerType.Valid != newOwnerID.Valid {
+			writeError(w, http.StatusBadRequest, "owner_type and owner_id must be provided together")
+			return
 		}
 		if !h.validateGoalOwnerPair(w, r, workspaceID, newOwnerType, newOwnerID) {
 			return
