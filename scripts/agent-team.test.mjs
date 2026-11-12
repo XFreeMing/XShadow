@@ -337,8 +337,8 @@ test("a truncated wakeup read leaves continuation unknown instead of calling the
 });
 
 test("portable template contains the current roster without machine identities or credentials", () => {
-  assert.equal(template.agents.length, 20);
-  assert.equal(template.skills.length, 15);
+  assert.equal(template.agents.length, 21);
+  assert.equal(template.skills.length, 16);
   assert.equal(template.squads.length, 5);
   const serialized = JSON.stringify(template);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
@@ -351,8 +351,8 @@ test("portable template contains the current roster without machine identities o
 test("new destination gets fresh references, prompts, skills and squad roles; rerun is a no-op", async () => {
   const f = fixture();
   const ids = await initializeTeam(f.api, template, options);
-  assert.equal(f.state.agents.length, 20);
-  assert.equal(f.state.skills.length, 15);
+  assert.equal(f.state.agents.length, 21);
+  assert.equal(f.state.skills.length, 16);
   assert.equal(f.state.squads.length, 5);
   for (const s of f.state.squads) {
     assert.doesNotMatch(s.instructions, /\{\{squad:/);
@@ -407,8 +407,8 @@ test("retry after a partial creation reuses completed objects", async () => {
   await assert.rejects(initializeTeam(api, template, options), /interrupted/);
   assert.equal(f.state.agents.length, 2);
   await initializeTeam(api, template, options);
-  assert.equal(f.state.agents.length, 20);
-  assert.equal(f.state.skills.length, 15);
+  assert.equal(f.state.agents.length, 21);
+  assert.equal(f.state.skills.length, 16);
 });
 
 test("readback detects a server that ignores the requested settings", async () => {
@@ -455,7 +455,7 @@ test("HTTP profile execution uses the selected account/workspace without an agen
   writeFileSync(join(dir, "fixture/config.json"), JSON.stringify(config));
   const args = ["init", "--profile", "fixture", "--profiles-dir", dir, ...f.state.runtimes.flatMap((r) => ["--runtime", `${r.provider}=${r.id}`])];
   await main(args, { MULTICA_TOKEN: "wrong-token", MULTICA_SERVER_URL: "https://wrong.invalid" });
-  assert.equal(f.state.agents.length, 20);
+  assert.equal(f.state.agents.length, 21);
   assert.throws(() => apiClient({ ...config, token: "" }), /Profile needs/);
 });
 
@@ -519,7 +519,7 @@ test("offline context never discovers a profile, connects, starts services or pr
     root: "/missing", client() { throw new Error("must not connect"); }, discoverProfile() { throw new Error("must not discover"); },
   });
   assert.equal(report.live.status, "offline");
-  assert.equal(report.template.agents.length, 20);
+  assert.equal(report.template.agents.length, 21);
   assert.match(formatContext(report), /仅仓库模板；实时状态未核验/);
   assert.doesNotMatch(formatContext(report), /已读取目标工作区实时配置/);
 });
@@ -545,7 +545,7 @@ test("local profile selection is explicit, overrideable and unavailable state st
   assert.doesNotMatch(JSON.stringify(local), /hidden-token/);
   const down = await buildContext(template, { profilesDir: dir }, { ...deps, client() { return async () => { throw new Error("service unavailable"); }; } });
   assert.equal(down.live.status, "unavailable");
-  assert.equal(down.template.agents.length, 20);
+  assert.equal(down.template.agents.length, 21);
   assert.match(formatContext(down), /无法比较/);
   const missing = await buildContext(template, { profile: "missing", profilesDir: dir }, deps);
   assert.equal(missing.live.status, "unavailable");
