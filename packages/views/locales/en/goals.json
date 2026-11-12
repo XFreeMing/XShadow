@@ -218,6 +218,8 @@
     "generation_not_ready": "This plan isn't ready to apply yet. Wait for the run to finish, then try again.",
     "generation_already_applied": "This plan was already applied, so this attempt saved nothing. Reload the plan to see the current version.",
     "generation_retryable": "The planning run couldn't be confirmed yet. Retry this request; your text is kept.",
-    "binding_unknown": "Other task link ({{type}})"
+    "binding_unknown": "Other task link ({{type}})",
+    "start_refused": "This request was refused before a run started. Nothing was created; start a new run when you're ready.",
+    "plan_unavailable": "This plan can't be read here. Reload it to continue."
   }
 }

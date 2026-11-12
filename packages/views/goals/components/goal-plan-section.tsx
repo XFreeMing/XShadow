@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Goal, GoalPlanEdge, GoalPlanGeneration } from "@multica/core/types";
@@ -39,6 +39,23 @@ import { PlanActualBasis } from "./goal-plan-basis";
 
 type SaveOutcome = "saved" | "revision_conflict" | "generation_project_conflict" | "failed";
 
+/**
+ * Deletions that a candidate still has to respect. A candidate generated from
+ * revision N contains the nodes the user had at N; a deletion recorded at N or
+ * later happened while that run was in flight or after it, so it wins. A
+ * deletion made before the run started is already absent from its basis.
+ */
+function deletionsForRun(
+  removed: ReadonlyMap<string, number>,
+  baseRevision: number,
+): ReadonlySet<string> {
+  const kept = new Set<string>();
+  for (const [id, revision] of removed) {
+    if (revision >= baseRevision) kept.add(id);
+  }
+  return kept;
+}
+
 function saveFailureMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.status < 500 && error.message) {
     return error.message;
@@ -71,14 +88,25 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   const [draftProjectId, setDraftProjectId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [editedItemIds, setEditedItemIds] = useState<ReadonlySet<string>>(new Set());
-  const [removedItemIds, setRemovedItemIds] = useState<ReadonlySet<string>>(new Set());
-  const [removedEdgeKeys, setRemovedEdgeKeys] = useState<ReadonlySet<string>>(new Set());
+  // Each deletion records the revision it was made against. A candidate that
+  // started before the deletion still has to respect it, even after the
+  // deletion was saved into a newer revision.
+  const [removedItemIds, setRemovedItemIds] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  );
+  const [removedEdgeKeys, setRemovedEdgeKeys] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  );
   const [conflictRevision, setConflictRevision] = useState<number | null>(null);
   const [pendingGenerationId, setPendingGenerationId] = useState<string | null>(null);
   const [projectConflictNotice, setProjectConflictNotice] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [validationIssue, setValidationIssue] = useState<PlanValidationIssue | null>(null);
   const [generationNonce, setGenerationNonce] = useState(0);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const focusedInsideRef = useRef<HTMLElement | null>(null);
+  const conflictReloadRef = useRef<HTMLButtonElement | null>(null);
+  const planRetryRef = useRef<HTMLButtonElement | null>(null);
 
   // Server revisions can move underneath a local draft (another tab, realtime
   // refresh). Never silently replace unsaved work: keep the draft and show the
@@ -140,12 +168,13 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     });
   };
 
-  // Deletions are user decisions a late candidate must not undo.
+  // Deletions are user decisions a late candidate must not undo. The revision
+  // they were made against scopes them to runs that started at or before it.
   const handleItemRemoved = (itemId: string) => {
     setRemovedItemIds((current) => {
       if (current.has(itemId)) return current;
-      const next = new Set(current);
-      next.add(itemId);
+      const next = new Map(current);
+      next.set(itemId, planRevision);
       return next;
     });
   };
@@ -154,8 +183,8 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     const key = planEdgeKey(edge);
     setRemovedEdgeKeys((current) => {
       if (current.has(key)) return current;
-      const next = new Set(current);
-      next.add(key);
+      const next = new Map(current);
+      next.set(key, planRevision);
       return next;
     });
   };
@@ -180,8 +209,6 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
       setDraftProjectId(saved.project_id);
       setDirty(false);
       setEditedItemIds(new Set());
-      setRemovedItemIds(new Set());
-      setRemovedEdgeKeys(new Set());
       setConflictRevision(null);
       setPendingGenerationId(null);
       setSaveError(null);
@@ -266,8 +293,8 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     setDraftProjectId(result.data.project_id);
     setDirty(false);
     setEditedItemIds(new Set());
-    setRemovedItemIds(new Set());
-    setRemovedEdgeKeys(new Set());
+    setRemovedItemIds(new Map());
+    setRemovedEdgeKeys(new Map());
     setConflictRevision(null);
     setPendingGenerationId(null);
     setProjectConflictNotice(false);
@@ -287,15 +314,21 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
       return "failed";
     }
     const merged = mergeCandidate(draft, generation.candidate, editedItemIds, {
-      itemIds: removedItemIds,
-      edgeKeys: removedEdgeKeys,
+      itemIds: deletionsForRun(removedItemIds, generation.base_revision),
+      edgeKeys: deletionsForRun(removedEdgeKeys, generation.base_revision),
     });
     setDraft((current) => (current ? { ...current, ...merged } : current));
     setDirty(true);
     setPendingGenerationId(generation.id);
     setValidationIssue(null);
     const outcome = await persist(merged, planRevision, generation.id);
-    if (outcome === "saved") return "applied";
+    if (outcome === "saved") {
+      // The run this decision belonged to is now applied; later candidates
+      // start from the saved plan and need no local deletion record.
+      setRemovedItemIds(new Map());
+      setRemovedEdgeKeys(new Map());
+      return "applied";
+    }
     if (outcome === "generation_project_conflict") return "conflict";
     return "failed";
   };
@@ -359,9 +392,55 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     return null;
   };
 
-  // A terminal read failure means this viewer can no longer see the goal. The
-  // plan may still be in cache; it must not be rendered.
-  if (planQuery.isError && isGoalUnavailableError(planQuery.error)) return null;
+  // A terminal plan read refusal means this viewer can no longer read the
+  // plan. Cached plan content, a draft, a candidate and its basis must not be
+  // rendered, but the reader still gets an explanation and a recovery action.
+  const planUnavailable = planQuery.isError && isGoalUnavailableError(planQuery.error);
+
+  // Only move focus when the element the reader was using was removed with the
+  // content. A background refresh that leaves the form mounted keeps focus.
+  useEffect(() => {
+    const lost = focusedInsideRef.current;
+    if (!lost || lost.isConnected) return;
+    const target = projectConflictNotice
+      ? conflictReloadRef.current
+      : planUnavailable
+        ? planRetryRef.current
+        : null;
+    if (!target) return;
+    focusedInsideRef.current = null;
+    target.focus();
+  }, [projectConflictNotice, planUnavailable]);
+
+  if (planUnavailable) {
+    return (
+      <section
+        ref={sectionRef}
+        onFocusCapture={(event) => {
+          focusedInsideRef.current = event.target as HTMLElement;
+        }}
+        className="space-y-2"
+        data-testid="goal-plan-section"
+      >
+        <h2 className="text-title-sm font-semibold">{t(($) => $.plan.title)}</h2>
+        <div
+          className="flex items-center gap-2 text-caption text-destructive"
+          role="alert"
+          data-testid="plan-section-unavailable"
+        >
+          <span>{t(($) => $.plan.plan_unavailable)}</span>
+          <Button
+            ref={planRetryRef}
+            size="sm"
+            variant="outline"
+            onClick={() => void planQuery.refetch()}
+          >
+            {t(($) => $.plan.retry)}
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   const header = (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -428,7 +507,14 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   }
 
   return (
-    <section className="space-y-3" data-testid="goal-plan-section">
+    <section
+      ref={sectionRef}
+      onFocusCapture={(event) => {
+        focusedInsideRef.current = event.target as HTMLElement;
+      }}
+      className="space-y-3"
+      data-testid="goal-plan-section"
+    >
       {header}
 
       {planQuery.isError && plan ? (
@@ -453,7 +539,12 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
           <p className="text-caption text-muted-foreground">
             {t(($) => $.plan.section_project_conflict)}
           </p>
-          <Button size="sm" variant="outline" onClick={() => void handleLoadLatest()}>
+          <Button
+            ref={conflictReloadRef}
+            size="sm"
+            variant="outline"
+            onClick={() => void handleLoadLatest()}
+          >
             {t(($) => $.plan.project_conflict_reload)}
           </Button>
         </div>
@@ -506,9 +597,7 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
         onProjectConflict={handleProjectConflict}
         onRevisionConflict={handleStartRevisionConflict}
         onUnavailable={handleRunUnavailable}
-        onReloadPlan={async () => {
-          await handleLoadLatest();
-        }}
+        onReloadPlan={handleLoadLatest}
         onStartNewGeneration={handleStartNewGeneration}
       />
 

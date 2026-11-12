@@ -218,6 +218,8 @@
     "generation_not_ready": "Este plan aún no está listo para aplicarse. Espera a que termine la ejecución y vuelve a intentarlo.",
     "generation_already_applied": "Este plan ya se aplicó, así que este intento no guardó nada. Recarga el plan para ver la versión actual.",
     "generation_retryable": "Aún no se pudo confirmar la ejecución del plan. Reintenta esta misma solicitud; tu texto se conserva.",
-    "binding_unknown": "Otro vínculo de tarea ({{type}})"
+    "binding_unknown": "Otro vínculo de tarea ({{type}})",
+    "start_refused": "La solicitud se rechazó antes de iniciar la ejecución. No se creó nada; inicia una nueva ejecución cuando quieras.",
+    "plan_unavailable": "Este plan no se puede leer aquí. Recárgalo para continuar."
   }
 }

@@ -302,16 +302,28 @@ describe("GoalPlanSection", () => {
     expect(api.saveGoalPlan.mock.calls[0]![1].edges).toEqual([]);
   });
 
-  it("hides the whole plan area when the goal is no longer visible", async () => {
+  it("keeps a recovery entry without cached plan content when the plan is unreadable", async () => {
     api.getGoalPlan.mockRejectedValue(new ApiError("Forbidden", 403, "Forbidden"));
+    const user = userEvent.setup();
     renderSection();
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("goal-plan-section")).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: "Save plan" }),
-      ).not.toBeInTheDocument();
-    });
+    expect(
+      await screen.findByText("This plan can't be read here. Reload it to continue."),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("plan-section-unavailable")).toBeInTheDocument();
+    // No cached plan, draft, candidate or basis may survive the refusal.
+    expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save plan" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("plan-candidate")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("plan-actual-basis")).not.toBeInTheDocument();
+
+    api.getGoalPlan.mockResolvedValue(plan());
+    await user.click(
+      within(screen.getByTestId("plan-section-unavailable")).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+    expect(await screen.findByText("No tasks yet. Add one, or generate a plan.")).toBeInTheDocument();
   });
 
   it("hides a candidate whose run belongs to another project", async () => {
@@ -460,9 +472,10 @@ describe("GoalPlanSection", () => {
     void qc.invalidateQueries({ queryKey: goalKeys.plan("ws-1", "goal-1") }).catch(() => {});
 
     await waitFor(() => {
-      expect(screen.queryByTestId("goal-plan-section")).not.toBeInTheDocument();
+      expect(screen.getByTestId("plan-section-unavailable")).toBeInTheDocument();
       expect(screen.queryByTestId("plan-candidate")).not.toBeInTheDocument();
       expect(screen.queryByTestId("plan-actual-basis")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
     });
   });
 
@@ -859,5 +872,411 @@ describe("GoalPlanSection", () => {
       type: "external",
       issue_id: null,
     });
+  });
+
+  it("keeps the generation gate when a conflict reload fails", async () => {
+    api.getGoalPlanGeneration.mockRejectedValue(
+      new ApiError("conflict", 409, "Conflict", {
+        code: "generation_project_conflict",
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    const card = await screen.findByTestId("plan-project-conflict");
+    expect(screen.queryByTestId("plan-candidate")).not.toBeInTheDocument();
+
+    // The plan re-read behind the conflict notice fails: the notice, the
+    // hidden candidate and the request gate must all stay in place.
+    api.getGoalPlan.mockRejectedValue(new ApiError("boom", 500, "Boom"));
+    await user.click(within(card).getByRole("button", { name: "Reload plan" }));
+
+    expect(await within(card).findByText("Couldn't load the plan.")).toBeInTheDocument();
+    expect(screen.getByTestId("plan-project-conflict")).toBeInTheDocument();
+    expect(screen.getByTestId("plan-section-project-conflict")).toBeInTheDocument();
+    expect(screen.queryByTestId("plan-candidate")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
+    expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(1);
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+
+    // Only a successful read of the current project's plan releases the gate.
+    api.getGoalPlan.mockResolvedValue(plan());
+    await user.click(within(card).getByRole("button", { name: "Reload plan" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("plan-project-conflict")).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("plan-section-project-conflict")).not.toBeInTheDocument();
+    expect(await screen.findByText("No tasks yet. Add one, or generate a plan.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate plan" })).toBeEnabled();
+    expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(1);
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+  });
+
+  it("keeps a saved node deletion out of a candidate that started before it", async () => {
+    api.getGoalPlan.mockResolvedValue(
+      plan({
+        revision: 2,
+        items: [item("node-1", "First"), item("node-2", "Second")],
+      }),
+    );
+    api.createGoalPlanGeneration.mockResolvedValue(
+      generation({ state: "queued", base_revision: 2 }),
+    );
+    api.getGoalPlanGeneration.mockResolvedValue(
+      generation({ state: "queued", base_revision: 2 }),
+    );
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("plan-item-node-2");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+    await screen.findByTestId("plan-generation-status");
+
+    // While the run is in flight: a local addition and a deletion, saved into
+    // revision 3. The deletion decision is still valid for the revision-2 run.
+    await user.click(screen.getByRole("button", { name: "Add task" }));
+    const titles = screen.getAllByLabelText("Title");
+    await user.type(titles[titles.length - 1]!, "Local addition");
+    await user.click(screen.getByRole("button", { name: "Delete Second" }));
+    api.saveGoalPlan.mockImplementationOnce(async (_goalId, data) =>
+      plan({
+        revision: 3,
+        items: data.items,
+        edges: data.edges,
+        context_snapshot: data.context_snapshot,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+    await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(1));
+
+    api.getGoalPlanGeneration.mockResolvedValue(
+      generation({
+        state: "succeeded",
+        base_revision: 2,
+        candidate: {
+          items: [
+            item("node-1", "First"),
+            item("node-2", "Second"),
+            item("node-3", "Candidate addition"),
+          ],
+          edges: [],
+          context_snapshot: {},
+        },
+      }),
+    );
+    void qc
+      .invalidateQueries({ queryKey: goalKeys.planGeneration("ws-1", "goal-1", "gen-1") })
+      .catch(() => {});
+
+    const candidate = await screen.findByTestId("plan-candidate");
+    await user.click(within(candidate).getByRole("button", { name: "Review and apply" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Apply and save" }));
+
+    await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(2));
+    const [, saved] = api.saveGoalPlan.mock.calls[1]!;
+    const ids = saved.items.map((entry: GoalPlanItem) => entry.id);
+    expect(ids).not.toContain("node-2");
+    expect(ids).toContain("node-1");
+    expect(ids).toContain("node-3");
+    expect(saved.items.map((entry: GoalPlanItem) => entry.title)).toContain(
+      "Local addition",
+    );
+    expect(screen.queryByTestId("plan-item-node-2")).not.toBeInTheDocument();
+  });
+
+  it("keeps a saved dependency deletion out of a candidate that started before it", async () => {
+    const dependency = {
+      dependent_item_id: "node-2",
+      prerequisite_item_id: "node-1",
+      reason: "needs the first",
+    };
+    api.getGoalPlan.mockResolvedValue(
+      plan({
+        revision: 2,
+        items: [item("node-1", "First"), item("node-2", "Second")],
+        edges: [dependency],
+      }),
+    );
+    api.createGoalPlanGeneration.mockResolvedValue(
+      generation({ state: "queued", base_revision: 2 }),
+    );
+    api.getGoalPlanGeneration.mockResolvedValue(
+      generation({ state: "queued", base_revision: 2 }),
+    );
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("plan-item-node-2");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+    await screen.findByTestId("plan-generation-status");
+
+    await user.click(screen.getByRole("button", { name: "Remove dependency on First" }));
+    api.saveGoalPlan.mockImplementationOnce(async (_goalId, data) =>
+      plan({
+        revision: 3,
+        items: data.items,
+        edges: data.edges,
+        context_snapshot: data.context_snapshot,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+    await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(1));
+
+    api.getGoalPlanGeneration.mockResolvedValue(
+      generation({
+        state: "succeeded",
+        base_revision: 2,
+        candidate: {
+          items: [
+            item("node-1", "First"),
+            item("node-2", "Second"),
+            item("node-3", "Candidate addition"),
+          ],
+          edges: [
+            { ...dependency, reason: "candidate reason" },
+            { dependent_item_id: "node-3", prerequisite_item_id: "node-1", reason: "new" },
+          ],
+          context_snapshot: {},
+        },
+      }),
+    );
+    void qc
+      .invalidateQueries({ queryKey: goalKeys.planGeneration("ws-1", "goal-1", "gen-1") })
+      .catch(() => {});
+
+    const candidate = await screen.findByTestId("plan-candidate");
+    await user.click(within(candidate).getByRole("button", { name: "Review and apply" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Apply and save" }));
+
+    await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(2));
+    const [, saved] = api.saveGoalPlan.mock.calls[1]!;
+    expect(
+      saved.edges.some(
+        (edge: { dependent_item_id: string; prerequisite_item_id: string }) =>
+          edge.dependent_item_id === "node-2" && edge.prerequisite_item_id === "node-1",
+      ),
+    ).toBe(false);
+    expect(
+      saved.edges.some(
+        (edge: { dependent_item_id: string; prerequisite_item_id: string }) =>
+          edge.dependent_item_id === "node-3" && edge.prerequisite_item_id === "node-1",
+      ),
+    ).toBe(true);
+    expect(saved.items.map((entry: GoalPlanItem) => entry.id)).toContain("node-2");
+  });
+
+  it("starts a new run after the reader resolves a start revision conflict", async () => {
+    api.getGoalPlan
+      .mockResolvedValueOnce(plan({ revision: 2 }))
+      .mockResolvedValue(plan({ revision: 5 }));
+    api.createGoalPlanGeneration
+      .mockRejectedValueOnce(
+        new ApiError("conflict", 409, "Conflict", {
+          code: "plan_revision_conflict",
+          current_revision: 5,
+        }),
+      )
+      .mockResolvedValueOnce(generation({ id: "gen-2", base_revision: 5 }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    // A local edit makes the revision choice real: the draft can't be
+    // replaced silently by the refetched plan.
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
+    await user.type(screen.getByLabelText("Title"), "Unsaved edit");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
+    // The refused request may not be repeated until the reader chooses.
+    expect(screen.getByRole("button", { name: "Generate plan" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Load latest" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("plan-revision-conflict")).not.toBeInTheDocument(),
+    );
+
+    const intent = screen.getByLabelText("What should the plan deliver?");
+    await user.clear(intent);
+    await user.type(intent, "Recovered intent");
+    await user.click(screen.getByRole("button", { name: "Start a new run" }));
+
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+    const first = api.createGoalPlanGeneration.mock.calls[0]![1];
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    expect(second.request_key).not.toBe(first.request_key);
+    expect(second.expected_revision).toBe(5);
+    expect(second.intent).toBe("Recovered intent");
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+  });
+
+  it("starts a new run after the reader saves their version over a conflict", async () => {
+    api.getGoalPlan
+      .mockResolvedValueOnce(plan({ revision: 2 }))
+      .mockResolvedValue(plan({ revision: 5 }));
+    api.saveGoalPlan.mockImplementationOnce(async (_goalId, data) =>
+      plan({
+        revision: 6,
+        items: data.items,
+        edges: data.edges,
+        context_snapshot: data.context_snapshot,
+      }),
+    );
+    api.createGoalPlanGeneration
+      .mockRejectedValueOnce(
+        new ApiError("conflict", 409, "Conflict", {
+          code: "plan_revision_conflict",
+          current_revision: 5,
+        }),
+      )
+      .mockResolvedValueOnce(generation({ id: "gen-2", base_revision: 6 }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
+    await user.type(screen.getByLabelText("Title"), "Unsaved edit");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+    expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save my version" }));
+    await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(1));
+    expect(api.saveGoalPlan.mock.calls[0]![1].expected_revision).toBe(5);
+    await waitFor(() =>
+      expect(screen.queryByTestId("plan-revision-conflict")).not.toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Start a new run" }));
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    expect(second.expected_revision).toBe(6);
+    expect(second.request_key).not.toBe(
+      api.createGoalPlanGeneration.mock.calls[0]![1].request_key,
+    );
+    // A new run never saves the draft on the reader's behalf.
+    expect(api.saveGoalPlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers from a refused start once the goal is still visible", async () => {
+    api.createGoalPlanGeneration
+      .mockRejectedValueOnce(new ApiError("Not found", 404, "Not found"))
+      .mockResolvedValueOnce(generation({ id: "gen-2" }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    expect(
+      await screen.findByText("This goal or its planning agent is no longer available to you."),
+    ).toBeInTheDocument();
+    // The goal and plan are still readable, so recovery is available.
+    expect(screen.getByTestId("goal-plan-section")).toBeInTheDocument();
+    expect(screen.getByTestId("plan-start-refused")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start a new run" }));
+
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    expect(second.request_key).not.toBe(
+      api.createGoalPlanGeneration.mock.calls[0]![1].request_key,
+    );
+    expect(second.expected_revision).toBe(2);
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+  });
+
+  it("starts a new run with the current input after the agent refuses", async () => {
+    api.createGoalPlanGeneration
+      .mockRejectedValueOnce(new ApiError("Forbidden", 403, "Forbidden"))
+      .mockResolvedValueOnce(generation({ id: "gen-2" }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    expect(await screen.findByText("You can't use this planning agent.")).toBeInTheDocument();
+    expect(screen.getByTestId("plan-start-refused")).toBeInTheDocument();
+
+    const intent = screen.getByLabelText("What should the plan deliver?");
+    await user.clear(intent);
+    await user.type(intent, "After agent refusal");
+    await user.click(screen.getByRole("button", { name: "Start a new run" }));
+
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    expect(second.request_key).not.toBe(
+      api.createGoalPlanGeneration.mock.calls[0]![1].request_key,
+    );
+    expect(second.intent).toBe("After agent refusal");
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+  });
+
+  it("moves focus to the recovery action when the project conflict removes the editor", async () => {
+    api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-1", revision: 0 }));
+    const user = userEvent.setup();
+    const view = renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    await user.click(screen.getByRole("button", { name: "Add task" }));
+    const title = screen.getByLabelText("Title");
+    await user.click(title);
+    await user.type(title, "Only in project A");
+    expect(document.activeElement).toBe(title);
+
+    api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-2", revision: 0 }));
+    view.rerender(
+      <QueryClientProvider client={qc}>
+        <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+      </QueryClientProvider>,
+    );
+
+    const notice = await screen.findByTestId("plan-section-project-conflict");
+    expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(notice).getByRole("button", { name: "Reload plan" }),
+      ),
+    );
+  });
+
+  it("does not move focus on an ordinary background refresh", async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    await user.click(screen.getByRole("button", { name: "Add task" }));
+    const title = screen.getByLabelText("Title");
+    await user.click(title);
+    await user.type(title, "Unsaved edit");
+
+    qc.setQueryData(goalKeys.plan("ws-1", "goal-1"), plan({ revision: 3 }));
+
+    expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
+    expect(document.activeElement).toBe(
+      within(screen.getByTestId("goal-plan-editor")).getByLabelText("Title"),
+    );
   });
 });

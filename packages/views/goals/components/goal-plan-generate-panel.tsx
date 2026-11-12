@@ -86,7 +86,7 @@ export function GoalPlanGenerationPanel({
   onProjectConflict: () => void;
   onRevisionConflict: (revision: number | null) => void;
   onUnavailable: () => void;
-  onReloadPlan: () => Promise<void>;
+  onReloadPlan: () => Promise<boolean>;
   onStartNewGeneration: () => Promise<void>;
 }) {
   const { t } = useT("goals");
@@ -101,6 +101,11 @@ export function GoalPlanGenerationPanel({
   const [projectConflict, setProjectConflict] = useState(false);
   const [runUnavailable, setRunUnavailable] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  // A definite refusal created no run. The request key/body belong to that
+  // refused attempt, so recovery is an explicit new run once the reader has
+  // resolved whatever blocked it (a plan revision choice, an agent change).
+  const [startRefused, setStartRefused] = useState(false);
+  const [reloadError, setReloadError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const requestKeyRef = useRef<string | null>(null);
   // The body that belongs to the stored request_key. A retry must replay the
@@ -206,6 +211,8 @@ export function GoalPlanGenerationPanel({
     }
     setStartError(null);
     setRunUnavailable(false);
+    setStartRefused(false);
+    setReloadError(null);
     requestKeyRef.current = null;
     requestBodyRef.current = null;
     // `generationId` is read once per project change; re-running on every
@@ -238,11 +245,16 @@ export function GoalPlanGenerationPanel({
   const startGeneration = async (freshKey = false) => {
     const trimmed = intent.trim();
     if (!trimmed || !agentId || starting) return;
+    // A refused request may only recover after the reader has resolved the
+    // plan conflict it hit; starting earlier would be refused again.
+    if (startRefused && applyBlocked) return;
     if (freshKey) {
       requestKeyRef.current = null;
       requestBodyRef.current = null;
       setProjectConflict(false);
       setRunUnavailable(false);
+      setStartRefused(false);
+      setReloadError(null);
     }
     if (!requestKeyRef.current) {
       requestKeyRef.current = newRequestKey();
@@ -271,6 +283,7 @@ export function GoalPlanGenerationPanel({
           agent_id: body.agentId,
         },
       });
+      setStartRefused(false);
       setGenerationId(started.id);
       // Read the authoritative state right away instead of waiting for the
       // first poll tick: the creation response is only the start signal.
@@ -304,13 +317,19 @@ export function GoalPlanGenerationPanel({
       // overwrite of the local edits.
       const revision = planConflictRevision(err);
       if (revision !== null) {
+        setStartRefused(true);
         setStartError(t(($) => $.plan.start_revision_conflict));
         onRevisionConflict(revision);
         return;
       }
       if (err instanceof ApiError && err.status === 404) onUnavailable();
-      // Keep the same request_key: retrying this exact request must resolve
-      // to the run the server may already have created.
+      // A 4xx is a definite refusal: no run exists, so the recorded key/body
+      // cannot resolve to one. Recovery is an explicit new request after the
+      // reader resolves the cause. A network failure or a 5xx leaves the
+      // outcome unknown and keeps the recorded key/body for a same-request
+      // retry.
+      const refusedByServer = err instanceof ApiError && err.status >= 400 && err.status < 500;
+      setStartRefused(refusedByServer);
       setStartError(startErrorMessage(err));
     }
   };
@@ -345,10 +364,19 @@ export function GoalPlanGenerationPanel({
   };
 
   const handleReloadPlan = async () => {
-    await onReloadPlan();
+    // Only a confirmed read of the current project's plan may release the
+    // project-conflict gate. A failed reload keeps the notice, the hidden
+    // candidate and the recorded request untouched.
+    const reloaded = await onReloadPlan();
+    if (!reloaded) {
+      setReloadError(t(($) => $.plan.load_failed));
+      return;
+    }
+    setReloadError(null);
     setProjectConflict(false);
     setGenerationId(null);
     setStartError(null);
+    setStartRefused(false);
     setRunUnavailable(false);
     requestKeyRef.current = null;
     requestBodyRef.current = null;
@@ -372,6 +400,11 @@ export function GoalPlanGenerationPanel({
         <p className="text-caption text-muted-foreground">
           {t(($) => $.plan.project_conflict_description)}
         </p>
+        {reloadError ? (
+          <p className="text-caption text-destructive" role="alert">
+            {reloadError}
+          </p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={() => void handleReloadPlan()}>
             {t(($) => $.plan.project_conflict_reload)}
@@ -440,8 +473,14 @@ export function GoalPlanGenerationPanel({
           </div>
           <Button
             size="sm"
-            onClick={() => void startGeneration(generation !== null)}
-            disabled={!intent.trim() || !agentId || pending || starting}
+            onClick={() => void startGeneration(generation !== null || startRefused)}
+            disabled={
+              !intent.trim() ||
+              !agentId ||
+              pending ||
+              starting ||
+              (startRefused && applyBlocked)
+            }
           >
             {starting ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
             {starting
@@ -461,6 +500,27 @@ export function GoalPlanGenerationPanel({
           <p className="text-caption text-destructive" role="alert">
             {startError}
           </p>
+        ) : null}
+        {startRefused ? (
+          <div className="space-y-1" data-testid="plan-start-refused">
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.plan.start_refused)}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void startGeneration(true)}
+              disabled={
+                !intent.trim() ||
+                !agentId ||
+                pending ||
+                starting ||
+                applyBlocked
+              }
+            >
+              {t(($) => $.plan.project_conflict_generate)}
+            </Button>
+          </div>
         ) : null}
       </div>
 
