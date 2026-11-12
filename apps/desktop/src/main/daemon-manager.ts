@@ -27,10 +27,6 @@ import { decideVersionAction } from "./version-decision";
 import { createDaemonQuitHandler } from "./daemon-quit";
 import { quitConfirmationOptions, quitFailureOptions } from "./daemon-quit-dialogs";
 import {
-  prepareDaemonForInstall,
-  type DaemonInstallPrep,
-} from "./update-install-gate";
-import {
   deriveProfileName,
   profileArgs,
   profileConfigPath,
@@ -109,9 +105,6 @@ let activeProfile: ActiveProfile | null = null;
 // Recovery is intentionally process-local: it keeps a daemon alive while the
 // Desktop main process is running, but is not an OS service/watchdog.
 let desiredDaemonRunning = false;
-// Non-null while the Windows updater owns daemon shutdown and installation.
-let desiredRunningBeforeUpdateStop: boolean | null = null;
-const UPDATE_IN_PROGRESS = { success: false, error: "An update is being installed. Try again shortly." };
 let quitting = false;
 // Renderer recreation must not undo a failed-quit cancellation. Keep this
 // process-local until an explicit start/restart, without changing preferences.
@@ -345,7 +338,6 @@ function invalidateActiveProfile(): void {
 }
 
 function setDesiredDaemonRunning(desired: boolean, explicit = false): void {
-  if (desired && desiredRunningBeforeUpdateStop !== null) return;
   if (desired && explicit) autoStartSuppressedAfterQuit = false;
   if (desiredDaemonRunning === desired && !explicit) return;
   desiredDaemonRunning = desired;
@@ -658,11 +650,7 @@ async function ensureRunningDaemonVersionMatches(): Promise<
   }
 
   const bundled = await getCliBinaryVersion();
-  if (
-    quitting ||
-    autoStartSuppressedAfterQuit ||
-    desiredRunningBeforeUpdateStop !== null
-  ) {
+  if (quitting || autoStartSuppressedAfterQuit) {
     pendingVersionRestart = true;
     return "deferred";
   }
@@ -997,7 +985,6 @@ function scheduleStatusRefresh(): void {
 async function startDaemon(
   recoveryProfile?: ActiveProfile,
 ): Promise<{ success: boolean; error?: string }> {
-  if (desiredRunningBeforeUpdateStop !== null) return UPDATE_IN_PROGRESS;
   if (quitting) return { success: false, error: "Application is quitting" };
   const bin = await resolveCliBinary();
   if (!bin) return { success: false, error: "multica CLI is not installed" };
@@ -1041,7 +1028,6 @@ async function startDaemon(
     return { success: false, error: "Daemon recovery was superseded" };
   }
 
-  if (desiredRunningBeforeUpdateStop !== null) return UPDATE_IN_PROGRESS;
   if (quitting) return { success: false, error: "Application is quitting" };
   if (recoveryProfile) recoveryPolicy.recordRecoveryAttempt(Date.now());
   currentState = "starting";
@@ -1093,10 +1079,8 @@ async function lifecycleBlockedByForeignDaemon(): Promise<boolean> {
 }
 
 async function stopDaemon(
-  options: { force?: boolean; signal?: AbortSignal } = {},
+  options: { force?: boolean } = {},
 ): Promise<{ success: boolean; error?: string }> {
-  const { signal } = options;
-  if (signal?.aborted) return { success: true };
   // Central lifecycle guard: a daemon running in an environment we can't drive
   // (e.g. Linux in WSL2 behind a Windows desktop) can't be stopped by the
   // native CLI — it would act on the host process namespace and no-op, while
@@ -1111,8 +1095,6 @@ async function stopDaemon(
 
   const active = await ensureActiveProfile();
   if (!active) return { success: true };
-  // A queued update stop can expire while resolving the CLI/profile/preflight.
-  if (signal?.aborted) return { success: true };
   currentState = "stopping";
   // An explicit stop is a clean reset — drop any pending auth-failure verdict.
   authExpired = false;
@@ -1136,7 +1118,6 @@ async function stopDaemon(
 }
 
 async function restartDaemon(): Promise<{ success: boolean; error?: string }> {
-  if (desiredRunningBeforeUpdateStop !== null) return UPDATE_IN_PROGRESS;
   if (quitting) return { success: false, error: "Application is quitting" };
   // Same central, live-preflighted guard as stopDaemon: we can neither stop nor
   // start a daemon we don't manage, so don't try (user-switch, reauth,
@@ -1291,7 +1272,7 @@ async function pollOnce(): Promise<void> {
 }
 
 function startPolling(): void {
-  if (quitting || statusPollTimer || desiredRunningBeforeUpdateStop !== null) return;
+  if (quitting || statusPollTimer) return;
   void pollOnce();
   statusPollTimer = setInterval(() => void pollOnce(), POLL_INTERVAL_MS);
 }
@@ -1421,41 +1402,6 @@ function stopLogTail(): void {
   }
 }
 
-export function prepareDaemonForUpdateInstall(options: {
-  interruptActiveTasks: boolean;
-}): Promise<DaemonInstallPrep> {
-  desiredRunningBeforeUpdateStop ??= desiredDaemonRunning;
-  setDesiredDaemonRunning(false);
-  stopPolling();
-  return prepareDaemonForInstall({
-    probe: async () => {
-      const active = await ensureActiveProfile();
-      if (!active) return null;
-      const health = await fetchProfileHealth(active);
-      return {
-        alive: daemonStatusAlive(health?.status),
-        pid: health?.pid,
-        activeTasks: health?.active_task_count ?? 0,
-        externallyManaged: isDaemonExternallyManaged(health?.os, normalizeHostOS(process.platform)),
-      };
-    },
-    stop: async (signal) => {
-      const result = await lifecycleOperations.runForeground(() => stopDaemon({ signal }));
-      if (!result.success) throw new Error(result.error ?? "daemon stop failed");
-    },
-    processExists: daemonProcessExists,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  }, options);
-}
-
-export function resumeDaemonAfterAbortedUpdateInstall(): void {
-  if (desiredRunningBeforeUpdateStop === null) return;
-  const desired = desiredRunningBeforeUpdateStop;
-  desiredRunningBeforeUpdateStop = null;
-  setDesiredDaemonRunning(desired, true);
-  startPolling();
-}
-
 /**
  * `windowGetter` is the main window that hosts dialogs and progress;
  * `statusWindowsGetter` lists every main window that shows daemon status.
@@ -1481,21 +1427,15 @@ export function setupDaemonManager(
     }
   });
   ipcMain.handle("daemon:start", () => {
-    if (desiredRunningBeforeUpdateStop !== null) return UPDATE_IN_PROGRESS;
     externalDaemonObserved = false;
     setDesiredDaemonRunning(true, true);
     return lifecycleOperations.runForeground(() => startDaemon());
   });
   ipcMain.handle("daemon:stop", () => {
-    if (desiredRunningBeforeUpdateStop !== null) {
-      desiredRunningBeforeUpdateStop = false;
-      return { success: true };
-    }
     setDesiredDaemonRunning(false, true);
     return lifecycleOperations.runForeground(() => stopDaemon());
   });
   ipcMain.handle("daemon:restart", () => {
-    if (desiredRunningBeforeUpdateStop !== null) return UPDATE_IN_PROGRESS;
     externalDaemonObserved = false;
     setDesiredDaemonRunning(true, true);
     return lifecycleOperations.runForeground(() => restartDaemon());
@@ -1695,14 +1635,6 @@ export function setupDaemonManager(
     quit: () => { stopLogTail(); app.quit(); },
   });
   app.on("before-quit", (event) => {
-    // The Windows updater registers first and owns its pending or approved quit.
-    if (event.defaultPrevented) return;
-    if (desiredRunningBeforeUpdateStop !== null) {
-      setDesiredDaemonRunning(false);
-      stopPolling();
-      stopLogTail();
-      return;
-    }
-    handleQuit(event);
+    if (!event.defaultPrevented) handleQuit(event);
   });
 }

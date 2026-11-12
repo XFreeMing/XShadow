@@ -176,6 +176,18 @@ gc: ## Collect environments whose directory is gone or whose TTL expired
 env-exec: ## Run a command with this environment's variables (ARGS="-- pnpm dev:desktop")
 	@bash scripts/dev-env.sh exec $(ARGS)
 
+# `init` depends on `agent` so `make -j agent init` still runs once.
+ifneq ($(filter agent,$(MAKECMDGOALS)),)
+ifneq ($(strip $(filter-out agent init,$(MAKECMDGOALS))),)
+$(error Use make agent init separately from other targets)
+endif
+.PHONY: agent init
+agent: ## Initialize the personal agent team: make agent init (ARGS="--help" for options)
+	@node scripts/agent-team.mjs init $(if $(filter init,$(MAKECMDGOALS)),$(ARGS),--help)
+init: agent
+
+endif
+
 # Single-component entry points. No database preflight: `up` has already proven
 # the database is reachable before it launches anything, and repeating the
 # check here would make each component slower to restart on its own.

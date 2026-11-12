@@ -98,7 +98,7 @@ describe("desktop quit uses the CLI lifecycle", () => {
   });
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  it("leaves an already prevented quit to the Windows updater", async () => {
+  it("does not stop the daemon when another handler prevents quit", async () => {
     await setup();
     const event = { defaultPrevented: true, preventDefault: vi.fn() };
     context.beforeQuit!(event);
@@ -107,21 +107,6 @@ describe("desktop quit uses the CLI lifecycle", () => {
     expect(context.dialog).not.toHaveBeenCalled();
     expect(context.exec).not.toHaveBeenCalled();
     expect(context.quit).not.toHaveBeenCalled();
-  });
-
-  it("allows the updater-owned final quit without a second daemon stop", async () => {
-    await setup();
-    const manager = await import("./daemon-manager");
-    await expect(manager.prepareDaemonForUpdateInstall({ interruptActiveTasks: false }))
-      .resolves.toEqual({ kind: "busy", activeTasks: 1 });
-    const event = { defaultPrevented: false, preventDefault: vi.fn() };
-    context.beforeQuit!(event);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(event.preventDefault).not.toHaveBeenCalled();
-    expect(context.dialog).not.toHaveBeenCalled();
-    expect(context.exec).not.toHaveBeenCalled();
-    expect(context.quit).not.toHaveBeenCalled();
-    manager.resumeDaemonAfterAbortedUpdateInstall();
   });
 
   it("shows English confirmation and waits for the profile-scoped CLI result", async () => {

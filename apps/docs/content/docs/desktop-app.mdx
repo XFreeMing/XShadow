@@ -17,7 +17,7 @@ Multica Desktop is available for macOS, Windows, and Linux. It uses the same acc
 | How you open it | Browser | Install the desktop app |
 | Workspace tabs | Uses browser tabs | Each workspace keeps its own set of tabs |
 | Daemon | Install and start the CLI separately | Started by the app automatically after sign-in |
-| Updates | Refresh the page | Updated through the desktop app |
+| Updates | Refresh the page | Install a new package |
 
 Web is more convenient for a quick look or on a shared computer.
 
@@ -68,15 +68,7 @@ You can check runtime status and logs in Desktop's settings. If a tool isn't det
 
 ## Updating Desktop
 
-Auto-update is on by default. The app checks for and downloads new versions in the background; once a download finishes you can restart to install immediately or let it install on the next quit. Under **Settings → Updates** you can turn off automatic checks or check for new versions manually.
-
-Updates are distributed per OS and CPU architecture:
-
-- Windows arm64 and macOS x64 (Intel) each use their own update feed;
-- all other architectures use the default feed;
-- the app matches the update feed automatically, so no manual selection is needed;
-- on Linux, auto-update only works for `.AppImage`; update `.deb` and `.rpm` by installing a new package over the old one;
-- if auto-update fails, likewise install over the top with the matching installer from the downloads page.
+Download the installer for your operating system and CPU architecture, then install it over your current version. [Multica downloads](https://multica.ai/download)
 
 ## Connecting to a self-hosted instance
 

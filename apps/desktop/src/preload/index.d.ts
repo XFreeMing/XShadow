@@ -9,10 +9,6 @@ import type {
   IssueWindowRequest,
 } from "../shared/issue-window";
 import type {
-  ManualUpdateCheckResult,
-  UpdaterPreferences,
-} from "../shared/updater-types";
-import type {
   DaemonStatus,
   DaemonPrefs,
   LocalRuntimeProbe,
@@ -204,25 +200,11 @@ interface DaemonAPI {
   openLogFile: () => Promise<{ success: boolean; error?: string }>;
 }
 
-interface UpdaterAPI {
-  onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => () => void;
-  onDownloadProgress: (callback: (progress: { percent: number }) => void) => () => void;
-  onUpdateDownloaded: (
-    callback: (info: { version: string; releaseNotes?: string }) => void,
-  ) => () => void;
-  downloadUpdate: () => Promise<void>;
-  installUpdate: () => Promise<void>;
-  getPreferences: () => Promise<UpdaterPreferences>;
-  setAutomaticUpdates: (enabled: boolean) => Promise<UpdaterPreferences>;
-  checkForUpdates: () => Promise<ManualUpdateCheckResult>;
-}
-
 declare global {
   interface Window {
     electron: ElectronAPI;
     desktopAPI: DesktopAPI;
     daemonAPI: DaemonAPI;
-    updater: UpdaterAPI;
   }
 }
 

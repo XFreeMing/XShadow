@@ -1402,9 +1402,6 @@
     "actions_aria": "Actions pour {{url}}"
   },
   "desktop": {
-    "tabs": {
-      "updates": "Mises à jour"
-    },
     "tab_bar": {
       "pin": "Épingler l'onglet",
       "unpin": "Désépingler l'onglet",
@@ -1416,19 +1413,6 @@
       "copy_link": "Copier le lien",
       "link_copied": "Lien copié",
       "close_right": "Fermer les onglets à droite"
-    },
-    "updates": {
-      "title": "Mises à jour",
-      "current_version": "Version actuelle",
-      "automatic_updates_title": "Mises à jour automatiques en arrière-plan",
-      "automatic_updates_description": "Vérifier peu après le lancement puis toutes les heures, et télécharger les mises à jour disponibles en arrière-plan.",
-      "automatic_updates_save_failed": "Échec de l'enregistrement des réglages de mise à jour automatique",
-      "check_section_title": "Rechercher des mises à jour",
-      "check_section_description": "Vous serez invité à redémarrer une fois le téléchargement terminé.",
-      "up_to_date": "Vous avez la dernière version.",
-      "downloading": "La v{{version}} se télécharge en arrière-plan — vous serez averti quand elle sera prête à installer.",
-      "check_now": "Vérifier maintenant",
-      "checking": "Vérification…"
     },
     "daemon": {
       "title": "Démon",

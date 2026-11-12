@@ -14,7 +14,6 @@ import { Toaster } from "@multica/ui/components/ui/sonner";
 import { DesktopLoginPage } from "./pages/login";
 import { DesktopAuthRecoveryPage } from "./pages/auth-recovery";
 import { DesktopShell } from "./components/desktop-layout";
-import { UpdateNotification } from "./components/update-notification";
 import { NativeContextMenu } from "./components/native-context-menu";
 import { IssueWindow } from "./components/issue-window";
 import { useTabStore } from "./stores/tab-store";
@@ -506,7 +505,6 @@ export default function App() {
         <BlockingRuntimeConfigError message={runtimeConfigResult.error.message} />
       )}
       <Toaster />
-      {windowContext.kind === "main" && <UpdateNotification />}
     </ThemeProvider>
   );
 }

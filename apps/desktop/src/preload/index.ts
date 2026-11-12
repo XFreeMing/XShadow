@@ -2,10 +2,6 @@ import { contextBridge, ipcRenderer } from "electron";
 import { electronAPI } from "@electron-toolkit/preload";
 import type { RuntimeConfigResult } from "../shared/runtime-config";
 import type { FreezeBreadcrumb } from "../shared/freeze-breadcrumb";
-import type {
-  ManualUpdateCheckResult,
-  UpdaterPreferences,
-} from "../shared/updater-types";
 import {
   RENDERER_ROUTE_CONTEXT_CHANNEL,
   type RendererRouteContextInput,
@@ -411,40 +407,10 @@ const daemonAPI = {
     ipcRenderer.invoke("daemon:open-log-file"),
 };
 
-const updaterAPI = {
-  onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => {
-    const handler = (_: unknown, info: { version: string; releaseNotes?: string }) => callback(info);
-    ipcRenderer.on("updater:update-available", handler);
-    return () => ipcRenderer.removeListener("updater:update-available", handler);
-  },
-  onDownloadProgress: (callback: (progress: { percent: number }) => void) => {
-    const handler = (_: unknown, progress: { percent: number }) => callback(progress);
-    ipcRenderer.on("updater:download-progress", handler);
-    return () => ipcRenderer.removeListener("updater:download-progress", handler);
-  },
-  onUpdateDownloaded: (
-    callback: (info: { version: string; releaseNotes?: string }) => void,
-  ) => {
-    const handler = (_: unknown, info: { version: string; releaseNotes?: string }) =>
-      callback(info);
-    ipcRenderer.on("updater:update-downloaded", handler);
-    return () => ipcRenderer.removeListener("updater:update-downloaded", handler);
-  },
-  downloadUpdate: () => ipcRenderer.invoke("updater:download"),
-  installUpdate: () => ipcRenderer.invoke("updater:install"),
-  getPreferences: (): Promise<UpdaterPreferences> =>
-    ipcRenderer.invoke("updater:get-preferences"),
-  setAutomaticUpdates: (enabled: boolean): Promise<UpdaterPreferences> =>
-    ipcRenderer.invoke("updater:set-automatic-updates", enabled),
-  checkForUpdates: (): Promise<ManualUpdateCheckResult> =>
-    ipcRenderer.invoke("updater:check"),
-};
-
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("electron", electronAPI);
   contextBridge.exposeInMainWorld("desktopAPI", desktopAPI);
   contextBridge.exposeInMainWorld("daemonAPI", daemonAPI);
-  contextBridge.exposeInMainWorld("updater", updaterAPI);
 } else {
   // @ts-expect-error - fallback for non-isolated context
   window.electron = electronAPI;
@@ -452,6 +418,4 @@ if (process.contextIsolated) {
   window.desktopAPI = desktopAPI;
   // @ts-expect-error - fallback for non-isolated context
   window.daemonAPI = daemonAPI;
-  // @ts-expect-error - fallback for non-isolated context
-  window.updater = updaterAPI;
 }

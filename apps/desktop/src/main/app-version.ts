@@ -7,13 +7,8 @@ import { execFileSync } from "node:child_process";
  * (driven by `git describe` — see `apps/desktop/scripts/package.mjs`), so
  * `app.getVersion()` matches the GitHub Release tag exactly.
  *
- * In dev (`pnpm dev:desktop`) `app.getVersion()` only sees the static
- * `apps/desktop/package.json` value, which is "0.1.0" and never bumped —
- * the Settings → Updates panel and any other UI surfacing the version
- * would mislead developers into thinking they're running ancient builds.
- * Fall back to `git describe --tags --always --dirty` (same source the
- * packager uses) so dev shows e.g. `0.2.19-14-gabcdef-dirty`. If git is
- * unavailable for whatever reason, we just return the package.json value.
+ * In dev, use `git describe` so diagnostics identify the running checkout.
+ * Fall back to the package.json version when Git is unavailable.
  */
 export function getAppVersion(): string {
   if (app.isPackaged) {

@@ -403,6 +403,14 @@ This single command:
 - runs all migrations
 - starts both backend and frontend
 
+### Personal Agent Team
+
+Run `make agent init` to start this checkout's managed API/daemon environment
+and initialize the portable, cross-project team. Install and authenticate the
+required agent CLIs first. For preflight, existing-server profiles, runtime
+selection, and the fields synchronized on rerun, see
+[the agent team guide](agent-team/README.md).
+
 ### Explicit Setup (advanced)
 
 If you prefer separate control over setup and startup:

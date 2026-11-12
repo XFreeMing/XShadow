@@ -1391,9 +1391,6 @@
     "actions_aria": "{{url}} 的操作"
   },
   "desktop": {
-    "tabs": {
-      "updates": "更新"
-    },
     "tab_bar": {
       "pin": "固定标签页",
       "unpin": "取消固定标签页",
@@ -1405,19 +1402,6 @@
       "copy_link": "复制链接",
       "link_copied": "已复制链接",
       "close_right": "关闭右侧标签页"
-    },
-    "updates": {
-      "title": "更新",
-      "current_version": "当前版本",
-      "automatic_updates_title": "后台自动更新",
-      "automatic_updates_description": "开启后，桌面端会在启动后和每小时检查更新，并在后台下载可用版本。",
-      "automatic_updates_save_failed": "保存自动更新设置失败",
-      "check_section_title": "检查更新",
-      "check_section_description": "下载完成后会提示重启。",
-      "up_to_date": "已是最新版本。",
-      "downloading": "v{{version}} 正在后台下载——准备好安装时会通知你。",
-      "check_now": "立即检查",
-      "checking": "检查中..."
     },
     "daemon": {
       "title": "守护进程",

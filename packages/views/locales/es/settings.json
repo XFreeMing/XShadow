@@ -1402,9 +1402,6 @@
     "url_label": "URL del repositorio"
   },
   "desktop": {
-    "tabs": {
-      "updates": "Actualizaciones"
-    },
     "tab_bar": {
       "pin": "Fijar pestaña",
       "unpin": "Dejar de fijar pestaña",
@@ -1416,19 +1413,6 @@
       "copy_link": "Copiar enlace",
       "link_copied": "Enlace copiado",
       "close_right": "Cerrar las pestañas a la derecha"
-    },
-    "updates": {
-      "title": "Actualizaciones",
-      "current_version": "Versión actual",
-      "automatic_updates_title": "Actualizaciones automáticas en segundo plano",
-      "automatic_updates_description": "Comprueba poco después de iniciar y cada hora, y descarga las actualizaciones disponibles en segundo plano.",
-      "automatic_updates_save_failed": "Error al guardar la configuración de actualizaciones automáticas",
-      "check_section_title": "Buscar actualizaciones",
-      "check_section_description": "Se te pedirá reiniciar cuando la descarga esté lista.",
-      "up_to_date": "Tienes la última versión.",
-      "downloading": "v{{version}} se está descargando en segundo plano: te avisaremos cuando esté lista para instalar.",
-      "check_now": "Buscar ahora",
-      "checking": "Comprobando…"
     },
     "daemon": {
       "title": "Daemon",

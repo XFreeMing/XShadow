@@ -1,6 +1,5 @@
 import {
   app,
-  autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   dialog,
   ipcMain,
@@ -13,12 +12,7 @@ import { join } from "path";
 import { pathToFileURL } from "url";
 import { electronApp, optimizer, is } from "@electron-toolkit/utils";
 import fixPath from "fix-path";
-import { createElectronBusyInstallPrompt, setupAutoUpdater } from "./updater";
-import {
-  prepareDaemonForUpdateInstall,
-  resumeDaemonAfterAbortedUpdateInstall,
-  setupDaemonManager,
-} from "./daemon-manager";
+import { setupDaemonManager } from "./daemon-manager";
 import { setupLocalDirectory } from "./local-directory";
 import { setupThemeFolder } from "./theme-folder";
 import { configureLinuxFileDialogs } from "./linux-file-dialog";
@@ -1058,21 +1052,6 @@ if (!gotTheLock) {
       createMainWindow(saved);
     }
 
-    // Register first so the update quit gate can block daemon autoStop.
-    setupAutoUpdater(() => mainWindows.all(), {
-      // Windows only (the updater ignores it elsewhere): stop the bundled
-      // daemon before the installer runs so multica.exe is replaced. #8823
-      daemonGate: {
-        prepare: prepareDaemonForUpdateInstall,
-        resumeAfterAbortedInstall: resumeDaemonAfterAbortedUpdateInstall,
-        confirmInstallWhileBusy: createElectronBusyInstallPrompt((options) => {
-          const parent = mainWindows.mostRecent();
-          return parent && !parent.isDestroyed()
-            ? dialog.showMessageBox(parent, options)
-            : dialog.showMessageBox(options);
-        }),
-      },
-    });
     setupDaemonManager(
       () => mainWindows.mostRecent(),
       () => mainWindows.all(),
@@ -1080,17 +1059,11 @@ if (!gotTheLock) {
     setupLocalDirectory(() => mainWindows.mostRecent());
     setupThemeFolder();
 
-    // Registered after the updater and daemon gates, so a quit they hold
-    // (busy daemon, pending install) leaves the session writable; only the
-    // quit that actually proceeds freezes it.
+    // Keep the window session writable while the daemon quit dialog is open.
     app.on("before-quit", (event) => {
       if (event.defaultPrevented) return;
       freezeWindowSession();
     });
-    // macOS quitAndInstall closes every window before before-quit fires.
-    if (process.platform === "darwin") {
-      nativeAutoUpdater.on("before-quit-for-update", freezeWindowSession);
-    }
 
     app.on("activate", () => {
       const window = ensureMainWindow();

@@ -1402,9 +1402,6 @@
     "actions_aria": "Actions for {{url}}"
   },
   "desktop": {
-    "tabs": {
-      "updates": "Updates"
-    },
     "tab_bar": {
       "pin": "Pin tab",
       "unpin": "Unpin tab",
@@ -1416,19 +1413,6 @@
       "copy_link": "Copy link",
       "link_copied": "Link copied",
       "close_right": "Close tabs to the right"
-    },
-    "updates": {
-      "title": "Updates",
-      "current_version": "Current version",
-      "automatic_updates_title": "Automatic background updates",
-      "automatic_updates_description": "Check shortly after launch and every hour, then download available updates in the background.",
-      "automatic_updates_save_failed": "Failed to save automatic update settings",
-      "check_section_title": "Check for updates",
-      "check_section_description": "You'll be prompted to restart when the download is ready.",
-      "up_to_date": "You're on the latest version.",
-      "downloading": "v{{version}} is downloading in the background — you'll be notified when it's ready to install.",
-      "check_now": "Check now",
-      "checking": "Checking…"
     },
     "daemon": {
       "title": "Daemon",

@@ -98,9 +98,6 @@ vi.mock("./pages/auth-recovery", () => ({
 vi.mock("./components/desktop-layout", () => ({
   DesktopShell: () => <div data-testid="desktop-shell" />,
 }));
-vi.mock("./components/update-notification", () => ({
-  UpdateNotification: () => null,
-}));
 vi.mock("./components/issue-window", () => ({
   IssueWindow: () => <div data-testid="issue-window" />,
 }));

@@ -1391,9 +1391,6 @@
     "actions_aria": "{{url}} の操作"
   },
   "desktop": {
-    "tabs": {
-      "updates": "アップデート"
-    },
     "tab_bar": {
       "pin": "タブをピン留め",
       "unpin": "タブのピン留めを解除",
@@ -1405,19 +1402,6 @@
       "copy_link": "リンクをコピー",
       "link_copied": "リンクをコピーしました",
       "close_right": "右側のタブを閉じる"
-    },
-    "updates": {
-      "title": "アップデート",
-      "current_version": "現在のバージョン",
-      "automatic_updates_title": "バックグラウンドで自動アップデート",
-      "automatic_updates_description": "有効にすると、起動直後と 1 時間ごとにアップデートを確認し、利用可能なバージョンをバックグラウンドでダウンロードします。",
-      "automatic_updates_save_failed": "自動アップデート設定を保存できませんでした",
-      "check_section_title": "アップデートを確認",
-      "check_section_description": "ダウンロード完了後に再起動を案内します。",
-      "up_to_date": "最新バージョンを使用しています。",
-      "downloading": "v{{version}} をバックグラウンドでダウンロード中です。インストールの準備が整うとお知らせします。",
-      "check_now": "今すぐ確認",
-      "checking": "確認中…"
     },
     "daemon": {
       "title": "デーモン",
