@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FocusEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Goal, GoalPlanEdge, GoalPlanGeneration } from "@multica/core/types";
@@ -107,6 +107,24 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   const focusedInsideRef = useRef<HTMLElement | null>(null);
   const conflictReloadRef = useRef<HTMLButtonElement | null>(null);
   const planRetryRef = useRef<HTMLButtonElement | null>(null);
+
+  // Remember where focus is inside the plan area, but forget it as soon as the
+  // reader moves focus to a control outside. The memory must describe the
+  // element in use when content is removed, not merely the last one focused
+  // here at some earlier point.
+  const handleFocusIn = (event: FocusEvent<HTMLElement>) => {
+    focusedInsideRef.current = event.target as HTMLElement;
+  };
+
+  const handleFocusOut = (event: FocusEvent<HTMLElement>) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && sectionRef.current?.contains(next)) return;
+    // A removal can dispatch focusout for an element that is already gone;
+    // that element was still in use, so keep the record for the recovery
+    // effect below. Moving to an outside control clears it.
+    const target = event.target as HTMLElement;
+    if (target.isConnected) focusedInsideRef.current = null;
+  };
 
   // Server revisions can move underneath a local draft (another tab, realtime
   // refresh). Never silently replace unsaved work: keep the draft and show the
@@ -402,6 +420,17 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   useEffect(() => {
     const lost = focusedInsideRef.current;
     if (!lost || lost.isConnected) return;
+    // A control outside the plan area still has focus; leaving it there is
+    // the whole point of only recovering focus that the removal took away.
+    const active = document.activeElement as HTMLElement | null;
+    if (
+      active &&
+      active !== document.body &&
+      active.isConnected &&
+      !sectionRef.current?.contains(active)
+    ) {
+      return;
+    }
     const target = projectConflictNotice
       ? conflictReloadRef.current
       : planUnavailable
@@ -416,9 +445,8 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     return (
       <section
         ref={sectionRef}
-        onFocusCapture={(event) => {
-          focusedInsideRef.current = event.target as HTMLElement;
-        }}
+        onFocusCapture={handleFocusIn}
+        onBlurCapture={handleFocusOut}
         className="space-y-2"
         data-testid="goal-plan-section"
       >
@@ -509,9 +537,8 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
   return (
     <section
       ref={sectionRef}
-      onFocusCapture={(event) => {
-        focusedInsideRef.current = event.target as HTMLElement;
-      }}
+      onFocusCapture={handleFocusIn}
+      onBlurCapture={handleFocusOut}
       className="space-y-3"
       data-testid="goal-plan-section"
     >

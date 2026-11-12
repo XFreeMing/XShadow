@@ -792,6 +792,111 @@ describe("GoalPlanSection", () => {
     expect(second.expected_revision).toBe(first.expected_revision);
   });
 
+  it("replays an unconfirmed run over a succeeded one through the top action", async () => {
+    const succeeded = generation({
+      state: "succeeded",
+      candidate: {
+        items: [item("candidate-item", "Candidate task")],
+        edges: [],
+        context_snapshot: {},
+      },
+    });
+    api.getGoalPlanGeneration.mockResolvedValue(succeeded);
+    api.createGoalPlanGeneration
+      .mockResolvedValueOnce(succeeded)
+      .mockRejectedValueOnce(
+        new ApiError("unavailable", 503, "Unavailable", {
+          code: "goal_plan_generation_retryable",
+        }),
+      )
+      .mockResolvedValueOnce(generation({ id: "gen-2", state: "failed" }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const intent = screen.getByLabelText("What should the plan deliver?");
+    const top = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(top).toBeEnabled());
+    await user.click(top);
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(1));
+
+    // A terminal run is on screen, so the next start is explicitly new.
+    await user.clear(intent);
+    await user.type(intent, "Second intent");
+    await user.click(screen.getByRole("button", { name: "Generate again" }));
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+
+    await user.clear(intent);
+    await user.type(intent, "Third intent");
+    // That request's outcome is unknown. The ordinary recovery entry replays
+    // it rather than treating the earlier terminal run as a reason for a new
+    // key and the changed form.
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(3));
+
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    const third = api.createGoalPlanGeneration.mock.calls[2]![1];
+    expect(third.request_key).toBe(second.request_key);
+    expect(third.intent).toBe("Second intent");
+    expect(third.agent_id).toBe(second.agent_id);
+    expect(third.expected_revision).toBe(second.expected_revision);
+
+    // Once the unconfirmed request resolves, an explicit new run may use the
+    // current input under a fresh key.
+    const resumed = await screen.findByRole("button", { name: "Generate again" });
+    await waitFor(() => expect(resumed).toBeEnabled());
+    await user.click(resumed);
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(4));
+    const fourth = api.createGoalPlanGeneration.mock.calls[3]![1];
+    expect(fourth.request_key).not.toBe(second.request_key);
+    expect(fourth.intent).toBe("Third intent");
+  });
+
+  it("replays an unconfirmed run over a failed one from the failed card", async () => {
+    const failed = generation({ state: "failed", error: "Planner broke" });
+    api.getGoalPlanGeneration.mockResolvedValue(failed);
+    api.createGoalPlanGeneration
+      .mockResolvedValueOnce(failed)
+      .mockRejectedValueOnce(
+        new ApiError("unavailable", 503, "Unavailable", {
+          code: "goal_plan_generation_retryable",
+        }),
+      )
+      .mockResolvedValueOnce(generation({ id: "gen-2", state: "failed" }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const intent = screen.getByLabelText("What should the plan deliver?");
+    const top = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(top).toBeEnabled());
+    await user.click(top);
+    const status = await screen.findByTestId("plan-generation-status");
+
+    await user.clear(intent);
+    await user.type(intent, "Second intent");
+    await user.click(within(status).getByRole("button", { name: "Generate again" }));
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+
+    await user.clear(intent);
+    await user.type(intent, "Third intent");
+    await user.click(
+      within(screen.getByTestId("plan-generation-status")).getByRole("button", {
+        name: "Generate again",
+      }),
+    );
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(3));
+
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    const third = api.createGoalPlanGeneration.mock.calls[2]![1];
+    expect(third.request_key).toBe(second.request_key);
+    expect(third.intent).toBe("Second intent");
+    expect(third.agent_id).toBe(second.agent_id);
+    expect(third.expected_revision).toBe(second.expected_revision);
+  });
+
   it("uses a new key and body only for an explicit new run", async () => {
     api.createGoalPlanGeneration.mockResolvedValue(generation({ state: "failed" }));
     api.getGoalPlanGeneration.mockResolvedValue(generation({ state: "failed" }));
@@ -1260,6 +1365,86 @@ describe("GoalPlanSection", () => {
         within(notice).getByRole("button", { name: "Reload plan" }),
       ),
     );
+  });
+
+  function renderWithOutsideControl(goalOverride: Goal = goal) {
+    return renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <div>
+          <GoalPlanSection goal={goalOverride} />
+          <button type="button">Outside control</button>
+        </div>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("moves focus to the recovery action when the plan becomes unreadable", async () => {
+    api.getGoalPlan.mockResolvedValue(plan({ revision: 0 }));
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    await user.click(screen.getByRole("button", { name: "Add task" }));
+    const title = screen.getByLabelText("Title");
+    await user.click(title);
+    expect(document.activeElement).toBe(title);
+
+    api.getGoalPlan.mockRejectedValue(new ApiError("Forbidden", 403, "Forbidden"));
+    void qc.invalidateQueries({ queryKey: goalKeys.plan("ws-1", "goal-1") }).catch(() => {});
+
+    const unavailable = await screen.findByTestId("plan-section-unavailable");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(unavailable).getByRole("button", { name: "Retry" }),
+      ),
+    );
+  });
+
+  it("keeps focus on an outside control when the plan becomes unreadable", async () => {
+    api.getGoalPlan.mockResolvedValue(plan({ revision: 0 }));
+    const user = userEvent.setup();
+    renderWithOutsideControl();
+
+    await screen.findByTestId("goal-plan-section");
+    await user.click(screen.getByRole("button", { name: "Add task" }));
+    const title = screen.getByLabelText("Title");
+    await user.click(title);
+    const outside = screen.getByRole("button", { name: "Outside control" });
+    await user.click(outside);
+    expect(document.activeElement).toBe(outside);
+
+    api.getGoalPlan.mockRejectedValue(new ApiError("Forbidden", 403, "Forbidden"));
+    void qc.invalidateQueries({ queryKey: goalKeys.plan("ws-1", "goal-1") }).catch(() => {});
+
+    await screen.findByTestId("plan-section-unavailable");
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("keeps focus on an outside control when a project conflict removes the editor", async () => {
+    api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-1", revision: 0 }));
+    const user = userEvent.setup();
+    const view = renderWithOutsideControl();
+
+    await screen.findByTestId("goal-plan-section");
+    await user.click(screen.getByRole("button", { name: "Add task" }));
+    const title = screen.getByLabelText("Title");
+    await user.click(title);
+    const outside = screen.getByRole("button", { name: "Outside control" });
+    await user.click(outside);
+    expect(document.activeElement).toBe(outside);
+
+    api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-2", revision: 0 }));
+    view.rerender(
+      <QueryClientProvider client={qc}>
+        <div>
+          <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+          <button type="button">Outside control</button>
+        </div>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByTestId("plan-section-project-conflict");
+    expect(document.activeElement).toBe(outside);
   });
 
   it("does not move focus on an ordinary background refresh", async () => {

@@ -105,6 +105,10 @@ export function GoalPlanGenerationPanel({
   // refused attempt, so recovery is an explicit new run once the reader has
   // resolved whatever blocked it (a plan revision choice, an agent change).
   const [startRefused, setStartRefused] = useState(false);
+  // A start whose commit outcome is unknown still owns the recorded key/body.
+  // The ordinary start action must replay it before any explicit new run,
+  // even when an older terminal run is still on screen.
+  const [startUnknown, setStartUnknown] = useState(false);
   const [reloadError, setReloadError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const requestKeyRef = useRef<string | null>(null);
@@ -212,6 +216,7 @@ export function GoalPlanGenerationPanel({
     setStartError(null);
     setRunUnavailable(false);
     setStartRefused(false);
+    setStartUnknown(false);
     setReloadError(null);
     requestKeyRef.current = null;
     requestBodyRef.current = null;
@@ -254,6 +259,7 @@ export function GoalPlanGenerationPanel({
       setProjectConflict(false);
       setRunUnavailable(false);
       setStartRefused(false);
+      setStartUnknown(false);
       setReloadError(null);
     }
     if (!requestKeyRef.current) {
@@ -284,6 +290,7 @@ export function GoalPlanGenerationPanel({
         },
       });
       setStartRefused(false);
+      setStartUnknown(false);
       setGenerationId(started.id);
       // Read the authoritative state right away instead of waiting for the
       // first poll tick: the creation response is only the start signal.
@@ -306,6 +313,8 @@ export function GoalPlanGenerationPanel({
         }
         setConfirmOpen(false);
         setStartError(null);
+        setStartRefused(false);
+        setStartUnknown(false);
         requestKeyRef.current = null;
         requestBodyRef.current = null;
         setProjectConflict(true);
@@ -318,6 +327,7 @@ export function GoalPlanGenerationPanel({
       const revision = planConflictRevision(err);
       if (revision !== null) {
         setStartRefused(true);
+        setStartUnknown(false);
         setStartError(t(($) => $.plan.start_revision_conflict));
         onRevisionConflict(revision);
         return;
@@ -330,6 +340,7 @@ export function GoalPlanGenerationPanel({
       // retry.
       const refusedByServer = err instanceof ApiError && err.status >= 400 && err.status < 500;
       setStartRefused(refusedByServer);
+      setStartUnknown(!refusedByServer);
       setStartError(startErrorMessage(err));
     }
   };
@@ -343,6 +354,8 @@ export function GoalPlanGenerationPanel({
     setGenerationId(null);
     setProjectConflict(false);
     setStartError(null);
+    setStartRefused(false);
+    setStartUnknown(false);
     requestKeyRef.current = null;
     void startGeneration(true);
     // Only the nonce decides this; the call reads the current render's props.
@@ -377,6 +390,7 @@ export function GoalPlanGenerationPanel({
     setGenerationId(null);
     setStartError(null);
     setStartRefused(false);
+    setStartUnknown(false);
     setRunUnavailable(false);
     requestKeyRef.current = null;
     requestBodyRef.current = null;
@@ -420,6 +434,10 @@ export function GoalPlanGenerationPanel({
 
   const usable = generation ? isCandidateUsable(generation.candidate) : false;
   const inputBasis = generation ? readInputContext(generation.input_context) : null;
+  // An unconfirmed start owns the recorded request until the server resolves
+  // it. Only an explicit new run may replace it, regardless of whether an
+  // older terminal run is still displayed above.
+  const explicitNewRun = (generation !== null || startRefused) && !startUnknown;
   const stateLabel = generation
     ? generation.state === "preparing"
       ? t(($) => $.plan.state_preparing)
@@ -473,7 +491,7 @@ export function GoalPlanGenerationPanel({
           </div>
           <Button
             size="sm"
-            onClick={() => void startGeneration(generation !== null || startRefused)}
+            onClick={() => void startGeneration(explicitNewRun)}
             disabled={
               !intent.trim() ||
               !agentId ||
@@ -485,9 +503,11 @@ export function GoalPlanGenerationPanel({
             {starting ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
             {starting
               ? t(($) => $.plan.starting)
-              : generation
-                ? t(($) => $.plan.generate_again)
-                : t(($) => $.plan.generate)}
+              : startUnknown
+                ? t(($) => $.plan.retry)
+                : generation
+                  ? t(($) => $.plan.generate_again)
+                  : t(($) => $.plan.generate)}
           </Button>
         </div>
         {activeAgents.length === 0 ? (
@@ -575,7 +595,7 @@ export function GoalPlanGenerationPanel({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void startGeneration(true)}
+                onClick={() => void startGeneration(!startUnknown)}
                 disabled={starting}
               >
                 {t(($) => $.plan.generate_again)}
@@ -591,7 +611,7 @@ export function GoalPlanGenerationPanel({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void startGeneration(true)}
+                onClick={() => void startGeneration(!startUnknown)}
                 disabled={starting}
               >
                 {t(($) => $.plan.generate_again)}
@@ -607,7 +627,7 @@ export function GoalPlanGenerationPanel({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void startGeneration(true)}
+                onClick={() => void startGeneration(!startUnknown)}
                 disabled={starting}
               >
                 {t(($) => $.plan.generate_again)}
