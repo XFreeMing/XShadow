@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
+import { goalKeys } from "@multica/core/goals";
 import type {
   Goal,
   GoalPlan,
@@ -334,5 +335,134 @@ describe("GoalPlanSection", () => {
     ).toBeInTheDocument();
     // The current plan is re-read rather than merged with the old candidate.
     expect(api.getGoalPlan.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("refuses a start when the goal moved project and only a new run reuses a key", async () => {
+    api.createGoalPlanGeneration
+      .mockRejectedValueOnce(
+        new ApiError("conflict", 409, "Conflict", {
+          code: "goal_project_conflict",
+        }),
+      )
+      .mockResolvedValueOnce(generation({ id: "gen-2" }));
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    // Nothing was written into the goal's new project.
+    expect(await screen.findByTestId("plan-project-conflict")).toBeInTheDocument();
+    expect(screen.queryByTestId("plan-revision-conflict")).not.toBeInTheDocument();
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+    // The goal and its plan were re-read after the refusal.
+    expect(api.getGoalPlan.mock.calls.length).toBeGreaterThan(1);
+
+    const firstKey = api.createGoalPlanGeneration.mock.calls[0]![1].request_key;
+    expect(typeof firstKey).toBe("string");
+
+    await user.click(screen.getByRole("button", { name: "Start a new run" }));
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+    const secondKey = api.createGoalPlanGeneration.mock.calls[1]![1].request_key;
+    expect(secondKey).not.toBe(firstKey);
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a run from a project the goal has left", async () => {
+    api.createGoalPlanGeneration.mockRejectedValue(
+      new ApiError("conflict", 409, "Conflict", {
+        code: "generation_project_conflict",
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    expect(await screen.findByTestId("plan-project-conflict")).toBeInTheDocument();
+    expect(screen.queryByTestId("plan-generation-status")).not.toBeInTheDocument();
+    expect(api.saveGoalPlan).not.toHaveBeenCalled();
+    // The stale request key was forgotten, so a later run cannot replay it.
+    await user.click(
+      within(screen.getByTestId("plan-project-conflict")).getByRole("button", {
+        name: "Reload plan",
+      }),
+    );
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getByRole("button", { name: "Generate plan" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps an ordinary start-time revision conflict out of the project notice", async () => {
+    api.createGoalPlanGeneration.mockRejectedValue(
+      new ApiError("conflict", 409, "Conflict", {
+        code: "plan_revision_conflict",
+        current_revision: 5,
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    expect(
+      await screen.findByText(
+        "The plan changed before the run started. Reload the plan and start again.",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
+    expect(screen.queryByTestId("plan-project-conflict")).not.toBeInTheDocument();
+    expect(screen.getByText(/Reload revision 5/)).toBeInTheDocument();
+  });
+
+  it("drops a displayed candidate and its basis when the goal stops being visible", async () => {
+    api.getGoalPlanGeneration.mockResolvedValue(
+      generation({
+        state: "succeeded",
+        input_context: { project_title: "Project A" },
+        candidate: {
+          items: [item("node-1", "Model task")],
+          edges: [],
+          context_snapshot: {
+            repo_sha: "abc123",
+            files: [{ path: "src/plan.ts" }],
+          },
+        },
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.click(generate);
+
+    expect(await screen.findByTestId("plan-candidate")).toBeInTheDocument();
+    expect(screen.getByText("Project A")).toBeInTheDocument();
+
+    // Losing the project (404 for this viewer) must hide the cached server
+    // data, not keep rendering what the client still has in memory.
+    api.getGoalPlan.mockRejectedValue(new ApiError("Not found", 404, "Not found"));
+    void qc.invalidateQueries({ queryKey: goalKeys.plan("ws-1", "goal-1") }).catch(() => {});
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("goal-plan-section")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("plan-candidate")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("plan-actual-basis")).not.toBeInTheDocument();
+    });
   });
 });

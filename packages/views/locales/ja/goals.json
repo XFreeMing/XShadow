@@ -211,6 +211,7 @@
     "dependency_choose": "タスクを選択",
     "dependency_reason": "理由",
     "add_dependency": "追加",
-    "dependency_required": "タスクを選び、理由を入力してください。"
+    "dependency_required": "タスクを選び、理由を入力してください。",
+    "start_revision_conflict": "実行を開始する前にプランが更新されました。プランを再読み込みしてからやり直してください。"
   }
 }

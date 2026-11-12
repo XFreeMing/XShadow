@@ -211,6 +211,7 @@
     "dependency_choose": "Choisir une tâche",
     "dependency_reason": "Pourquoi",
     "add_dependency": "Ajouter",
-    "dependency_required": "Choisissez une tâche et indiquez la raison."
+    "dependency_required": "Choisissez une tâche et indiquez la raison.",
+    "start_revision_conflict": "Le plan a changé avant le démarrage de l’exécution. Rechargez le plan, puis relancez."
   }
 }

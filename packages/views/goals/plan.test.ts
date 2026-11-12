@@ -10,6 +10,8 @@ import {
   describeResourceRef,
   isCandidateUsable,
   isGenerationProjectConflict,
+  isGoalProjectConflict,
+  isProjectConflict,
   mergeCandidate,
   planConflictRevision,
   readActualBasis,
@@ -214,6 +216,28 @@ describe("conflict classification", () => {
       ),
     ).toBeNull();
     expect(planConflictRevision(new Error("offline"))).toBeNull();
+  });
+
+  it("recognizes a goal that moved while a request was being prepared", () => {
+    const moved = new ApiError("conflict", 409, "Conflict", {
+      code: "goal_project_conflict",
+    });
+    expect(isGoalProjectConflict(moved)).toBe(true);
+    expect(isProjectConflict(moved)).toBe(true);
+    expect(isProjectConflict(
+      new ApiError("conflict", 409, "Conflict", {
+        code: "generation_project_conflict",
+      }),
+    )).toBe(true);
+    // An ordinary revision conflict is contention on the saved plan, not a
+    // project boundary refusal.
+    const revision = new ApiError("conflict", 409, "Conflict", {
+      code: "plan_revision_conflict",
+      current_revision: 4,
+    });
+    expect(isGoalProjectConflict(revision)).toBe(false);
+    expect(isProjectConflict(revision)).toBe(false);
+    expect(isGoalProjectConflict(new Error("offline"))).toBe(false);
   });
 });
 

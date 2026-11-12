@@ -211,6 +211,7 @@
     "dependency_choose": "Pick a task",
     "dependency_reason": "Why",
     "add_dependency": "Add",
-    "dependency_required": "Choose a task and write the reason."
+    "dependency_required": "Choose a task and write the reason.",
+    "start_revision_conflict": "The plan changed before the run started. Reload the plan and start again."
   }
 }

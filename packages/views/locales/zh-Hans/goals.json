@@ -211,6 +211,7 @@
     "dependency_choose": "选择任务",
     "dependency_reason": "原因",
     "add_dependency": "添加",
-    "dependency_required": "请选择任务并填写原因。"
+    "dependency_required": "请选择任务并填写原因。",
+    "start_revision_conflict": "计划在本次运行启动前已更新，请重新加载计划后再启动。"
   }
 }

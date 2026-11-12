@@ -211,6 +211,7 @@
     "dependency_choose": "작업 선택",
     "dependency_reason": "이유",
     "add_dependency": "추가",
-    "dependency_required": "작업을 선택하고 이유를 입력하세요."
+    "dependency_required": "작업을 선택하고 이유를 입력하세요.",
+    "start_revision_conflict": "실행을 시작하기 전에 계획이 변경되었습니다. 계획을 다시 불러온 뒤 다시 시작하세요."
   }
 }

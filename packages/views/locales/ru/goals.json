@@ -211,6 +211,7 @@
     "dependency_choose": "Выберите задачу",
     "dependency_reason": "Причина",
     "add_dependency": "Добавить",
-    "dependency_required": "Выберите задачу и укажите причину."
+    "dependency_required": "Выберите задачу и укажите причину.",
+    "start_revision_conflict": "План изменился до запуска. Перезагрузите план и запустите снова."
   }
 }

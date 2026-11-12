@@ -40,6 +40,8 @@ import { useT } from "../../i18n";
 import {
   isCandidateUsable,
   isGenerationProjectConflict,
+  isProjectConflict,
+  planConflictRevision,
   readActualBasis,
   readInputContext,
 } from "../plan";
@@ -68,6 +70,7 @@ export function GoalPlanGenerationPanel({
   generationNonce,
   onApplyCandidate,
   onProjectConflict,
+  onRevisionConflict,
   onReloadPlan,
   onStartNewGeneration,
 }: {
@@ -77,6 +80,7 @@ export function GoalPlanGenerationPanel({
   generationNonce: number;
   onApplyCandidate: (generation: GoalPlanGeneration) => Promise<ApplyCandidateOutcome>;
   onProjectConflict: () => void;
+  onRevisionConflict: (revision: number | null) => void;
   onReloadPlan: () => Promise<void>;
   onStartNewGeneration: () => Promise<void>;
 }) {
@@ -126,6 +130,7 @@ export function GoalPlanGenerationPanel({
         queryKey: goalKeys.planGeneration(wsId, goal.id, generationId),
       });
       setGenerationId(null);
+      setConfirmOpen(false);
     }
     requestKeyRef.current = null;
     setProjectConflict(true);
@@ -142,18 +147,20 @@ export function GoalPlanGenerationPanel({
   ]);
 
   // Any cached run belongs to the project it was started in. When the goal
-  // moves, never keep showing or polling it.
+  // moves, never keep showing or polling it. A project-conflict notice is kept
+  // until the user reloads or starts a new run: dropping the run must not also
+  // erase the explanation of why nothing was applied.
   const projectId = goal.project_id;
   useEffect(() => {
     if (generationId) {
       queryClient.removeQueries({
         queryKey: goalKeys.planGeneration(wsId, goal.id, generationId),
       });
+      setGenerationId(null);
+      setProjectConflict(false);
+      setConfirmOpen(false);
     }
-    setGenerationId(null);
-    setProjectConflict(false);
     setStartError(null);
-    setConfirmOpen(false);
     requestKeyRef.current = null;
     // `generationId` is read once per project change; re-running on every
     // state tick would erase a run the user just started.
@@ -197,6 +204,35 @@ export function GoalPlanGenerationPanel({
         queryKey: goalKeys.planGeneration(wsId, goal.id, started.id),
       });
     } catch (err) {
+      // The goal crossed a project boundary between the request's read and its
+      // protected transaction, or this request_key resolves to a run of the
+      // project the goal has left. Nothing was created or applied: drop the old
+      // run (candidate and basis included), forget its key, and re-read the
+      // goal and plan. The local intent stays, and only an explicit new run
+      // gets a fresh request_key.
+      if (isProjectConflict(err)) {
+        if (generationId) {
+          queryClient.removeQueries({
+            queryKey: goalKeys.planGeneration(wsId, goal.id, generationId),
+          });
+          setGenerationId(null);
+        }
+        setConfirmOpen(false);
+        setStartError(null);
+        requestKeyRef.current = null;
+        setProjectConflict(true);
+        onProjectConflict();
+        return;
+      }
+      // A revision conflict is ordinary contention on the saved plan, not a
+      // project move: keep the request key and let the section offer reload or
+      // overwrite of the local edits.
+      const revision = planConflictRevision(err);
+      if (revision !== null) {
+        setStartError(t(($) => $.plan.start_revision_conflict));
+        onRevisionConflict(revision);
+        return;
+      }
       // Keep the same request_key: retrying this exact request must resolve
       // to the run the server may already have created.
       setStartError(startErrorMessage(err));

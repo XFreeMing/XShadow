@@ -113,6 +113,25 @@ export function isGenerationProjectConflict(error: unknown): boolean {
 }
 
 /**
+ * The goal changed project between the request's read and its protected
+ * transaction, so the request was refused before creating or writing anything.
+ * The client re-reads the goal and plan; it never retries against the old
+ * project and never treats this as a revision conflict.
+ */
+export function isGoalProjectConflict(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    errorCode(error) === "goal_project_conflict"
+  );
+}
+
+/** Either project boundary refusal: nothing from the old project stays usable. */
+export function isProjectConflict(error: unknown): boolean {
+  return isGoalProjectConflict(error) || isGenerationProjectConflict(error);
+}
+
+/**
  * A candidate is only applicable when every item has a stable UUID and every
  * edge resolves inside the candidate. The server normally guarantees both;
  * a degraded payload must not reach the merge, where it could silently drop

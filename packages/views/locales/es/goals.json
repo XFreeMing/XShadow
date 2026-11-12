@@ -211,6 +211,7 @@
     "dependency_choose": "Elige una tarea",
     "dependency_reason": "Motivo",
     "add_dependency": "Añadir",
-    "dependency_required": "Elige una tarea y escribe el motivo."
+    "dependency_required": "Elige una tarea y escribe el motivo.",
+    "start_revision_conflict": "El plan cambió antes de iniciar la ejecución. Recarga el plan y vuelve a empezar."
   }
 }

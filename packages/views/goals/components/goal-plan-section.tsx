@@ -223,6 +223,15 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
     void planQuery.refetch();
   };
 
+  // Ordinary contention on the saved plan. The draft is untouched; the banner
+  // offers reload or overwrite. This is deliberately not the project-conflict
+  // notice: the run was refused before it existed, not hidden after the fact.
+  const handleStartRevisionConflict = (revision: number | null) => {
+    setPendingGenerationId(null);
+    if (revision !== null) setConflictRevision(revision);
+    void planQuery.refetch();
+  };
+
   const handleStartNewGeneration = async () => {
     const loaded = await handleLoadLatest();
     if (!loaded) return;
@@ -400,6 +409,7 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
         generationNonce={generationNonce}
         onApplyCandidate={handleApplyCandidate}
         onProjectConflict={handleProjectConflict}
+        onRevisionConflict={handleStartRevisionConflict}
         onReloadPlan={async () => {
           await handleLoadLatest();
         }}
