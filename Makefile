@@ -176,15 +176,19 @@ gc: ## Collect environments whose directory is gone or whose TTL expired
 env-exec: ## Run a command with this environment's variables (ARGS="-- pnpm dev:desktop")
 	@bash scripts/dev-env.sh exec $(ARGS)
 
-# `init` depends on `agent` so `make -j agent init` still runs once.
+# Subcommands depend on `agent` so parallel make still runs once.
 ifneq ($(filter agent,$(MAKECMDGOALS)),)
-ifneq ($(strip $(filter-out agent init,$(MAKECMDGOALS))),)
-$(error Use make agent init separately from other targets)
+ifneq ($(strip $(filter-out agent init context,$(MAKECMDGOALS))),)
+$(error Use make agent init or make agent context separately from other targets)
 endif
-.PHONY: agent init
-agent: ## Initialize the personal agent team: make agent init (ARGS="--help" for options)
-	@node scripts/agent-team.mjs init $(if $(filter init,$(MAKECMDGOALS)),$(ARGS),--help)
-init: agent
+ifeq ($(words $(filter init context,$(MAKECMDGOALS))),2)
+$(error Choose only one agent subcommand: init or context)
+endif
+.PHONY: agent init context
+agent: ## Personal agent team: make agent init or make agent context (ARGS="--help")
+	@node scripts/agent-team.mjs $(or $(filter init context,$(MAKECMDGOALS)),init) $(if $(filter init context,$(MAKECMDGOALS)),$(ARGS),--help)
+init context: agent
+	@:
 
 endif
 
