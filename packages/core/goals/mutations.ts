@@ -2,7 +2,15 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { goalKeys } from "./queries";
-import type { CreateGoalRequest, Goal, UpdateGoalRequest } from "../types";
+import type {
+  CreateGoalPlanGenerationRequest,
+  CreateGoalRequest,
+  Goal,
+  GoalPlan,
+  GoalPlanGeneration,
+  SaveGoalPlanRequest,
+  UpdateGoalRequest,
+} from "../types";
 
 /**
  * Goal writes wait for the server before the UI treats them as done. There is
@@ -82,6 +90,75 @@ export function useUnlinkGoalIssue() {
       api.unlinkGoalIssue(goalId, issueId),
     onSettled: (_data, _error, { goalId }) => {
       qc.invalidateQueries({ queryKey: goalKeys.issues(wsId, goalId) });
+    },
+  });
+}
+
+/**
+ * A save is only success when the server returns the goal's own plan with the
+ * new revision. The schema degrades a malformed body to an empty draft, so
+ * accepting that would reset the editor's revision to 0 and invite a bogus
+ * next write.
+ */
+function requireConfirmedPlan(plan: GoalPlan, goalId: string): GoalPlan {
+  if (!plan.goal_id || plan.goal_id !== goalId || (plan.id === null && plan.revision === 0)) {
+    throw new Error("The server did not confirm the saved plan.");
+  }
+  return plan;
+}
+
+/**
+ * Saves the full edited draft. A `generation_id` marks that candidate applied
+ * in the same transaction, so the generation can never be applied twice.
+ */
+export function useSaveGoalPlan() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: async ({
+      goalId,
+      data,
+    }: {
+      goalId: string;
+      data: SaveGoalPlanRequest;
+    }) => requireConfirmedPlan(await api.saveGoalPlan(goalId, data), goalId),
+    onSuccess: (saved, { goalId, data }) => {
+      // The PUT reply is authoritative; write it straight into the cache
+      // instead of an immediate refetch, which could race another writer.
+      qc.setQueryData(goalKeys.plan(wsId, goalId), saved);
+      if (data.generation_id) {
+        qc.invalidateQueries({ queryKey: goalKeys.planGenerationAll(wsId, goalId) });
+      }
+    },
+  });
+}
+
+/**
+ * Starts one planning run. A malformed reply must not be treated as a started
+ * run, so a generation without its own id fails the mutation.
+ */
+export function useCreateGoalPlanGeneration() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: async ({
+      goalId,
+      data,
+    }: {
+      goalId: string;
+      data: CreateGoalPlanGenerationRequest;
+    }): Promise<GoalPlanGeneration> => {
+      const generation = await api.createGoalPlanGeneration(goalId, data);
+      if (!generation.id || generation.goal_id !== goalId) {
+        throw new Error("The server did not confirm the planning run.");
+      }
+      return generation;
+    },
+    onSuccess: (generation, { goalId }) => {
+      qc.setQueryData(
+        goalKeys.planGeneration(wsId, goalId, generation.id),
+        generation,
+      );
     },
   });
 }

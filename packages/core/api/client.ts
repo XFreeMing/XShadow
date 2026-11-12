@@ -126,6 +126,10 @@ import type {
   ListGoalsResponse,
   ListGoalIssuesParams,
   ListGoalIssuesResponse,
+  GoalPlan,
+  GoalPlanGeneration,
+  SaveGoalPlanRequest,
+  CreateGoalPlanGenerationRequest,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -393,6 +397,10 @@ import {
   EMPTY_GOAL,
   EMPTY_LIST_GOALS_RESPONSE,
   EMPTY_LIST_GOAL_ISSUES_RESPONSE,
+  GoalPlanSchema,
+  GoalPlanGenerationSchema,
+  EMPTY_GOAL_PLAN,
+  EMPTY_GOAL_PLAN_GENERATION,
   SearchProjectsResponseSchema,
   SearchIndexManifestSchema,
   SearchIndexSnapshotPageSchema,
@@ -4481,6 +4489,51 @@ export class ApiClient {
 
   async unlinkGoalIssue(goalId: string, issueId: string): Promise<void> {
     await this.fetch(`/api/goals/${goalId}/issues/${issueId}`, { method: "DELETE" });
+  }
+
+  // Goal plans (DEV-6). A plan is an editable draft and never dispatches work.
+  // Parse failures degrade to the empty draft, so callers must treat save
+  // results with revision 0 or no goal_id as unconfirmed (see useSaveGoalPlan).
+  async getGoalPlan(goalId: string): Promise<GoalPlan> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/plan`);
+    return parseWithFallback(raw, GoalPlanSchema, EMPTY_GOAL_PLAN, {
+      endpoint: "GET /api/goals/:id/plan",
+    });
+  }
+
+  async saveGoalPlan(goalId: string, data: SaveGoalPlanRequest): Promise<GoalPlan> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/plan`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GoalPlanSchema, EMPTY_GOAL_PLAN, {
+      endpoint: "PUT /api/goals/:id/plan",
+    });
+  }
+
+  async createGoalPlanGeneration(
+    goalId: string,
+    data: CreateGoalPlanGenerationRequest,
+  ): Promise<GoalPlanGeneration> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/plan/generations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GoalPlanGenerationSchema, EMPTY_GOAL_PLAN_GENERATION, {
+      endpoint: "POST /api/goals/:id/plan/generations",
+    });
+  }
+
+  async getGoalPlanGeneration(
+    goalId: string,
+    generationId: string,
+  ): Promise<GoalPlanGeneration> {
+    const raw = await this.fetch<unknown>(
+      `/api/goals/${goalId}/plan/generations/${generationId}`,
+    );
+    return parseWithFallback(raw, GoalPlanGenerationSchema, EMPTY_GOAL_PLAN_GENERATION, {
+      endpoint: "GET /api/goals/:id/plan/generations/:generationId",
+    });
   }
 
   async addProjectMembers(id: string, userIds: string[]): Promise<ListProjectMembersResponse> {
