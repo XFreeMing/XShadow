@@ -491,7 +491,11 @@ UPDATE goal_plan_generation SET
     task_id = $2::uuid,
     state = 'queued',
     updated_at = now()
-WHERE id = $3 AND workspace_id = $4
+WHERE id = $3
+  AND workspace_id = $4
+  AND state = 'preparing'
+  AND task_id IS NULL
+  AND chat_session_id IS NULL
 RETURNING id, workspace_id, goal_id, project_id, request_key, intent, agent_id, base_revision, state, chat_session_id, task_id, input_context, candidate, applied, applied_revision, observed_revision, error, created_at, updated_at
 `
 
@@ -502,6 +506,10 @@ type SetGoalPlanGenerationRunParams struct {
 	WorkspaceID   pgtype.UUID `json:"workspace_id"`
 }
 
+// Binds the run's session and task in the same transaction that inserted the
+// generation, so the row never commits in a half-started state. The guard
+// keeps a terminal run from being revived: a failed or succeeded generation
+// must not accept a late binding and re-enter the queue.
 func (q *Queries) SetGoalPlanGenerationRun(ctx context.Context, arg SetGoalPlanGenerationRunParams) (GoalPlanGeneration, error) {
 	row := q.db.QueryRow(ctx, setGoalPlanGenerationRun,
 		arg.ChatSessionID,

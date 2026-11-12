@@ -74,12 +74,20 @@ SELECT * FROM goal_plan_generation
 WHERE workspace_id = $1 AND task_id = $2;
 
 -- name: SetGoalPlanGenerationRun :one
+-- Binds the run's session and task in the same transaction that inserted the
+-- generation, so the row never commits in a half-started state. The guard
+-- keeps a terminal run from being revived: a failed or succeeded generation
+-- must not accept a late binding and re-enter the queue.
 UPDATE goal_plan_generation SET
     chat_session_id = sqlc.arg('chat_session_id')::uuid,
     task_id = sqlc.arg('task_id')::uuid,
     state = 'queued',
     updated_at = now()
-WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
+  AND state = 'preparing'
+  AND task_id IS NULL
+  AND chat_session_id IS NULL
 RETURNING *;
 
 -- name: FailGoalPlanGeneration :exec
