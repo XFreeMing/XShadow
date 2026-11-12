@@ -2274,6 +2274,29 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Goals (DEV-5): workspace-scoped deliverables that own intent,
+			// scope, acceptance criteria, owner and lifecycle.
+			r.Route("/api/goals", func(r chi.Router) {
+				r.Get("/", h.ListGoals)
+				r.Post("/", h.CreateGoal)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetGoal)
+					r.Put("/", h.UpdateGoal)
+					r.Delete("/", h.DeleteGoal)
+					r.Get("/issues", h.ListGoalIssues)
+					r.Put("/issues/{issueId}", h.LinkGoalIssue)
+					r.Delete("/issues/{issueId}", h.UnlinkGoalIssue)
+					// Plan drafts (DEV-6): an editable plan that is independent of
+					// execution. Generations reuse the chat/task chain; the result
+					// endpoint is called by the planning run's own task token.
+					r.Get("/plan", h.GetGoalPlan)
+					r.Put("/plan", h.PutGoalPlan)
+					r.Post("/plan/generations", h.CreateGoalPlanGeneration)
+					r.Get("/plan/generations/{generationId}", h.GetGoalPlanGeneration)
+					r.Post("/plan/generations/{generationId}/result", h.SubmitGoalPlanGenerationResult)
+				})
+			})
+
 			// Projects
 			r.Route("/api/projects", func(r chi.Router) {
 				r.Get("/search", h.SearchProjects)

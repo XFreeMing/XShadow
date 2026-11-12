@@ -15,6 +15,7 @@ import type { SidebarIssuesRequest } from "../issues/sidebar-list";
 import { refreshIssueUnread } from "../issues/unread";
 import { refreshSubscribedIssues, subscribedIssueKeys } from "../issues/subscribed";
 import { projectKeys } from "../projects/queries";
+import { goalKeys } from "../goals/queries";
 import { pinKeys } from "../pins/queries";
 import { autopilotKeys } from "../autopilots/queries";
 import { runtimeKeys } from "../runtimes/queries";
@@ -686,6 +687,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: workspaceKeys.skills(wsId) });
     qc.invalidateQueries({ queryKey: workspaceKeys.invitations(wsId) });
     qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: goalKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: autopilotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
@@ -881,6 +883,11 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+          // Deleting a project deletes its goals, and changing its visibility
+          // or members changes who may see them. The event payload carries no
+          // goal ids, so refresh the whole workspace goal cache through the
+          // authorized API.
+          qc.invalidateQueries({ queryKey: goalKeys.all(wsId) });
           // Workflow responses include the projects using them. Creating,
           // deleting or changing a project also changes that usage list.
           qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
@@ -893,6 +900,14 @@ export function useRealtimeSync(
           // Deleting a project deletes the saved views scoped to it.
           qc.invalidateQueries({ queryKey: issueViewKeys.all(wsId) });
         }
+      },
+      goal: () => {
+        // `goal:changed` is deliberately content-free: goals may live in
+        // private projects, so the workspace broadcast only says "re-read
+        // through the authorized API". That also covers link/unlink, which
+        // changes a goal's task list but not the goal itself.
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: goalKeys.all(wsId) });
       },
       squad: () => {
         const wsId = getCurrentWsId();
@@ -1208,6 +1223,10 @@ export function useRealtimeSync(
         if (issue.status) {
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
+        // A goal's linked-task list embeds full issue rows, so a visible
+        // issue change must refresh it — including a project move, after
+        // which the server may have removed the link.
+        qc.invalidateQueries({ queryKey: goalKeys.issuesAll(wsId) });
       }
     });
 
@@ -1226,6 +1245,9 @@ export function useRealtimeSync(
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
         void onInboxIssueDeleted(qc, wsId, issue_id);
+        // Deleting a task also removes its goal link server-side; refresh
+        // every visible goal's task list. The goal itself never changes.
+        qc.invalidateQueries({ queryKey: goalKeys.issuesAll(wsId) });
       }
     });
 

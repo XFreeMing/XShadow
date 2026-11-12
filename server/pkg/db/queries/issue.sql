@@ -261,7 +261,7 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
     WHERE i.id = $1
       AND (sqlc.narg('expected_revision')::bigint IS NULL OR i.revision = sqlc.narg('expected_revision')::bigint)
     FOR UPDATE
-), changed AS (
+), changed AS MATERIALIZED (
     SELECT
         candidate.*,
         ROW(
@@ -285,35 +285,56 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
             next_duplicate_of_issue_id
         ) AS did_activity
     FROM candidate
+), updated AS (
+    UPDATE issue AS i SET
+        title = changed.next_title,
+        description = changed.next_description,
+        status = changed.next_status,
+        priority = changed.next_priority,
+        assignee_type = changed.next_assignee_type,
+        assignee_id = changed.next_assignee_id,
+        position = changed.next_position,
+        start_date = changed.next_start_date,
+        due_date = changed.next_due_date,
+        parent_issue_id = changed.next_parent_issue_id,
+        project_id = changed.next_project_id,
+        stage = changed.next_stage,
+        duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
+        revision = i.revision + changed.did_change::integer,
+        last_activity_at = CASE WHEN changed.did_activity
+            THEN GREATEST(COALESCE(i.last_activity_at, i.updated_at), now())
+            ELSE i.last_activity_at
+        END,
+        updated_at = CASE WHEN changed.did_change THEN now() ELSE i.updated_at END
+    FROM changed CROSS JOIN wakeup_source
+    WHERE i.id = changed.id
+      -- Re-check the precondition on the row version that UPDATE actually locks.
+      -- Under READ COMMITTED, concurrent statements may both populate candidate
+      -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
+      -- after waiting for the first writer, leaving the stale writer with 0 rows.
+      AND (sqlc.narg('expected_revision')::bigint IS NULL OR i.revision = sqlc.narg('expected_revision')::bigint)
+    RETURNING i.*
+), goal_unlink AS MATERIALIZED (
+    -- A goal link is scoped to (workspace, project) by construction, so an
+    -- issue that actually changes project cannot keep it. Deleting from
+    -- `updated` (not `changed`) means a write the statement ultimately refuses
+    -- — a revision re-check that leaves 0 rows — cannot unlink anything.
+    -- This lives in the shared write statement because every project-changing
+    -- write goes through it: single update, batch update, drag/move, and the
+    -- service path (issue_public.go). The comparison is on the locked old/new
+    -- values, never on the request pointer: clearing project_id sends a null
+    -- pointer that the handler's project_changed flag cannot detect.
+    --
+    -- Only the selected issue's own link is touched; its parent/children and
+    -- other goals are untouched.
+    DELETE FROM goal_issue AS gi
+    USING updated
+    JOIN changed ON changed.id = updated.id
+    WHERE gi.workspace_id = updated.workspace_id
+      AND gi.issue_id = updated.id
+      AND changed.project_id IS DISTINCT FROM updated.project_id
 )
-UPDATE issue AS i SET
-    title = changed.next_title,
-    description = changed.next_description,
-    status = changed.next_status,
-    priority = changed.next_priority,
-    assignee_type = changed.next_assignee_type,
-    assignee_id = changed.next_assignee_id,
-    position = changed.next_position,
-    start_date = changed.next_start_date,
-    due_date = changed.next_due_date,
-    parent_issue_id = changed.next_parent_issue_id,
-    project_id = changed.next_project_id,
-    stage = changed.next_stage,
-    duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
-    revision = i.revision + changed.did_change::integer,
-    last_activity_at = CASE WHEN changed.did_activity
-        THEN GREATEST(COALESCE(i.last_activity_at, i.updated_at), now())
-        ELSE i.last_activity_at
-    END,
-    updated_at = CASE WHEN changed.did_change THEN now() ELSE i.updated_at END
-FROM changed CROSS JOIN wakeup_source
-WHERE i.id = changed.id
-  -- Re-check the precondition on the row version that UPDATE actually locks.
-  -- Under READ COMMITTED, concurrent statements may both populate candidate
-  -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
-  -- after waiting for the first writer, leaving the stale writer with 0 rows.
-  AND (sqlc.narg('expected_revision')::bigint IS NULL OR i.revision = sqlc.narg('expected_revision')::bigint)
-RETURNING i.*;
+SELECT * FROM updated;
 
 -- name: UpdateIssueStatus :one
 -- Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.

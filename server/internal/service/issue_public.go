@@ -51,5 +51,5 @@ func (s *IssueService) UpdateContent(ctx context.Context, issue db.Issue, patch 
 	if patch.ExpectedRevision != nil && errors.Is(err, pgx.ErrNoRows) {
 		return db.Issue{}, ErrIssueRevisionConflict
 	}
-	return updated, err
+	return db.Issue(updated), err
 }
