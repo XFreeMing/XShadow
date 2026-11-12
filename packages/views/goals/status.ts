@@ -1,3 +1,4 @@
+import { ApiError } from "@multica/core/api";
 import type { GoalStatus } from "@multica/core/types";
 
 /** Every status this client knows, in lifecycle order. */
@@ -36,6 +37,15 @@ export function goalStatusLabelKey(status: string): GoalStatusLabelKey {
  */
 export function isGoalCompleted(status: string): boolean {
   return status === "completed";
+}
+
+/**
+ * A goal read that failed terminally: the goal is gone for this viewer
+ * (deleted, access revoked, or unreachable from this workspace). Transient
+ * failures — offline, 5xx — are not terminal and keep the last known identity.
+ */
+export function isGoalUnavailableError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 400 || error.status === 403 || error.status === 404);
 }
 
 export const GOAL_STATUS_DOT_CLASS: Record<GoalStatusLabelKey, string> = {
