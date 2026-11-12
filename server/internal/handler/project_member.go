@@ -228,6 +228,10 @@ func (h *Handler) writeProjectUpdate(w http.ResponseWriter, r *http.Request, par
 	if len(access.addIDs) > 0 {
 		h.publishProjectMembersChanged(project, parseUUIDOrInvalid(actorUserID))
 	}
+	if !access.empty() {
+		// A permission change can add or remove goals from a viewer's list.
+		h.publishGoalChanged(uuidToString(project.WorkspaceID), "member", actorUserID)
+	}
 	return project, true
 }
 
@@ -453,9 +457,13 @@ func (h *Handler) isProjectMember(r *http.Request, project db.Project, userID pg
 }
 
 func (h *Handler) publishProjectMembersChanged(project db.Project, actorUserID pgtype.UUID) {
-	h.publish(protocol.EventProjectMembersChanged, uuidToString(project.WorkspaceID), "member", uuidToString(actorUserID), map[string]any{
+	workspaceID := uuidToString(project.WorkspaceID)
+	h.publish(protocol.EventProjectMembersChanged, workspaceID, "member", uuidToString(actorUserID), map[string]any{
 		"project_id": uuidToString(project.ID),
 	})
+	// Membership gates a private project's goals, so the goal list may have
+	// gained or lost entries for this viewer.
+	h.publishGoalChanged(workspaceID, "member", uuidToString(actorUserID))
 }
 
 // touchProjectSearchIndex re-announces a project's issues and comments to

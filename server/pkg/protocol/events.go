@@ -108,6 +108,12 @@ const (
 	// member list changed (MUL-8472).
 	EventProjectMembersChanged = "project:members_changed"
 
+	// Goal events. EventGoalChanged carries an empty payload: goal writes and
+	// project access changes invalidate the workspace's goal queries, and
+	// clients re-read through the HTTP API, so the broadcast never carries a
+	// goal a viewer cannot see.
+	EventGoalChanged = "goal:changed"
+
 	// Label events
 	EventLabelCreated       = "label:created"
 	EventLabelUpdated       = "label:updated"

@@ -766,3 +766,11 @@ deleted_share_links AS (
 )
 DELETE FROM workspace_invitation
 WHERE workspace_invitation.workspace_id = $1;
+
+-- name: DeleteWorkspaceGoalIssues :exec
+-- Goal links go before goals and before the workspace row; no foreign keys
+-- hold this order, so the teardown names it explicitly.
+DELETE FROM goal_issue WHERE goal_issue.workspace_id = $1;
+
+-- name: DeleteWorkspaceGoals :exec
+DELETE FROM goal WHERE goal.workspace_id = $1;
