@@ -505,6 +505,13 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "generation not found")
 			return
 		}
+		// A goal can move once it has no saved plan and no in-flight run, but a
+		// finished candidate from its old project must never be applied to the
+		// new one. It stays readable nowhere; the user starts a new run.
+		if uuidToString(generation.ProjectID) != uuidToString(locked.ProjectID) {
+			writeGoalPlanGenerationProjectConflict(w)
+			return
+		}
 		if len(generation.Candidate) == 0 {
 			writeErrorCode(w, http.StatusConflict, "generation_not_ready",
 				"this generation has not submitted a plan yet")
@@ -546,6 +553,23 @@ func writeGoalPlanRevisionConflict(w http.ResponseWriter, current int32) {
 		"code":             "plan_revision_conflict",
 		"current_revision": current,
 	})
+}
+
+// writeGoalPlanProjectConflict refuses a generation whose goal changed project
+// between this request's read and the protected transaction. Nothing from the
+// old project is written or returned; the caller re-reads the goal and starts a
+// new request.
+func writeGoalPlanProjectConflict(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusConflict, "goal_project_conflict",
+		"the goal's project changed while this request was being prepared; re-read the goal and retry")
+}
+
+// writeGoalPlanGenerationProjectConflict refuses to read, apply, replay or
+// accept the result of a run created for a project the goal no longer belongs
+// to. The body carries no old-project input context or candidate.
+func writeGoalPlanGenerationProjectConflict(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusConflict, "generation_project_conflict",
+		"this planning run belongs to a project the goal no longer uses; start a new run")
 }
 
 // CreateGoalPlanGeneration starts one planning run. It reuses the existing
@@ -619,18 +643,11 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	contextSnapshot, err := h.buildGoalPlanInputContext(r.Context(), goal)
-	if err != nil {
-		slog.Error("build goal plan input context failed",
-			append(logger.RequestAttrs(r), "goal_id", uuidToString(goal.ID), "error", err)...)
-		writeError(w, http.StatusInternalServerError, "failed to read project context")
-		return
-	}
-
-	// One transaction decides dedupe and records the request, then creates the
-	// chat session it will run in. The workspace key-share lock comes first, in
-	// the same order CreateChatSession takes it, so this path cannot deadlock
-	// with workspace deletion.
+	// One transaction fixes the run's input and records it, then creates the
+	// chat session it will run in. The locks are taken in the order the delete
+	// paths take them — workspace delete locks the workspace first, project
+	// delete locks the project before its goals — so this path cannot deadlock
+	// with either: a generation never waits for a project while holding a goal.
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
@@ -642,6 +659,21 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 	if _, err := qtx.LockWorkspaceForChatSessionCreate(r.Context(), goal.WorkspaceID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to start planning run")
+		return
+	}
+	// The project is locked from the project the goal had when this request was
+	// read. The goal lock comes afterwards and the two are compared below: if
+	// the goal moved in between, this run is refused rather than mixing the old
+	// project's resources with a session created in the new one.
+	if _, err := qtx.LockProjectForChatSessionCreate(r.Context(), db.LockProjectForChatSessionCreateParams{
+		ID:          goal.ProjectID,
+		WorkspaceID: goal.WorkspaceID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeGoalPlanProjectConflict(w)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
@@ -664,6 +696,10 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 			"link this goal to a project before generating a plan")
 		return
 	}
+	if uuidToString(lockedGoal.ProjectID) != uuidToString(goal.ProjectID) {
+		writeGoalPlanProjectConflict(w)
+		return
+	}
 	if err := qtx.LockGoalPlanAdvisory(r.Context(), uuidToString(lockedGoal.ID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
 		return
@@ -679,6 +715,14 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 			existing.BaseRevision != *req.ExpectedRevision {
 			writeErrorCode(w, http.StatusConflict, "generation_request_conflict",
 				"request_key was already used for a different generation request")
+			return
+		}
+		// A replay may only hand back a run of the goal's current project. The
+		// goal can move once its plan and every in-flight run are gone, so an
+		// old run is still readable by id; replaying its request_key must not
+		// resurrect its old-project input or candidate.
+		if uuidToString(existing.ProjectID) != uuidToString(lockedGoal.ProjectID) {
+			writeGoalPlanGenerationProjectConflict(w)
 			return
 		}
 		if err := tx.Commit(r.Context()); err != nil {
@@ -699,37 +743,36 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	current, _, err := h.goalPlanRevision(r.Context(), qtx, lockedGoal)
+	// The draft is read under the goal lock and the advisory lock, so the
+	// revision compared here is the one the run is fixed to. Everything the run
+	// receives — base revision, input context, session project and prompt — is
+	// derived from this one read and never refreshed afterwards.
+	plan, hasPlan, err := loadGoalPlanDraft(r.Context(), qtx, lockedGoal)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
 		return
 	}
-	if current != *req.ExpectedRevision {
-		writeGoalPlanRevisionConflict(w, current)
+	if plan.Revision != *req.ExpectedRevision {
+		writeGoalPlanRevisionConflict(w, plan.Revision)
 		return
 	}
-
-	if _, err := qtx.LockProjectForChatSessionCreate(r.Context(), db.LockProjectForChatSessionCreateParams{
-		ID:          lockedGoal.ProjectID,
-		WorkspaceID: lockedGoal.WorkspaceID,
-	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "project not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
+	input, err := h.buildGoalPlanGenerationInput(r.Context(), qtx, lockedGoal, plan, hasPlan)
+	if err != nil {
+		slog.Error("build goal plan input context failed",
+			append(logger.RequestAttrs(r), "goal_id", uuidToString(lockedGoal.ID), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to read project context")
 		return
 	}
 
 	generation, err := qtx.CreateGoalPlanGeneration(r.Context(), db.CreateGoalPlanGenerationParams{
 		WorkspaceID:  lockedGoal.WorkspaceID,
 		GoalID:       lockedGoal.ID,
-		ProjectID:    lockedGoal.ProjectID,
+		ProjectID:    input.Project.ID,
 		RequestKey:   requestKey,
 		Intent:       intent,
 		AgentID:      agentID,
-		BaseRevision: *req.ExpectedRevision,
-		InputContext: contextSnapshot,
+		BaseRevision: input.PlanRevision,
+		InputContext: input.Snapshot,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
@@ -742,7 +785,7 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		AgentID:     agentID,
 		CreatorID:   parseUUID(userID),
 		Title:       lockedGoal.Title,
-		ProjectID:   lockedGoal.ProjectID,
+		ProjectID:   input.Project.ID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start planning run")
@@ -757,12 +800,7 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	prompt, err := h.buildGoalPlanPrompt(r.Context(), lockedGoal, generation, contextSnapshot)
-	if err != nil {
-		h.failGoalPlanGeneration(generation, "failed to prepare the planning request")
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
-		return
-	}
+	prompt := buildGoalPlanPrompt(lockedGoal, generation, input)
 	sent, err := h.TaskService.SendDirectChatMessage(
 		r.Context(), session, agent, parseUUID(userID), prompt, nil, actorType, parseUUID(actorID),
 	)
@@ -831,6 +869,12 @@ func (h *Handler) GetGoalPlanGeneration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "generation not found")
 		return
 	}
+	// The goal may have moved after this run finished. Its candidate and input
+	// evidence describe the old project, so they are not served for the new one.
+	if uuidToString(generation.ProjectID) != uuidToString(goal.ProjectID) {
+		writeGoalPlanGenerationProjectConflict(w)
+		return
+	}
 	state := h.effectiveGoalPlanGenerationState(r.Context(), generation)
 	generation.Error = h.generationFailureText(r.Context(), generation, state)
 	current, _, err := h.goalPlanRevision(r.Context(), h.Queries, goal)
@@ -890,15 +934,6 @@ func (h *Handler) SubmitGoalPlanGenerationResult(w http.ResponseWriter, r *http.
 		return
 	}
 
-	goal, err := h.Queries.GetGoalInWorkspace(r.Context(), db.GetGoalInWorkspaceParams{
-		ID:          generation.GoalID,
-		WorkspaceID: generation.WorkspaceID,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "generation not found")
-		return
-	}
-
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record plan result")
@@ -906,6 +941,28 @@ func (h *Handler) SubmitGoalPlanGenerationResult(w http.ResponseWriter, r *http.
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+	// Same lock order as every other plan writer: the goal, then the per-goal
+	// advisory lock. The goal is re-read under its lock so the project compared
+	// below is the current one, not the one this run was started with.
+	goal, err := qtx.LockGoalForUpdate(r.Context(), db.LockGoalForUpdateParams{
+		ID:          generation.GoalID,
+		WorkspaceID: generation.WorkspaceID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "generation not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to record plan result")
+		return
+	}
+	// Ownership already answered 404 above. A goal that moved to another
+	// project while this run was out is a conflict: the candidate was produced
+	// from the old project, so it is neither stored nor returned.
+	if uuidToString(generation.ProjectID) != uuidToString(goal.ProjectID) {
+		writeGoalPlanGenerationProjectConflict(w)
+		return
+	}
 	if err := qtx.LockGoalPlanAdvisory(r.Context(), uuidToString(goal.ID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record plan result")
 		return
@@ -1300,25 +1357,87 @@ func detectGoalPlanCycle(edges []GoalPlanEdge) error {
 	return nil
 }
 
-// buildGoalPlanInputContext records what the request is based on: the project
-// and its own resources. A resource is a pointer, not proof of reading, so
-// `read` starts false and the run's result fills in what it actually read. The
-// workspace default repo is deliberately not consulted.
-func (h *Handler) buildGoalPlanInputContext(ctx context.Context, goal db.Goal) (json.RawMessage, error) {
-	project, err := h.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
+// goalPlanGenerationInput is everything one planning run is allowed to be based
+// on. It is read inside the transaction that creates the generation, after the
+// workspace, project and goal locks, so the stored input_context, the base
+// revision, the chat session's project and the prompt all describe the same
+// project and the same draft revision. Nothing re-reads the draft afterwards.
+type goalPlanGenerationInput struct {
+	Project      db.Project
+	Resources    []db.ProjectResource
+	PlanRevision int32
+	PlanContent  json.RawMessage
+	Snapshot     json.RawMessage
+}
+
+// loadGoalPlanDraft reads the saved draft inside the caller's transaction. The
+// second result is false when the goal has never been saved; the draft is then
+// the synthetic revision 0 with no content.
+func loadGoalPlanDraft(ctx context.Context, q *db.Queries, goal db.Goal) (db.GoalPlan, bool, error) {
+	plan, err := q.GetGoalPlan(ctx, db.GetGoalPlanParams{
+		WorkspaceID: goal.WorkspaceID,
+		GoalID:      goal.ID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.GoalPlan{}, false, nil
+	}
+	if err != nil {
+		return db.GoalPlan{}, false, err
+	}
+	return plan, true, nil
+}
+
+// buildGoalPlanGenerationInput fixes the project, its own resources and the
+// draft revision of one run. It must run inside the generation transaction
+// after the project and goal locks; the result is the only source the caller
+// uses for the stored input context, the base revision, the session project
+// and the prompt. The workspace default repo is deliberately not consulted.
+func (h *Handler) buildGoalPlanGenerationInput(
+	ctx context.Context,
+	q *db.Queries,
+	goal db.Goal,
+	plan db.GoalPlan,
+	hasPlan bool,
+) (goalPlanGenerationInput, error) {
+	project, err := q.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
 		ID:          goal.ProjectID,
 		WorkspaceID: goal.WorkspaceID,
 	})
 	if err != nil {
-		return nil, err
+		return goalPlanGenerationInput{}, err
 	}
-	resources, err := h.Queries.ListProjectResourcesInWorkspace(ctx, db.ListProjectResourcesInWorkspaceParams{
+	resources, err := q.ListProjectResourcesInWorkspace(ctx, db.ListProjectResourcesInWorkspaceParams{
 		ProjectID:   project.ID,
 		WorkspaceID: goal.WorkspaceID,
 	})
 	if err != nil {
-		return nil, err
+		return goalPlanGenerationInput{}, err
 	}
+	input := goalPlanGenerationInput{Project: project, Resources: resources}
+	if hasPlan {
+		input.PlanRevision = plan.Revision
+		if len(plan.Content) > 0 {
+			input.PlanContent = json.RawMessage(plan.Content)
+		}
+	}
+	snapshot, err := buildGoalPlanContextSnapshot(project, resources, input.PlanRevision, time.Now().UTC())
+	if err != nil {
+		return goalPlanGenerationInput{}, err
+	}
+	input.Snapshot = snapshot
+	return input, nil
+}
+
+// buildGoalPlanContextSnapshot records what the request is based on: the
+// project, its own resources and the draft revision the run is fixed to. A
+// resource is a pointer, not proof of reading, so `read` starts false and the
+// run's result fills in what it actually read.
+func buildGoalPlanContextSnapshot(
+	project db.Project,
+	resources []db.ProjectResource,
+	planRevision int32,
+	readAt time.Time,
+) (json.RawMessage, error) {
 	resourceEntries := make([]map[string]any, 0, len(resources))
 	missing := []string{}
 	for _, resource := range resources {
@@ -1345,37 +1464,36 @@ func (h *Handler) buildGoalPlanInputContext(ctx context.Context, goal db.Goal) (
 		"project_title":       project.Title,
 		"project_description": project.Description.String,
 		"resources":           resourceEntries,
-		"plan_revision":       int32(0),
+		"plan_revision":       planRevision,
 		"missing":             missing,
-		"read_at":             time.Now().UTC().Format(time.RFC3339),
+		"read_at":             readAt.Format(time.RFC3339),
 	}
-	return json.Marshal(snapshot)
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("encode goal plan context snapshot: %w", err)
+	}
+	return encoded, nil
 }
 
-func (h *Handler) buildGoalPlanPrompt(ctx context.Context, goal db.Goal, generation db.GoalPlanGeneration, inputContext json.RawMessage) (string, error) {
-	plan, err := h.Queries.GetGoalPlan(ctx, db.GetGoalPlanParams{
-		WorkspaceID: goal.WorkspaceID,
-		GoalID:      goal.ID,
-	})
+func buildGoalPlanPrompt(goal db.Goal, generation db.GoalPlanGeneration, input goalPlanGenerationInput) string {
 	currentPlan := "（空：这是第一份计划草稿）"
-	if err == nil {
-		content := json.RawMessage(plan.Content)
-		if len(content) == 0 {
-			content = json.RawMessage(`{"items":[],"edges":[]}`)
-		}
-		currentPlan = fmt.Sprintf("revision %d\n%s", plan.Revision, string(content))
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
+	if len(input.PlanContent) > 0 {
+		currentPlan = fmt.Sprintf("revision %d\n%s", input.PlanRevision, string(input.PlanContent))
+	} else if input.PlanRevision > 0 {
+		currentPlan = fmt.Sprintf("revision %d\n（空计划内容）", input.PlanRevision)
 	}
-	var snapshot map[string]any
-	_ = json.Unmarshal(inputContext, &snapshot)
-	resourceLines := []string{}
-	if raw, ok := snapshot["resources"].([]any); ok {
-		for _, entry := range raw {
-			if m, ok := entry.(map[string]any); ok {
-				resourceLines = append(resourceLines, fmt.Sprintf("- type=%v label=%v ref=%v", m["type"], m["label"], m["ref"]))
-			}
+	resourceLines := make([]string, 0, len(input.Resources))
+	for _, resource := range input.Resources {
+		ref := string(resource.ResourceRef)
+		if ref == "" {
+			ref = "{}"
 		}
+		label := ""
+		if resource.Label.Valid {
+			label = resource.Label.String
+		}
+		resourceLines = append(resourceLines, fmt.Sprintf(
+			"- id=%s type=%s label=%s ref=%s", uuidToString(resource.ID), resource.ResourceType, label, ref))
 	}
 	if len(resourceLines) == 0 {
 		resourceLines = []string{"（该项目还没有登记资源；请在 context_snapshot.missing 中如实记录缺失项，不要改用工作区默认仓库）"}
@@ -1390,12 +1508,13 @@ func (h *Handler) buildGoalPlanPrompt(ctx context.Context, goal db.Goal, generat
 	if goal.AcceptanceCriteria != "" {
 		fmt.Fprintf(&b, "- 验收标准: %s\n", goal.AcceptanceCriteria)
 	}
-	fmt.Fprintf(&b, "\n## 本次请求\n- intent: %s\n- base_revision: %d\n- project_id: %s\n", generation.Intent, generation.BaseRevision, uuidToString(goal.ProjectID))
-	if raw, ok := snapshot["project_title"]; ok {
-		fmt.Fprintf(&b, "- 项目: %v\n", raw)
+	fmt.Fprintf(&b, "\n## 本次请求\n- intent: %s\n- base_revision: %d\n- project_id: %s\n",
+		generation.Intent, input.PlanRevision, uuidToString(input.Project.ID))
+	if input.Project.Title != "" {
+		fmt.Fprintf(&b, "- 项目: %s\n", input.Project.Title)
 	}
-	if raw, ok := snapshot["project_description"]; ok && raw != "" {
-		fmt.Fprintf(&b, "- 项目描述: %v\n", raw)
+	if input.Project.Description.Valid && input.Project.Description.String != "" {
+		fmt.Fprintf(&b, "- 项目描述: %s\n", input.Project.Description.String)
 	}
 	b.WriteString("- 项目资源（只使用这些资源，不要改用工作区默认仓库）:\n")
 	for _, line := range resourceLines {
@@ -1416,5 +1535,5 @@ func (h *Handler) buildGoalPlanPrompt(ctx context.Context, goal db.Goal, generat
 	b.WriteString("然后运行（不要用 curl，也不要把计划贴进评论）：\n")
 	fmt.Fprintf(&b, "  \"$MULTICA_CLI_PATH\" goal plan-result --goal %s --generation %s --file <上面的文件路径>\n", uuidToString(goal.ID), uuidToString(generation.ID))
 	b.WriteString("提交成功即结束。若确实无法完成，用同一条命令加 --error \"<原因>\" 报告失败，不要编造依据。\n")
-	return b.String(), nil
+	return b.String()
 }
