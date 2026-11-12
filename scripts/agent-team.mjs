@@ -18,6 +18,7 @@ context is read-only: show template, live roster and drift without starting serv
   --template PATH          Template JSON (default agent-team/team.json)
   --check                  Preflight only; requires an existing environment/profile
   --offline                context: template only, no profile or network access
+  --tasks                  context: also read unfinished issues, active runs and wakeups (read-only)
   --json                   context: machine-readable output
   --help                   Show this help
 
@@ -34,6 +35,7 @@ export function parseArgs(args) {
     if (flag === "--check") { options.check = true; continue; }
     if (flag === "--offline") { options.offline = true; continue; }
     if (flag === "--json") { options.json = true; continue; }
+    if (flag === "--tasks") { options.tasks = true; continue; }
     const key = { "--profile": "profile", "--profiles-dir": "profilesDir", "--template": "template", "--runtime": "runtime" }[flag];
     if (!key || !args[0] || args[0].startsWith("--")) throw new Error(`Invalid option: ${flag}\n${HELP}`);
     const value = args.shift();
@@ -44,7 +46,8 @@ export function parseArgs(args) {
     } else options[key] = value;
   }
   if (options.profile && !/^[\w.-]+$/.test(options.profile)) throw new Error("Invalid profile name");
-  if (options.command === "init" && (options.offline || options.json)) throw new Error("--offline and --json apply only to context");
+  if (options.command === "init" && (options.offline || options.json || options.tasks)) throw new Error("--offline, --json and --tasks apply only to context");
+  if (options.command === "context" && options.tasks && options.offline) throw new Error("--tasks needs a live profile; remove --offline");
   if (options.command === "context" && (options.check || Object.keys(options.runtimeIds).length)) throw new Error("context reads existing bindings; --check and --runtime apply only to init");
   return options;
 }

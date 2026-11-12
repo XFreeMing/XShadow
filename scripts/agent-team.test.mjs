@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { apiClient, initializeTeam, loadTemplate, main, parseArgs, selectRuntimes } from "./agent-team.mjs";
-import { buildContext, formatContext, readLiveContext } from "./agent-team-context.mjs";
+import { buildContext, formatContext, readLiveContext, readTaskDiagnosis } from "./agent-team-context.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const template = loadTemplate(join(ROOT, "agent-team/team.json"));
@@ -16,6 +16,7 @@ function fixture() {
   let next = 1;
   const state = {
     agents: [], skills: [], squads: [], members: {}, bindings: {}, calls: [],
+    issues: [], tasks: [], wakeups: [],
     runtimes: Object.keys(template.runtime_limits).map((provider) => ({ id: `target-${provider}`, provider, name: provider, status: "online", daemon_id: "test-machine", max_concurrent_tasks: null })),
   };
   const modelLists = Object.fromEntries(state.runtimes.map((r) => [r.id, [...new Set(template.agents.filter((a) => a.provider === r.provider).map((a) => a.model))].map((id) => ({ id, thinking: { supported_levels: [{ value: "high" }] }, supports_explicit_standard_service_tier: true }))]));
@@ -25,6 +26,20 @@ function fixture() {
     const path = input.split("?")[0];
     const parts = path.split("/").filter(Boolean);
     if (path === "/api/me") return { id: "owner" };
+    if (path === "/api/issues") {
+      assert.equal(method, "GET");
+      return { issues: structuredClone(state.issues), total: state.issues.length };
+    }
+    if (path === "/api/agent-task-snapshot") {
+      assert.equal(method, "GET");
+      return structuredClone(state.tasks);
+    }
+    if (path === "/api/issue-wakeups") {
+      assert.equal(method, "GET");
+      const params = new URL(input, "http://fixture").searchParams;
+      const offset = Number(params.get("offset") ?? 0), limit = Number(params.get("limit") ?? 50);
+      return { items: structuredClone(state.wakeups.slice(offset, offset + limit)), total: state.wakeups.length, counts: {} };
+    }
     if (parts[1] === "runtimes") {
       if (method === "GET" && parts.length === 2) return structuredClone(state.runtimes);
       if (parts[3] === "models") return { status: "completed", supported: true, models: structuredClone(modelLists[parts[2]]) };
@@ -69,9 +84,260 @@ function fixture() {
 
 const options = { daemonId: "test-machine", log() {} };
 
+function openIssue(overrides) {
+  return {
+    id: "issue-fixture", workspace_id: "fixture-workspace", number: 1, identifier: "DEV-1", title: "fixture",
+    status: "in_progress", status_category: "in_progress", assignee_type: "agent", assignee_id: "unassigned",
+    parent_issue_id: null, stage: null, ...overrides,
+  };
+}
+
+function wakeupRule(overrides) {
+  return {
+    id: "wakeup-fixture", issue_id: "issue-fixture", kind: "event", mode: "once",
+    event_types: ["issue.status_changed"], enabled: true, issue_closed: false,
+    fire_count: 0, max_fires: null, expires_at: null, timed_out_at: null,
+    paused_reason: null, last_error: null, active_runs: 0, source: "member", rule: null, ...overrides,
+  };
+}
+
+test("task diagnosis separates runs, waiting parents, parked work, blockers and missing handoffs", async () => {
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  const agent = f.state.agents[0], squad = f.state.squads[0];
+  f.state.issues = [
+    openIssue({ id: "run", identifier: "DEV-10", assignee_id: agent.id }),
+    openIssue({ id: "parent", identifier: "DEV-11", assignee_type: "squad", assignee_id: squad.id }),
+    openIssue({ id: "child-a", identifier: "DEV-12", parent_issue_id: "parent", assignee_id: agent.id }),
+    openIssue({ id: "child-b", identifier: "DEV-13", parent_issue_id: "parent", assignee_id: agent.id }),
+    openIssue({ id: "backlog", identifier: "DEV-14", status: "backlog", status_category: "backlog", assignee_id: agent.id }),
+    openIssue({ id: "parked", identifier: "DEV-15", status: "backlog", status_category: "backlog", assignee_type: null, assignee_id: null }),
+    openIssue({ id: "blocked", identifier: "DEV-16", status: "blocked", status_category: "blocked", assignee_id: agent.id }),
+    openIssue({ id: "review", identifier: "DEV-17", status: "in_review", status_category: "in_review", assignee_id: agent.id }),
+    openIssue({ id: "idle", identifier: "DEV-18", assignee_id: agent.id }),
+    openIssue({ id: "event", identifier: "DEV-19", assignee_id: agent.id }),
+  ];
+  f.state.tasks = [
+    { id: "t1", issue_id: "run", agent_id: agent.id, status: "running" },
+    { id: "t2", issue_id: "run", agent_id: agent.id, status: "queued" },
+    { id: "t3", issue_id: "run", agent_id: agent.id, status: "completed" },
+    { id: "t4", issue_id: "idle", agent_id: agent.id, status: "failed" },
+  ];
+  f.state.wakeups = [wakeupRule({ id: "w1", issue_id: "child-b" }), wakeupRule({ id: "w2", issue_id: "event" })];
+  const live = await readLiveContext(f.api, template);
+  const start = f.state.calls.length;
+  const report = await readTaskDiagnosis(f.api, live, { now: Date.parse("2026-11-12T10:00:00Z") });
+  const by = Object.fromEntries(report.issues.map((i) => [i.identifier, i]));
+
+  assert.equal(report.status, "verified");
+  assert.equal(by["DEV-10"].category, "active_run");
+  assert.equal(by["DEV-10"].run_counts.running, 1);
+  assert.equal(by["DEV-10"].run_counts.queued, 1);
+  assert.equal(by["DEV-10"].run_counts.completed, undefined);
+  assert.equal(by["DEV-10"].owner, agent.name);
+  assert.equal(by["DEV-11"].category, "waiting_children");
+  assert.deepEqual(by["DEV-11"].children.map((c) => c.identifier), ["DEV-12", "DEV-13"]);
+  assert.equal(by["DEV-11"].children.find((c) => c.identifier === "DEV-12").category, "none");
+  assert.equal(by["DEV-11"].children.find((c) => c.identifier === "DEV-12").progressing, false);
+  assert.equal(by["DEV-11"].children.find((c) => c.identifier === "DEV-13").category, "continuation");
+  assert.match(by["DEV-11"].facts.join("；"), /1 项不会自行推进/);
+  assert.match(by["DEV-11"].facts.join("；"), /父项自身无有效接续/);
+  assert.equal(by["DEV-14"].category, "backlog_assigned");
+  assert.equal(by["DEV-15"].category, "backlog_unassigned");
+  assert.equal(by["DEV-16"].category, "blocked");
+  assert.equal(by["DEV-17"].category, "awaiting_review");
+  assert.equal(by["DEV-18"].category, "no_continuation");
+  assert.equal(by["DEV-19"].category, "waiting_continuation");
+  assert.match(by["DEV-19"].facts.join("；"), /外部条件未验证/);
+  assert.equal(report.counts.active_runs, 2);
+  assert.equal(report.summary.active_run, 1);
+
+  // One workspace-wide read per source — never one request per issue — and read-only.
+  const calls = f.state.calls.slice(start);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(([method]) => method === "GET"));
+  const text = formatContext({
+    version: 1, observed_at: "t", target: { profile: "fixture" }, tasks: report,
+    template: { agents: [], squads: [], common: "" },
+    live: { status: "verified", agents: [], squads: [], differences: [], runtimes: [] },
+  });
+  assert.match(text, /## 任务诊断/);
+  assert.match(text, /DEV-11/);
+  assert.match(text, /等待子项/);
+  assert.match(text, /业务状态不等于活动 run/);
+});
+
+test("expired, consumed and errored wakeups are not reported as usable continuations", async () => {
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  const agent = f.state.agents[0];
+  const now = Date.parse("2026-11-12T10:00:00Z");
+  f.state.issues = [
+    openIssue({ id: "expired", identifier: "DEV-20", assignee_id: agent.id }),
+    openIssue({ id: "consumed", identifier: "DEV-21", assignee_id: agent.id }),
+    openIssue({ id: "errored", identifier: "DEV-22", assignee_id: agent.id }),
+    openIssue({ id: "overdue", identifier: "DEV-23", assignee_id: agent.id }),
+    openIssue({ id: "scheduled", identifier: "DEV-24", assignee_id: agent.id }),
+    openIssue({ id: "paused", identifier: "DEV-25", assignee_id: agent.id }),
+  ];
+  f.state.wakeups = [
+    wakeupRule({ id: "w1", issue_id: "expired", expires_at: "2026-11-12T09:00:00Z" }),
+    wakeupRule({ id: "w2", issue_id: "consumed", mode: "once", fire_count: 1 }),
+    wakeupRule({ id: "w3", issue_id: "errored", last_error: "cannot resolve PR link" }),
+    wakeupRule({ id: "w4", issue_id: "overdue", kind: "at", event_types: [], next_fire_at: "2026-11-12T09:30:00Z" }),
+    wakeupRule({ id: "w5", issue_id: "scheduled", kind: "at", event_types: [], next_fire_at: "2026-11-12T12:00:00Z" }),
+    wakeupRule({ id: "w6", issue_id: "paused", paused_reason: "capacity" }),
+  ];
+  const live = await readLiveContext(f.api, template);
+  const report = await readTaskDiagnosis(f.api, live, { now });
+  const by = Object.fromEntries(report.issues.map((i) => [i.identifier, i]));
+
+  for (const [identifier, pattern] of [["DEV-20", /已过期/], ["DEV-21", /一次性规则已触发/], ["DEV-22", /规则错误/], ["DEV-23", /已到期但未触发/], ["DEV-25", /已暂停/]]) {
+    assert.equal(by[identifier].category, "no_continuation", identifier);
+    assert.match(by[identifier].facts.join("；"), pattern, identifier);
+  }
+  assert.equal(by["DEV-24"].category, "waiting_continuation");
+  assert.match(by["DEV-24"].facts.join("；"), /已配置定时唤醒/);
+});
+
+test("--tasks is explicit, read-only, and a failed query stays unverified instead of looking idle", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-team-tasks-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, "fixture"));
+  writeFileSync(join(dir, "fixture/config.json"), JSON.stringify({ server_url: "http://example.test", workspace_id: "fixture-workspace", token: "hidden-token" }));
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  const agent = f.state.agents[0];
+  f.state.issues = [openIssue({ id: "run", identifier: "DEV-10", assignee_id: agent.id })];
+  f.state.tasks = [{ id: "t1", issue_id: "run", agent_id: agent.id, status: "running" }];
+  const deps = { root: dir, env: {}, client: () => f.api };
+
+  const defaultStart = f.state.calls.length;
+  const plain = await buildContext(template, { profile: "fixture", profilesDir: dir }, deps);
+  assert.equal(plain.tasks, undefined);
+  assert.ok(f.state.calls.slice(defaultStart).every(([, path]) => !["/api/issues", "/api/agent-task-snapshot", "/api/issue-wakeups"].some((p) => path.split("?")[0] === p)));
+
+  const start = f.state.calls.length;
+  const report = await buildContext(template, { profile: "fixture", profilesDir: dir, tasks: true }, deps);
+  assert.equal(report.tasks.status, "verified");
+  assert.equal(report.tasks.issues[0].category, "active_run");
+  assert.ok(f.state.calls.slice(start).every(([method]) => method === "GET"));
+  assert.match(formatContext(report), /## 任务诊断/);
+  assert.match(formatContext(report), /DEV-10/);
+
+  const failing = { ...deps, client: () => async (method, path, body) => {
+    if (path === "/api/agent-task-snapshot") throw new Error("GET /api/agent-task-snapshot: HTTP 500 Bearer secret-token-value");
+    return f.api(method, path, body);
+  } };
+  const broken = await buildContext(template, { profile: "fixture", profilesDir: dir, tasks: true }, failing);
+  assert.equal(broken.tasks.status, "unavailable");
+  assert.match(broken.tasks.reason, /HTTP 500/);
+  assert.match(formatContext(broken), /未核验/);
+  assert.match(formatContext(broken), /不能据此认为没有运行/);
+  assert.doesNotMatch(JSON.stringify(broken), /hidden-token|secret-token-value/);
+
+  assert.equal(parseArgs(["context", "--tasks"]).tasks, true);
+  assert.throws(() => parseArgs(["init", "--tasks"]), /only to context/);
+  assert.throws(() => parseArgs(["context", "--offline", "--tasks"]), /needs a live profile/);
+  assert.equal(parseArgs(["context"]).tasks, undefined);
+});
+
+test("a condition-based event rule is a real continuation even without event_types", async () => {
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  const agent = f.state.agents[0];
+  f.state.issues = [openIssue({ id: "condition", identifier: "DEV-30", assignee_id: agent.id })];
+  f.state.wakeups = [wakeupRule({
+    id: "w1", issue_id: "condition", event_types: [],
+    condition: { type: "other_issue", state: "in_review", issue_id: "00000000-0000-0000-0000-000000000001", identifier: "DEV-5" },
+  })];
+  const live = await readLiveContext(f.api, template);
+  const report = await readTaskDiagnosis(f.api, live, { now: Date.parse("2026-11-12T10:00:00Z") });
+  const row = report.issues[0];
+  assert.equal(row.category, "waiting_continuation");
+  assert.match(row.facts.join("；"), /已配置条件 事项 DEV-5 达到 in_review（外部条件未验证）/);
+  assert.doesNotMatch(row.facts.join("；"), /缺少事件类型/);
+});
+
+test("unknown rule state and system barriers stay facts, not usable continuations", async () => {
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  const agent = f.state.agents[0], squad = f.state.squads[0];
+  f.state.issues = [
+    openIssue({ id: "unknown", identifier: "DEV-31", assignee_id: agent.id }),
+    openIssue({ id: "barrier", identifier: "DEV-32", assignee_id: agent.id }),
+    openIssue({ id: "parent", identifier: "DEV-33", assignee_type: "squad", assignee_id: squad.id }),
+    openIssue({ id: "child", identifier: "DEV-34", parent_issue_id: "parent", assignee_id: agent.id }),
+  ];
+  f.state.wakeups = [
+    wakeupRule({ id: "w1", issue_id: "unknown", condition: { type: "future_condition" } }),
+    wakeupRule({ id: "w2", issue_id: "barrier", event_types: [], rule: "child_done", system_remaining: 1 }),
+    wakeupRule({ id: "w3", issue_id: "child", condition: { type: "future_condition" } }),
+  ];
+  const live = await readLiveContext(f.api, template);
+  const report = await readTaskDiagnosis(f.api, live, { now: Date.parse("2026-11-12T10:00:00Z") });
+  const by = Object.fromEntries(report.issues.map((i) => [i.identifier, i]));
+  const facts = (id) => by[id].facts.join("；");
+
+  assert.equal(by["DEV-31"].category, "continuation_unverified");
+  assert.match(facts("DEV-31"), /部分规则无法验证，接续未核验/);
+  assert.ok(!facts("DEV-31").includes("无可用接续"));
+  assert.equal(by["DEV-32"].category, "no_continuation");
+  assert.match(facts("DEV-32"), /阶段屏障 child_done\(剩余 1\)（仅随子项完成，不保证唤醒执行）/);
+  assert.doesNotMatch(facts("DEV-32"), /可用接续 child_done/);
+  const child = by["DEV-33"].children.find((c) => c.identifier === "DEV-34");
+  assert.equal(child.category, "unverified");
+  assert.equal(child.unknown, true);
+  assert.equal(child.progressing, false);
+  assert.match(facts("DEV-33"), /1 项接续未核验，不能判定是否会推进/);
+  assert.doesNotMatch(facts("DEV-33"), /不会自行推进/);
+  assert.match(facts("DEV-33"), /父项自身无有效接续，需核对是否真在等待/);
+});
+
+test("a truncated wakeup read leaves continuation unknown instead of calling the handoff broken", async () => {
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  const agent = f.state.agents[0];
+  f.state.issues = [
+    openIssue({ id: "parent", identifier: "DEV-40", assignee_type: "squad", assignee_id: f.state.squads[0].id }),
+    openIssue({ id: "idle", identifier: "DEV-41", assignee_id: agent.id }),
+    openIssue({ id: "child", identifier: "DEV-42", parent_issue_id: "parent", assignee_id: agent.id }),
+  ];
+  // 501 rules the page cap cannot fully read; none of them belong to these issues.
+  f.state.wakeups = Array.from({ length: 501 }, (_, i) => wakeupRule({ id: `w${i}`, issue_id: "elsewhere", issue_identifier: "DEV-9" }));
+  const live = await readLiveContext(f.api, template);
+  const start = f.state.calls.length;
+  const report = await readTaskDiagnosis(f.api, live, { now: Date.parse("2026-11-12T10:00:00Z") });
+  const by = Object.fromEntries(report.issues.map((i) => [i.identifier, i]));
+
+  assert.equal(report.counts.wakeup_truncated, true);
+  assert.equal(report.counts.wakeup_rules, 500);
+  assert.equal(f.state.calls.slice(start).filter(([, path]) => path.startsWith("/api/issue-wakeups")).length, 5);
+  assert.equal(by["DEV-41"].category, "continuation_unverified");
+  assert.match(by["DEV-41"].facts.join("；"), /规则未完整读取，接续未核验/);
+  assert.ok(!by["DEV-41"].facts.join("；").includes("无可用接续"));
+  assert.equal(by["DEV-42"].category, "continuation_unverified");
+  const child = by["DEV-40"].children.find((c) => c.identifier === "DEV-42");
+  assert.equal(child.category, "unverified");
+  assert.equal(child.unknown, true);
+  assert.equal(child.progressing, false);
+  assert.match(by["DEV-40"].facts.join("；"), /1 项接续未核验，不能判定是否会推进/);
+  assert.doesNotMatch(by["DEV-40"].facts.join("；"), /不会自行推进/);
+  assert.match(by["DEV-40"].facts.join("；"), /父项自身接续未核验/);
+  assert.equal(by["DEV-40"].category, "waiting_children");
+  const text = formatContext({
+    version: 1, observed_at: "t", target: { profile: "fixture" }, tasks: report,
+    template: { agents: [], squads: [], common: "" },
+    live: { status: "verified", agents: [], squads: [], differences: [], runtimes: [] },
+  });
+  assert.match(text, /接续未核验/);
+  assert.match(text, /含接续未核验的子项/);
+  assert.doesNotMatch(text, /含不会自行推进的子项/);
+});
+
 test("portable template contains the current roster without machine identities or credentials", () => {
-  assert.equal(template.agents.length, 18);
-  assert.equal(template.skills.length, 13);
+  assert.equal(template.agents.length, 20);
+  assert.equal(template.skills.length, 15);
   assert.equal(template.squads.length, 5);
   const serialized = JSON.stringify(template);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
@@ -84,8 +350,8 @@ test("portable template contains the current roster without machine identities o
 test("new destination gets fresh references, prompts, skills and squad roles; rerun is a no-op", async () => {
   const f = fixture();
   const ids = await initializeTeam(f.api, template, options);
-  assert.equal(f.state.agents.length, 18);
-  assert.equal(f.state.skills.length, 13);
+  assert.equal(f.state.agents.length, 20);
+  assert.equal(f.state.skills.length, 15);
   assert.equal(f.state.squads.length, 5);
   for (const s of f.state.squads) {
     assert.doesNotMatch(s.instructions, /\{\{squad:/);
@@ -140,8 +406,8 @@ test("retry after a partial creation reuses completed objects", async () => {
   await assert.rejects(initializeTeam(api, template, options), /interrupted/);
   assert.equal(f.state.agents.length, 2);
   await initializeTeam(api, template, options);
-  assert.equal(f.state.agents.length, 18);
-  assert.equal(f.state.skills.length, 13);
+  assert.equal(f.state.agents.length, 20);
+  assert.equal(f.state.skills.length, 15);
 });
 
 test("readback detects a server that ignores the requested settings", async () => {
@@ -188,7 +454,7 @@ test("HTTP profile execution uses the selected account/workspace without an agen
   writeFileSync(join(dir, "fixture/config.json"), JSON.stringify(config));
   const args = ["init", "--profile", "fixture", "--profiles-dir", dir, ...f.state.runtimes.flatMap((r) => ["--runtime", `${r.provider}=${r.id}`])];
   await main(args, { MULTICA_TOKEN: "wrong-token", MULTICA_SERVER_URL: "https://wrong.invalid" });
-  assert.equal(f.state.agents.length, 18);
+  assert.equal(f.state.agents.length, 20);
   assert.throws(() => apiClient({ ...config, token: "" }), /Profile needs/);
 });
 
@@ -248,7 +514,7 @@ test("offline context never discovers a profile, connects, starts services or pr
     root: "/missing", client() { throw new Error("must not connect"); }, discoverProfile() { throw new Error("must not discover"); },
   });
   assert.equal(report.live.status, "offline");
-  assert.equal(report.template.agents.length, 18);
+  assert.equal(report.template.agents.length, 20);
   assert.match(formatContext(report), /仅仓库模板；实时状态未核验/);
   assert.doesNotMatch(formatContext(report), /已读取目标工作区实时配置/);
 });
@@ -274,7 +540,7 @@ test("local profile selection is explicit, overrideable and unavailable state st
   assert.doesNotMatch(JSON.stringify(local), /hidden-token/);
   const down = await buildContext(template, { profilesDir: dir }, { ...deps, client() { return async () => { throw new Error("service unavailable"); }; } });
   assert.equal(down.live.status, "unavailable");
-  assert.equal(down.template.agents.length, 18);
+  assert.equal(down.template.agents.length, 20);
   assert.match(formatContext(down), /无法比较/);
   const missing = await buildContext(template, { profile: "missing", profilesDir: dir }, deps);
   assert.equal(missing.live.status, "unavailable");
