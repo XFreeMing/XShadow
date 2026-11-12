@@ -160,7 +160,7 @@
     "project_conflict_description": "Su candidato y base se ocultaron. Recarga el plan actual antes de iniciar otra ejecución.",
     "project_conflict_reload": "Recargar plan",
     "project_conflict_generate": "Iniciar nueva ejecución",
-    "section_project_conflict": "Este plan o ejecución pertenece a otro proyecto. Su candidato se ocultó y tus cambios se conservan pero no se guardaron. Recarga el plan o inicia una nueva ejecución.",
+    "section_project_conflict": "Este plan o esta ejecución pertenece a otro proyecto. Las ediciones sin guardar de ese proyecto se conservan aquí, pero no se pueden guardar en este; recargar el plan actual las descarta.",
     "conflict_title": "El plan cambió en otro lugar",
     "conflict_description": "Tus cambios se conservan. Recarga la revisión {{revision}} para comparar, o guarda los tuyos encima.",
     "conflict_reload": "Cargar lo último",
@@ -212,6 +212,12 @@
     "dependency_reason": "Motivo",
     "add_dependency": "Añadir",
     "dependency_required": "Elige una tarea y escribe el motivo.",
-    "start_revision_conflict": "El plan cambió antes de iniciar la ejecución. Recarga el plan y vuelve a empezar."
+    "start_revision_conflict": "El plan cambió antes de iniciar la ejecución. Recarga el plan y vuelve a empezar.",
+    "start_unavailable": "Este objetivo o su agente de planificación ya no está disponible para ti.",
+    "generation_unavailable": "Esta ejecución de planificación no se puede leer aquí. Recarga el plan e inténtalo de nuevo.",
+    "generation_not_ready": "Este plan aún no está listo para aplicarse. Espera a que termine la ejecución y vuelve a intentarlo.",
+    "generation_already_applied": "Este plan ya se aplicó, así que este intento no guardó nada. Recarga el plan para ver la versión actual.",
+    "generation_retryable": "Aún no se pudo confirmar la ejecución del plan. Reintenta esta misma solicitud; tu texto se conserva.",
+    "binding_unknown": "Otro vínculo de tarea ({{type}})"
   }
 }

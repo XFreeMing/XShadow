@@ -160,7 +160,7 @@
     "project_conflict_description": "候補と根拠は非表示にしました。新しい実行の前に現在の計画を再読み込みしてください。",
     "project_conflict_reload": "計画を再読み込み",
     "project_conflict_generate": "新しい実行を開始",
-    "section_project_conflict": "この計画または実行は別のプロジェクトのものです。候補は非表示にし、編集内容は保持していますが保存されていません。計画を再読み込みするか、新しい実行を開始してください。",
+    "section_project_conflict": "このプランまたは計画実行は別のプロジェクトのものです。そのプロジェクトの未保存の編集はここに保持されますが、このプロジェクトには保存できません。現在のプランを再読み込みすると破棄されます。",
     "conflict_title": "計画が別の場所で変更されました",
     "conflict_description": "編集内容は保持されています。リビジョン {{revision}} を再読み込みして比較するか、自分の版で上書き保存してください。",
     "conflict_reload": "最新を読み込む",
@@ -212,6 +212,12 @@
     "dependency_reason": "理由",
     "add_dependency": "追加",
     "dependency_required": "タスクを選び、理由を入力してください。",
-    "start_revision_conflict": "実行を開始する前にプランが更新されました。プランを再読み込みしてからやり直してください。"
+    "start_revision_conflict": "実行を開始する前にプランが更新されました。プランを再読み込みしてからやり直してください。",
+    "start_unavailable": "この目標またはその計画エージェントを表示できなくなりました。",
+    "generation_unavailable": "この計画実行はここでは読み取れません。プランを再読み込みしてやり直してください。",
+    "generation_not_ready": "このプランはまだ適用できません。実行が完了してから、もう一度お試しください。",
+    "generation_already_applied": "このプランはすでに適用済みのため、今回の操作では何も保存されませんでした。最新のプランを再読み込みしてください。",
+    "generation_retryable": "計画の実行をまだ確認できません。同じリクエストを再試行してください。入力内容は保持されます。",
+    "binding_unknown": "その他のタスク紐付け（{{type}}）"
   }
 }

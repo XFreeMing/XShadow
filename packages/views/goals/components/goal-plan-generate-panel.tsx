@@ -217,6 +217,11 @@ export function GoalPlanGenerationPanel({
     const code = errorCode(err);
     if (code === "generation_request_conflict") return t(($) => $.plan.request_conflict);
     if (code === "goal_project_required") return t(($) => $.plan.project_required);
+    // The run's commit outcome is unknown; retrying the same request_key is
+    // how the server resolves it, so the retry must not rotate the key.
+    if (code === "goal_plan_generation_retryable") {
+      return t(($) => $.plan.generation_retryable);
+    }
     if (err instanceof ApiError && err.status === 403) {
       // The auth refusal this endpoint returns is "no access to this agent";
       // it says nothing about the goal or its project.

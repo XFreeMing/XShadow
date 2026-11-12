@@ -160,7 +160,7 @@
     "project_conflict_description": "Son candidat et sa base ont été masqués. Rechargez le plan actuel avant de démarrer une autre exécution.",
     "project_conflict_reload": "Recharger le plan",
     "project_conflict_generate": "Démarrer une nouvelle exécution",
-    "section_project_conflict": "Ce plan ou cette exécution appartient à un autre projet. Son candidat a été masqué et vos modifications sont conservées mais non enregistrées. Rechargez le plan ou démarrez une nouvelle exécution.",
+    "section_project_conflict": "Ce plan ou cette exécution appartient à un autre projet. Les modifications non enregistrées de ce projet sont conservées ici mais ne peuvent pas être enregistrées dans celui-ci ; recharger le plan actuel les supprime.",
     "conflict_title": "Le plan a changé ailleurs",
     "conflict_description": "Vos modifications sont conservées. Rechargez la révision {{revision}} pour comparer, ou enregistrez votre version par-dessus.",
     "conflict_reload": "Charger la dernière",
@@ -212,6 +212,12 @@
     "dependency_reason": "Pourquoi",
     "add_dependency": "Ajouter",
     "dependency_required": "Choisissez une tâche et indiquez la raison.",
-    "start_revision_conflict": "Le plan a changé avant le démarrage de l’exécution. Rechargez le plan, puis relancez."
+    "start_revision_conflict": "Le plan a changé avant le démarrage de l’exécution. Rechargez le plan, puis relancez.",
+    "start_unavailable": "Cet objectif ou son agent de planification ne vous est plus accessible.",
+    "generation_unavailable": "Cette exécution de planification n’est pas lisible ici. Rechargez le plan et réessayez.",
+    "generation_not_ready": "Ce plan n'est pas encore prêt à être appliqué. Attendez la fin de l'exécution, puis réessayez.",
+    "generation_already_applied": "Ce plan a déjà été appliqué ; cette tentative n'a rien enregistré. Rechargez le plan pour voir la version actuelle.",
+    "generation_retryable": "L'exécution du plan n'a pas encore pu être confirmée. Réessayez cette même demande ; votre texte est conservé.",
+    "binding_unknown": "Autre liaison de tâche ({{type}})"
   }
 }

@@ -738,6 +738,47 @@ describe("GoalPlanSection", () => {
     expect(second.expected_revision).toBe(first.expected_revision);
   });
 
+  it("retries an unconfirmed run with the same key and body", async () => {
+    api.createGoalPlanGeneration
+      .mockRejectedValueOnce(
+        new ApiError("unavailable", 503, "Unavailable", {
+          code: "goal_plan_generation_retryable",
+        }),
+      )
+      .mockResolvedValueOnce(generation());
+
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByTestId("goal-plan-section");
+    const intent = screen.getByLabelText("What should the plan deliver?");
+    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await user.clear(intent);
+    await user.type(intent, "First intent");
+    await user.click(generate);
+
+    expect(
+      await screen.findByText(
+        "The planning run couldn't be confirmed yet. Retry this request; your text is kept.",
+      ),
+    ).toBeInTheDocument();
+
+    const first = api.createGoalPlanGeneration.mock.calls[0]![1];
+    // The commit outcome is unknown, so the retry has to resolve the same
+    // request even though the form no longer says the same thing.
+    await user.clear(intent);
+    await user.type(intent, "Changed intent");
+    await user.click(generate);
+    await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(2));
+
+    const second = api.createGoalPlanGeneration.mock.calls[1]![1];
+    expect(second.request_key).toBe(first.request_key);
+    expect(second.intent).toBe("First intent");
+    expect(second.agent_id).toBe(first.agent_id);
+    expect(second.expected_revision).toBe(first.expected_revision);
+  });
+
   it("uses a new key and body only for an explicit new run", async () => {
     api.createGoalPlanGeneration.mockResolvedValue(generation({ state: "failed" }));
     api.getGoalPlanGeneration.mockResolvedValue(generation({ state: "failed" }));

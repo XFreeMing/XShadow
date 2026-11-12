@@ -160,7 +160,7 @@
     "project_conflict_description": "Its candidate and basis were hidden. Reload the current plan before starting another run.",
     "project_conflict_reload": "Reload plan",
     "project_conflict_generate": "Start a new run",
-    "section_project_conflict": "This plan or planning run belongs to another project. Its candidate was hidden and your edits are kept but not saved. Reload the plan, or start a new run.",
+    "section_project_conflict": "This plan or planning run belongs to another project. Unsaved edits from that project are kept here but can't be saved to this one; reloading the current plan discards them.",
     "conflict_title": "The plan changed elsewhere",
     "conflict_description": "Your edits are kept. Reload revision {{revision}} to compare, or save yours over it.",
     "conflict_reload": "Load latest",
@@ -212,6 +212,12 @@
     "dependency_reason": "Why",
     "add_dependency": "Add",
     "dependency_required": "Choose a task and write the reason.",
-    "start_revision_conflict": "The plan changed before the run started. Reload the plan and start again."
+    "start_revision_conflict": "The plan changed before the run started. Reload the plan and start again.",
+    "start_unavailable": "This goal or its planning agent is no longer available to you.",
+    "generation_unavailable": "This planning run can't be read here. Reload the plan and try again.",
+    "generation_not_ready": "This plan isn't ready to apply yet. Wait for the run to finish, then try again.",
+    "generation_already_applied": "This plan was already applied, so this attempt saved nothing. Reload the plan to see the current version.",
+    "generation_retryable": "The planning run couldn't be confirmed yet. Retry this request; your text is kept.",
+    "binding_unknown": "Other task link ({{type}})"
   }
 }
