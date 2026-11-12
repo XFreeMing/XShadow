@@ -42,6 +42,7 @@ export type TabVisual =
 export type TabLabelKey =
   | "issue"
   | "project"
+  | "goal"
   | "autopilot"
   | "agent"
   | "member"
@@ -81,6 +82,7 @@ export type InboxSelectionData =
 export interface TabEntityData {
   issue?: Pick<Issue, "identifier" | "title" | "status" | "status_category">;
   project?: { icon: string | null; title: string };
+  goal?: { title: string };
   autopilot?: { title: string };
   /** Resolved display name for an actor subject. */
   actorName?: string;
@@ -176,6 +178,11 @@ export function resolveTabPresentation(
       return {
         visual: { kind: "project-icon", icon: data.project?.icon ?? null },
         title: textOr(data.project?.title, "project"),
+      };
+    case "goal":
+      return {
+        visual: { kind: "icon", icon: "Target" },
+        title: textOr(data.goal?.title, "goal"),
       };
     case "autopilot":
       return {

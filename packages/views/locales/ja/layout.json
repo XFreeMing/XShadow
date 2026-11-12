@@ -5,6 +5,7 @@
     "my_issues": "マイタスク",
     "issues": "タスク",
     "projects": "プロジェクト",
+    "goals": "ゴール",
     "autopilots": "オートパイロット",
     "agents": "エージェント",
     "squads": "スクワッド",
@@ -17,6 +18,7 @@
   "tab": {
     "issue": "タスク",
     "project": "プロジェクト",
+    "goal": "ゴール",
     "autopilot": "オートパイロット",
     "agent": "エージェント",
     "member": "メンバー",

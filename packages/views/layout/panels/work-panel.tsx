@@ -12,11 +12,12 @@ import { useSidebarKeptStore } from "@multica/core/issues/stores/sidebar-kept-st
 import { useSidebarTreeStore } from "@multica/core/issues/stores/sidebar-tree-store";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type { Project } from "@multica/core/types";
+import { Target } from "@multica/ui/icons";
 import { useNavigation } from "../../navigation";
 import { IssueContextMenuProvider } from "../../issues/actions";
 import { useIssueViewActions } from "../../issue-views/use-view-actions";
 import { useT } from "../../i18n";
-import { PanelBody, PanelHeader, isPathWithin } from "../panel-nav";
+import { PanelBody, PanelHeader, PanelLink, PanelList, PanelSection, isPathWithin } from "../panel-nav";
 import { PinnedSection, usePanelPins } from "./pinned-section";
 import { useKeptActiveItem } from "./sidebar-tree";
 import { ProjectsSection, useIssueInTree } from "./work-tree";
@@ -183,6 +184,19 @@ export function WorkPanel() {
             <div data-pinned-section className="contents">
               <PinnedSection pins={pins} wsId={wsId} />
             </div>
+          )}
+
+          {wsId && (
+            <PanelSection label={t(($) => $.nav.goals)}>
+              <PanelList>
+                <PanelLink
+                  href={p.goals()}
+                  label={t(($) => $.nav.goals)}
+                  active={isPathWithin(pathname, p.goals())}
+                  icon={<Target />}
+                />
+              </PanelList>
+            </PanelSection>
           )}
 
           {wsId && (
