@@ -77,6 +77,7 @@ describe("GoalDetailPage", () => {
     deleteGoal: vi.fn(),
     unlinkGoalIssue: vi.fn(),
     linkGoalIssue: vi.fn(),
+    getGoalPlan: vi.fn(),
   };
 
   beforeEach(() => {
@@ -90,6 +91,18 @@ describe("GoalDetailPage", () => {
     api.deleteGoal.mockResolvedValue(undefined);
     api.unlinkGoalIssue.mockResolvedValue(undefined);
     api.linkGoalIssue.mockResolvedValue(undefined);
+    api.getGoalPlan.mockResolvedValue({
+      id: null,
+      goal_id: "goal-1",
+      project_id: null,
+      revision: 0,
+      state: "draft",
+      items: [],
+      edges: [],
+      context_snapshot: {},
+      created_at: null,
+      updated_at: null,
+    });
     setApiInstance(api as unknown as ApiClient);
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
