@@ -323,6 +323,12 @@ type childProc struct {
 	cmd  *exec.Cmd
 	log  *os.File
 	done chan error
+
+	// stopOnce makes cleanup single-shot: the t.Cleanup registered right after a
+	// successful start and any explicit stop call share one signal sequence, so
+	// an early failure never stops the same process twice.
+	stopOnce   sync.Once
+	stopResult map[string]any
 }
 
 func startChild(t *testing.T, name, workDir, bin string, args, env []string, logPath string) *childProc {
@@ -345,28 +351,110 @@ func startChild(t *testing.T, name, workDir, bin string, args, env []string, log
 		t.Fatalf("start %s: %v", name, err)
 	}
 	p := &childProc{name: name, cmd: cmd, log: logFile, done: make(chan error, 1)}
+	// Register cleanup before anything else can fail. Every later t.Fatal or
+	// panic path (health check, PID validation, daemon log creation or start)
+	// then unwinds through this stop without a separate defer having to be
+	// reached first.
+	t.Cleanup(func() { p.stop(t, 30*time.Second) })
 	go func() { p.done <- cmd.Wait() }()
 	t.Logf("%s started pid=%d", name, cmd.Process.Pid)
 	return p
 }
 
+// stop terminates exactly the process group this test started (Setpgid makes
+// the child pid the group id) and records how it exited. Repeated calls return
+// the first result and send no further signal.
 func (p *childProc) stop(t *testing.T, timeout time.Duration) map[string]any {
 	t.Helper()
-	result := map[string]any{"name": p.name, "pid": p.cmd.Process.Pid}
+	p.stopOnce.Do(func() { p.stopResult = p.stopProcess(t, timeout) })
+	return p.stopResult
+}
+
+func (p *childProc) stopProcess(t *testing.T, timeout time.Duration) map[string]any {
+	result := map[string]any{"name": p.name, "signals_sent": 0}
 	if p.cmd.Process == nil {
+		result["pid"] = 0
+		result["stopped_by"] = "not-started"
 		return result
 	}
-	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
+	pid := p.cmd.Process.Pid
+	result["pid"] = pid
+	if pid <= 0 {
+		result["stopped_by"] = "not-started"
+		return result
+	}
+	result["signals_sent"] = 1
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+		result["signal_error"] = err.Error()
+	}
 	select {
 	case <-p.done:
 		result["stopped_by"] = "SIGTERM"
 	case <-time.After(timeout):
-		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+		result["signals_sent"] = 2
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		<-p.done
 		result["stopped_by"] = "SIGKILL"
 	}
 	p.log.Close()
 	return result
+}
+
+// chainCleanup collects every child started by the chain test. The report is
+// written from a t.Cleanup registered before the first start, so it runs after
+// the per-process cleanups no matter where the test stopped.
+type chainCleanup struct {
+	mu         sync.Mutex
+	procs      []*childProc
+	stablePID  int
+	profileDir string
+}
+
+func (c *chainCleanup) add(p *childProc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.procs = append(c.procs, p)
+}
+
+func (c *chainCleanup) write(t *testing.T, artifacts, pat string) {
+	report := map[string]any{"stable_daemon_pid": c.stablePID, "proxy": "closed"}
+	processes := []map[string]any{}
+	touched := false
+	c.mu.Lock()
+	procs := append([]*childProc(nil), c.procs...)
+	c.mu.Unlock()
+	for _, p := range procs {
+		res := p.stop(t, 30*time.Second)
+		processes = append(processes, res)
+		report[p.name] = res
+		if pid, ok := res["pid"].(int); ok && c.stablePID != 0 && pid == c.stablePID {
+			touched = true
+		}
+	}
+	report["processes"] = processes
+	report["stable_daemon_touched"] = touched
+	for _, name := range []string{"server", "daemon"} {
+		if res, ok := report[name].(map[string]any); ok {
+			report[name+"_pid"] = res["pid"]
+		}
+	}
+
+	// The foreground daemon routes structured logs into its profile's rotating
+	// daemon.log rather than the inherited stdout, so copy it out of the
+	// temporary HOME before it disappears.
+	copied := []string{}
+	for _, name := range []string{"daemon.log", "daemon.err.log"} {
+		raw, err := os.ReadFile(filepath.Join(c.profileDir, name))
+		if err != nil {
+			continue
+		}
+		if os.WriteFile(filepath.Join(artifacts, "profile-"+name), raw, 0o600) == nil {
+			copied = append(copied, "profile-"+name)
+		}
+	}
+	report["profile_logs"] = copied
+	writeArtifact(t, artifacts, "cleanup.json", report)
+	assertNoCredentials(t, artifacts, pat)
 }
 
 // stableDaemonPID reads the daemon.port record of the host's stable daemon.
@@ -587,12 +675,15 @@ func TestGoalPlanProcessChain(t *testing.T) {
 
 	httpc := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
 
+	// Register the evidence writer before starting anything: child cleanups are
+	// registered later and therefore run first, so cleanup.json always reflects
+	// the stop that already happened — including when the test fails right after
+	// the server became healthy and before the daemon could start.
+	cleanup := &chainCleanup{stablePID: stablePID, profileDir: daemonHomeConfigDir}
+	t.Cleanup(func() { cleanup.write(t, cfg.artifacts, profile.Token) })
+
 	server := startChild(t, "server", root, cfg.serverBin, nil, serverEnv, filepath.Join(cfg.artifacts, "server.log"))
-	defer func() {
-		if server.cmd.Process != nil {
-			t.Logf("server pid=%d", server.cmd.Process.Pid)
-		}
-	}()
+	cleanup.add(server)
 	if !waitHTTPOK(httpc, serverBase+"/health", 90*time.Second) {
 		t.Fatalf("server did not become healthy; see %s", filepath.Join(cfg.artifacts, "server.log"))
 	}
@@ -635,33 +726,8 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		"--no-auto-reload",
 	}
 	daemon := startChild(t, "daemon", root, cfg.cliBin, daemonArgs, daemonEnv, filepath.Join(cfg.artifacts, "daemon.log"))
+	cleanup.add(daemon)
 
-	cleanup := map[string]any{}
-	defer func() {
-		cleanup["daemon"] = daemon.stop(t, 30*time.Second)
-		cleanup["server"] = server.stop(t, 30*time.Second)
-		cleanup["proxy"] = "closed"
-		cleanup["daemon_pid"] = daemon.cmd.Process.Pid
-		cleanup["server_pid"] = server.cmd.Process.Pid
-		cleanup["stable_daemon_pid"] = stablePID
-		cleanup["stable_daemon_touched"] = stablePID != 0 && (stablePID == daemon.cmd.Process.Pid || stablePID == server.cmd.Process.Pid)
-		// The foreground daemon routes structured logs into its profile's
-		// rotating daemon.log rather than the inherited stdout, so copy it out
-		// of the temporary HOME before it disappears.
-		copied := []string{}
-		for _, name := range []string{"daemon.log", "daemon.err.log"} {
-			raw, err := os.ReadFile(filepath.Join(daemonHomeConfigDir, name))
-			if err != nil {
-				continue
-			}
-			if os.WriteFile(filepath.Join(cfg.artifacts, "profile-"+name), raw, 0o600) == nil {
-				copied = append(copied, "profile-"+name)
-			}
-		}
-		cleanup["profile_logs"] = copied
-		writeArtifact(t, cfg.artifacts, "cleanup.json", cleanup)
-		assertNoCredentials(t, cfg.artifacts, profile.Token)
-	}()
 	if stablePID != 0 && (stablePID == daemon.cmd.Process.Pid || stablePID == server.cmd.Process.Pid) {
 		t.Fatalf("started pid collides with the stable daemon pid %d; refusing to continue", stablePID)
 	}
@@ -797,17 +863,17 @@ func TestGoalPlanProcessChain(t *testing.T) {
 	t.Logf("generation %s queued task=%s", created.ID, created.TaskID)
 
 	writeArtifact(t, cfg.artifacts, "fixtures.json", map[string]any{
-		"project_id":   project.ID,
-		"resource_id":  resource.ID,
-		"agent_id":     agent.ID,
-		"goal_id":      goal.ID,
+		"project_id":    project.ID,
+		"resource_id":   resource.ID,
+		"agent_id":      agent.ID,
+		"goal_id":       goal.ID,
 		"generation_id": created.ID,
-		"task_id":      created.TaskID,
-		"runtime_id":   runtimeID,
-		"daemon_id":    daemonID,
-		"context_path": contextPath,
-		"context_sha":  contextSHA,
-		"marker":       marker,
+		"task_id":       created.TaskID,
+		"runtime_id":    runtimeID,
+		"daemon_id":     daemonID,
+		"context_path":  contextPath,
+		"context_sha":   contextSHA,
+		"marker":        marker,
 	})
 
 	var final struct {
