@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { apiClient, initializeTeam, loadTemplate, main, parseArgs, selectRuntimes } from "./agent-team.mjs";
+import { buildContext, formatContext, readLiveContext } from "./agent-team-context.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const template = loadTemplate(join(ROOT, "agent-team/team.json"));
@@ -197,4 +198,84 @@ test("Make dispatches init exactly once including parallel make and never combin
   assert.throws(() => execFileSync("make", ["-n", "agent", "init", "down"], { cwd: ROOT, stdio: "pipe" }));
   assert.throws(() => parseArgs(["init", "--profile", "../wrong"]), /Invalid profile/);
   assert.throws(() => parseArgs(["init", "--runtime", "codex=one", "--runtime", "codex=two"]), /repeated runtime/);
+  const context = execFileSync("make", ["-n", "-j", "agent", "context", "ARGS=--offline"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(context.split("\n").filter((line) => line.includes("node scripts/agent-team.mjs context")).length, 1);
+  assert.throws(() => execFileSync("make", ["-n", "agent", "init", "context"], { cwd: ROOT, stdio: "pipe" }));
+  assert.throws(() => parseArgs(["init", "--offline"]), /only to context/);
+  assert.throws(() => parseArgs(["context", "--runtime", "grok=one"]), /reads existing bindings/);
+});
+
+test("live context is read-only, includes the whole workspace and reports actionable configuration drift", async () => {
+  const f = fixture();
+  const ids = await initializeTeam(f.api, template, options);
+  const start = f.state.calls.length;
+  const initial = await readLiveContext(f.api, template);
+  assert.equal(initial.status, "verified");
+  assert.deepEqual(initial.differences, []);
+  assert.ok(f.state.calls.slice(start).every(([method]) => method === "GET"));
+
+  const pm = f.state.agents.find((a) => a.id === ids.agents.pm);
+  pm.model = "new-model";
+  pm.instructions = "changed private prompt";
+  pm.custom_env = { API_KEY: "secret-never-output" };
+  pm.mcp_config = { secret: "secret-never-output" };
+  f.state.skills[0].content = "changed skill body";
+  f.state.members[ids.squads.delivery][1].role = "Changed role";
+  f.state.agents.push({ id: "added-in-ui", name: "New specialist", model: "another-model", custom_env: { KEY: "secret-never-output" } });
+  f.state.bindings["added-in-ui"] = [];
+  f.state.runtimes[0].status = "offline";
+  f.state.runtimes[0].custom_env = { KEY: "secret-never-output" };
+  const current = await readLiveContext(f.api, template);
+  assert.ok(current.differences.some((d) => d.name === pm.name && d.fields.includes("model") && d.fields.includes("instructions")));
+  assert.ok(current.differences.some((d) => d.kind === "skill" && d.fields.includes("content")));
+  assert.ok(current.differences.some((d) => d.kind === "squad" && d.fields.includes("members")));
+  assert.ok(current.differences.some((d) => d.name === "New specialist" && d.type === "extra"));
+  assert.ok(current.runtimes.some((r) => r.status === "offline"));
+  assert.doesNotMatch(JSON.stringify(current), /secret-never-output|changed private prompt|changed skill body/);
+});
+
+test("context distinguishes missing and renamed members from an unverified workspace", async () => {
+  const f = fixture();
+  await initializeTeam(f.api, template, options);
+  f.state.agents[0].name = "Renamed chief";
+  const current = await readLiveContext(f.api, template);
+  assert.ok(current.differences.some((d) => d.kind === "agent" && d.name === template.agents[0].name && d.type === "missing"));
+  assert.ok(current.differences.some((d) => d.name === "Renamed chief" && d.type === "extra"));
+});
+
+test("offline context never discovers a profile, connects, starts services or pretends to be live", async () => {
+  const report = await buildContext(template, { offline: true }, {
+    root: "/missing", client() { throw new Error("must not connect"); }, discoverProfile() { throw new Error("must not discover"); },
+  });
+  assert.equal(report.live.status, "offline");
+  assert.equal(report.template.agents.length, 18);
+  assert.match(formatContext(report), /仅仓库模板；实时状态未核验/);
+  assert.doesNotMatch(formatContext(report), /已读取目标工作区实时配置/);
+});
+
+test("local profile selection is explicit, overrideable and unavailable state stays honest", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-team-context-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, "agent-team"));
+  for (const profile of ["local-target", "explicit-target"]) {
+    mkdirSync(join(dir, profile));
+    writeFileSync(join(dir, profile, "config.json"), JSON.stringify({ server_url: "http://example.test", workspace_id: profile, token: "hidden-token" }));
+  }
+  writeFileSync(join(dir, "agent-team/local.json"), JSON.stringify({ profile: "local-target" }));
+  const f = fixture(); await initializeTeam(f.api, template, options);
+  const seen = [];
+  const deps = { root: dir, env: { MULTICA_DEV_PROFILE: "wrong-target" }, client(config) { seen.push(config.workspace_id); return f.api; } };
+  const local = await buildContext(template, { profilesDir: dir }, deps);
+  assert.equal(local.target.profile, "local-target");
+  assert.equal(local.live.status, "verified");
+  const explicit = await buildContext(template, { profile: "explicit-target", profilesDir: dir }, deps);
+  assert.equal(explicit.target.profile, "explicit-target");
+  assert.deepEqual(seen, ["local-target", "explicit-target"]);
+  assert.doesNotMatch(JSON.stringify(local), /hidden-token/);
+  const down = await buildContext(template, { profilesDir: dir }, { ...deps, client() { return async () => { throw new Error("service unavailable"); }; } });
+  assert.equal(down.live.status, "unavailable");
+  assert.equal(down.template.agents.length, 18);
+  assert.match(formatContext(down), /无法比较/);
+  const missing = await buildContext(template, { profile: "missing", profilesDir: dir }, deps);
+  assert.equal(missing.live.status, "unavailable");
 });
