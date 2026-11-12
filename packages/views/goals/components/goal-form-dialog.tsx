@@ -89,6 +89,9 @@ export function GoalFormDialog({
   const statusEditable =
     !goal || (EDITABLE_GOAL_STATUSES as readonly string[]).includes(goal.status);
   const projectLocked = !!goal && linkedIssueCount > 0;
+  // Clearing the project opens the goal to the whole workspace. Warn before
+  // the save, since the post-save list refresh cannot undo the decision.
+  const movingToWorkspace = !!goal?.project_id && projectId === null;
 
   const statusItems = EDITABLE_GOAL_STATUSES.map((value) => ({
     value,
@@ -226,6 +229,11 @@ export function GoalFormDialog({
               {projectLocked && (
                 <p className="text-caption text-muted-foreground">
                   {t(($) => $.form.project_locked)}
+                </p>
+              )}
+              {movingToWorkspace && (
+                <p className="text-caption text-muted-foreground">
+                  {t(($) => $.detail.project_moved_scope)}
                 </p>
               )}
             </div>
