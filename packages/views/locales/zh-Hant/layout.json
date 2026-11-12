@@ -5,6 +5,7 @@
     "my_issues": "我的任務",
     "issues": "任務",
     "projects": "專案",
+    "goals": "目標",
     "autopilots": "自動化",
     "agents": "AI 代理",
     "squads": "小隊",
@@ -17,6 +18,7 @@
   "tab": {
     "issue": "任務",
     "project": "專案",
+    "goal": "目標",
     "autopilot": "自動化",
     "agent": "AI 代理",
     "member": "成員",
