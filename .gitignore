@@ -58,6 +58,7 @@ apps/web/test-results/
 !.multica/environments.toml
 
 # local settings
+/agent-team/local.json
 .claude/
 .tool-versions
 
