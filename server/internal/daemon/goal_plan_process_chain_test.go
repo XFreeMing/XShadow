@@ -8,9 +8,10 @@ package daemon_test
 // tree, forces task claiming over the production HTTP route (the transport
 // proxy below refuses WebSocket upgrades), and lets a test-owned `opencode`
 // executable read the prompt the daemon received. The fake executor locates the
-// controlled local_directory file through the absolute path in the prompt,
-// reads it, and submits the plan with this tree's CLI through the real
-// task-token auth path.
+// controlled local_directory checkout through the absolute path in the prompt,
+// reads its repo SHA and file bytes, reads a seeded existing task through the
+// run's own task-token authorization, and submits the plan with this tree's CLI
+// through the real task-token auth path.
 //
 // Everything is opt-in because it needs a migrated, isolated database and two
 // built binaries:
@@ -55,6 +56,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -310,25 +312,141 @@ esac
 cat > "$D/prompt.txt"
 pwd > "$D/pwd.txt"
 tok="$MULTICA_TOKEN"
-printf 'task=%s\nagent=%s\nserver=%s\ntoken_prefix=%s\ntoken_len=%s\n' \
-  "$MULTICA_TASK_ID" "$MULTICA_AGENT_ID" "$MULTICA_SERVER_URL" \
+printf 'task=%s\nagent=%s\nworkspace=%s\nserver=%s\ntoken_prefix=%s\ntoken_len=%s\n' \
+  "$MULTICA_TASK_ID" "$MULTICA_AGENT_ID" "$MULTICA_WORKSPACE_ID" "$MULTICA_SERVER_URL" \
   "$(printf '%s' "$tok" | cut -c1-4)" "$(printf '%s' "$tok" | wc -c)" > "$D/task-env.txt"
 goal=$(sed -n 's/.*--goal \([0-9a-f-]*\) --generation.*/\1/p' "$D/prompt.txt" | head -n 1)
 gen=$(sed -n 's/.*--generation \([0-9a-f-]*\).*/\1/p' "$D/prompt.txt" | head -n 1)
+proj=$(sed -n 's/.*- project_id: \([0-9a-f-]*\).*/\1/p' "$D/prompt.txt" | head -n 1)
 path=$(sed -n 's/.*"local_path":[[:space:]]*"\([^"]*\)".*/\1/p' "$D/prompt.txt" | head -n 1)
 rid=$(sed -n 's/.*- id=\([0-9a-f-]*\) type=local_directory.*/\1/p' "$D/prompt.txt" | head -n 1)
 [ -z "$rid" ] && rid="$path"
-printf 'goal=%s\ngeneration=%s\nresource_path=%s\nresource_id=%s\n' "$goal" "$gen" "$path" "$rid" > "$D/parsed.txt"
-if [ -z "$goal" ] || [ -z "$gen" ] || [ -z "$path" ]; then
-  echo "prompt parse failed: goal=$goal gen=$gen path=$path" > "$D/cli.err"
+printf 'goal=%s\ngeneration=%s\nproject=%s\nresource_path=%s\nresource_id=%s\n' "$goal" "$gen" "$proj" "$path" "$rid" > "$D/parsed.txt"
+if [ -z "$goal" ] || [ -z "$gen" ] || [ -z "$proj" ] || [ -z "$path" ]; then
+  echo "prompt parse failed: goal=$goal gen=$gen project=$proj path=$path" > "$D/cli.err"
   exit 2
 fi
-content=$(cat "$path/context.md")
-sha=$(sha256sum "$path/context.md" | cut -d' ' -f1)
-printf 'context_sha256=%s\ncontext=%s\n' "$sha" "$content" > "$D/context-read.txt"
-cat > "$D/plan.json" <<PLAN
-{"items":[{"title":"Process chain item","outcome":"The planning run produced this item from the resource it actually read.","acceptance_criteria":"The stored candidate records the controlled context digest.","evidence_refs":[{"kind":"file","ref":"$path/context.md","version":"sha256:$sha","note":"$content"}],"binding":{"type":"new"}}],"edges":[],"context_snapshot":{"files":[{"path":"$path/context.md","summary":"$content"}],"resources":[{"id":"$rid","read":true}],"read_at":"2026-11-12T00:00:00Z"}}
-PLAN
+# The controlled local_directory is a real checkout; read its actual HEAD.
+repo_sha=$(git -C "$path" rev-parse HEAD 2> "$D/git.err")
+# Read the file once and hash exactly the bytes that were read.
+cat "$path/context.md" > "$D/context-read.bin"
+sha=$(sha256sum "$D/context-read.bin" | cut -d' ' -f1)
+content=$(cat "$D/context-read.bin")
+read_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Read the seeded existing task through the run's own task-token authorization.
+"$MULTICA_CLI_PATH" issue list --project "$proj" --output json > "$D/issues.json" 2> "$D/issues.err"
+printf '%s\n' "$?" > "$D/issues.rc"
+issue_line=$(python3 - "$D/issues.json" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+issues = doc.get("issues") or []
+pick = next((i for i in issues if str(i.get("title", "")).startswith("DEV-6 chain existing task")), issues[0] if issues else None)
+if not pick:
+    sys.exit(1)
+print("\t".join([str(pick.get("id", "")), str(pick.get("revision", 0)), str(pick.get("title", "")), str(pick.get("identifier", ""))]))
+PY
+)
+issue_id=$(printf '%s' "$issue_line" | cut -f1)
+issue_rev=$(printf '%s' "$issue_line" | cut -f2)
+issue_title=$(printf '%s' "$issue_line" | cut -f3)
+issue_ident=$(printf '%s' "$issue_line" | cut -f4)
+printf 'issue_id=%s\nrevision=%s\ntitle=%s\nidentifier=%s\nread_at=%s\n' \
+  "$issue_id" "$issue_rev" "$issue_title" "$issue_ident" "$read_at" > "$D/tasks-read.txt"
+printf 'context_sha256=%s\ncontext=%s\nrepo_sha=%s\nread_at=%s\n' "$sha" "$content" "$repo_sha" "$read_at" > "$D/context-read.txt"
+if [ -z "$repo_sha" ] || [ -z "$issue_id" ] || [ -z "$issue_rev" ]; then
+  echo "controlled read failed: repo_sha=$repo_sha issue_id=$issue_id revision=$issue_rev" > "$D/cli.err"
+  exit 3
+fi
+CHAIN_REPO_SHA="$repo_sha" CHAIN_CONTEXT_SHA="$sha" CHAIN_CONTEXT_CONTENT="$content" \
+CHAIN_READ_AT="$read_at" CHAIN_ISSUE_ID="$issue_id" CHAIN_ISSUE_REV="$issue_rev" \
+CHAIN_ISSUE_TITLE="$issue_title" CHAIN_ISSUE_IDENT="$issue_ident" \
+CHAIN_PATH="$path" CHAIN_RESOURCE_ID="$rid" \
+python3 - "$D/plan.json" <<'PY'
+import json, os, sys
+
+env = os.environ
+item_a = "a1111111-1111-4111-8111-111111111111"
+item_b = "b2222222-2222-4222-8222-222222222222"
+item_c = "c3333333-3333-4333-8333-333333333333"
+file_ref = {
+    "kind": "file",
+    "ref": env["CHAIN_PATH"] + "/context.md",
+    "version": "sha256:" + env["CHAIN_CONTEXT_SHA"],
+    "note": env["CHAIN_CONTEXT_CONTENT"],
+}
+task_ref = {
+    "kind": "task",
+    "ref": env["CHAIN_ISSUE_ID"],
+    "version": "revision " + env["CHAIN_ISSUE_REV"],
+    "note": env["CHAIN_ISSUE_TITLE"] + " (" + env["CHAIN_ISSUE_IDENT"] + ")",
+}
+plan = {
+    "items": [
+        {
+            "id": item_a,
+            "title": "Controlled checkout item",
+            "outcome": "The planning run produced this item from the checkout it actually read.",
+            "acceptance_criteria": "The stored candidate records the checkout repo SHA and the digest of the bytes read.",
+            "evidence_refs": [file_ref],
+            "binding": {"type": "new"},
+            "coordination": {"parallel_reason": "Independent of the seeded existing task; both can start together."},
+            "stage": None,
+        },
+        {
+            "id": item_b,
+            "title": "Existing task item",
+            "outcome": "The planning run read the seeded task through its task-token authorization.",
+            "acceptance_criteria": "The stored evidence names the task UUID and the revision that was read.",
+            "evidence_refs": [task_ref],
+            "binding": {"type": "existing", "issue_id": env["CHAIN_ISSUE_ID"]},
+            "coordination": {"parallel_reason": "Read-only task evidence; independent of the checkout item."},
+            "stage": None,
+        },
+        {
+            "id": item_c,
+            "title": "Dependent item",
+            "outcome": "This item consumes both the checkout context and the seeded task evidence.",
+            "acceptance_criteria": "The stored edge carries the reason it must wait for the checkout item.",
+            "evidence_refs": [file_ref, task_ref],
+            "binding": {"type": "new"},
+            "stage": None,
+        },
+    ],
+    "edges": [
+        {
+            "dependent_item_id": item_c,
+            "prerequisite_item_id": item_a,
+            "reason": "The dependent item consumes the context the controlled checkout item reads first.",
+        },
+    ],
+    "context_snapshot": {
+        "repo_sha": env["CHAIN_REPO_SHA"],
+        "files": [
+            {
+                "path": env["CHAIN_PATH"] + "/context.md",
+                "lines": "1",
+                "summary": env["CHAIN_CONTEXT_CONTENT"],
+                "sha256": env["CHAIN_CONTEXT_SHA"],
+            }
+        ],
+        "tasks": [
+            {
+                "issue_id": env["CHAIN_ISSUE_ID"],
+                "revision": int(env["CHAIN_ISSUE_REV"]),
+                "read_at": env["CHAIN_READ_AT"],
+            }
+        ],
+        "resources": [{"id": env["CHAIN_RESOURCE_ID"], "read": True}],
+        "missing": [],
+        "read_at": env["CHAIN_READ_AT"],
+    },
+}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(plan, f, ensure_ascii=False)
+PY
 "$MULTICA_CLI_PATH" goal plan-result --goal "$goal" --generation "$gen" --file "$D/plan.json" > "$D/cli.out" 2> "$D/cli.err"
 rc=$?
 printf '%s\n' "$rc" > "$D/cli.rc"
@@ -697,6 +815,50 @@ type proxyRecord struct {
 	Body       string `json:"body,omitempty"`
 }
 
+// chainCandidate is the submitted plan read back from the server. The fake
+// executor fills it from the checkout and the task it actually read.
+type chainCandidate struct {
+	Items []struct {
+		ID           string `json:"id"`
+		Title        string `json:"title"`
+		EvidenceRefs []struct {
+			Kind    string `json:"kind"`
+			Ref     string `json:"ref"`
+			Version string `json:"version"`
+		} `json:"evidence_refs"`
+		Binding struct {
+			Type    string `json:"type"`
+			IssueID string `json:"issue_id"`
+		} `json:"binding"`
+		Coordination *struct {
+			ParallelReason string `json:"parallel_reason"`
+		} `json:"coordination"`
+	} `json:"items"`
+	Edges []struct {
+		DependentItemID    string `json:"dependent_item_id"`
+		PrerequisiteItemID string `json:"prerequisite_item_id"`
+		Reason             string `json:"reason"`
+	} `json:"edges"`
+	ContextSnapshot struct {
+		RepoSHA string `json:"repo_sha"`
+		Files   []struct {
+			Path    string `json:"path"`
+			Summary string `json:"summary"`
+			SHA256  string `json:"sha256"`
+		} `json:"files"`
+		Tasks []struct {
+			IssueID  string `json:"issue_id"`
+			Revision int64  `json:"revision"`
+			ReadAt   string `json:"read_at"`
+		} `json:"tasks"`
+		Resources []struct {
+			ID   string `json:"id"`
+			Read bool   `json:"read"`
+		} `json:"resources"`
+		ReadAt string `json:"read_at"`
+	} `json:"context_snapshot"`
+}
+
 type recorder struct {
 	mu      sync.Mutex
 	records []proxyRecord
@@ -761,6 +923,9 @@ func TestGoalPlanProcessChain(t *testing.T) {
 	}
 	contextRaw, _ := os.ReadFile(contextPath)
 	contextSHA := sha256Hex(contextRaw)
+	// The planning run must report the actual repo SHA of the checkout it was
+	// pointed at, not a fixture constant.
+	repoSHA := initControlledCheckout(t, controlledDir)
 
 	fakePath := filepath.Join(binDir, "opencode")
 	if err := os.WriteFile(fakePath, []byte(fakeOpenCode), 0o700); err != nil {
@@ -982,6 +1147,27 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		"description": "Isolated fixture for the goal plan process chain.",
 	}, &project, http.StatusCreated)
 
+	// Seed one existing task in the project. The planning run has to read it
+	// through its own task-token authorization; the expected values below only
+	// bound the assertion, they are not written into the submitted plan.
+	var seededTask struct {
+		ID         string `json:"id"`
+		Identifier string `json:"identifier"`
+		Title      string `json:"title"`
+		Revision   int64  `json:"revision"`
+	}
+	seededTaskTitle := "DEV-6 chain existing task " + runTag
+	api.mustJSON(t, http.MethodPost, "/api/issues", map[string]any{
+		"title":       seededTaskTitle,
+		"description": "Existing task seeded before the planning run; the run must read it, not invent it.",
+		"project_id":  project.ID,
+		"status":      "todo",
+		"priority":    "medium",
+	}, &seededTask, http.StatusCreated)
+	if seededTask.ID == "" || seededTask.Revision < 1 {
+		t.Fatalf("seeded existing task = %+v, want an id and revision", seededTask)
+	}
+
 	var resource struct {
 		ID string `json:"id"`
 	}
@@ -1016,31 +1202,36 @@ func TestGoalPlanProcessChain(t *testing.T) {
 	}, &goal, http.StatusCreated)
 
 	requestKey := fmt.Sprintf("chain-%d", time.Now().UnixNano())
+	generationBody := map[string]any{
+		"intent":            "生成一份包含受控文件依据的计划草稿",
+		"request_key":       requestKey,
+		"expected_revision": 0,
+		"agent_id":          agent.ID,
+	}
 	var created struct {
 		ID     string `json:"id"`
 		State  string `json:"state"`
 		TaskID string `json:"task_id"`
 	}
-	api.mustJSON(t, http.MethodPost, "/api/goals/"+goal.ID+"/plan/generations", map[string]any{
-		"intent":            "生成一份包含受控文件依据的计划草稿",
-		"request_key":       requestKey,
-		"expected_revision": 0,
-		"agent_id":          agent.ID,
-	}, &created, http.StatusAccepted)
+	api.mustJSON(t, http.MethodPost, "/api/goals/"+goal.ID+"/plan/generations", generationBody, &created, http.StatusAccepted)
 	t.Logf("generation %s queued task=%s", created.ID, created.TaskID)
 
 	writeArtifact(t, cfg.artifacts, "fixtures.json", map[string]any{
-		"project_id":    project.ID,
-		"resource_id":   resource.ID,
-		"agent_id":      agent.ID,
-		"goal_id":       goal.ID,
-		"generation_id": created.ID,
-		"task_id":       created.TaskID,
-		"runtime_id":    runtimeID,
-		"daemon_id":     daemonID,
-		"context_path":  contextPath,
-		"context_sha":   contextSHA,
-		"marker":        marker,
+		"project_id":          project.ID,
+		"resource_id":         resource.ID,
+		"agent_id":            agent.ID,
+		"goal_id":             goal.ID,
+		"generation_id":       created.ID,
+		"task_id":             created.TaskID,
+		"runtime_id":          runtimeID,
+		"daemon_id":           daemonID,
+		"context_path":        contextPath,
+		"context_sha":         contextSHA,
+		"repo_sha":            repoSHA,
+		"existing_task_id":    seededTask.ID,
+		"existing_task_rev":   seededTask.Revision,
+		"existing_task_title": seededTask.Title,
+		"marker":              marker,
 	})
 
 	var final struct {
@@ -1084,6 +1275,64 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		t.Fatalf("candidate does not reference the input resource id %s: %.2000s", resource.ID, candidate)
 	}
 
+	var submitted chainCandidate
+	if err := json.Unmarshal(final.Candidate, &submitted); err != nil {
+		t.Fatalf("decode candidate: %v", err)
+	}
+	if submitted.ContextSnapshot.RepoSHA != repoSHA {
+		t.Fatalf("candidate repo_sha = %q, want the controlled checkout HEAD %q",
+			submitted.ContextSnapshot.RepoSHA, repoSHA)
+	}
+	if len(submitted.ContextSnapshot.Files) == 0 || submitted.ContextSnapshot.Files[0].SHA256 != contextSHA {
+		t.Fatalf("candidate file digest does not match the bytes the run read: %+v (want %s)",
+			submitted.ContextSnapshot.Files, contextSHA)
+	}
+	if len(submitted.ContextSnapshot.Tasks) != 1 ||
+		submitted.ContextSnapshot.Tasks[0].IssueID != seededTask.ID ||
+		submitted.ContextSnapshot.Tasks[0].Revision != seededTask.Revision ||
+		submitted.ContextSnapshot.Tasks[0].ReadAt == "" {
+		t.Fatalf("candidate task snapshot = %+v, want issue %s at revision %d with a read time",
+			submitted.ContextSnapshot.Tasks, seededTask.ID, seededTask.Revision)
+	}
+	foundTaskEvidence, foundExistingBinding := false, false
+	for _, item := range submitted.Items {
+		if item.Binding.Type == "existing" && item.Binding.IssueID == seededTask.ID {
+			foundExistingBinding = true
+		}
+		for _, ref := range item.EvidenceRefs {
+			if ref.Kind == "task" && ref.Ref == seededTask.ID &&
+				strings.Contains(ref.Version, strconv.FormatInt(seededTask.Revision, 10)) {
+				foundTaskEvidence = true
+			}
+		}
+	}
+	if !foundTaskEvidence {
+		t.Fatalf("candidate has no task evidence naming %s at revision %d",
+			seededTask.ID, seededTask.Revision)
+	}
+	if !foundExistingBinding {
+		t.Fatalf("candidate does not bind an item to the seeded existing task %s", seededTask.ID)
+	}
+	if len(submitted.Edges) == 0 || strings.TrimSpace(submitted.Edges[0].Reason) == "" {
+		t.Fatalf("candidate has no must-wait edge with a reason: %+v", submitted.Edges)
+	}
+	edgePairs := map[string]bool{}
+	for _, edge := range submitted.Edges {
+		edgePairs[edge.DependentItemID+"|"+edge.PrerequisiteItemID] = true
+		edgePairs[edge.PrerequisiteItemID+"|"+edge.DependentItemID] = true
+	}
+	foundParallel := false
+	for i := 0; i < len(submitted.Items); i++ {
+		for j := i + 1; j < len(submitted.Items); j++ {
+			if !edgePairs[submitted.Items[i].ID+"|"+submitted.Items[j].ID] {
+				foundParallel = true
+			}
+		}
+	}
+	if !foundParallel {
+		t.Fatalf("candidate has no pair of items without a dependency edge: %+v", submitted.Items)
+	}
+
 	promptRaw, err := os.ReadFile(filepath.Join(fakeDir, "prompt.txt"))
 	if err != nil {
 		t.Fatalf("fake executor captured no prompt: %v", err)
@@ -1105,8 +1354,28 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		}
 	}
 	readRaw, _ := os.ReadFile(filepath.Join(fakeDir, "context-read.txt"))
-	if !strings.Contains(string(readRaw), "context_sha256="+contextSHA) || !strings.Contains(string(readRaw), marker) {
-		t.Fatalf("fake executor did not read the controlled file: %q", string(readRaw))
+	readText := string(readRaw)
+	if !strings.Contains(readText, "context_sha256="+contextSHA) || !strings.Contains(readText, marker) {
+		t.Fatalf("fake executor did not read the controlled file: %q", readText)
+	}
+	if !strings.Contains(readText, "repo_sha="+repoSHA) {
+		t.Fatalf("fake executor did not read the checkout HEAD %s: %q", repoSHA, readText)
+	}
+	taskReadRaw, _ := os.ReadFile(filepath.Join(fakeDir, "tasks-read.txt"))
+	taskRead := string(taskReadRaw)
+	wantIssueID := "issue_id=" + seededTask.ID
+	wantIssueRev := "revision=" + strconv.FormatInt(seededTask.Revision, 10)
+	if !strings.Contains(taskRead, wantIssueID) || !strings.Contains(taskRead, wantIssueRev) {
+		t.Fatalf("fake executor did not read the seeded task %s at %s: %q", seededTask.ID, wantIssueRev, taskRead)
+	}
+	issuesRC, _ := os.ReadFile(filepath.Join(fakeDir, "issues.rc"))
+	if strings.TrimSpace(string(issuesRC)) != "0" {
+		issuesErr, _ := os.ReadFile(filepath.Join(fakeDir, "issues.err"))
+		t.Fatalf("task-token issue list failed rc=%q stderr=%s", strings.TrimSpace(string(issuesRC)), issuesErr)
+	}
+	issuesJSON, _ := os.ReadFile(filepath.Join(fakeDir, "issues.json"))
+	if !strings.Contains(string(issuesJSON), seededTask.ID) {
+		t.Fatalf("task-token issue list did not return the seeded task %s: %.2000s", seededTask.ID, string(issuesJSON))
 	}
 	taskEnvRaw, _ := os.ReadFile(filepath.Join(fakeDir, "task-env.txt"))
 	if !strings.Contains(string(taskEnvRaw), "token_prefix=mat_") {
@@ -1122,13 +1391,66 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		t.Fatalf("unexpected CLI output: %q", string(cliOut))
 	}
 
+	// The planning run must not create an execution issue: the project still
+	// holds exactly the task seeded before the run.
+	type projectIssues struct {
+		Issues []struct {
+			ID       string `json:"id"`
+			Revision int64  `json:"revision"`
+			Title    string `json:"title"`
+		} `json:"issues"`
+		Total int `json:"total"`
+	}
+	issuePath := "/api/issues?project_id=" + project.ID + "&limit=100"
+	var afterRun projectIssues
+	api.mustJSON(t, http.MethodGet, issuePath, nil, &afterRun, http.StatusOK)
+	writeArtifact(t, cfg.artifacts, "issues-after-run.json", afterRun)
+	if len(afterRun.Issues) != 1 || afterRun.Issues[0].ID != seededTask.ID {
+		t.Fatalf("planning run changed the project's issues: %+v", afterRun.Issues)
+	}
+
+	// A same-key retry must replay the existing generation instead of starting
+	// a second run or a second task.
+	var replayed struct {
+		ID     string `json:"id"`
+		State  string `json:"state"`
+		TaskID string `json:"task_id"`
+	}
+	replay := api.do(t, http.MethodPost, "/api/goals/"+goal.ID+"/plan/generations", generationBody)
+	if replay.Status != http.StatusOK {
+		t.Fatalf("same-key retry: status %d, body %.2000s", replay.Status, replay.Body)
+	}
+	if err := json.Unmarshal(replay.Body, &replayed); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	writeArtifact(t, cfg.artifacts, "replay.json", json.RawMessage(mustMarshal(t, replayed)))
+	if replayed.ID != created.ID || replayed.TaskID != created.TaskID {
+		t.Fatalf("same-key retry did not replay the original generation: %+v vs %s/%s",
+			replayed, created.ID, created.TaskID)
+	}
+	var afterReplay projectIssues
+	api.mustJSON(t, http.MethodGet, issuePath, nil, &afterReplay, http.StatusOK)
+	writeArtifact(t, cfg.artifacts, "issues-after-replay.json", afterReplay)
+	if len(afterReplay.Issues) != len(afterRun.Issues) || afterReplay.Issues[0].ID != seededTask.ID {
+		t.Fatalf("same-key retry changed the project's issues: %+v", afterReplay.Issues)
+	}
+
 	records := rec.snapshot()
 	writeArtifact(t, cfg.artifacts, "proxy.json", records)
 	if n := rec.countClaim(); n == 0 {
 		t.Fatalf("no HTTP task claim reached the server; claims must not use the WebSocket transport")
 	}
-	if n := rec.countResults("mat_"); n == 0 {
-		t.Fatalf("no result submission used the task token over the real auth route")
+	if n := rec.countResults("mat_"); n != 1 {
+		t.Fatalf("result submissions using the task token = %d, want exactly one", n)
+	}
+	taskListRead := false
+	for _, record := range records {
+		if record.Method == http.MethodGet && strings.HasPrefix(record.Path, "/api/issues") && record.AuthPrefix == "mat_" {
+			taskListRead = true
+		}
+	}
+	if !taskListRead {
+		t.Fatalf("the run never read existing tasks with its task token: %+v", records)
 	}
 	wsRejected := 0
 	for _, record := range records {
@@ -1155,6 +1477,47 @@ func TestGoalPlanProcessChain(t *testing.T) {
 	assertNoCredentials(t, cfg.artifacts, profile.Token)
 
 	t.Logf("chain OK: generation=%s state=%s task=%s runtime=%s", final.ID, final.State, final.TaskID, runtimeID)
+}
+
+// initControlledCheckout turns the controlled resource directory into a real
+// git checkout and returns its HEAD. The fake executor reads this SHA with
+// `git rev-parse HEAD`, so the candidate's repo_sha is the actual revision the
+// run saw, not a value copied from the fixture.
+func initControlledCheckout(t *testing.T, dir string) string {
+	t.Helper()
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git is required to create the controlled checkout: %v", err)
+	}
+	env := []string{
+		"HOME=" + dir,
+		"PATH=/usr/bin:/bin",
+		"TMPDIR=" + dir,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=DEV-6 Chain",
+		"GIT_AUTHOR_EMAIL=dev6-chain@example.invalid",
+		"GIT_COMMITTER_NAME=DEV-6 Chain",
+		"GIT_COMMITTER_EMAIL=dev6-chain@example.invalid",
+	}
+	run := func(args ...string) string {
+		cmd := exec.Command(gitBin, args...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q")
+	run("add", "context.md")
+	run("commit", "-q", "-m", "seed controlled checkout")
+	head := run("rev-parse", "HEAD")
+	if len(head) != 40 {
+		t.Fatalf("controlled checkout HEAD = %q, want a 40-character commit SHA", head)
+	}
+	return head
 }
 
 func mustMarshal(t *testing.T, v any) []byte {
