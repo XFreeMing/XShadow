@@ -65,6 +65,9 @@ import type {
   Label,
   Project,
   ListProjectsResponse,
+  Goal,
+  ListGoalsResponse,
+  ListGoalIssuesResponse,
   MemberWithUser,
   IssueProperty,
   ListPropertiesResponse,
@@ -1802,6 +1805,51 @@ export const ListProjectsResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_LIST_PROJECTS_RESPONSE: ListProjectsResponse = { projects: [], total: 0 };
+
+// Goals (DEV-5). Required identity fields fail the parse (so the caller never
+// treats a reply without an id as a successful save); editable bodies, the
+// project/owner refs and timestamps degrade to safe defaults so an older or
+// partially rolled-out backend still renders. `status` stays a plain string:
+// an unknown future value must survive parsing and be shown as unknown, never
+// silently read as `completed`.
+export const GoalSchema = z.object({
+  id: z.string().min(1),
+  workspace_id: z.string().default(""),
+  project_id: z.string().nullable().catch(null).default(null),
+  title: z.string().default(""),
+  intent: z.string().catch("").default(""),
+  scope: z.string().catch("").default(""),
+  acceptance_criteria: z.string().catch("").default(""),
+  owner_type: z.string().nullable().catch(null).default(null),
+  owner_id: z.string().nullable().catch(null).default(null),
+  status: z.string().catch("planned").default("planned"),
+  creator_type: z.string().catch("").default(""),
+  creator_id: z.string().catch("").default(""),
+  created_at: z.string().catch("").default(""),
+  updated_at: z.string().catch("").default(""),
+}).loose();
+
+export const EMPTY_GOAL: Goal = {
+  id: "", workspace_id: "", project_id: null, title: "", intent: "", scope: "",
+  acceptance_criteria: "", owner_type: null, owner_id: null, status: "planned",
+  creator_type: "", creator_id: "", created_at: "", updated_at: "",
+};
+
+export const ListGoalsResponseSchema = z.object({
+  goals: z.array(GoalSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_GOALS_RESPONSE: ListGoalsResponse = { goals: [], total: 0 };
+
+// Linked tasks reuse the existing IssueSchema and IssueResponse contract; a
+// malformed page degrades to empty rather than blanking the goal page.
+export const ListGoalIssuesResponseSchema = z.object({
+  issues: z.array(IssueSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_GOAL_ISSUES_RESPONSE: ListGoalIssuesResponse = { issues: [], total: 0 };
 
 export const ProjectMemberSchema = z.object({
   project_id: z.string(),

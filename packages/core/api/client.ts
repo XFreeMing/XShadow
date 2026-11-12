@@ -119,6 +119,13 @@ import type {
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
+  Goal,
+  CreateGoalRequest,
+  UpdateGoalRequest,
+  ListGoalsParams,
+  ListGoalsResponse,
+  ListGoalIssuesParams,
+  ListGoalIssuesResponse,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -380,6 +387,12 @@ import {
   ListProjectsResponseSchema,
   EMPTY_PROJECT,
   EMPTY_LIST_PROJECTS_RESPONSE,
+  GoalSchema,
+  ListGoalsResponseSchema,
+  ListGoalIssuesResponseSchema,
+  EMPTY_GOAL,
+  EMPTY_LIST_GOALS_RESPONSE,
+  EMPTY_LIST_GOAL_ISSUES_RESPONSE,
   SearchProjectsResponseSchema,
   SearchIndexManifestSchema,
   SearchIndexSnapshotPageSchema,
@@ -4408,6 +4421,66 @@ export class ApiClient {
 
   private parseProjectSubscription(raw: unknown, endpoint: string): boolean {
     return parseWithFallback(raw, ProjectSubscriptionSchema, { subscribed: false }, { endpoint }).subscribed;
+  }
+
+  // Goals. Every response passes through a zod schema and the shared fallback,
+  // so a malformed reply degrades instead of throwing; callers must treat an
+  // empty `id` as a failed save and must not navigate to an empty goal id.
+  async listGoals(params?: ListGoalsParams): Promise<ListGoalsResponse> {
+    const search = new URLSearchParams();
+    if (params?.project_id) search.set("project_id", params.project_id);
+    if (params?.status) search.set("status", params.status);
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    const query = search.size > 0 ? `?${search}` : "";
+    const raw = await this.fetch<unknown>(`/api/goals${query}`);
+    return parseWithFallback(raw, ListGoalsResponseSchema, EMPTY_LIST_GOALS_RESPONSE, {
+      endpoint: "GET /api/goals",
+    });
+  }
+
+  async getGoal(id: string): Promise<Goal> {
+    const raw = await this.fetch<unknown>(`/api/goals/${id}`);
+    return parseWithFallback(raw, GoalSchema, EMPTY_GOAL, { endpoint: "GET /api/goals/:id" });
+  }
+
+  async createGoal(data: CreateGoalRequest): Promise<Goal> {
+    const raw = await this.fetch<unknown>("/api/goals", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GoalSchema, EMPTY_GOAL, { endpoint: "POST /api/goals" });
+  }
+
+  async updateGoal(id: string, data: UpdateGoalRequest): Promise<Goal> {
+    const raw = await this.fetch<unknown>(`/api/goals/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GoalSchema, EMPTY_GOAL, { endpoint: "PUT /api/goals/:id" });
+  }
+
+  async deleteGoal(id: string): Promise<void> {
+    await this.fetch(`/api/goals/${id}`, { method: "DELETE" });
+  }
+
+  async listGoalIssues(id: string, params?: ListGoalIssuesParams): Promise<ListGoalIssuesResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    const query = search.size > 0 ? `?${search}` : "";
+    const raw = await this.fetch<unknown>(`/api/goals/${id}/issues${query}`);
+    return parseWithFallback(raw, ListGoalIssuesResponseSchema, EMPTY_LIST_GOAL_ISSUES_RESPONSE, {
+      endpoint: "GET /api/goals/:id/issues",
+    });
+  }
+
+  async linkGoalIssue(goalId: string, issueId: string): Promise<void> {
+    await this.fetch(`/api/goals/${goalId}/issues/${issueId}`, { method: "PUT" });
+  }
+
+  async unlinkGoalIssue(goalId: string, issueId: string): Promise<void> {
+    await this.fetch(`/api/goals/${goalId}/issues/${issueId}`, { method: "DELETE" });
   }
 
   async addProjectMembers(id: string, userIds: string[]): Promise<ListProjectMembersResponse> {

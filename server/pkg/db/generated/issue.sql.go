@@ -2178,7 +2178,7 @@ func (q *Queries) SetIssueMetadataKey(ctx context.Context, arg SetIssueMetadataK
 }
 
 const updateIssue = `-- name: UpdateIssue :one
-WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($3::uuid::text, ''), true)), candidate AS MATERIALIZED (
+WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($2::uuid::text, ''), true)), candidate AS MATERIALIZED (
     -- FOR UPDATE, so every next_* value below is computed from the row this
     -- statement is about to write rather than from the snapshot the statement
     -- started with. Without it a write that waits here behind a concurrent one
@@ -2188,17 +2188,17 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
     -- Materialized so the locking clause is never inlined away.
     SELECT
         i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id,
-        COALESCE($4::text, i.title) AS next_title,
-        COALESCE($5::text, i.description) AS next_description,
-        COALESCE($6::text, i.status) AS next_status,
-        COALESCE($7::text, i.priority) AS next_priority,
-        $8::text AS next_assignee_type,
-        $9::uuid AS next_assignee_id,
+        COALESCE($3::text, i.title) AS next_title,
+        COALESCE($4::text, i.description) AS next_description,
+        COALESCE($5::text, i.status) AS next_status,
+        COALESCE($6::text, i.priority) AS next_priority,
+        $7::text AS next_assignee_type,
+        $8::uuid AS next_assignee_id,
         CASE
             -- An explicit position wins. Cross-column drag-and-drop sends
             -- status and position together and means the slot it dropped on.
-            WHEN $10::double precision IS NOT NULL
-                THEN $10::double precision
+            WHEN $9::double precision IS NOT NULL
+                THEN $9::double precision
             -- position ranks an issue *within* its (workspace, status)
             -- column, so it stops meaning anything the moment the column
             -- changes: the value that put the issue on top of Todo lands it
@@ -2213,37 +2213,37 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
             -- unstable across pages. Creation avoids the tie by computing its
             -- min under the workspace counter lock; a status change holds no
             -- such lock and is not worth taking one for.
-            WHEN i.status IS DISTINCT FROM COALESCE($6::text, i.status)
+            WHEN i.status IS DISTINCT FROM COALESCE($5::text, i.status)
                 THEN (
                     SELECT COALESCE(MIN(target.position), 0) - 1
                     FROM issue AS target
                     WHERE target.workspace_id = i.workspace_id
-                      AND target.status = $6::text
+                      AND target.status = $5::text
                 )
             ELSE i.position
         END AS next_position,
-        $11::date AS next_start_date,
-        $12::date AS next_due_date,
-        $13::uuid AS next_parent_issue_id,
-        $14::uuid AS next_project_id,
-        $15::integer AS next_stage,
+        $10::date AS next_start_date,
+        $11::date AS next_due_date,
+        $12::uuid AS next_parent_issue_id,
+        $13::uuid AS next_project_id,
+        $14::integer AS next_stage,
         -- A supplied pointer marks the issue (the handler also sets cancelled).
         -- Otherwise a mark only survives a write that leaves an already
         -- cancelled issue cancelled. Every other write drops it: reopening is
         -- how a mark is removed, and re-entering cancelled does not revive a
         -- pointer that a server predating this rule left on a reopened issue.
         CASE
-            WHEN $16::uuid IS NOT NULL
-                THEN $16::uuid
-            WHEN i.status = 'cancelled' AND COALESCE($6::text, i.status) = 'cancelled'
+            WHEN $15::uuid IS NOT NULL
+                THEN $15::uuid
+            WHEN i.status = 'cancelled' AND COALESCE($5::text, i.status) = 'cancelled'
                 THEN i.duplicate_of_issue_id
             ELSE NULL
         END AS next_duplicate_of_issue_id
     FROM issue AS i
     WHERE i.id = $1
-      AND ($2::bigint IS NULL OR i.revision = $2::bigint)
+      AND ($16::bigint IS NULL OR i.revision = $16::bigint)
     FOR UPDATE
-), changed AS (
+), changed AS MATERIALIZED (
     SELECT
         candidate.id, candidate.workspace_id, candidate.title, candidate.description, candidate.status, candidate.priority, candidate.assignee_type, candidate.assignee_id, candidate.creator_type, candidate.creator_id, candidate.parent_issue_id, candidate.acceptance_criteria, candidate.context_refs, candidate.position, candidate.due_date, candidate.created_at, candidate.updated_at, candidate.number, candidate.project_id, candidate.origin_type, candidate.origin_id, candidate.first_executed_at, candidate.start_date, candidate.metadata, candidate.stage, candidate.properties, candidate.revision, candidate.last_activity_at, candidate.triage_state, candidate.duplicate_of_issue_id, candidate.requester_user_id, candidate.next_title, candidate.next_description, candidate.next_status, candidate.next_priority, candidate.next_assignee_type, candidate.next_assignee_id, candidate.next_position, candidate.next_start_date, candidate.next_due_date, candidate.next_parent_issue_id, candidate.next_project_id, candidate.next_stage, candidate.next_duplicate_of_issue_id,
         ROW(
@@ -2267,40 +2267,60 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
             next_duplicate_of_issue_id
         ) AS did_activity
     FROM candidate
+), updated AS (
+    UPDATE issue AS i SET
+        title = changed.next_title,
+        description = changed.next_description,
+        status = changed.next_status,
+        priority = changed.next_priority,
+        assignee_type = changed.next_assignee_type,
+        assignee_id = changed.next_assignee_id,
+        position = changed.next_position,
+        start_date = changed.next_start_date,
+        due_date = changed.next_due_date,
+        parent_issue_id = changed.next_parent_issue_id,
+        project_id = changed.next_project_id,
+        stage = changed.next_stage,
+        duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
+        revision = i.revision + changed.did_change::integer,
+        last_activity_at = CASE WHEN changed.did_activity
+            THEN GREATEST(COALESCE(i.last_activity_at, i.updated_at), now())
+            ELSE i.last_activity_at
+        END,
+        updated_at = CASE WHEN changed.did_change THEN now() ELSE i.updated_at END
+    FROM changed CROSS JOIN wakeup_source
+    WHERE i.id = changed.id
+      -- Re-check the precondition on the row version that UPDATE actually locks.
+      -- Under READ COMMITTED, concurrent statements may both populate candidate
+      -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
+      -- after waiting for the first writer, leaving the stale writer with 0 rows.
+      AND ($16::bigint IS NULL OR i.revision = $16::bigint)
+    RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id
+), goal_unlink AS MATERIALIZED (
+    -- A goal link is scoped to (workspace, project) by construction, so an
+    -- issue that actually changes project cannot keep it. Deleting from
+    -- ` + "`" + `updated` + "`" + ` (not ` + "`" + `changed` + "`" + `) means a write the statement ultimately refuses
+    -- — a revision re-check that leaves 0 rows — cannot unlink anything.
+    -- This lives in the shared write statement because every project-changing
+    -- write goes through it: single update, batch update, drag/move, and the
+    -- service path (issue_public.go). The comparison is on the locked old/new
+    -- values, never on the request pointer: clearing project_id sends a null
+    -- pointer that the handler's project_changed flag cannot detect.
+    --
+    -- Only the selected issue's own link is touched; its parent/children and
+    -- other goals are untouched.
+    DELETE FROM goal_issue AS gi
+    USING updated
+    JOIN changed ON changed.id = updated.id
+    WHERE gi.workspace_id = updated.workspace_id
+      AND gi.issue_id = updated.id
+      AND changed.project_id IS DISTINCT FROM updated.project_id
 )
-UPDATE issue AS i SET
-    title = changed.next_title,
-    description = changed.next_description,
-    status = changed.next_status,
-    priority = changed.next_priority,
-    assignee_type = changed.next_assignee_type,
-    assignee_id = changed.next_assignee_id,
-    position = changed.next_position,
-    start_date = changed.next_start_date,
-    due_date = changed.next_due_date,
-    parent_issue_id = changed.next_parent_issue_id,
-    project_id = changed.next_project_id,
-    stage = changed.next_stage,
-    duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
-    revision = i.revision + changed.did_change::integer,
-    last_activity_at = CASE WHEN changed.did_activity
-        THEN GREATEST(COALESCE(i.last_activity_at, i.updated_at), now())
-        ELSE i.last_activity_at
-    END,
-    updated_at = CASE WHEN changed.did_change THEN now() ELSE i.updated_at END
-FROM changed CROSS JOIN wakeup_source
-WHERE i.id = changed.id
-  -- Re-check the precondition on the row version that UPDATE actually locks.
-  -- Under READ COMMITTED, concurrent statements may both populate candidate
-  -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
-  -- after waiting for the first writer, leaving the stale writer with 0 rows.
-  AND ($2::bigint IS NULL OR i.revision = $2::bigint)
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id FROM updated
 `
 
 type UpdateIssueParams struct {
 	ID                 pgtype.UUID   `json:"id"`
-	ExpectedRevision   pgtype.Int8   `json:"expected_revision"`
 	SourceTaskID       pgtype.UUID   `json:"source_task_id"`
 	Title              pgtype.Text   `json:"title"`
 	Description        pgtype.Text   `json:"description"`
@@ -2315,12 +2335,46 @@ type UpdateIssueParams struct {
 	ProjectID          pgtype.UUID   `json:"project_id"`
 	Stage              pgtype.Int4   `json:"stage"`
 	DuplicateOfIssueID pgtype.UUID   `json:"duplicate_of_issue_id"`
+	ExpectedRevision   pgtype.Int8   `json:"expected_revision"`
 }
 
-func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue, error) {
+type UpdateIssueRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeType       pgtype.Text        `json:"assignee_type"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
+	ContextRefs        []byte             `json:"context_refs"`
+	Position           float64            `json:"position"`
+	DueDate            pgtype.Date        `json:"due_date"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	Number             int32              `json:"number"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	OriginType         pgtype.Text        `json:"origin_type"`
+	OriginID           pgtype.UUID        `json:"origin_id"`
+	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
+	StartDate          pgtype.Date        `json:"start_date"`
+	Metadata           []byte             `json:"metadata"`
+	Stage              pgtype.Int4        `json:"stage"`
+	Properties         []byte             `json:"properties"`
+	Revision           int64              `json:"revision"`
+	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
+	TriageState        pgtype.Text        `json:"triage_state"`
+	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
+	RequesterUserID    pgtype.UUID        `json:"requester_user_id"`
+}
+
+func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (UpdateIssueRow, error) {
 	row := q.db.QueryRow(ctx, updateIssue,
 		arg.ID,
-		arg.ExpectedRevision,
 		arg.SourceTaskID,
 		arg.Title,
 		arg.Description,
@@ -2335,8 +2389,9 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.ProjectID,
 		arg.Stage,
 		arg.DuplicateOfIssueID,
+		arg.ExpectedRevision,
 	)
-	var i Issue
+	var i UpdateIssueRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
