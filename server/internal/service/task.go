@@ -3805,6 +3805,43 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 			return fmt.Errorf("claim task: %w", err)
 		}
 
+		// Last gate before a run starts. A dependent issue may have been
+		// queued while its prerequisite was still in review, or by an event
+		// that predates the prerequisite being reopened. Re-check the
+		// persisted evidence here and put the claim straight back when it no
+		// longer holds: status alone (a human write, a merged-PR automation)
+		// is never release evidence.
+		if task.IssueID.Valid {
+			issue, err := qtx.GetIssue(ctx, task.IssueID)
+			if err != nil {
+				outcome = "error_dependency_check"
+				return fmt.Errorf("load issue for dependency check: %w", err)
+			}
+			state, err := IssueDependenciesReady(ctx, qtx, issue)
+			if err != nil {
+				outcome = "error_dependency_check"
+				return fmt.Errorf("check issue dependencies: %w", err)
+			}
+			if !state.Ready {
+				if _, err := qtx.RequeueAgentTaskAfterClaimFailure(ctx, db.RequeueAgentTaskAfterClaimFailureParams{
+					TaskID:       task.ID,
+					RuntimeID:    task.RuntimeID,
+					DispatchedAt: task.DispatchedAt,
+				}); err != nil {
+					outcome = "error_requeue_dependency"
+					return fmt.Errorf("requeue task blocked by dependencies: %w", err)
+				}
+				outcome = "dependencies_unmet"
+				slog.Debug("task claim held: issue dependencies are not accepted",
+					"task_id", util.UUIDToString(task.ID),
+					"issue_id", util.UUIDToString(task.IssueID),
+					"reason", state.Reason,
+					"detail", state.Detail,
+				)
+				return nil
+			}
+		}
+
 		// An idle task-owned direct-chat row may already be visible as the
 		// positional queue head. Normal completion reanchors a successor beside
 		// the assistant outcome before commit; this claim-time query is the

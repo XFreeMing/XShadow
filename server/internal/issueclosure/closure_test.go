@@ -24,18 +24,19 @@ func human() Principal {
 
 func baseInput() Input {
 	return Input{
-		Now:              now,
-		SubjectKind:      SubjectIssue,
-		SubjectID:        "issue-1",
-		Action:           ActionIssueClose,
-		Status:           "in_review",
-		Managed:          true,
-		Delivery:         delivery,
-		CriteriaRevision: "plan-rev-3",
-		LinkedGoalID:     "goal-1",
-		Author:           author(),
-		Caller:           author(),
-		CallerCanClose:   true,
+		Now:               now,
+		SubjectKind:       SubjectIssue,
+		SubjectID:         "issue-1",
+		Action:            ActionIssueClose,
+		Status:            "in_review",
+		Managed:           true,
+		Delivery:          delivery,
+		CriteriaRevision:  "plan-rev-3",
+		LinkedGoalID:      "goal-1",
+		Author:            author(),
+		Caller:            author(),
+		CallerCanClose:    true,
+		RequirementsKnown: true,
 	}
 }
 
@@ -307,6 +308,38 @@ func TestMissingDeliverableBlocksClosure(t *testing.T) {
 
 	in.Required[0].Satisfied = true
 	want(t, Evaluate(in), CanClose, "")
+}
+
+// A caller that could not read the delivery conditions must not fall through
+// to the "no required deliverables" branch: unknown is not empty.
+func TestUnknownDeliverablesBlockClosure(t *testing.T) {
+	in := baseInput()
+	in.Authorization = issueAuthorization()
+	in.Reviews = []Review{passReview()}
+	in.RequirementsKnown = false
+
+	dec := Evaluate(in)
+	want(t, dec, Blocked, ReasonDeliverablesUnknown)
+	if dec.Detail == "" {
+		t.Fatal("blocked decision must say the conditions could not be read")
+	}
+
+	// The same input with a readable, empty list is a legitimate "nothing
+	// extra required" answer.
+	in.RequirementsKnown = true
+	want(t, Evaluate(in), CanClose, "")
+}
+
+// A pending human step still reports the human endpoint even when the
+// delivery-condition source is unreadable; neither path may auto-close.
+func TestUnknownDeliverablesNeverOverrideAHumanStep(t *testing.T) {
+	in := baseInput()
+	in.Authorization = issueAuthorization()
+	in.Reviews = []Review{passReview()}
+	in.RequirementsKnown = false
+	in.Workflow.HumanStepPending = true
+	in.Workflow.HumanActor = "member-1"
+	want(t, Evaluate(in), WaitHuman, ReasonHumanStepPending)
 }
 
 // Case 13: an observer or any caller without closer rights cannot run the

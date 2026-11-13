@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/issueclosure"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -94,6 +95,64 @@ func closureIssueStatus(t *testing.T, issueID string) string {
 	var status string
 	dbfx.QueryRow(t, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&status)
 	return status
+}
+
+// closureLinkPullRequest attaches one delivery pull request to the issue so
+// the required-deliverable source has a real row to read.
+func closureLinkPullRequest(t *testing.T, issueID, state string) string {
+	t.Helper()
+	prID := dbfx.Insert(t, "github_pull_request", testutil.Cols{
+		"workspace_id":    testWorkspaceID,
+		"installation_id": int64(1),
+		"repo_owner":      "XFreeMing",
+		"repo_name":       "XShadow",
+		"pr_number":       int(time.Now().UnixNano() % 1_000_000_000),
+		"title":           "DEV-7 delivery",
+		"state":           state,
+		"html_url":        "https://github.com/XFreeMing/XShadow/pull/1",
+		"pr_created_at":   testutil.Raw("now()"),
+		"pr_updated_at":   testutil.Raw("now()"),
+	})
+	dbfx.InsertNoID(t, "issue_pull_request", testutil.Cols{
+		"issue_id":        issueID,
+		"pull_request_id": prID,
+	}, "issue_id = $1 AND pull_request_id = $2", issueID, prID)
+	return prID
+}
+
+func TestUnmergedPullRequestBlocksClosureAndMergedReleasesIt(t *testing.T) {
+	author := closureTestAgent(t, "closure author", "deepseek-v4.1-flash")
+	reviewer := closureTestAgent(t, "closure reviewer", "gpt-5-codex")
+	issueID, _ := closureTestManagedIssue(t, author)
+	authorTask := createHandlerTestTaskForAgentOnIssue(t, author, issueID)
+	reviewerTask := createHandlerTestTaskForAgentOnIssue(t, reviewer, issueID)
+
+	closureGrantIssue(t, issueID, "issue_close")
+	closurePostReview(t, "/api/issues/"+issueID, issueID, reviewer, reviewerTask, "pass")
+	prID := closureLinkPullRequest(t, issueID, "open")
+
+	// The independent pass is technical acceptance only. The delivery the
+	// issue declares as required is not there yet, so the close is refused and
+	// the issue stays open instead of claiming a finished delivery.
+	body := closurePutIssueStatus(t, issueID, author, authorTask, "done").WantOneOf(http.StatusConflict).Map()
+	if body["outcome"] != string(issueclosure.Blocked) || body["reason"] != "missing_deliverable" {
+		t.Fatalf("decision = %v/%v, body = %v", body["outcome"], body["reason"], body)
+	}
+	if got := closureIssueStatus(t, issueID); got != "in_progress" {
+		t.Fatalf("status after missing deliverable = %q, want in_progress", got)
+	}
+	var accepted int
+	dbfx.QueryRow(t, `SELECT count(*) FROM closure_review WHERE subject_id = $1 AND accepted_at IS NOT NULL`, issueID).Scan(&accepted)
+	if accepted != 0 {
+		t.Fatalf("accepted reviews = %d after a refused write", accepted)
+	}
+
+	// Once the required pull request is merged the same evidence closes it.
+	dbfx.Exec(t, `UPDATE github_pull_request SET state = 'merged', merged_at = now() WHERE id = $1`, prID)
+	closurePutIssueStatus(t, issueID, author, authorTask, "done").WantOneOf(http.StatusOK)
+	if got := closureIssueStatus(t, issueID); got != "done" {
+		t.Fatalf("status after the deliverable merged = %q, want done", got)
+	}
 }
 
 func TestAgentDoneOnManagedIssueNeedsRecordedDelivery(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -130,16 +131,16 @@ type CreateClosureAuthorizationRequest struct {
 }
 
 type closureSubject struct {
-	kind          issueclosure.SubjectKind
-	id            pgtype.UUID
-	workspaceID   pgtype.UUID
-	projectID     pgtype.UUID
-	status        string
-	managed       bool
-	linkedGoalID  pgtype.UUID
-	author        issueclosure.Principal
-	ownerType     string
-	ownerID       pgtype.UUID
+	kind         issueclosure.SubjectKind
+	id           pgtype.UUID
+	workspaceID  pgtype.UUID
+	projectID    pgtype.UUID
+	status       string
+	managed      bool
+	linkedGoalID pgtype.UUID
+	author       issueclosure.Principal
+	ownerType    string
+	ownerID      pgtype.UUID
 }
 
 func (h *Handler) closureAgentPrincipal(ctx context.Context, actorType, actorID string) issueclosure.Principal {
@@ -181,13 +182,13 @@ func (h *Handler) closureCallerPrincipal(ctx context.Context, w http.ResponseWri
 
 func (h *Handler) loadIssueClosureSubject(ctx context.Context, issue db.Issue) (closureSubject, error) {
 	s := closureSubject{
-		kind:          issueclosure.SubjectIssue,
-		id:            issue.ID,
-		workspaceID:   issue.WorkspaceID,
-		projectID:     issue.ProjectID,
-		status:        issue.Status,
-		ownerType:     issue.AssigneeType.String,
-		ownerID:       issue.AssigneeID,
+		kind:        issueclosure.SubjectIssue,
+		id:          issue.ID,
+		workspaceID: issue.WorkspaceID,
+		projectID:   issue.ProjectID,
+		status:      issue.Status,
+		ownerType:   issue.AssigneeType.String,
+		ownerID:     issue.AssigneeID,
 	}
 	link, err := h.Queries.GetGoalIssueLink(ctx, db.GetGoalIssueLinkParams{
 		WorkspaceID: issue.WorkspaceID,
@@ -214,14 +215,14 @@ func (h *Handler) loadIssueClosureSubject(ctx context.Context, issue db.Issue) (
 
 func (h *Handler) loadGoalClosureSubject(ctx context.Context, goal db.Goal) (closureSubject, error) {
 	s := closureSubject{
-		kind:          issueclosure.SubjectGoal,
-		id:            goal.ID,
-		workspaceID:   goal.WorkspaceID,
-		projectID:     goal.ProjectID,
-		status:        goal.Status,
-		managed:       true,
-		ownerType:     goal.OwnerType.String,
-		ownerID:       goal.OwnerID,
+		kind:        issueclosure.SubjectGoal,
+		id:          goal.ID,
+		workspaceID: goal.WorkspaceID,
+		projectID:   goal.ProjectID,
+		status:      goal.Status,
+		managed:     true,
+		ownerType:   goal.OwnerType.String,
+		ownerID:     goal.OwnerID,
 	}
 	if author, err := h.Queries.GetLatestGoalAuthor(ctx, db.GetLatestGoalAuthorParams{
 		WorkspaceID: goal.WorkspaceID,
@@ -330,7 +331,7 @@ func closureAcceptance(reviews []db.ClosureReview) *issueclosure.Acceptance {
 		}
 		return &issueclosure.Acceptance{
 			ReviewID:        uuidToString(r.ID),
-			AuthorizationID: "",
+			AuthorizationID: uuidToString(r.AuthorizationID),
 			Delivery:        issueclosure.DeliveryVersion{Version: r.DeliveryVersion, Tree: r.DeliveryTree},
 			AcceptedBy: issueclosure.Principal{
 				Type: r.AcceptedByType,
@@ -446,13 +447,46 @@ func (h *Handler) evaluateClosure(ctx context.Context, s closureSubject, deliver
 		Reviews:          closureReviewInputs(reviews),
 	}
 	if s.kind == issueclosure.SubjectIssue {
+		in.Required, in.RequirementsKnown = h.issueRequiredDeliverables(ctx, s)
 		issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: s.id, WorkspaceID: s.workspaceID})
 		if err != nil {
 			return issueclosure.Decision{}, nil, nil, err
 		}
 		in.Workflow = h.closureWorkflowFacts(ctx, issue)
+	} else {
+		// Goal acceptance has no additional delivery-condition source of its
+		// own: its conditions are the goal's review criteria, carried by the
+		// independent goal review. That is an explicit empty answer, not an
+		// unread one.
+		in.RequirementsKnown = true
 	}
 	return issueclosure.Evaluate(in), authRow, reviews, nil
+}
+
+// issueRequiredDeliverables reads the concrete delivery conditions recorded
+// for one issue. A linked pull request is required until it is merged; a read
+// failure is reported as unknown so the caller refuses rather than accepting
+// an empty list. An issue with no linked pull request has no PR condition to
+// satisfy (known, empty).
+func (h *Handler) issueRequiredDeliverables(ctx context.Context, s closureSubject) ([]issueclosure.RequiredDeliverable, bool) {
+	prs, err := h.Queries.ListIssueLinkedPullRequestStates(ctx, s.id)
+	if err != nil {
+		slog.Warn("closure: linked pull request states unreadable; treating conditions as unknown",
+			"workspace_id", uuidToString(s.workspaceID),
+			"issue_id", uuidToString(s.id),
+			"error", err,
+		)
+		return nil, false
+	}
+	required := make([]issueclosure.RequiredDeliverable, 0, len(prs))
+	for _, pr := range prs {
+		required = append(required, issueclosure.RequiredDeliverable{
+			Kind:      "pull_request",
+			Ref:       fmt.Sprintf("%s #%d", pr.Provider, pr.PrNumber),
+			Satisfied: pr.State == "merged",
+		})
+	}
+	return required, true
 }
 
 func actionForSubject(kind issueclosure.SubjectKind) issueclosure.Action {
@@ -953,6 +987,10 @@ func (h *Handler) persistClosureAcceptance(ctx context.Context, reviews []db.Clo
 	if err != nil {
 		return err
 	}
+	authorizationID, err := util.ParseUUID(decision.AuthorizationID)
+	if err != nil {
+		return fmt.Errorf("closure decision has no authorization to record: %w", err)
+	}
 	callerID, err := util.ParseUUID(caller.ID)
 	if err != nil {
 		return err
@@ -968,10 +1006,11 @@ func (h *Handler) persistClosureAcceptance(ctx context.Context, reviews []db.Clo
 		return fmt.Errorf("closure review not found for acceptance")
 	}
 	_, err = h.Queries.AcceptClosureReview(ctx, db.AcceptClosureReviewParams{
-		ID:             reviewID,
-		WorkspaceID:    workspaceID,
-		AcceptedByType: caller.Type,
-		AcceptedByID:   callerID,
+		ID:              reviewID,
+		WorkspaceID:     workspaceID,
+		AcceptedByType:  caller.Type,
+		AcceptedByID:    callerID,
+		AuthorizationID: authorizationID,
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err

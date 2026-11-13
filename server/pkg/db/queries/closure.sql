@@ -81,13 +81,38 @@ WHERE workspace_id = sqlc.arg('workspace_id')
 
 -- name: AcceptClosureReview :one
 -- The persisted completion action. Only an unaccepted, passing review can be
--- accepted, so a repeated request returns no row and the caller replays.
+-- accepted, so a repeated request returns no row and the caller replays. The
+-- grant it ran under is recorded with the action: downstream release refuses
+-- evidence whose grant was revoked or expired after this write.
 UPDATE closure_review SET
     accepted_at = now(),
     accepted_by_type = $3,
-    accepted_by_id = $4
+    accepted_by_id = $4,
+    authorization_id = $5
 WHERE id = $1 AND workspace_id = $2 AND accepted_at IS NULL AND verdict = 'pass'
 RETURNING *;
+
+-- name: GetValidAcceptedClosureReview :one
+-- The currently valid acceptance for one issue. Valid means: a pass verdict
+-- for the action, already accepted, not superseded by a newer delivery, and
+-- backed by an authorization that is still active, unexpired and still allows
+-- closing. accepted_at alone is not evidence: a revoked grant, a replaced
+-- delivery or a stale row must not release a downstream dependent.
+SELECT r.* FROM closure_review AS r
+JOIN closure_authorization AS a
+  ON a.id = r.authorization_id AND a.workspace_id = r.workspace_id
+WHERE r.workspace_id = sqlc.arg('workspace_id')
+  AND r.subject_kind = 'issue'
+  AND r.subject_id = sqlc.arg('subject_id')
+  AND r.action = 'issue_close'
+  AND r.verdict = 'pass'
+  AND r.accepted_at IS NOT NULL
+  AND r.superseded_by IS NULL
+  AND a.state = 'active'
+  AND (a.expires_at IS NULL OR a.expires_at > now())
+  AND 'issue_close' = ANY(a.actions)
+ORDER BY r.recorded_at DESC, r.id DESC
+LIMIT 1;
 
 -- name: DeleteClosureReviewsBySubject :exec
 DELETE FROM closure_review

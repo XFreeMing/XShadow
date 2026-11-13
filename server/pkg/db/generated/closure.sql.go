@@ -15,26 +15,31 @@ const acceptClosureReview = `-- name: AcceptClosureReview :one
 UPDATE closure_review SET
     accepted_at = now(),
     accepted_by_type = $3,
-    accepted_by_id = $4
+    accepted_by_id = $4,
+    authorization_id = $5
 WHERE id = $1 AND workspace_id = $2 AND accepted_at IS NULL AND verdict = 'pass'
-RETURNING id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at
+RETURNING id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at, authorization_id
 `
 
 type AcceptClosureReviewParams struct {
-	ID             pgtype.UUID `json:"id"`
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	AcceptedByType string      `json:"accepted_by_type"`
-	AcceptedByID   pgtype.UUID `json:"accepted_by_id"`
+	ID              pgtype.UUID `json:"id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	AcceptedByType  string      `json:"accepted_by_type"`
+	AcceptedByID    pgtype.UUID `json:"accepted_by_id"`
+	AuthorizationID pgtype.UUID `json:"authorization_id"`
 }
 
 // The persisted completion action. Only an unaccepted, passing review can be
-// accepted, so a repeated request returns no row and the caller replays.
+// accepted, so a repeated request returns no row and the caller replays. The
+// grant it ran under is recorded with the action: downstream release refuses
+// evidence whose grant was revoked or expired after this write.
 func (q *Queries) AcceptClosureReview(ctx context.Context, arg AcceptClosureReviewParams) (ClosureReview, error) {
 	row := q.db.QueryRow(ctx, acceptClosureReview,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.AcceptedByType,
 		arg.AcceptedByID,
+		arg.AuthorizationID,
 	)
 	var i ClosureReview
 	err := row.Scan(
@@ -66,6 +71,7 @@ func (q *Queries) AcceptClosureReview(ctx context.Context, arg AcceptClosureRevi
 		&i.AcceptedByType,
 		&i.AcceptedByID,
 		&i.RecordedAt,
+		&i.AuthorizationID,
 	)
 	return i, err
 }
@@ -143,7 +149,7 @@ INSERT INTO closure_review (
     $9, $10, $11, $12,
     $13, $14, $15, $16,
     $17, $18, $19, $20, $21, $22
-) RETURNING id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at
+) RETURNING id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at, authorization_id
 `
 
 type CreateClosureReviewParams struct {
@@ -226,6 +232,7 @@ func (q *Queries) CreateClosureReview(ctx context.Context, arg CreateClosureRevi
 		&i.AcceptedByType,
 		&i.AcceptedByID,
 		&i.RecordedAt,
+		&i.AuthorizationID,
 	)
 	return i, err
 }
@@ -363,7 +370,7 @@ func (q *Queries) GetClosureAuthorizationByID(ctx context.Context, arg GetClosur
 }
 
 const getClosureReviewByIdempotencyKey = `-- name: GetClosureReviewByIdempotencyKey :one
-SELECT id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at FROM closure_review
+SELECT id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at, authorization_id FROM closure_review
 WHERE workspace_id = $1 AND idempotency_key = $2 AND idempotency_key <> ''
 `
 
@@ -404,6 +411,7 @@ func (q *Queries) GetClosureReviewByIdempotencyKey(ctx context.Context, arg GetC
 		&i.AcceptedByType,
 		&i.AcceptedByID,
 		&i.RecordedAt,
+		&i.AuthorizationID,
 	)
 	return i, err
 }
@@ -509,8 +517,73 @@ func (q *Queries) GetLatestIssueAuthor(ctx context.Context, issueID pgtype.UUID)
 	return i, err
 }
 
+const getValidAcceptedClosureReview = `-- name: GetValidAcceptedClosureReview :one
+SELECT r.id, r.workspace_id, r.project_id, r.subject_kind, r.subject_id, r.action, r.delivery_version, r.delivery_tree, r.criteria_revision, r.author_type, r.author_id, r.author_run_id, r.author_model, r.reviewer_type, r.reviewer_id, r.reviewer_run_id, r.reviewer_model, r.verdict, r.criteria, r.platforms, r.missing, r.reason, r.idempotency_key, r.superseded_by, r.accepted_at, r.accepted_by_type, r.accepted_by_id, r.recorded_at, r.authorization_id FROM closure_review AS r
+JOIN closure_authorization AS a
+  ON a.id = r.authorization_id AND a.workspace_id = r.workspace_id
+WHERE r.workspace_id = $1
+  AND r.subject_kind = 'issue'
+  AND r.subject_id = $2
+  AND r.action = 'issue_close'
+  AND r.verdict = 'pass'
+  AND r.accepted_at IS NOT NULL
+  AND r.superseded_by IS NULL
+  AND a.state = 'active'
+  AND (a.expires_at IS NULL OR a.expires_at > now())
+  AND 'issue_close' = ANY(a.actions)
+ORDER BY r.recorded_at DESC, r.id DESC
+LIMIT 1
+`
+
+type GetValidAcceptedClosureReviewParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SubjectID   pgtype.UUID `json:"subject_id"`
+}
+
+// The currently valid acceptance for one issue. Valid means: a pass verdict
+// for the action, already accepted, not superseded by a newer delivery, and
+// backed by an authorization that is still active, unexpired and still allows
+// closing. accepted_at alone is not evidence: a revoked grant, a replaced
+// delivery or a stale row must not release a downstream dependent.
+func (q *Queries) GetValidAcceptedClosureReview(ctx context.Context, arg GetValidAcceptedClosureReviewParams) (ClosureReview, error) {
+	row := q.db.QueryRow(ctx, getValidAcceptedClosureReview, arg.WorkspaceID, arg.SubjectID)
+	var i ClosureReview
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.SubjectKind,
+		&i.SubjectID,
+		&i.Action,
+		&i.DeliveryVersion,
+		&i.DeliveryTree,
+		&i.CriteriaRevision,
+		&i.AuthorType,
+		&i.AuthorID,
+		&i.AuthorRunID,
+		&i.AuthorModel,
+		&i.ReviewerType,
+		&i.ReviewerID,
+		&i.ReviewerRunID,
+		&i.ReviewerModel,
+		&i.Verdict,
+		&i.Criteria,
+		&i.Platforms,
+		&i.Missing,
+		&i.Reason,
+		&i.IdempotencyKey,
+		&i.SupersededBy,
+		&i.AcceptedAt,
+		&i.AcceptedByType,
+		&i.AcceptedByID,
+		&i.RecordedAt,
+		&i.AuthorizationID,
+	)
+	return i, err
+}
+
 const listClosureReviews = `-- name: ListClosureReviews :many
-SELECT id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at FROM closure_review
+SELECT id, workspace_id, project_id, subject_kind, subject_id, action, delivery_version, delivery_tree, criteria_revision, author_type, author_id, author_run_id, author_model, reviewer_type, reviewer_id, reviewer_run_id, reviewer_model, verdict, criteria, platforms, missing, reason, idempotency_key, superseded_by, accepted_at, accepted_by_type, accepted_by_id, recorded_at, authorization_id FROM closure_review
 WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
 ORDER BY recorded_at DESC, id DESC
 `
@@ -559,6 +632,7 @@ func (q *Queries) ListClosureReviews(ctx context.Context, arg ListClosureReviews
 			&i.AcceptedByType,
 			&i.AcceptedByID,
 			&i.RecordedAt,
+			&i.AuthorizationID,
 		); err != nil {
 			return nil, err
 		}

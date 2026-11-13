@@ -717,6 +717,7 @@ type ClosureReview struct {
 	AcceptedByType   string             `json:"accepted_by_type"`
 	AcceptedByID     pgtype.UUID        `json:"accepted_by_id"`
 	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+	AuthorizationID  pgtype.UUID        `json:"authorization_id"`
 }
 
 type CloudAgentConnection struct {

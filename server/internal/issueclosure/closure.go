@@ -83,6 +83,7 @@ const (
 	ReasonReviewFailed           ReasonCode = "review_failed"
 	ReasonReviewNeedsChanges     ReasonCode = "review_needs_changes"
 	ReasonMissingDeliverable     ReasonCode = "missing_deliverable"
+	ReasonDeliverablesUnknown    ReasonCode = "deliverables_unknown"
 	ReasonCallerNotCloser        ReasonCode = "caller_not_closer"
 )
 
@@ -282,7 +283,15 @@ type Input struct {
 	Authorization  *Authorization
 	Acceptance     *Acceptance
 	Reviews        []Review
-	Required       []RequiredDeliverable
+	// Required lists the delivery conditions the caller actually read. An
+	// empty list is only meaningful together with RequirementsKnown: without
+	// that flag the caller could not read the conditions and the decision must
+	// not treat "unknown" as "nothing required".
+	Required []RequiredDeliverable
+	// RequirementsKnown is true only when Required is the complete, readable
+	// result of the delivery-condition source. The zero value is false so a
+	// caller that forgets to load evidence fails closed instead of closing.
+	RequirementsKnown bool
 }
 
 // Decision is the single verdict consumed by the prompt, the status-write gate
@@ -345,6 +354,14 @@ func Evaluate(in Input) Decision {
 		dec.Reason = ReasonHumanStepPending
 		dec.Detail = "a human review step is still open"
 		dec.NextActor = in.Workflow.HumanActor
+		return dec
+	}
+	// Unreadable delivery conditions are not "none". Refusing here is what
+	// keeps a failing evidence source from silently widening what may close.
+	if !in.RequirementsKnown {
+		dec.Outcome = Blocked
+		dec.Reason = ReasonDeliverablesUnknown
+		dec.Detail = "required delivery conditions could not be read; treating them as complete is not allowed"
 		return dec
 	}
 
