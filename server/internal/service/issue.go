@@ -143,6 +143,14 @@ type IssueCreateOpts struct {
 	// still resolving, then promotes the returned task after attachment binding.
 	// Zero preserves the ordinary immediate enqueue path.
 	AssignedAgentRunFireAt time.Time
+
+	// SuppressAssignedRunEnqueue leaves the automatic assigned-agent task to the
+	// caller. The issue is still committed and published, but no task is created
+	// and no daemon is notified. Goal plan materialization uses this to commit
+	// the goal link and (goal_id, item_id) binding first, then enqueue through
+	// IssueService.WillEnqueueRun: the dependency gate can only see the plan
+	// graph once those rows exist.
+	SuppressAssignedRunEnqueue bool
 }
 
 // ErrActiveDuplicate signals that the duplicate guard found an active
@@ -618,7 +626,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 
 	s.publishIssueCreated(issue, attachments, labels, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
-	if opts.AssignedAgentRunFireAt.IsZero() {
+	if opts.AssignedAgentRunFireAt.IsZero() && !opts.SuppressAssignedRunEnqueue {
 		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
 	}
 

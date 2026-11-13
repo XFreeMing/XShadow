@@ -134,6 +134,117 @@ func TestMaterializeGoalPlanIsIdempotentPerItem(t *testing.T) {
 	})
 }
 
+// A dependent item must not reach the queue while its prerequisite is still
+// unfinished. The goal link and (goal_id, item_id) binding are written before
+// the enqueue, so the dependency gate sees the plan graph instead of an
+// unconstrained issue. Creating the issue used to enqueue immediately and
+// notify the daemon, which let a dependent be claimed in that window.
+func TestMaterializeGoalPlanBindsDependenciesBeforeEnqueue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	projectID := createProjectForPlan(t, "Materialize dependency gate "+t.Name())
+	goal := planTestGoal(t, projectID)
+	runtimeID, agentID := planTestRuntimeAndAgent(t, "materialize dependency gate")
+
+	itemA := "018f3a9e-2222-7c2b-9f1e-0000000000a1"
+	itemB := "018f3a9e-2222-7c2b-9f1e-0000000000a2"
+	code, _ := putPlan(t, goal.ID, map[string]any{
+		"expected_revision": 0,
+		"items": []map[string]any{
+			{"id": itemA, "title": "deliver the prerequisite", "outcome": "A exists", "acceptance_criteria": "A is usable", "binding": map[string]any{"type": "new"}},
+			{"id": itemB, "title": "deliver the dependent", "outcome": "B builds on A", "acceptance_criteria": "B is usable", "binding": map[string]any{"type": "new"}},
+		},
+		"edges": []map[string]any{{
+			"dependent_item_id": itemB, "prerequisite_item_id": itemA, "reason": "B needs A's interface",
+		}},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("save plan = %d, want 200", code)
+	}
+
+	body := map[string]any{"items": []map[string]any{
+		{"item_id": itemA, "assignee_type": "agent", "assignee_id": agentID},
+		{"item_id": itemB, "assignee_type": "agent", "assignee_id": agentID},
+	}}
+	first := materializePlan(t, goal.ID, body)
+	issues := map[string]string{}
+	for _, item := range first.Items {
+		issues[item.ItemID] = item.IssueID
+		switch item.ItemID {
+		case itemA:
+			if !item.Created || !item.TaskEnqueued || item.TaskEnqueuedID == nil {
+				t.Fatalf("upstream item A = %+v, want a created issue with an enqueued task", item)
+			}
+			if !item.Dependency.Ready {
+				t.Fatalf("upstream item A reported not ready: %+v", item.Dependency)
+			}
+		case itemB:
+			if !item.Created {
+				t.Fatalf("dependent item B was not materialized: %+v", item)
+			}
+			if item.TaskEnqueued || item.TaskEnqueuedID != nil {
+				t.Fatalf("dependent item B enqueued before its prerequisite was accepted: %+v", item)
+			}
+			if item.Dependency.Ready || item.Dependency.Reason != "dependency_not_done" {
+				t.Fatalf("dependent item B dependency = %+v, want dependency_not_done", item.Dependency)
+			}
+		}
+	}
+	if issues[itemA] == "" || issues[itemB] == "" || issues[itemA] == issues[itemB] {
+		t.Fatalf("materialized issues = %+v, want two distinct issues", issues)
+	}
+
+	var upstreamTasks, dependentTasks int
+	dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issues[itemA]).Scan(&upstreamTasks)
+	dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issues[itemB]).Scan(&dependentTasks)
+	if upstreamTasks != 1 {
+		t.Fatalf("upstream tasks = %d, want 1", upstreamTasks)
+	}
+	if dependentTasks != 0 {
+		t.Fatalf("dependent tasks = %d, want 0 before the prerequisite is accepted", dependentTasks)
+	}
+
+	// The claim path agrees with the persisted state: the only claimable task
+	// is the prerequisite's, and the dependent has nothing to hand out.
+	claimed, err := testHandler.TaskService.ClaimTaskForRuntime(context.Background(), parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("claim upstream task: %v", err)
+	}
+	if claimed == nil || uuidToString(claimed.IssueID) != issues[itemA] {
+		t.Fatalf("first claim = %+v, want the upstream issue %s", claimed, issues[itemA])
+	}
+	none, err := testHandler.TaskService.ClaimTaskForRuntime(context.Background(), parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("claim dependent task: %v", err)
+	}
+	if none != nil {
+		t.Fatalf("second claim = %s, want nothing while the prerequisite is unfinished", uuidToString(none.ID))
+	}
+
+	// A retry resolves the same binding and adds no task for either item.
+	replay := materializePlan(t, goal.ID, body)
+	for _, item := range replay.Items {
+		if item.Created || item.IssueID != issues[item.ItemID] {
+			t.Fatalf("replayed materialize item = %+v, want the existing issue %s", item, issues[item.ItemID])
+		}
+	}
+	var tasksAfterReplay int
+	dbfx.QueryRow(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = ANY($1::uuid[])`,
+		[]string{issues[itemA], issues[itemB]}).Scan(&tasksAfterReplay)
+	if tasksAfterReplay != upstreamTasks {
+		t.Fatalf("replayed materialize changed task count %d -> %d", upstreamTasks, tasksAfterReplay)
+	}
+
+	t.Cleanup(func() {
+		ctx := context.Background()
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = ANY($1::uuid[])`, []string{issues[itemA], issues[itemB]})
+		testPool.Exec(ctx, `DELETE FROM goal_plan_item_issue WHERE goal_id = $1`, goal.ID)
+		testPool.Exec(ctx, `DELETE FROM goal_issue WHERE goal_id = $1`, goal.ID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = ANY($1::uuid[])`, []string{issues[itemA], issues[itemB]})
+	})
+}
+
 // A refreshed page reads the durable execution model: the persisted item→issue
 // binding, the current dependency verdict, and the real event that releases a
 // waiting item. Nothing here depends on the materialize response being held in

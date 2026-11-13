@@ -191,14 +191,13 @@ func (h *Handler) materializePlanItem(ctx context.Context, w http.ResponseWriter
 	issueID := dbid.FromName("goal-plan-item", uuidToString(goal.WorkspaceID), uuidToString(goal.ID), item.ID)
 
 	created := false
-	var assignedTaskID pgtype.UUID
 	if _, err := h.Queries.GetIssue(ctx, issueID); errors.Is(err, pgx.ErrNoRows) {
 		assigneeType, assigneeID, ok := h.planItemAssignee(w, r, goal, request)
 		if !ok {
 			return result, false
 		}
 		creatorID, _ := util.ParseUUID(userID)
-		createResult, createErr := h.IssueService.Create(ctx, service.IssueCreateParams{
+		_, createErr := h.IssueService.Create(ctx, service.IssueCreateParams{
 			ID:             issueID,
 			WorkspaceID:    goal.WorkspaceID,
 			Title:          item.Title,
@@ -214,6 +213,10 @@ func (h *Handler) materializePlanItem(ctx context.Context, w http.ResponseWriter
 		}, service.IssueCreateOpts{
 			ActorID:  userID,
 			Platform: "web",
+			// The goal link and item binding below are what make the dependency
+			// gate aware of this issue. Create must not enqueue before they are
+			// committed; the enqueue happens after both writes.
+			SuppressAssignedRunEnqueue: true,
 		})
 		if createErr != nil {
 			// A concurrent materialize can win the primary key. If the row it
@@ -225,7 +228,6 @@ func (h *Handler) materializePlanItem(ctx context.Context, w http.ResponseWriter
 			}
 		} else {
 			created = true
-			assignedTaskID = createResult.AssignedTaskID
 		}
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve the issue for plan item "+item.ID)
@@ -251,6 +253,10 @@ func (h *Handler) materializePlanItem(ctx context.Context, w http.ResponseWriter
 		IssueID:      issueID,
 		PlanRevision: plan.Revision,
 	})
+	// boundHere is true only when this call inserted the (goal_id, item_id)
+	// binding. A concurrent materialize that already bound the item owns its own
+	// enqueue; this call must not add a second one.
+	boundHere := err == nil
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Lost the (goal_id, item_id) race: the winner's binding stands.
 		mapping, err = h.Queries.GetGoalPlanItemIssue(ctx, db.GetGoalPlanItemIssueParams{
@@ -261,7 +267,31 @@ func (h *Handler) materializePlanItem(ctx context.Context, w http.ResponseWriter
 		writeError(w, http.StatusInternalServerError, "failed to persist the plan item binding")
 		return result, false
 	}
-	return h.finishMaterializedItem(ctx, mapping.IssueID, created, item.ID, "new", created && assignedTaskID.Valid, assignedTaskID), true
+	// The goal link and binding above are committed, so the dependency gate now
+	// resolves this item's prerequisites. Only here may an assigned item enter
+	// the queue: enqueueing during Create let a dependent be claimed while it
+	// still looked unconstrained. WillEnqueueRun is the same predicate every
+	// issue write uses, and a rejected dependent stays taskless until the real
+	// dependency event releases it.
+	taskEnqueued := false
+	var taskID pgtype.UUID
+	if created || boundHere {
+		issue, loadErr := h.Queries.GetIssue(ctx, issueID)
+		if loadErr != nil {
+			slog.Error("plan materialize: bound issue unreadable",
+				"goal_id", uuidToString(goal.ID),
+				"item_id", item.ID,
+				"issue_id", uuidToString(issueID),
+				"error", loadErr,
+			)
+		} else if trigger, willRun := h.IssueService.WillEnqueueRun(ctx, service.IssueTriggerInput{
+			Issue:    issue,
+			IsCreate: true,
+		}, service.IssueTriggerProbe{}); willRun {
+			taskID, taskEnqueued = h.dispatchIssueRun(ctx, issue, trigger, "member", userID, "")
+		}
+	}
+	return h.finishMaterializedItem(ctx, mapping.IssueID, created, item.ID, "new", taskEnqueued, taskID), true
 }
 
 // finishMaterializedItem reports the binding and the current dependency
