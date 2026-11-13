@@ -303,13 +303,13 @@ func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pg
 func updateIssueStoppingWakeups(ctx context.Context, q *db.Queries, params db.UpdateIssueParams) (db.Issue, []db.AgentTaskQueue, error) {
 	issue, err := q.UpdateIssue(ctx, params)
 	if err != nil || !params.Status.Valid {
-		return issue, nil, err
+		return db.Issue(issue), nil, err
 	}
-	cancelled, err := service.StopClosedIssueWakeups(ctx, q, issue)
+	cancelled, err := service.StopClosedIssueWakeups(ctx, q, db.Issue(issue))
 	if err != nil {
 		return db.Issue{}, nil, fmt.Errorf("stop closed issue wakeups: %w", err)
 	}
-	return issue, cancelled, nil
+	return db.Issue(issue), cancelled, nil
 }
 
 func (h *Handler) broadcastCancelledWakeups(ctx context.Context, workspaceID pgtype.UUID, cancelled []db.AgentTaskQueue) {
@@ -4432,6 +4432,14 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.processChildEvents(r.Context(), issue.ParentIssueID, prevIssue.ParentIssueID)
 	}
 
+	// A status write is a real dependency-change event: dependents that were
+	// parked (or never enqueued) because this issue was not accepted yet get
+	// one chance to run. The release re-checks the persisted acceptance, so an
+	// unaccepted or reopened prerequisite still releases nothing.
+	if statusChanged {
+		h.releaseDependentsOfIssue(r.Context(), issue)
+	}
+
 	// The broadcast reaches every member; the caller's own copy names the
 	// original only when the caller can see it.
 	if resp.DuplicateOf != nil {
@@ -4679,6 +4687,9 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": resolvedID})
 	h.publishIssueSnapshots(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
 	h.publishClearedDuplicates(r.Context(), deleteResult.ClearedDuplicates, actorType, actorID)
+	if deleteResult.GoalLinksChanged {
+		h.publishGoalChanged(uuidToString(issue.WorkspaceID), actorType, actorID)
+	}
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", resolvedID, "workspace_id", uuidToString(issue.WorkspaceID))...)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -4694,6 +4705,10 @@ type issueDeleteResult struct {
 	// ClearedDuplicates lost their duplicate mark because their original was
 	// deleted. They stay cancelled.
 	ClearedDuplicates []clearedDuplicate
+	// GoalLinksChanged reports that at least one deleted task was linked to a
+	// goal, so the workspace's goal queries need a refresh. The goals
+	// themselves are untouched.
+	GoalLinksChanged bool
 }
 
 // clearedDuplicate pairs a duplicate whose mark a delete cleared with the
@@ -4782,6 +4797,31 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 			}
 		} else if !errors.Is(contextErr, pgx.ErrNoRows) {
 			return issueDeleteResult{}, fmt.Errorf("load issue source context for delete: %w", contextErr)
+		}
+		// A goal link is a relation to the task, not part of it: the delete
+		// clears the link and leaves the goal itself intact. The goal lock
+		// family (FOR UPDATE on goal delete) is not needed here because the
+		// issue row lock already serializes link writes.
+		goalLinks, err := qtx.DeleteGoalIssuesByIssue(ctx, db.DeleteGoalIssuesByIssueParams{
+			WorkspaceID: issue.WorkspaceID, IssueID: issue.ID,
+		})
+		if err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete goal links: %w", err)
+		}
+		if goalLinks > 0 {
+			result.GoalLinksChanged = true
+		}
+		// Closure evidence hangs off the subject by value only (no foreign
+		// keys by project rule), so it is removed with the issue.
+		if err := qtx.DeleteClosureReviewsBySubject(ctx, db.DeleteClosureReviewsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure reviews: %w", err)
+		}
+		if err := qtx.DeleteClosureAuthorizationsBySubject(ctx, db.DeleteClosureAuthorizationsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure authorizations: %w", err)
 		}
 		if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue: %w", err)
@@ -5296,6 +5336,9 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	h.publishIssueSnapshots(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
 	h.publishClearedDuplicates(r.Context(), deleteResult.ClearedDuplicates, actorType, actorID)
+	if deleteResult.GoalLinksChanged {
+		h.publishGoalChanged(workspaceID, actorType, actorID)
+	}
 	deleted := len(issues)
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)

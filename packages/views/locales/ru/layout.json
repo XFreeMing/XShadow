@@ -5,6 +5,7 @@
     "my_issues": "Мои задачи",
     "issues": "Задачи",
     "projects": "Проекты",
+    "goals": "Цели",
     "autopilots": "Автопилот",
     "agents": "Агенты",
     "squads": "Команды",
@@ -17,6 +18,7 @@
   "tab": {
     "issue": "Задача",
     "project": "Проект",
+    "goal": "Цель",
     "autopilot": "Автопилот",
     "agent": "Агент",
     "member": "Участник",

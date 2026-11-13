@@ -2344,6 +2344,68 @@ type DirectChatSendResult struct {
 
 var ErrChatSessionAlreadyStarted = errors.New("chat session already has a user message")
 
+// DirectChatSendPreparation carries everything a direct-chat send resolves
+// before its transaction: the agent preflight, the per-task Composio overlay
+// (network I/O) and the direct-human attribution (policy read + fallback).
+// A caller that owns its own transaction builds one first and then calls
+// SendPreparedDirectChatMessageInTx, so no network read runs with the
+// transaction open and no nested transaction is needed.
+type DirectChatSendPreparation struct {
+	runtimeOverlay   runtimeMCPOverlayData
+	originatorUser   pgtype.UUID
+	accountableUser  pgtype.UUID
+	attrSource       pgtype.Text
+	attrEvidenceKind pgtype.Text
+	attrEvidenceRef  pgtype.UUID
+}
+
+// PrepareDirectChatSend performs the pre-transaction work for one direct-chat
+// turn. sessionID is the session the turn will belong to; callers that create
+// the session themselves must preallocate it so attribution evidence and the
+// final row name the same id.
+func (s *TaskService) PrepareDirectChatSend(
+	ctx context.Context,
+	sessionID pgtype.UUID,
+	agent db.Agent,
+	initiatorUserID pgtype.UUID,
+) (DirectChatSendPreparation, error) {
+	// Re-read the agent before the transaction: the overlay and attribution
+	// must not be built with a transaction open, and the caller's row may have
+	// changed since it was loaded. The send re-checks both under the locks.
+	current, err := s.Queries.GetAgent(ctx, agent.ID)
+	if err != nil {
+		return DirectChatSendPreparation{}, fmt.Errorf("load direct chat agent: %w", err)
+	}
+	if current.ArchivedAt.Valid {
+		return DirectChatSendPreparation{}, ErrChatTaskAgentArchived
+	}
+	if !current.RuntimeID.Valid {
+		return DirectChatSendPreparation{}, ErrChatTaskAgentNoRuntime
+	}
+
+	// Full attribution for the chat sender, resolved before the tx (the policy
+	// read + fallback must not run with a transaction open) — the same
+	// direct_human stamp EnqueueChatTask writes. Without this the direct-chat
+	// path was a bypass: it set originator_user_id but left accountable_user_id
+	// / source / evidence NULL, violating the one-way invariant and dropping the
+	// audit source (MUL-4302 §2).
+	attr := attribution.DirectHumanRun(initiatorUserID, attribution.EvidenceChat, sessionID)
+	attr, err = s.applyAttributionFallback(ctx, attr, current)
+	if err != nil {
+		return DirectChatSendPreparation{}, err
+	}
+	attrSource, _, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
+
+	return DirectChatSendPreparation{
+		runtimeOverlay:   s.buildRuntimeMCPOverlay(ctx, initiatorUserID, current),
+		originatorUser:   attr.UserID,
+		accountableUser:  attr.AccountableUserID,
+		attrSource:       attrSource,
+		attrEvidenceKind: attrEvidenceKind,
+		attrEvidenceRef:  attrEvidenceRef,
+	}, nil
+}
+
 // SendDirectChatMessage atomically persists one web/mobile direct-chat turn:
 // the owning task (which claims its own input batch via chat_input_task_id), the
 // user message bound to that task, any attachment bindings, and the session
@@ -2365,187 +2427,223 @@ func (s *TaskService) SendDirectChatMessage(
 	uploaderType string,
 	uploaderID pgtype.UUID,
 ) (*DirectChatSendResult, error) {
-	// Build the per-task Composio overlay before the transaction — it can do
-	// network I/O and must not run with a DB transaction open.
-	overlay := s.buildRuntimeMCPOverlay(ctx, initiatorUserID, agent)
-
-	// Full attribution for the chat sender, resolved before the tx (the policy read
-	// + fallback must not run with a transaction open) — the same direct_human stamp
-	// EnqueueChatTask writes. Without this the direct-chat path was a bypass: it set
-	// originator_user_id but left accountable_user_id / source / evidence NULL,
-	// violating the one-way invariant and dropping the audit source (MUL-4302 §2).
-	attr := attribution.DirectHumanRun(initiatorUserID, attribution.EvidenceChat, session.ID)
-	attr, err := s.applyAttributionFallback(ctx, attr, agent)
+	prepared, err := s.PrepareDirectChatSend(ctx, session.ID, agent, initiatorUserID)
 	if err != nil {
 		return nil, err
 	}
-	attrSource, _, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
+	if s.TxStarter == nil {
+		return nil, errors.New("direct chat send: transaction starter is required")
+	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin direct chat send: %w", err)
+	}
+	defer tx.Rollback(ctx)
 
-	var out DirectChatSendResult
-	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
-		// Serialise this send against a concurrent runtime rebind of the same
-		// session (MUL-5163). The lock must be taken first and the agent re-read
-		// under it: the runtime_id the caller loaded can already be stale by the
-		// time we get here, and a send blocked behind a rebind would otherwise
-		// resume and stamp its task with the runtime the switch just moved away
-		// from — leaving the user with a "switched" confirmation and a reply
-		// running on the old runtime. Locking chat_session first also matches the
-		// delete path's lock order, so the two cannot deadlock.
-		if _, err := qtx.LockChatSessionForRuntimeBind(ctx, session.ID); err != nil {
-			return fmt.Errorf("lock chat session: %w", err)
-		}
-		currentSession, err := qtx.GetChatSession(ctx, session.ID)
-		if err != nil {
-			return fmt.Errorf("reload chat session: %w", err)
-		}
-		if currentSession.Status != "active" {
-			return ErrChatSessionArchived
-		}
-		carrier, err := qtx.GetAgentForClaimUpdate(ctx, session.AgentID)
-		if err != nil {
-			return fmt.Errorf("reload chat agent: %w", err)
-		}
-		if carrier.ArchivedAt.Valid {
-			return ErrChatTaskAgentArchived
-		}
-		if !carrier.RuntimeID.Valid {
-			return ErrChatTaskAgentNoRuntime
-		}
-
-		// The database status of every newly-created task is "queued" until a
-		// daemon claims it. Product queue semantics are positional instead: this
-		// send is a follow-up only when another visible task in the same session
-		// is already ahead of it. Deferred retries count because they resume an
-		// older turn before this one. The session + agent locks serialize sibling
-		// sends, retries, terminal writes, and claims around this read.
-		queued, err := qtx.HasPendingChatTurnForSession(ctx, session.ID)
-		if err != nil {
-			return fmt.Errorf("check direct chat queue position: %w", err)
-		}
-		out.Queued = queued
-
-		task, err := qtx.CreateChatTask(ctx, db.CreateChatTaskParams{
-			ID:                   dbid.NewV7(),
-			AgentID:              session.AgentID,
-			RuntimeID:            carrier.RuntimeID,
-			Priority:             2, // medium priority for chat; matches EnqueueChatTask
-			ChatSessionID:        session.ID,
-			InitiatorUserID:      initiatorUserID,
-			OriginatorUserID:     attr.UserID,
-			AccountableUserID:    attr.AccountableUserID,
-			ForceFreshSession:    pgtype.Bool{Bool: false, Valid: true},
-			RuntimeMcpOverlay:    overlay.Overlay,
-			RuntimeConnectedApps: overlay.ConnectedApps,
-			OriginatorSource:     attrSource,
-			TriggerEvidenceKind:  attrEvidenceKind,
-			TriggerEvidenceRefID: attrEvidenceRef,
-		})
-		if err != nil {
-			return fmt.Errorf("create direct chat task: %w", err)
-		}
-		// Claim this task's own input batch (chat_input_task_id = id) in the same
-		// transaction, before the user message is written with task_id = task.id.
-		task, err = qtx.SetChatTaskInputOwnerSelf(ctx, task.ID)
-		if err != nil {
-			return fmt.Errorf("stamp direct chat input owner: %w", err)
-		}
-		out.Task = task
-
-		// Adopt the onboarding kickoff, if this session still has an unowned one.
-		// It is written by OpenMikaOnboardingChat with no task, so this is the
-		// only thing that ever delivers it to a runtime — and it must happen
-		// before the member's own row is written, so the batch reads as
-		// "context, then their message" once ordered by created_at.
-		//
-		// A no-op for every other session: only Mika onboarding writes that kind,
-		// and only the first send of one finds it unowned.
-		if err := qtx.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
-			ChatSessionID: session.ID,
-			TaskID:        task.ID,
-		}); err != nil {
-			return fmt.Errorf("adopt onboarding kickoff: %w", err)
-		}
-
-		// Initialize an explicitly empty Chat before inserting its first public
-		// user message. The CAS query also protects a manual rename and competing
-		// first send; keeping it in this transaction prevents a title-only commit.
-		if title := chattitle.Derive(content); title != "" {
-			if _, err := qtx.InitializeChatSessionTitle(ctx, db.InitializeChatSessionTitleParams{ID: session.ID, Title: title}); err == nil {
-				out.InitialTitle = title
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("initialize direct chat title: %w", err)
-			}
-		}
-
-		// Create the user message already owned by this task (task_id = task.id),
-		// so it belongs to this immutable input batch the instant it exists.
-		msg, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
-			ID:            dbid.NewV7(),
-			ChatSessionID: session.ID,
-			Role:          "user",
-			Content:       content,
-			TaskID:        task.ID,
-			MessageKind:   pgtype.Text{String: protocol.ChatMessageKindMessage, Valid: true},
-		})
-		if err != nil {
-			return fmt.Errorf("create user chat message: %w", err)
-		}
-		out.Message = msg
-
-		if len(attachmentIDs) > 0 {
-			bound, err := qtx.LinkAttachmentsToChatMessage(ctx, db.LinkAttachmentsToChatMessageParams{
-				ChatMessageID: msg.ID,
-				ChatSessionID: session.ID,
-				WorkspaceID:   session.WorkspaceID,
-				UploaderType:  uploaderType,
-				UploaderID:    uploaderID,
-				AttachmentIds: attachmentIDs,
-			})
-			if err != nil {
-				return fmt.Errorf("link chat attachments: %w", err)
-			}
-			out.BoundAttachmentIDs = bound
-
-			// An explicitly empty /new Chat can receive its first turn from a
-			// first-party client. For an attachment-only turn, initialize the
-			// title from the first attachment that was actually bound. The media
-			// title CAS runs after the message insert by design and still refuses
-			// to overwrite a manual rename or a competing first message.
-			if out.InitialTitle == "" && strings.TrimSpace(content) == "" && len(bound) > 0 {
-				attachments, err := qtx.ListAttachmentsByChatMessage(ctx, db.ListAttachmentsByChatMessageParams{
-					ChatMessageID: msg.ID,
-					WorkspaceID:   session.WorkspaceID,
-				})
-				if err != nil {
-					return fmt.Errorf("list bound chat attachments for title: %w", err)
-				}
-				if len(attachments) > 0 {
-					title := chattitle.Derive(attachments[0].Filename)
-					if title != "" {
-						if _, err := qtx.InitializeChatSessionMediaTitle(ctx, db.InitializeChatSessionMediaTitleParams{
-							ID: session.ID, MessageID: msg.ID, Title: title,
-						}); err == nil {
-							out.InitialTitle = title
-						} else if !errors.Is(err, pgx.ErrNoRows) {
-							return fmt.Errorf("initialize direct attachment chat title: %w", err)
-						}
-					}
-				}
-			}
-		}
-
-		if err := qtx.TouchChatSession(ctx, session.ID); err != nil {
-			return fmt.Errorf("touch chat session: %w", err)
-		}
-		return nil
-	}); err != nil {
+	out, err := s.SendPreparedDirectChatMessageInTx(
+		ctx, tx, session, initiatorUserID, content, attachmentIDs, uploaderType, uploaderID, prepared,
+	)
+	if err != nil {
 		slog.Error("direct chat send failed",
 			"chat_session_id", util.UUIDToString(session.ID),
 			"agent_id", util.UUIDToString(session.AgentID),
 			"error", err)
 		return nil, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit direct chat send: %w", err)
+	}
 
+	s.FinalizeDirectChatSend(ctx, session, out)
+	return out, nil
+}
+
+// SendPreparedDirectChatMessageInTx writes one direct-chat turn into a
+// caller-owned transaction: the task, its own input owner, the onboarding
+// kickoff adoption, the title CAS, the user message, attachment bindings and
+// the session touch. It never begins, commits or rolls back — the caller decides
+// the transaction boundary — and it performs no post-commit effects.
+func (s *TaskService) SendPreparedDirectChatMessageInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	session db.ChatSession,
+	initiatorUserID pgtype.UUID,
+	content string,
+	attachmentIDs []pgtype.UUID,
+	uploaderType string,
+	uploaderID pgtype.UUID,
+	prepared DirectChatSendPreparation,
+) (*DirectChatSendResult, error) {
+	if tx == nil {
+		return nil, errors.New("direct chat send: caller transaction is required")
+	}
+	qtx := s.Queries.WithTx(tx)
+
+	var out DirectChatSendResult
+	// Serialise this send against a concurrent runtime rebind of the same
+	// session (MUL-5163). The lock must be taken first and the agent re-read
+	// under it: the runtime_id the caller loaded can already be stale by the
+	// time we get here, and a send blocked behind a rebind would otherwise
+	// resume and stamp its task with the runtime the switch just moved away
+	// from — leaving the user with a "switched" confirmation and a reply
+	// running on the old runtime. Locking chat_session first also matches the
+	// delete path's lock order, so the two cannot deadlock.
+	if _, err := qtx.LockChatSessionForRuntimeBind(ctx, session.ID); err != nil {
+		return nil, fmt.Errorf("lock chat session: %w", err)
+	}
+	currentSession, err := qtx.GetChatSession(ctx, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("reload chat session: %w", err)
+	}
+	if currentSession.Status != "active" {
+		return nil, ErrChatSessionArchived
+	}
+	carrier, err := qtx.GetAgentForClaimUpdate(ctx, session.AgentID)
+	if err != nil {
+		return nil, fmt.Errorf("reload chat agent: %w", err)
+	}
+	if carrier.ArchivedAt.Valid {
+		return nil, ErrChatTaskAgentArchived
+	}
+	if !carrier.RuntimeID.Valid {
+		return nil, ErrChatTaskAgentNoRuntime
+	}
+
+	// The database status of every newly-created task is "queued" until a
+	// daemon claims it. Product queue semantics are positional instead: this
+	// send is a follow-up only when another visible task in the same session
+	// is already ahead of it. Deferred retries count because they resume an
+	// older turn before this one. The session + agent locks serialize sibling
+	// sends, retries, terminal writes, and claims around this read.
+	queued, err := qtx.HasPendingChatTurnForSession(ctx, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("check direct chat queue position: %w", err)
+	}
+	out.Queued = queued
+
+	task, err := qtx.CreateChatTask(ctx, db.CreateChatTaskParams{
+		ID:                   dbid.NewV7(),
+		AgentID:              session.AgentID,
+		RuntimeID:            carrier.RuntimeID,
+		Priority:             2, // medium priority for chat; matches EnqueueChatTask
+		ChatSessionID:        session.ID,
+		InitiatorUserID:      initiatorUserID,
+		OriginatorUserID:     prepared.originatorUser,
+		AccountableUserID:    prepared.accountableUser,
+		ForceFreshSession:    pgtype.Bool{Bool: false, Valid: true},
+		RuntimeMcpOverlay:    prepared.runtimeOverlay.Overlay,
+		RuntimeConnectedApps: prepared.runtimeOverlay.ConnectedApps,
+		OriginatorSource:     prepared.attrSource,
+		TriggerEvidenceKind:  prepared.attrEvidenceKind,
+		TriggerEvidenceRefID: prepared.attrEvidenceRef,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create direct chat task: %w", err)
+	}
+	// Claim this task's own input batch (chat_input_task_id = id) in the same
+	// transaction, before the user message is written with task_id = task.id.
+	task, err = qtx.SetChatTaskInputOwnerSelf(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("stamp direct chat input owner: %w", err)
+	}
+	out.Task = task
+
+	// Adopt the onboarding kickoff, if this session still has an unowned one.
+	// It is written by OpenMikaOnboardingChat with no task, so this is the
+	// only thing that ever delivers it to a runtime — and it must happen
+	// before the member's own row is written, so the batch reads as
+	// "context, then their message" once ordered by created_at.
+	//
+	// A no-op for every other session: only Mika onboarding writes that kind,
+	// and only the first send of one finds it unowned.
+	if err := qtx.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
+		ChatSessionID: session.ID,
+		TaskID:        task.ID,
+	}); err != nil {
+		return nil, fmt.Errorf("adopt onboarding kickoff: %w", err)
+	}
+
+	// Initialize an explicitly empty Chat before inserting its first public
+	// user message. The CAS query also protects a manual rename and competing
+	// first send; keeping it in this transaction prevents a title-only commit.
+	if title := chattitle.Derive(content); title != "" {
+		if _, err := qtx.InitializeChatSessionTitle(ctx, db.InitializeChatSessionTitleParams{ID: session.ID, Title: title}); err == nil {
+			out.InitialTitle = title
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("initialize direct chat title: %w", err)
+		}
+	}
+
+	// Create the user message already owned by this task (task_id = task.id),
+	// so it belongs to this immutable input batch the instant it exists.
+	msg, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+		ID:            dbid.NewV7(),
+		ChatSessionID: session.ID,
+		Role:          "user",
+		Content:       content,
+		TaskID:        task.ID,
+		MessageKind:   pgtype.Text{String: protocol.ChatMessageKindMessage, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create user chat message: %w", err)
+	}
+	out.Message = msg
+
+	if len(attachmentIDs) > 0 {
+		bound, err := qtx.LinkAttachmentsToChatMessage(ctx, db.LinkAttachmentsToChatMessageParams{
+			ChatMessageID: msg.ID,
+			ChatSessionID: session.ID,
+			WorkspaceID:   session.WorkspaceID,
+			UploaderType:  uploaderType,
+			UploaderID:    uploaderID,
+			AttachmentIds: attachmentIDs,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("link chat attachments: %w", err)
+		}
+		out.BoundAttachmentIDs = bound
+
+		// An explicitly empty /new Chat can receive its first turn from a
+		// first-party client. For an attachment-only turn, initialize the
+		// title from the first attachment that was actually bound. The media
+		// title CAS runs after the message insert by design and still refuses
+		// to overwrite a manual rename or a competing first message.
+		if out.InitialTitle == "" && strings.TrimSpace(content) == "" && len(bound) > 0 {
+			attachments, err := qtx.ListAttachmentsByChatMessage(ctx, db.ListAttachmentsByChatMessageParams{
+				ChatMessageID: msg.ID,
+				WorkspaceID:   session.WorkspaceID,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("list bound chat attachments for title: %w", err)
+			}
+			if len(attachments) > 0 {
+				title := chattitle.Derive(attachments[0].Filename)
+				if title != "" {
+					if _, err := qtx.InitializeChatSessionMediaTitle(ctx, db.InitializeChatSessionMediaTitleParams{
+						ID: session.ID, MessageID: msg.ID, Title: title,
+					}); err == nil {
+						out.InitialTitle = title
+					} else if !errors.Is(err, pgx.ErrNoRows) {
+						return nil, fmt.Errorf("initialize direct attachment chat title: %w", err)
+					}
+				}
+			}
+		}
+	}
+
+	if err := qtx.TouchChatSession(ctx, session.ID); err != nil {
+		return nil, fmt.Errorf("touch chat session: %w", err)
+	}
+	return &out, nil
+}
+
+// FinalizeDirectChatSend performs only the post-commit effects of a direct-chat
+// send. It must run after the caller's transaction commits, so nothing is
+// announced before it is durable.
+func (s *TaskService) FinalizeDirectChatSend(ctx context.Context, session db.ChatSession, out *DirectChatSendResult) {
+	if out == nil {
+		return
+	}
 	slog.Info("direct chat task enqueued",
 		"task_id", util.UUIDToString(out.Task.ID),
 		"chat_session_id", util.UUIDToString(session.ID),
@@ -2553,7 +2651,6 @@ func (s *TaskService) SendDirectChatMessage(
 	// Notify only after commit. See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, out.Task)
 	s.NotifyTaskEnqueued(ctx, out.Task)
-	return &out, nil
 }
 
 // MikaOnboardingOpenResult carries the two rows that open a Mika conversation.
@@ -3706,6 +3803,50 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 			}
 			outcome = "error_claim"
 			return fmt.Errorf("claim task: %w", err)
+		}
+
+		// Last gate before a run starts. A dependent issue may have been
+		// queued while its prerequisite was still in review, or by an event
+		// that predates the prerequisite being reopened. Re-check the
+		// persisted evidence here and park the claim when it no longer holds:
+		// status alone (a human write, a merged-PR automation) is never
+		// release evidence.
+		//
+		// The parked row is 'deferred' with no fire_at, not 'queued'. Returning
+		// it to the claim queue would make every later poll list it, claim it
+		// and reject it again — the repeated pickup this gate exists to avoid.
+		// A real dependency change re-arms it through
+		// ReleaseDeferredDependentTasksForIssue, and the ordinary deferred
+		// promotion path then puts it back into the claim queue once.
+		if task.IssueID.Valid {
+			issue, err := qtx.GetIssue(ctx, task.IssueID)
+			if err != nil {
+				outcome = "error_dependency_check"
+				return fmt.Errorf("load issue for dependency check: %w", err)
+			}
+			state, err := IssueDependenciesReady(ctx, qtx, issue)
+			if err != nil {
+				outcome = "error_dependency_check"
+				return fmt.Errorf("check issue dependencies: %w", err)
+			}
+			if !state.Ready {
+				if _, err := qtx.DeferAgentTaskForUnmetDependencies(ctx, db.DeferAgentTaskForUnmetDependenciesParams{
+					TaskID:       task.ID,
+					RuntimeID:    task.RuntimeID,
+					DispatchedAt: task.DispatchedAt,
+				}); err != nil {
+					outcome = "error_defer_dependency"
+					return fmt.Errorf("defer task blocked by dependencies: %w", err)
+				}
+				outcome = "dependencies_unmet"
+				slog.Debug("task claim parked: issue dependencies are not accepted",
+					"task_id", util.UUIDToString(task.ID),
+					"issue_id", util.UUIDToString(task.IssueID),
+					"reason", state.Reason,
+					"detail", state.Detail,
+				)
+				return nil
+			}
 		}
 
 		// An idle task-owned direct-chat row may already be visible as the

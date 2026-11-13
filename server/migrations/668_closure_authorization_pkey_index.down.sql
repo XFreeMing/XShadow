@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS closure_authorization_pkey_uidx;

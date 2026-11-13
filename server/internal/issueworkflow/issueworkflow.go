@@ -881,6 +881,9 @@ func Brief(in BriefInput) string {
 		}
 		if span.deliver != "" {
 			fmt.Fprintf(&b, "Step done      → multica issue status %s %s%s\n", in.IssueIdentifier, span.deliver, handsOffTo(span.deliver))
+			if span.deliver == issuestatus.Done {
+				b.WriteString("Closing is a decision, not a side effect: on a managed issue `done` is refused unless a scoped grant and an independent acceptance of the fixed delivery are recorded. Do not retry a refused close; leave it to the reviewer or a human.\n")
+			}
 		} else {
 			fmt.Fprintf(&b, "Step done      → leave the issue at `%s`; `done` is set by a human\n", in.StatusKey)
 		}

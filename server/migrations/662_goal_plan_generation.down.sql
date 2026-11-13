@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS goal_plan_generation;

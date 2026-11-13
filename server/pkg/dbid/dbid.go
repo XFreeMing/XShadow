@@ -56,3 +56,17 @@ func NewV7() pgtype.UUID {
 	}
 	return pgtype.UUID{Bytes: [16]byte(id), Valid: true}
 }
+
+// FromName derives a stable UUID from a namespace and a list of parts. It is
+// deliberately NOT random: callers use it when the same logical row must keep
+// resolving to the same primary key across retried triggers (for example a goal
+// plan item materialized into an issue). The value is content-addressed, never
+// secret, and must not be used where unpredictability matters.
+func FromName(namespace string, parts ...string) pgtype.UUID {
+	name := namespace
+	for _, part := range parts {
+		name += ":" + part
+	}
+	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(name))
+	return pgtype.UUID{Bytes: [16]byte(id), Valid: true}
+}

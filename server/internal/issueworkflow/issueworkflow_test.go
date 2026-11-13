@@ -451,6 +451,19 @@ func TestBriefPrintsBuiltInKeysOnce(t *testing.T) {
 	}
 }
 
+// A handlerless span that reaches straight to done is still a suggestion, not
+// permission: the closure contract can refuse the write (DEV-7).
+func TestBriefWarnsThatSpanDoneIsAClosureDecision(t *testing.T) {
+	def := Definition{Name: "Lean", Steps: []Step{{StatusKey: "todo"}, {StatusKey: "done"}}}
+	brief := Brief(BriefInput{Workflow: def, StatusKey: "todo", IssueIdentifier: "MUL-9"})
+	if !strings.Contains(brief, "Step done      → multica issue status MUL-9 done\n") {
+		t.Fatalf("brief dropped the span's done move:\n%s", brief)
+	}
+	if !strings.Contains(brief, "Closing is a decision, not a side effect") {
+		t.Fatalf("brief suggests done without the closure contract warning:\n%s", brief)
+	}
+}
+
 func TestBriefWithoutBlockedPointsAtTheBackStatus(t *testing.T) {
 	def := withHandoffs(Definition{Name: "Lean", Steps: stepsFor(ArrangeKeys([]string{"implement", "code_review"}))},
 		[]Step{{StatusKey: "code_review", Handler: Handler{Type: HandlerProjectLead}, BackStatusKey: "implement"}})

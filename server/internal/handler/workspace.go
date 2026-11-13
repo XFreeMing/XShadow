@@ -1367,6 +1367,43 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceIssueRoots(ctx, requester.WorkspaceID) },
 		},
 		{
+			// Closure evidence is workspace-owned and hangs off its subject by
+			// value only; it is swept before the goals and issues it names.
+			name: "delete closure reviews",
+			run:  func() error { return qtx.DeleteWorkspaceClosureReviews(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete closure authorizations",
+			run:  func() error { return qtx.DeleteWorkspaceClosureAuthorizations(ctx, requester.WorkspaceID) },
+		},
+		{
+			// goal and goal_issue carry no foreign keys by project rule, so
+			// both are swept explicitly. Links go first so no relation to a
+			// goal outlives the goal row.
+			name: "delete goal links",
+			run:  func() error { return qtx.DeleteWorkspaceGoalIssues(ctx, requester.WorkspaceID) },
+		},
+		{
+			// Plan drafts and their generations hang off goals by value only.
+			// They go before the goals; the agent tasks that ran a generation
+			// are swept by the task steps and are never deleted here.
+			name: "delete goal plan generations",
+			run:  func() error { return qtx.DeleteWorkspaceGoalPlanGenerations(ctx, requester.WorkspaceID) },
+		},
+		{
+			// Materialized bindings name goals and issues by value only.
+			name: "delete goal plan item issues",
+			run:  func() error { return qtx.DeleteWorkspaceGoalPlanItemIssues(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete goal plans",
+			run:  func() error { return qtx.DeleteWorkspaceGoalPlans(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete goals",
+			run:  func() error { return qtx.DeleteWorkspaceGoals(ctx, requester.WorkspaceID) },
+		},
+		{
 			// issue_status carries no foreign key by project rule, so its rows
 			// are swept explicitly. Placed after the issue deletes so no issue
 			// row outlives the catalog its status key resolves against.

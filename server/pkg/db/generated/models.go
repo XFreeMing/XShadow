@@ -668,6 +668,58 @@ type ClientUsageDaily struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ClosureAuthorization struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	SubjectKind      string             `json:"subject_kind"`
+	SubjectID        pgtype.UUID        `json:"subject_id"`
+	Actions          []string           `json:"actions"`
+	CoversChildren   bool               `json:"covers_children"`
+	CriteriaRevision string             `json:"criteria_revision"`
+	State            string             `json:"state"`
+	Revision         int32              `json:"revision"`
+	SourceRef        string             `json:"source_ref"`
+	GrantedByType    string             `json:"granted_by_type"`
+	GrantedByID      pgtype.UUID        `json:"granted_by_id"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ClosureReview struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	SubjectKind      string             `json:"subject_kind"`
+	SubjectID        pgtype.UUID        `json:"subject_id"`
+	Action           string             `json:"action"`
+	DeliveryVersion  string             `json:"delivery_version"`
+	DeliveryTree     string             `json:"delivery_tree"`
+	CriteriaRevision string             `json:"criteria_revision"`
+	AuthorType       string             `json:"author_type"`
+	AuthorID         pgtype.UUID        `json:"author_id"`
+	AuthorRunID      pgtype.UUID        `json:"author_run_id"`
+	AuthorModel      string             `json:"author_model"`
+	ReviewerType     string             `json:"reviewer_type"`
+	ReviewerID       pgtype.UUID        `json:"reviewer_id"`
+	ReviewerRunID    pgtype.UUID        `json:"reviewer_run_id"`
+	ReviewerModel    string             `json:"reviewer_model"`
+	Verdict          string             `json:"verdict"`
+	Criteria         []byte             `json:"criteria"`
+	Platforms        []byte             `json:"platforms"`
+	Missing          []byte             `json:"missing"`
+	Reason           string             `json:"reason"`
+	IdempotencyKey   string             `json:"idempotency_key"`
+	SupersededBy     pgtype.UUID        `json:"superseded_by"`
+	AcceptedAt       pgtype.Timestamptz `json:"accepted_at"`
+	AcceptedByType   string             `json:"accepted_by_type"`
+	AcceptedByID     pgtype.UUID        `json:"accepted_by_id"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+	AuthorizationID  pgtype.UUID        `json:"authorization_id"`
+}
+
 type CloudAgentConnection struct {
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
 	Provider         string             `json:"provider"`
@@ -884,6 +936,76 @@ type GithubPullRequestCheckSuite struct {
 	Conclusion pgtype.Text        `json:"conclusion"`
 	Status     string             `json:"status"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Goal struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	ProjectID          pgtype.UUID        `json:"project_id"`
+	Title              string             `json:"title"`
+	Intent             string             `json:"intent"`
+	Scope              string             `json:"scope"`
+	AcceptanceCriteria string             `json:"acceptance_criteria"`
+	OwnerType          pgtype.Text        `json:"owner_type"`
+	OwnerID            pgtype.UUID        `json:"owner_id"`
+	Status             string             `json:"status"`
+	CreatorType        string             `json:"creator_type"`
+	CreatorID          pgtype.UUID        `json:"creator_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GoalIssue struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	GoalID      pgtype.UUID        `json:"goal_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type GoalPlan struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	GoalID          pgtype.UUID        `json:"goal_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	Revision        int32              `json:"revision"`
+	State           string             `json:"state"`
+	Content         []byte             `json:"content"`
+	ContextSnapshot []byte             `json:"context_snapshot"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GoalPlanGeneration struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	GoalID           pgtype.UUID        `json:"goal_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	RequestKey       string             `json:"request_key"`
+	Intent           string             `json:"intent"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	BaseRevision     int32              `json:"base_revision"`
+	State            string             `json:"state"`
+	ChatSessionID    pgtype.UUID        `json:"chat_session_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	InputContext     []byte             `json:"input_context"`
+	Candidate        []byte             `json:"candidate"`
+	Applied          bool               `json:"applied"`
+	AppliedRevision  pgtype.Int4        `json:"applied_revision"`
+	ObservedRevision pgtype.Int4        `json:"observed_revision"`
+	Error            string             `json:"error"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GoalPlanItemIssue struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	GoalID       pgtype.UUID        `json:"goal_id"`
+	ItemID       string             `json:"item_id"`
+	IssueID      pgtype.UUID        `json:"issue_id"`
+	PlanRevision int32              `json:"plan_revision"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type InboxItem struct {

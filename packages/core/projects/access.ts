@@ -2,6 +2,7 @@ import { onlineManager, useMutation, useQueryClient } from "@tanstack/react-quer
 import { api } from "../api";
 import { projectKeys } from "./queries";
 import { issueKeys } from "../issues/queries";
+import { goalKeys } from "../goals/queries";
 import type { Project, ProjectVisibility } from "../types";
 
 // Mirrors the server: owners/admins, or the member lead of a private project.
@@ -42,6 +43,8 @@ export function useProjectAccessMutation(wsId: string, projectId: string) {
     onSettled: async () => {
       await qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
       await qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+      // Visibility and membership decide which goals this viewer may see.
+      await qc.invalidateQueries({ queryKey: goalKeys.all(wsId) });
     },
   });
 }

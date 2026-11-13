@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS uq_goal_plan_item_issue;
