@@ -92,6 +92,7 @@ export interface ChatSession {
    *  conversation uses workspace context only; optional for older servers. */
   project_id?: string | null;
   title: string;
+  is_goal_conversation?: boolean;
   status: "active" | "archived";
   /** True when the session has any unread assistant replies. List-only.
    *  Convenience for `unread_count > 0`. */

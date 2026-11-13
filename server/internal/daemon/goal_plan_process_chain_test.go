@@ -1291,12 +1291,6 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		ID string `json:"id"`
 	}
 	intent := "验证受控 context.md 能被规划任务读取"
-	api.mustJSON(t, http.MethodPost, "/api/goals", map[string]any{
-		"title":               "DEV-6 process chain goal " + runTag,
-		"intent":              intent,
-		"acceptance_criteria": "候选计划记录受控文件摘要",
-		"project_id":          project.ID,
-	}, &goal, http.StatusCreated)
 
 	// The database assertions compare complete row sets, not just the ids the
 	// API already reported. Every stage records its SQL, parameters, rows and
@@ -1307,6 +1301,17 @@ func TestGoalPlanProcessChain(t *testing.T) {
 		t.Fatalf("connect to the isolated test database: %v", err)
 	}
 	t.Cleanup(func() { conn.Close(context.Background()) })
+
+	// This test starts at an existing goal. The dedicated goal conversation
+	// is exercised by the handler suite.
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO goal (workspace_id, project_id, title, intent, acceptance_criteria, creator_type, creator_id)
+		VALUES ($1, $2, $3, $4, $5, 'member', (SELECT creator_id FROM project WHERE id = $2))
+		RETURNING id
+	`, profile.WorkspaceID, project.ID, "DEV-6 process chain goal "+runTag, intent,
+		"候选计划记录受控文件摘要").Scan(&goal.ID); err != nil {
+		t.Fatalf("seed the existing goal: %v", err)
+	}
 
 	var dbStages []dbStageEvidence
 	recordStage := func(ev dbStageEvidence) {

@@ -1,7 +1,11 @@
 {
   "list": {
     "title": "Goals",
-    "new_goal": "New goal",
+    "talk_to_chief": "Talk to the chief of staff",
+    "chief_unavailable": "The chief of staff is unavailable. Check who leads the coordination squad.",
+    "chat_open_failed": "Couldn't open the goal conversation. Try again.",
+    "project_chat_draft": "I'd like to discuss a goal for {{project}}: ",
+    "chat_intro": "Describe the outcome you want. Your chief of staff will find relevant tasks and save the goal once the outcome is clear.",
     "filter_status": "Status",
     "all_statuses": "All statuses",
     "empty_title": "No goals yet",
@@ -51,7 +55,6 @@
     "project_moved_scope": "This goal now has no project, so everyone in the workspace can see it."
   },
   "form": {
-    "create_title": "New goal",
     "edit_title": "Edit goal",
     "title": "Title",
     "title_placeholder": "What outcome should this goal deliver?",
@@ -69,10 +72,7 @@
     "squads": "Squads",
     "save": "Save",
     "saving": "Saving…",
-    "create": "Create goal",
-    "creating": "Creating…",
     "cancel": "Cancel",
-    "create_failed": "Couldn't create the goal. Your input is still here; try again.",
     "save_failed": "Couldn't save the goal. Your changes are still here; try again.",
     "project_locked": "Unlink every task before moving this goal to another project.",
     "owner_cleared": "Owner unavailable. Pick another owner or leave it empty."
@@ -103,7 +103,6 @@
     "unlinked": "Task unlinked"
   },
   "toast": {
-    "created": "Goal created",
     "updated": "Goal updated",
     "deleted": "Goal deleted",
     "completed": "Goal completed",

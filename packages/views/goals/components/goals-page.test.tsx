@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setApiInstance } from "@multica/core/api";
@@ -14,6 +14,7 @@ vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     goals: () => "/test/goals",
+    chatSession: (id: string) => `/test/chat?session=${id}`,
     goalDetail: (id: string) => `/test/goals/${id}`,
     issueDetail: (id: string) => `/test/issues/${id}`,
   }),
@@ -59,7 +60,7 @@ describe("GoalsPage", () => {
   const push = vi.fn();
   const api = {
     listGoals: vi.fn(),
-    createGoal: vi.fn(),
+    openGoalConversation: vi.fn(),
     getGoal: vi.fn(),
     listGoalIssues: vi.fn(),
   };
@@ -70,7 +71,7 @@ describe("GoalsPage", () => {
     });
     push.mockReset();
     api.listGoals.mockResolvedValue({ goals: [goal("g1", "First goal")], total: 1 });
-    api.createGoal.mockResolvedValue(goal("g2", "Second goal"));
+    api.openGoalConversation.mockReset().mockResolvedValue({ id: "chat-1", workspace_id: "ws-1" });
     api.listGoalIssues.mockResolvedValue({ issues: [], total: 0 });
     setApiInstance(api as unknown as ApiClient);
     vi.mocked(toast.success).mockClear();
@@ -129,41 +130,28 @@ describe("GoalsPage", () => {
     );
   });
 
-  it("does not navigate or toast success when the server confirms no goal", async () => {
-    api.createGoal.mockResolvedValue({ ...goal("", "") });
+  it("keeps the goal list open when the server confirms no conversation", async () => {
+    api.openGoalConversation.mockResolvedValue({ id: "", workspace_id: "ws-1" });
     renderPage();
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "New goal" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Title"), "Draft goal");
-    await user.click(within(dialog).getByRole("button", { name: "Create goal" }));
-
-    expect(await within(dialog).findByText(/Couldn't create the goal/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Talk to the chief of staff" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't open the goal conversation. Try again.",
+    ));
     expect(push).not.toHaveBeenCalled();
-    expect(toast.success).not.toHaveBeenCalled();
-    // The typed input survives a failed save.
-    expect(within(dialog).getByLabelText("Title")).toHaveValue("Draft goal");
   });
 
-  it("creates a goal, then opens its detail page", async () => {
+  it("opens the dedicated conversation returned by the workspace API", async () => {
     renderPage();
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "New goal" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Title"), "Draft goal");
-    await user.click(within(dialog).getByRole("button", { name: "Create goal" }));
-
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/test/goals/g2"));
-    expect(api.createGoal).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Draft goal" }),
-    );
-    expect(toast.success).toHaveBeenCalledWith("Goal created");
+    await userEvent.click(screen.getByRole("button", { name: "Talk to the chief of staff" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/test/chat?session=chat-1"));
+    expect(api.openGoalConversation).toHaveBeenCalledWith({ workspaceId: "ws-1" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("shows the empty state with a create action", async () => {
+  it("provides one conversation entry when the goal list is empty", async () => {
     api.listGoals.mockResolvedValue({ goals: [], total: 0 });
     renderPage();
     expect(await screen.findByText("No goals yet")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "New goal" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Talk to the chief of staff" })).toHaveLength(1);
   });
 });

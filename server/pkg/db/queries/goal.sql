@@ -47,10 +47,13 @@ FOR SHARE;
 -- name: CreateGoal :one
 INSERT INTO goal (
     workspace_id, project_id, title, intent, scope, acceptance_criteria,
-    owner_type, owner_id, status, creator_type, creator_id
+    owner_type, owner_id, status, creator_type, creator_id, source_chat_input_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg('source_chat_input_id')
 ) RETURNING *;
+
+-- name: GetGoalByChatInput :one
+SELECT * FROM goal WHERE workspace_id = $1 AND source_chat_input_id = $2;
 
 -- name: UpdateGoal :one
 UPDATE goal SET

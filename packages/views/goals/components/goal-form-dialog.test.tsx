@@ -50,7 +50,6 @@ const goal = (overrides: Partial<Goal> = {}): Goal => ({
 
 describe("GoalFormDialog", () => {
   let qc: QueryClient;
-  const createGoal = vi.fn();
   const updateGoal = vi.fn();
   const onSaved = vi.fn();
   const onOpenChange = vi.fn();
@@ -59,13 +58,11 @@ describe("GoalFormDialog", () => {
     qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    createGoal.mockClear();
     updateGoal.mockClear();
-    createGoal.mockResolvedValue(goal({ id: "goal-2" }));
     updateGoal.mockResolvedValue(goal());
     onSaved.mockReset();
     onOpenChange.mockReset();
-    setApiInstance({ createGoal, updateGoal } as unknown as ApiClient);
+    setApiInstance({ updateGoal } as unknown as ApiClient);
     vi.mocked(toast.success).mockClear();
     projects.length = 0;
   });
@@ -86,6 +83,7 @@ describe("GoalFormDialog", () => {
       <QueryClientProvider client={qc}>
         <GoalFormDialog
           open
+          goal={goal()}
           onOpenChange={onOpenChange}
           onSaved={onSaved}
           {...props}
@@ -94,23 +92,16 @@ describe("GoalFormDialog", () => {
     );
   }
 
-  it("requires a title before creating", async () => {
+  it("keeps the typed input and the dialog open when saving fails", async () => {
+    updateGoal.mockRejectedValue(new Error("Forbidden"));
     renderForm();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Create goal" }));
-    expect(await screen.findByText("Enter a title.")).toBeInTheDocument();
-    expect(createGoal).not.toHaveBeenCalled();
-  });
+    await user.clear(screen.getByLabelText("Title"));
+    await user.type(screen.getByLabelText("Title"), "Revised goal");
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
-  it("keeps the typed input and the dialog open when creation fails", async () => {
-    createGoal.mockRejectedValue(new Error("Forbidden"));
-    renderForm();
-    const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Title"), "Draft goal");
-    await user.click(screen.getByRole("button", { name: "Create goal" }));
-
-    expect(await screen.findByText(/Couldn't create the goal/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Title")).toHaveValue("Draft goal");
+    expect(await screen.findByText(/Couldn't save the goal/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toHaveValue("Revised goal");
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSaved).not.toHaveBeenCalled();
   });

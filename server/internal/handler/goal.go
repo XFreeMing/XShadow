@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -77,14 +78,15 @@ func goalToResponse(g db.Goal) GoalResponse {
 }
 
 type CreateGoalRequest struct {
-	Title              string  `json:"title"`
-	Intent             *string `json:"intent"`
-	Scope              *string `json:"scope"`
-	AcceptanceCriteria *string `json:"acceptance_criteria"`
-	ProjectID          *string `json:"project_id"`
-	OwnerType          *string `json:"owner_type"`
-	OwnerID            *string `json:"owner_id"`
-	Status             *string `json:"status"`
+	Title              string   `json:"title"`
+	Intent             *string  `json:"intent"`
+	Scope              *string  `json:"scope"`
+	AcceptanceCriteria *string  `json:"acceptance_criteria"`
+	ProjectID          *string  `json:"project_id"`
+	OwnerType          *string  `json:"owner_type"`
+	OwnerID            *string  `json:"owner_id"`
+	Status             *string  `json:"status"`
+	IssueIDs           []string `json:"issue_ids"`
 }
 
 type UpdateGoalRequest struct {
@@ -325,7 +327,7 @@ func (h *Handler) ListGoals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"goals": resp, "total": total})
 }
 
-func (h *Handler) CreateGoal(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) createGoal(w http.ResponseWriter, r *http.Request, inputID pgtype.UUID) {
 	var req CreateGoalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -345,6 +347,7 @@ func (h *Handler) CreateGoal(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
 	status := "planned"
 	if req.Status != nil && *req.Status != "" {
 		if !isGoalEnumValue(*req.Status, validGoalStatuses) {
@@ -352,6 +355,18 @@ func (h *Handler) CreateGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status = *req.Status
+	}
+	issueProjects := make(map[string]pgtype.UUID)
+	for _, ref := range req.IssueIDs {
+		issue, found := h.loadIssueForUser(w, r, strings.TrimSpace(ref))
+		if !found {
+			return
+		}
+		issueProjects[uuidToString(issue.ID)] = issue.ProjectID
+		if req.ProjectID == nil {
+			project := uuidToString(issue.ProjectID)
+			req.ProjectID = &project
+		}
 	}
 	projectID, ok := h.validateGoalProjectRef(w, r, wsUUID, req.ProjectID)
 	if !ok {
@@ -382,7 +397,49 @@ func (h *Handler) CreateGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	goal, err := h.Queries.CreateGoal(r.Context(), db.CreateGoalParams{
+	ctx := r.Context()
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		h.writeGoalWriteError(w, r, err, "create")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+	if inputID.Valid {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+			"goal-chat-input:"+uuidToString(inputID)); err != nil {
+			h.writeGoalWriteError(w, r, err, "create")
+			return
+		}
+		existing, err := qtx.GetGoalByChatInput(ctx, db.GetGoalByChatInputParams{
+			WorkspaceID: wsUUID, SourceChatInputID: inputID,
+		})
+		if err == nil {
+			_ = tx.Rollback(ctx)
+			if h.requireProjectVisible(w, r, workspaceID, existing.ProjectID, http.StatusNotFound, "goal not found") {
+				writeJSON(w, http.StatusOK, goalToResponse(existing))
+			}
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			h.writeGoalWriteError(w, r, err, "create")
+			return
+		}
+	}
+
+	if projectID.Valid {
+		if _, err := qtx.LockProjectForChatSessionCreate(ctx, db.LockProjectForChatSessionCreateParams{
+			ID: projectID, WorkspaceID: wsUUID,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "project not found")
+			} else {
+				h.writeGoalWriteError(w, r, err, "create")
+			}
+			return
+		}
+	}
+	goal, err := qtx.CreateGoal(ctx, db.CreateGoalParams{
 		WorkspaceID:        wsUUID,
 		ProjectID:          projectID,
 		Title:              title,
@@ -394,8 +451,49 @@ func (h *Handler) CreateGoal(w http.ResponseWriter, r *http.Request) {
 		Status:             status,
 		CreatorType:        actorType,
 		CreatorID:          creatorID,
+		SourceChatInputID:  inputID,
 	})
 	if err != nil {
+		h.writeGoalWriteError(w, r, err, "create")
+		return
+	}
+
+	issueIDs := make([]string, 0, len(issueProjects))
+	for id := range issueProjects {
+		issueIDs = append(issueIDs, id)
+	}
+	slices.Sort(issueIDs)
+	for _, id := range issueIDs {
+		issueID := parseUUID(id)
+		issue, err := qtx.LockIssueForGoalLink(ctx, db.LockIssueForGoalLinkParams{
+			ID: issueID, WorkspaceID: wsUUID,
+		})
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && issue.ProjectID != issueProjects[id]) {
+			writeError(w, http.StatusConflict, "issue changed while recording the goal")
+			return
+		}
+		if err != nil {
+			h.writeGoalWriteError(w, r, err, "link issue")
+			return
+		}
+		if issue.ProjectID != projectID {
+			writeErrorCode(w, http.StatusConflict, "goal_project_mismatch",
+				"the issue and the goal must belong to the same project")
+			return
+		}
+		if _, err := qtx.LinkGoalIssue(ctx, db.LinkGoalIssueParams{
+			WorkspaceID: wsUUID, GoalID: goal.ID, IssueID: issueID,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeErrorCode(w, http.StatusConflict, "issue_already_linked",
+					"the issue is already linked to another goal")
+			} else {
+				h.writeGoalWriteError(w, r, err, "link issue")
+			}
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		h.writeGoalWriteError(w, r, err, "create")
 		return
 	}

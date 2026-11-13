@@ -2642,6 +2642,7 @@ export const ChatSessionSchema: z.ZodType<ChatSession> = z.object({
   creator_id: z.string().default(""),
   project_id: z.string().nullable().optional(),
   title: z.string().default(""),
+  is_goal_conversation: z.boolean().optional().catch(undefined),
   status: z.enum(["active", "archived"]).catch("active"),
   has_unread: z.boolean().default(false),
   unread_count: z.number().optional(),

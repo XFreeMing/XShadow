@@ -36,20 +36,6 @@ export interface Goal {
   updated_at: string;
 }
 
-export interface CreateGoalRequest {
-  title: string;
-  intent?: string;
-  scope?: string;
-  acceptance_criteria?: string;
-  /** Omit or null for a workspace-level goal. */
-  project_id?: string | null;
-  /** owner_type and owner_id are set or cleared together. */
-  owner_type?: GoalOwnerType | null;
-  owner_id?: string | null;
-  /** Defaults to the server's `planned`. */
-  status?: GoalStatus;
-}
-
 /**
  * Partial update. Only keys present in the body change: omitting a key keeps
  * the current value, while `null` clears `project_id`/owner and `""` clears a

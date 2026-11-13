@@ -2,9 +2,9 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import type { Goal, GoalStatus, UpdateGoalRequest } from "@multica/core/types";
+import type { Goal, UpdateGoalRequest } from "@multica/core/types";
 import { errorCode } from "@multica/core/api";
-import { useCreateGoal, useUpdateGoal } from "@multica/core/goals";
+import { useUpdateGoal } from "@multica/core/goals";
 import { Button } from "@multica/ui/components/ui/button";
 import { Spinner } from "@multica/ui/components/ui/spinner";
 import { Input } from "@multica/ui/components/ui/input";
@@ -38,22 +38,18 @@ const FIELD_CLASS = "space-y-1.5";
 export function GoalFormDialog({
   open,
   onOpenChange,
-  goal = null,
-  defaultProjectId = null,
+  goal,
   linkedIssueCount = 0,
   onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The goal being edited; null creates a new one. */
-  goal?: Goal | null;
-  defaultProjectId?: string | null;
+  goal: Goal;
   /** Server refuses a project change while a goal still has linked tasks. */
   linkedIssueCount?: number;
   onSaved?: (goal: Goal) => void;
 }) {
   const { t } = useT("goals");
-  const createGoal = useCreateGoal();
   const updateGoal = useUpdateGoal();
   const { hasActor } = useActorName();
 
@@ -71,27 +67,27 @@ export function GoalFormDialog({
   // last input on purpose: a failed save must not erase what was typed.
   useEffect(() => {
     if (!open) return;
-    setTitle(goal?.title ?? "");
-    setIntent(goal?.intent ?? "");
-    setScope(goal?.scope ?? "");
-    setAcceptance(goal?.acceptance_criteria ?? "");
-    setProjectId(goal?.project_id ?? defaultProjectId);
-    setOwner({ type: goal?.owner_type ?? null, id: goal?.owner_id ?? null });
-    setStatus(goal ? goal.status : "planned");
+    setTitle(goal.title);
+    setIntent(goal.intent);
+    setScope(goal.scope);
+    setAcceptance(goal.acceptance_criteria);
+    setProjectId(goal.project_id);
+    setOwner({ type: goal.owner_type, id: goal.owner_id });
+    setStatus(goal.status);
     setTitleError(null);
     setSubmitError(null);
-  }, [open, goal, defaultProjectId]);
+  }, [open, goal]);
 
-  const pending = createGoal.isPending || updateGoal.isPending;
+  const pending = updateGoal.isPending;
   // Completed goals change status only through the detail page's confirmed
   // action. A status this client does not know renders read-only too, so an
   // edit can never send an unrecognized value back to the server.
   const statusEditable =
-    !goal || (EDITABLE_GOAL_STATUSES as readonly string[]).includes(goal.status);
-  const projectLocked = !!goal && linkedIssueCount > 0;
+    EDITABLE_GOAL_STATUSES.some((value) => value === goal.status);
+  const projectLocked = linkedIssueCount > 0;
   // Clearing the project opens the goal to the whole workspace. Warn before
   // the save, since the post-save list refresh cannot undo the decision.
-  const movingToWorkspace = !!goal?.project_id && projectId === null;
+  const movingToWorkspace = !!goal.project_id && projectId === null;
 
   const statusItems = EDITABLE_GOAL_STATUSES.map((value) => ({
     value,
@@ -116,44 +112,26 @@ export function GoalFormDialog({
     setSubmitError(null);
 
     try {
-      let saved: Goal;
-      if (goal) {
-        const changes: UpdateGoalRequest = {
-          title: trimmed,
-          intent,
-          scope,
-          acceptance_criteria: acceptance,
-          project_id: projectId,
-          owner_type: owner.type,
-          owner_id: owner.id,
-        };
-        // A status this client cannot edit (completed, or one the server grew)
-        // stays whatever the server already holds.
-        if (statusEditable) changes.status = status as GoalStatus;
-        saved = await updateGoal.mutateAsync({ id: goal.id, ...changes });
-        toast.success(t(($) => $.toast.updated));
-      } else {
-        saved = await createGoal.mutateAsync({
-          title: trimmed,
-          intent,
-          scope,
-          acceptance_criteria: acceptance,
-          project_id: projectId,
-          owner_type: owner.type,
-          owner_id: owner.id,
-          status: status as GoalStatus,
-        });
-        toast.success(t(($) => $.toast.created));
-      }
+      const changes: UpdateGoalRequest = {
+        title: trimmed,
+        intent,
+        scope,
+        acceptance_criteria: acceptance,
+        project_id: projectId,
+        owner_type: owner.type,
+        owner_id: owner.id,
+      };
+      const nextStatus = EDITABLE_GOAL_STATUSES.find((value) => value === status);
+      if (statusEditable && nextStatus) changes.status = nextStatus;
+      const saved = await updateGoal.mutateAsync({ id: goal.id, ...changes });
+      toast.success(t(($) => $.toast.updated));
       onOpenChange(false);
       onSaved?.(saved);
     } catch (err) {
       setSubmitError(
         errorCode(err) === "goal_has_linked_issues"
           ? t(($) => $.form.project_locked)
-          : goal
-            ? t(($) => $.form.save_failed)
-            : t(($) => $.form.create_failed),
+          : t(($) => $.form.save_failed),
       );
     }
   };
@@ -168,7 +146,7 @@ export function GoalFormDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {goal ? t(($) => $.form.edit_title) : t(($) => $.form.create_title)}
+            {t(($) => $.form.edit_title)}
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -271,7 +249,7 @@ export function GoalFormDialog({
                 </SelectContent>
               </Select>
             ) : (
-              <GoalStatusBadge status={goal?.status ?? status} className="w-fit" />
+              <GoalStatusBadge status={goal.status} className="w-fit" />
             )}
           </div>
 
@@ -292,13 +270,7 @@ export function GoalFormDialog({
             </Button>
             <Button type="submit" disabled={pending} aria-busy={pending}>
               {pending && <Spinner className="size-3.5" aria-hidden="true" />}
-              {pending
-                ? goal
-                  ? t(($) => $.form.saving)
-                  : t(($) => $.form.creating)
-                : goal
-                  ? t(($) => $.form.save)
-                  : t(($) => $.form.create)}
+              {pending ? t(($) => $.form.saving) : t(($) => $.form.save)}
             </Button>
           </DialogFooter>
         </form>

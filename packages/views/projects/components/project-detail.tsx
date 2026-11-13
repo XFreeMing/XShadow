@@ -588,7 +588,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </button>
           </nav>
           {activeTab === "goals" ? (
-            <ProjectGoalsTab projectId={projectId} />
+            <ProjectGoalsTab projectId={projectId} projectTitle={project.title} />
           ) : (
           <IssueSurface
             scope={issueScope}

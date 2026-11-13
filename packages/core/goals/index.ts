@@ -12,7 +12,7 @@ export {
 } from "./queries";
 export type { GoalListFilters } from "./queries";
 export {
-  useCreateGoal,
+  useOpenGoalConversation,
   useUpdateGoal,
   useDeleteGoal,
   useLinkGoalIssue,

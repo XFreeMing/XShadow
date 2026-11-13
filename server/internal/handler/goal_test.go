@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -31,7 +32,7 @@ func goalRequest(method, path, userID string, body any, params map[string]string
 func createGoalViaAPI(t *testing.T, userID string, body map[string]any) GoalResponse {
 	t.Helper()
 	var resp GoalResponse
-	testutil.Call(t, testHandler.CreateGoal,
+	testutil.Call(t, func(w http.ResponseWriter, r *http.Request) { testHandler.createGoal(w, r, pgtype.UUID{}) },
 		goalRequest(http.MethodPost, "/api/goals", userID, body, nil)).
 		Want(http.StatusCreated).JSON(&resp)
 	t.Cleanup(func() {
@@ -485,7 +486,7 @@ func TestGoalPrivateProjectVisibility(t *testing.T) {
 
 	// A private project the caller cannot see answers 404 on create, as does
 	// linking a task from it.
-	if code := testutil.Call(t, testHandler.CreateGoal,
+	if code := testutil.Call(t, func(w http.ResponseWriter, r *http.Request) { testHandler.createGoal(w, r, pgtype.UUID{}) },
 		goalRequest(http.MethodPost, "/api/goals", f.outsider, map[string]any{
 			"title":      "outsider goal",
 			"project_id": f.projectID,

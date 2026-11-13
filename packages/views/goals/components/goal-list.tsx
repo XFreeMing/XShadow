@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Target } from "@multica/ui/icons";
 import { Button } from "@multica/ui/components/ui/button";
@@ -73,7 +72,6 @@ export function GoalList({
   wsId,
   projectId,
   status,
-  emptyAction,
   compactEmpty = false,
   className,
 }: {
@@ -81,7 +79,6 @@ export function GoalList({
   /** Restrict to one project. Omit for the workspace-wide list. */
   projectId?: string;
   status?: string | null;
-  emptyAction?: ReactNode;
   compactEmpty?: boolean;
   className?: string;
 }) {
@@ -115,7 +112,6 @@ export function GoalList({
         size={compactEmpty ? "compact" : "default"}
         title={t(($) => $.list.empty_title)}
         description={t(($) => $.list.empty_description)}
-        actions={emptyAction}
         className={className}
       />
     );

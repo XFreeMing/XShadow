@@ -646,6 +646,7 @@ type ChatSession struct {
 	PinnedAt            pgtype.Timestamptz `json:"pinned_at"`
 	ProjectID           pgtype.UUID        `json:"project_id"`
 	ExplicitlyCreatedAt pgtype.Timestamptz `json:"explicitly_created_at"`
+	IsGoalConversation  bool               `json:"is_goal_conversation"`
 }
 
 type ClientUsageDaily struct {
@@ -901,6 +902,7 @@ type Goal struct {
 	CreatorID          pgtype.UUID        `json:"creator_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	SourceChatInputID  pgtype.UUID        `json:"source_chat_input_id"`
 }
 
 type GoalIssue struct {

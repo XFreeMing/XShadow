@@ -2,9 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { goalKeys } from "./queries";
+import { chatKeys, sortChatSessions } from "../chat/queries";
 import type {
+  ChatSession,
   CreateGoalPlanGenerationRequest,
-  CreateGoalRequest,
   Goal,
   GoalPlan,
   GoalPlanGeneration,
@@ -28,13 +29,25 @@ function requireConfirmedGoal(goal: Goal): Goal {
   return goal;
 }
 
-export function useCreateGoal() {
+export function useOpenGoalConversation() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: async (data: CreateGoalRequest) => requireConfirmedGoal(await api.createGoal(data)),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: goalKeys.listAll(wsId) });
+    mutationFn: async () => {
+      const session = await api.openGoalConversation({ workspaceId: wsId });
+      if (!session.id || session.workspace_id !== wsId) {
+        throw new Error("The server did not confirm the goal conversation.");
+      }
+      return session;
+    },
+    onSuccess: (session) => {
+      qc.setQueryData<ChatSession[]>(chatKeys.sessions(wsId), (old) => {
+        if (!old) return old;
+        const existing = old.find((chat) => chat.id === session.id);
+        const current = existing ? { ...existing, status: session.status, is_goal_conversation: session.is_goal_conversation } : session;
+        return sortChatSessions([...old.filter((chat) => chat.id !== session.id), current]);
+      });
+      void qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
     },
   });
 }

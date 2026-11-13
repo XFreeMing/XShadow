@@ -40,7 +40,7 @@ function lastCall(fetch: ReturnType<typeof vi.fn>): [string, RequestInit | undef
 afterEach(() => vi.unstubAllGlobals());
 
 describe("goal API response boundaries", () => {
-  const endpoints = ["list", "get", "create", "update"] as const;
+  const endpoints = ["list", "get", "update"] as const;
 
   it.each(endpoints)("validates %s responses from older backends", async (endpoint) => {
     stubFetch(endpoint === "list" ? { goals: [goal], total: 1 } : goal);
@@ -50,9 +50,7 @@ describe("goal API response boundaries", () => {
         ? (await client.listGoals()).goals[0]
         : endpoint === "get"
           ? await client.getGoal("goal-1")
-          : endpoint === "create"
-            ? await client.createGoal({ title: "Goal" })
-            : await client.updateGoal("goal-1", { title: "Goal" });
+          : await client.updateGoal("goal-1", { title: "Goal" });
     expect(result).toMatchObject({ id: "goal-1", status: "planned" });
   });
 
@@ -66,11 +64,19 @@ describe("goal API response boundaries", () => {
     const result =
       endpoint === "get"
         ? await client.getGoal("goal-1")
-        : endpoint === "create"
-          ? await client.createGoal({ title: "Goal" })
-          : await client.updateGoal("goal-1", { title: "Goal" });
+        : await client.updateGoal("goal-1", { title: "Goal" });
     // An empty id is the signal a mutation must not treat as saved.
     expect(result.id).toBe("");
+  });
+
+  it("rejects malformed goal conversation ids at the API boundary", async () => {
+    const fetch = stubFetch({ id: 42 });
+    const client = new ApiClient("https://api.example.test");
+    expect((await client.openGoalConversation({ workspaceId: "workspace-1" })).id).toBe("");
+    const [url, init] = lastCall(fetch);
+    expect(url).toContain("/api/goals/conversation");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("X-Workspace-ID")).toBe("workspace-1");
   });
 
   it("lists linked tasks with an empty-id-safe fallback", async () => {
@@ -94,13 +100,9 @@ describe("goal API request contract", () => {
     expect(init?.method).toBeUndefined();
   });
 
-  it("creates with POST and updates with PUT", async () => {
+  it("updates with PUT", async () => {
     const fetch = stubFetch(goal);
     const client = new ApiClient("https://api.example.test");
-    await client.createGoal({ title: "Goal" });
-    expect(lastCall(fetch)[0]).toContain("/api/goals");
-    expect(lastCall(fetch)[1]?.method).toBe("POST");
-
     await client.updateGoal("goal-1", { title: "Renamed" });
     expect(lastCall(fetch)[0]).toContain("/api/goals/goal-1");
     expect(lastCall(fetch)[1]?.method).toBe("PUT");

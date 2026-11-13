@@ -10,7 +10,6 @@ import { setApiInstance, ApiError, errorCode } from "../api";
 import type { ApiClient } from "../api/client";
 import { goalKeys } from "./queries";
 import {
-  useCreateGoal,
   useCreateGoalPlanGeneration,
   useDeleteGoal,
   useLinkGoalIssue,
@@ -85,7 +84,6 @@ const generation = {
 describe("goal mutations", () => {
   let qc: QueryClient;
   const api = {
-    createGoal: vi.fn(),
     updateGoal: vi.fn(),
     deleteGoal: vi.fn(),
     listGoals: vi.fn(),
@@ -98,7 +96,6 @@ describe("goal mutations", () => {
 
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
-    api.createGoal.mockResolvedValue(goal);
     api.updateGoal.mockResolvedValue(goal);
     api.deleteGoal.mockResolvedValue(undefined);
     api.listGoals.mockResolvedValue({ goals: [], total: 0 } satisfies ListGoalsResponse);
@@ -115,16 +112,6 @@ describe("goal mutations", () => {
     vi.clearAllMocks();
   });
 
-  it("does not treat a create without a confirmed id as saved", async () => {
-    api.createGoal.mockResolvedValue({ ...goal, id: "" });
-    const { result } = renderHook(() => useCreateGoal(), { wrapper: createWrapper(qc) });
-    await expect(
-      act(async () => {
-        await result.current.mutateAsync({ title: "Goal" });
-      }),
-    ).rejects.toThrow(/did not confirm/i);
-  });
-
   it("does not treat an update without a confirmed id as saved", async () => {
     api.updateGoal.mockResolvedValue({ ...goal, id: "" });
     const { result } = renderHook(() => useUpdateGoal(), { wrapper: createWrapper(qc) });
@@ -133,18 +120,6 @@ describe("goal mutations", () => {
         await result.current.mutateAsync({ id: "goal-1", title: "Renamed" });
       }),
     ).rejects.toThrow(/did not confirm/i);
-  });
-
-  it("creates through the API and refreshes the goal lists", async () => {
-    qc.setQueryData(goalKeys.list(WS, {}), { pages: [], pageParams: [] });
-    const { result } = renderHook(() => useCreateGoal(), { wrapper: createWrapper(qc) });
-    await act(async () => {
-      await result.current.mutateAsync({ title: "Goal" });
-    });
-    expect(api.createGoal).toHaveBeenCalledWith({ title: "Goal" });
-    await waitFor(() =>
-      expect(qc.getQueryState(goalKeys.list(WS, {}))?.isInvalidated).toBe(true),
-    );
   });
 
   it("updates through the API and refreshes the detail", async () => {

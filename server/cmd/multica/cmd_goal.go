@@ -20,7 +20,7 @@ import (
 // for. Do not post the plan as an issue comment instead.
 var goalCmd = &cobra.Command{
 	Use:   "goal",
-	Short: "Work with goal plan drafts",
+	Short: "Work with goals and goal plans",
 }
 
 var goalPlanResultCmd = &cobra.Command{
@@ -41,7 +41,62 @@ evidence.`,
 	RunE: runGoalPlanResult,
 }
 
+var goalRecordCmd = &cobra.Command{
+	Use:   "record",
+	Short: "Record a goal from the chief of staff conversation",
+	Long: `Record a goal from the dedicated chief of staff conversation using this run's task token.
+
+--file holds a UTF-8 JSON object:
+  {"title":"…","intent":"…","scope":"…","acceptance_criteria":"…","project_id":"…","issue_ids":["DEV-123"]}
+
+project_id and issue_ids are optional. Existing task links are saved together
+with the goal. The command returns the saved goal's Markdown link.`,
+	Args: cobra.NoArgs,
+	RunE: runGoalRecord,
+}
+
+func runGoalRecord(cmd *cobra.Command, _ []string) error {
+	path, _ := cmd.Flags().GetString("file")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read goal file: %w", err)
+	}
+	var body struct {
+		Title              string   `json:"title"`
+		Intent             string   `json:"intent"`
+		Scope              string   `json:"scope"`
+		AcceptanceCriteria string   `json:"acceptance_criteria"`
+		ProjectID          *string  `json:"project_id,omitempty"`
+		IssueIDs           []string `json:"issue_ids,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return fmt.Errorf("parse goal file: %w", err)
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var result struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	if err := client.PostJSON(ctx, "/api/goals", body, &result); err != nil {
+		return fmt.Errorf("record goal: %w", err)
+	}
+	if result.ID == "" {
+		return fmt.Errorf("the server did not confirm the saved goal")
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "[%s](/goals/%s)\n", result.Title, result.ID)
+	return nil
+}
+
 func init() {
+	goalRecordCmd.Flags().String("file", "", "Path to the goal JSON file")
+	_ = goalRecordCmd.MarkFlagRequired("file")
+	goalCmd.AddCommand(goalRecordCmd)
+
 	goalPlanResultCmd.Flags().String("goal", "", "Goal ID the run was started for (required)")
 	goalPlanResultCmd.Flags().String("generation", "", "Generation ID the run was started for (required)")
 	goalPlanResultCmd.Flags().String("file", "", "Path to the plan JSON file")

@@ -1,7 +1,11 @@
 -- name: CreateChatSession :one
-INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_agent_intro, project_id, id)
-VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), $5, sqlc.narg('project_id'), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()))
+INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_agent_intro, project_id, id, is_goal_conversation)
+VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), $5, sqlc.narg('project_id'), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), @is_goal_conversation)
 RETURNING *;
+
+-- name: GetGoalConversation :one
+SELECT * FROM chat_session
+WHERE workspace_id = $1 AND creator_id = $2 AND agent_id = $3 AND is_goal_conversation;
 
 -- name: ClearChatSessionProjectByProject :exec
 -- Project references are intentionally soft (no database FK). Keep chat

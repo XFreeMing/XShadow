@@ -14,13 +14,18 @@ export function EmptyState({
   agent,
   hasSessions = true,
   onPickPrompt,
+  isGoalConversation = false,
 }: {
   agent: Agent | null;
   hasSessions?: boolean;
+  isGoalConversation?: boolean;
   onPickPrompt: (prompt: string) => void;
 }) {
   const { t } = useT("chat");
-  const description = agent?.description?.trim();
+  const { t: tGoals } = useT("goals");
+  const description = isGoalConversation
+    ? tGoals(($) => $.list.chat_intro)
+    : agent?.description?.trim();
   const fallbackStarters = useFallbackConversationStarters();
   const { starters } = selectConversationStarters(
     agent?.conversation_starters,
@@ -46,13 +51,13 @@ export function EmptyState({
         {description && (
           <p className="text-body text-muted-foreground">{description}</p>
         )}
-        {!hasSessions && (
+        {!hasSessions && !isGoalConversation && (
           <p className="text-body text-muted-foreground">
             {t(($) => $.empty_state.first_time_actions)}
           </p>
         )}
       </div>
-      {agent ? (
+      {agent && !isGoalConversation ? (
         <div
           className="w-full max-w-sm space-y-2"
           aria-label={t(($) => $.conversation_starters.aria_label)}

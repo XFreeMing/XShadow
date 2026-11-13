@@ -2279,6 +2279,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/goals", func(r chi.Router) {
 				r.Get("/", h.ListGoals)
 				r.Post("/", h.CreateGoal)
+				r.With(handler.RequireHumanActor).Post("/conversation", h.OpenGoalConversation)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetGoal)
 					r.Put("/", h.UpdateGoal)

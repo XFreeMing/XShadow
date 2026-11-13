@@ -1,7 +1,11 @@
 {
   "list": {
     "title": "Objectifs",
-    "new_goal": "Nouvel objectif",
+    "talk_to_chief": "Parler au chef de cabinet",
+    "chief_unavailable": "Le chef de cabinet est indisponible. Vérifiez qui dirige l’équipe de coordination.",
+    "chat_open_failed": "Impossible d’ouvrir la conversation sur les objectifs. Réessayez.",
+    "project_chat_draft": "J’aimerais discuter d’un objectif pour {{project}} : ",
+    "chat_intro": "Décrivez le résultat souhaité. Le chef de cabinet trouvera les tâches pertinentes et enregistrera l’objectif une fois le résultat clarifié.",
     "filter_status": "Statut",
     "all_statuses": "Tous les statuts",
     "empty_title": "Aucun objectif pour l'instant",
@@ -51,7 +55,6 @@
     "project_moved_scope": "Cet objectif n'a plus de projet : tous les membres de l'espace de travail le voient désormais."
   },
   "form": {
-    "create_title": "Nouvel objectif",
     "edit_title": "Modifier l'objectif",
     "title": "Titre",
     "title_placeholder": "Quel résultat cet objectif doit-il livrer ?",
@@ -69,10 +72,7 @@
     "squads": "Escouades",
     "save": "Enregistrer",
     "saving": "Enregistrement…",
-    "create": "Créer l'objectif",
-    "creating": "Création…",
     "cancel": "Annuler",
-    "create_failed": "Impossible de créer l'objectif. Votre saisie est conservée ; réessayez.",
     "save_failed": "Impossible d'enregistrer l'objectif. Vos modifications sont conservées ; réessayez.",
     "project_locked": "Déliez toutes les tâches avant de déplacer cet objectif vers un autre projet.",
     "owner_cleared": "Responsable indisponible. Choisissez-en un autre ou laissez le champ vide."
@@ -103,7 +103,6 @@
     "unlinked": "Tâche déliée"
   },
   "toast": {
-    "created": "Objectif créé",
     "updated": "Objectif mis à jour",
     "deleted": "Objectif supprimé",
     "completed": "Objectif terminé",

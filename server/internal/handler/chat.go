@@ -199,19 +199,20 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			resp = append(resp, ChatSessionResponse{
-				ID:          uuidToString(s.ID),
-				WorkspaceID: uuidToString(s.WorkspaceID),
-				AgentID:     uuidToString(s.AgentID),
-				CreatorID:   uuidToString(s.CreatorID),
-				ProjectID:   uuidToPtr(s.ProjectID),
-				Title:       s.Title,
-				Status:      s.Status,
-				HasUnread:   s.UnreadCount > 0,
-				UnreadCount: int(s.UnreadCount),
-				LastMessage: buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
-				Pinned:      s.PinnedAt.Valid,
-				CreatedAt:   timestampToString(s.CreatedAt),
-				UpdatedAt:   timestampToString(s.UpdatedAt),
+				ID:                 uuidToString(s.ID),
+				WorkspaceID:        uuidToString(s.WorkspaceID),
+				AgentID:            uuidToString(s.AgentID),
+				CreatorID:          uuidToString(s.CreatorID),
+				ProjectID:          uuidToPtr(s.ProjectID),
+				Title:              s.Title,
+				IsGoalConversation: s.IsGoalConversation,
+				Status:             s.Status,
+				HasUnread:          s.UnreadCount > 0,
+				UnreadCount:        int(s.UnreadCount),
+				LastMessage:        buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
+				Pinned:             s.PinnedAt.Valid,
+				CreatedAt:          timestampToString(s.CreatedAt),
+				UpdatedAt:          timestampToString(s.UpdatedAt),
 			})
 		}
 	} else {
@@ -229,19 +230,20 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			resp = append(resp, ChatSessionResponse{
-				ID:          uuidToString(s.ID),
-				WorkspaceID: uuidToString(s.WorkspaceID),
-				AgentID:     uuidToString(s.AgentID),
-				CreatorID:   uuidToString(s.CreatorID),
-				ProjectID:   uuidToPtr(s.ProjectID),
-				Title:       s.Title,
-				Status:      s.Status,
-				HasUnread:   s.UnreadCount > 0,
-				UnreadCount: int(s.UnreadCount),
-				LastMessage: buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
-				Pinned:      s.PinnedAt.Valid,
-				CreatedAt:   timestampToString(s.CreatedAt),
-				UpdatedAt:   timestampToString(s.UpdatedAt),
+				ID:                 uuidToString(s.ID),
+				WorkspaceID:        uuidToString(s.WorkspaceID),
+				AgentID:            uuidToString(s.AgentID),
+				CreatorID:          uuidToString(s.CreatorID),
+				ProjectID:          uuidToPtr(s.ProjectID),
+				Title:              s.Title,
+				IsGoalConversation: s.IsGoalConversation,
+				Status:             s.Status,
+				HasUnread:          s.UnreadCount > 0,
+				UnreadCount:        int(s.UnreadCount),
+				LastMessage:        buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
+				Pinned:             s.PinnedAt.Valid,
+				CreatedAt:          timestampToString(s.CreatedAt),
+				UpdatedAt:          timestampToString(s.UpdatedAt),
 			})
 		}
 	}
@@ -880,6 +882,10 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if session.IsGoalConversation && isMachineCredentialActor(r) {
+		writeError(w, http.StatusForbidden, "only the member can send to the goal conversation")
+		return
+	}
 	// Archived sessions are read-only: refuse to enqueue new agent work for
 	// them (see SetChatSessionArchived). The frontend disables the composer
 	// for status='archived' and only offers unarchive/delete there. Legacy
@@ -934,8 +940,10 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	// query error here is treated as "not first" so we simply skip generation
 	// (best-effort — never block the send).
 	hadUserMessage := true
-	if existed, err := h.Queries.ChatSessionHasPublicUserMessage(r.Context(), session.ID); err == nil {
-		hadUserMessage = existed
+	if !session.IsGoalConversation {
+		if existed, err := h.Queries.ChatSessionHasPublicUserMessage(r.Context(), session.ID); err == nil {
+			hadUserMessage = existed
+		}
 	}
 	channelBacked := false
 	channelSourceKnown := true
@@ -1925,13 +1933,14 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 // Response types & helpers
 
 type ChatSessionResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	AgentID     string  `json:"agent_id"`
-	CreatorID   string  `json:"creator_id"`
-	ProjectID   *string `json:"project_id"`
-	Title       string  `json:"title"`
-	Status      string  `json:"status"`
+	ID                 string  `json:"id"`
+	WorkspaceID        string  `json:"workspace_id"`
+	AgentID            string  `json:"agent_id"`
+	CreatorID          string  `json:"creator_id"`
+	ProjectID          *string `json:"project_id"`
+	Title              string  `json:"title"`
+	Status             string  `json:"status"`
+	IsGoalConversation bool    `json:"is_goal_conversation,omitempty"`
 	// Only populated by list endpoints — single-session fetches return 0/false/nil.
 	// HasUnread is kept as a convenience (== UnreadCount > 0) for existing consumers.
 	HasUnread   bool             `json:"has_unread"`
@@ -2042,16 +2051,17 @@ type ChatMessageResponse struct {
 
 func chatSessionToResponse(s db.ChatSession) ChatSessionResponse {
 	return ChatSessionResponse{
-		ID:          uuidToString(s.ID),
-		WorkspaceID: uuidToString(s.WorkspaceID),
-		AgentID:     uuidToString(s.AgentID),
-		CreatorID:   uuidToString(s.CreatorID),
-		ProjectID:   uuidToPtr(s.ProjectID),
-		Title:       s.Title,
-		Status:      s.Status,
-		Pinned:      s.PinnedAt.Valid,
-		CreatedAt:   timestampToString(s.CreatedAt),
-		UpdatedAt:   timestampToString(s.UpdatedAt),
+		ID:                 uuidToString(s.ID),
+		WorkspaceID:        uuidToString(s.WorkspaceID),
+		AgentID:            uuidToString(s.AgentID),
+		CreatorID:          uuidToString(s.CreatorID),
+		ProjectID:          uuidToPtr(s.ProjectID),
+		Title:              s.Title,
+		IsGoalConversation: s.IsGoalConversation,
+		Status:             s.Status,
+		Pinned:             s.PinnedAt.Valid,
+		CreatedAt:          timestampToString(s.CreatedAt),
+		UpdatedAt:          timestampToString(s.UpdatedAt),
 	}
 }
 

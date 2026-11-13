@@ -3631,6 +3631,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		if failure := h.rejectClaimOnWorkspaceMismatch(r.Context(), task, resp.WorkspaceID, runtimeID, runtimeWorkspaceID, false); failure != nil {
 			return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, failure
 		}
+		if cs.IsGoalConversation && resp.Agent != nil {
+			resp.Agent.Instructions = strings.TrimSpace(resp.Agent.Instructions + "\n\n" + goalConversationInstructions)
+		}
 		resp.ChatSessionID = uuidToString(cs.ID)
 		resp.ThreadName = cs.Title
 		// Legacy compatibility: agent creation no longer creates intro chats,

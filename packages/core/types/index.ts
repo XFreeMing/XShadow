@@ -220,7 +220,6 @@ export type {
   Goal,
   GoalStatus,
   GoalOwnerType,
-  CreateGoalRequest,
   UpdateGoalRequest,
   ListGoalsParams,
   ListGoalsResponse,

@@ -90,10 +90,10 @@ func (q *Queries) CountGoals(ctx context.Context, arg CountGoalsParams) (int64, 
 const createGoal = `-- name: CreateGoal :one
 INSERT INTO goal (
     workspace_id, project_id, title, intent, scope, acceptance_criteria,
-    owner_type, owner_id, status, creator_type, creator_id
+    owner_type, owner_id, status, creator_type, creator_id, source_chat_input_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-) RETURNING id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+) RETURNING id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at, source_chat_input_id
 `
 
 type CreateGoalParams struct {
@@ -108,6 +108,7 @@ type CreateGoalParams struct {
 	Status             string      `json:"status"`
 	CreatorType        string      `json:"creator_type"`
 	CreatorID          pgtype.UUID `json:"creator_id"`
+	SourceChatInputID  pgtype.UUID `json:"source_chat_input_id"`
 }
 
 func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, error) {
@@ -123,6 +124,7 @@ func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, e
 		arg.Status,
 		arg.CreatorType,
 		arg.CreatorID,
+		arg.SourceChatInputID,
 	)
 	var i Goal
 	err := row.Scan(
@@ -140,6 +142,7 @@ func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, e
 		&i.CreatorID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceChatInputID,
 	)
 	return i, err
 }
@@ -226,8 +229,40 @@ func (q *Queries) DeleteGoalsByProject(ctx context.Context, arg DeleteGoalsByPro
 	return err
 }
 
+const getGoalByChatInput = `-- name: GetGoalByChatInput :one
+SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at, source_chat_input_id FROM goal WHERE workspace_id = $1 AND source_chat_input_id = $2
+`
+
+type GetGoalByChatInputParams struct {
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	SourceChatInputID pgtype.UUID `json:"source_chat_input_id"`
+}
+
+func (q *Queries) GetGoalByChatInput(ctx context.Context, arg GetGoalByChatInputParams) (Goal, error) {
+	row := q.db.QueryRow(ctx, getGoalByChatInput, arg.WorkspaceID, arg.SourceChatInputID)
+	var i Goal
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Title,
+		&i.Intent,
+		&i.Scope,
+		&i.AcceptanceCriteria,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Status,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceChatInputID,
+	)
+	return i, err
+}
+
 const getGoalInWorkspace = `-- name: GetGoalInWorkspace :one
-SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at FROM goal
+SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at, source_chat_input_id FROM goal
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -254,6 +289,7 @@ func (q *Queries) GetGoalInWorkspace(ctx context.Context, arg GetGoalInWorkspace
 		&i.CreatorID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceChatInputID,
 	)
 	return i, err
 }
@@ -393,7 +429,7 @@ func (q *Queries) ListGoalIssues(ctx context.Context, arg ListGoalIssuesParams) 
 }
 
 const listGoals = `-- name: ListGoals :many
-SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at FROM goal
+SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at, source_chat_input_id FROM goal
 WHERE workspace_id = $1
   AND ($2::uuid IS NULL OR project_id = $2)
   AND ($3::boolean IS NOT TRUE OR project_id IS NULL)
@@ -450,6 +486,7 @@ func (q *Queries) ListGoals(ctx context.Context, arg ListGoalsParams) ([]Goal, e
 			&i.CreatorID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceChatInputID,
 		); err != nil {
 			return nil, err
 		}
@@ -488,7 +525,7 @@ func (q *Queries) LockGoalForLink(ctx context.Context, arg LockGoalForLinkParams
 }
 
 const lockGoalForUpdate = `-- name: LockGoalForUpdate :one
-SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at FROM goal
+SELECT id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at, source_chat_input_id FROM goal
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 `
@@ -519,6 +556,7 @@ func (q *Queries) LockGoalForUpdate(ctx context.Context, arg LockGoalForUpdatePa
 		&i.CreatorID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceChatInputID,
 	)
 	return i, err
 }
@@ -611,7 +649,7 @@ UPDATE goal SET
     project_id = CASE WHEN $12::boolean THEN $13::uuid ELSE project_id END,
     updated_at = now()
 WHERE id = $14 AND workspace_id = $15
-RETURNING id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at
+RETURNING id, workspace_id, project_id, title, intent, scope, acceptance_criteria, owner_type, owner_id, status, creator_type, creator_id, created_at, updated_at, source_chat_input_id
 `
 
 type UpdateGoalParams struct {
@@ -666,6 +704,7 @@ func (q *Queries) UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, e
 		&i.CreatorID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceChatInputID,
 	)
 	return i, err
 }

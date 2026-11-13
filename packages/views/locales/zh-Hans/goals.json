@@ -1,7 +1,11 @@
 {
   "list": {
     "title": "目标",
-    "new_goal": "新建目标",
+    "talk_to_chief": "与幕僚长沟通",
+    "chief_unavailable": "幕僚长当前不可用，请检查「军团统筹」的负责人。",
+    "chat_open_failed": "无法打开目标会话，请重试。",
+    "project_chat_draft": "我想讨论「{{project}}」的一个目标：",
+    "chat_intro": "说说你想达成什么结果。方向明确后，幕僚长会查找相关任务，保存目标并建立关联。",
     "filter_status": "状态",
     "all_statuses": "全部状态",
     "empty_title": "还没有目标",
@@ -51,7 +55,6 @@
     "project_moved_scope": "此目标现在不属于任何项目，工作空间中的所有人都可以看到它。"
   },
   "form": {
-    "create_title": "新建目标",
     "edit_title": "编辑目标",
     "title": "标题",
     "title_placeholder": "这个目标要交付什么结果？",
@@ -69,10 +72,7 @@
     "squads": "小队",
     "save": "保存",
     "saving": "保存中…",
-    "create": "创建目标",
-    "creating": "创建中…",
     "cancel": "取消",
-    "create_failed": "无法创建目标。你的输入已保留，请重试。",
     "save_failed": "无法保存目标。你的修改已保留，请重试。",
     "project_locked": "请先解除所有任务关联，再将此目标移动到其他项目。",
     "owner_cleared": "负责人不可用。请重新选择负责人或留空。"
@@ -103,7 +103,6 @@
     "unlinked": "已解除任务关联"
   },
   "toast": {
-    "created": "目标已创建",
     "updated": "目标已更新",
     "deleted": "目标已删除",
     "completed": "目标已完成",

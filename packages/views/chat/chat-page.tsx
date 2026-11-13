@@ -362,6 +362,7 @@ export function ChatPage() {
         <EmptyState
           agent={c.activeAgent}
           hasSessions={c.sessions.length > 0}
+          isGoalConversation={c.currentSession?.is_goal_conversation}
           onPickPrompt={c.sendConversationStarter}
         />
       )}

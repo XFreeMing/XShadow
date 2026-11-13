@@ -1,7 +1,11 @@
 {
   "list": {
     "title": "目標",
-    "new_goal": "新增目標",
+    "talk_to_chief": "與幕僚長溝通",
+    "chief_unavailable": "幕僚長目前無法使用，請檢查「軍團統籌」的負責人。",
+    "chat_open_failed": "無法開啟目標對話，請重試。",
+    "project_chat_draft": "我想討論「{{project}}」的一個目標：",
+    "chat_intro": "說說你想達成什麼結果。方向明確後，幕僚長會查找相關任務，儲存目標並建立關聯。",
     "filter_status": "狀態",
     "all_statuses": "全部狀態",
     "empty_title": "尚無目標",
@@ -51,7 +55,6 @@
     "project_moved_scope": "此目標現在不屬於任何專案，工作空間中的所有人都能看到它。"
   },
   "form": {
-    "create_title": "新增目標",
     "edit_title": "編輯目標",
     "title": "標題",
     "title_placeholder": "這個目標要交付什麼結果？",
@@ -69,10 +72,7 @@
     "squads": "小隊",
     "save": "儲存",
     "saving": "儲存中…",
-    "create": "建立目標",
-    "creating": "建立中…",
     "cancel": "取消",
-    "create_failed": "無法建立目標。你的輸入已保留，請重試。",
     "save_failed": "無法儲存目標。你的變更已保留，請重試。",
     "project_locked": "請先解除所有任務關聯，再將此目標移到其他專案。",
     "owner_cleared": "負責人無法使用。請重新選擇負責人，或留空。"
@@ -103,7 +103,6 @@
     "unlinked": "已解除任務關聯"
   },
   "toast": {
-    "created": "目標已建立",
     "updated": "目標已更新",
     "deleted": "目標已刪除",
     "completed": "目標已完成",

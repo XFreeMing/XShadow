@@ -120,7 +120,6 @@ import type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
   Goal,
-  CreateGoalRequest,
   UpdateGoalRequest,
   ListGoalsParams,
   ListGoalsResponse,
@@ -4020,6 +4019,17 @@ export class ApiClient {
     });
   }
 
+  async openGoalConversation(workspace: WorkspaceScope): Promise<ChatSession> {
+    const endpoint = "/api/goals/conversation";
+    const raw: unknown = await this.fetch(endpoint, {
+      method: "POST",
+      headers: workspaceHeader(workspace),
+    });
+    return parseWithFallback(raw, ChatSessionSchema, EMPTY_CHAT_SESSION, {
+      endpoint: `POST ${endpoint}`,
+    });
+  }
+
   async createChatSession(
     data: {
       agent_id: string;
@@ -4450,14 +4460,6 @@ export class ApiClient {
   async getGoal(id: string): Promise<Goal> {
     const raw = await this.fetch<unknown>(`/api/goals/${id}`);
     return parseWithFallback(raw, GoalSchema, EMPTY_GOAL, { endpoint: "GET /api/goals/:id" });
-  }
-
-  async createGoal(data: CreateGoalRequest): Promise<Goal> {
-    const raw = await this.fetch<unknown>("/api/goals", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-    return parseWithFallback(raw, GoalSchema, EMPTY_GOAL, { endpoint: "POST /api/goals" });
   }
 
   async updateGoal(id: string, data: UpdateGoalRequest): Promise<Goal> {

@@ -365,6 +365,7 @@ export function ChatWindow() {
             <EmptyState
               agent={activeAgent}
               hasSessions={c.sessions.length > 0}
+              isGoalConversation={c.currentSession?.is_goal_conversation}
               onPickPrompt={c.sendConversationStarter}
             />
           </ChatWindowMessages>

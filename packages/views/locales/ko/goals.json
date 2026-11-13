@@ -1,7 +1,11 @@
 {
   "list": {
     "title": "목표",
-    "new_goal": "새 목표",
+    "talk_to_chief": "참모장과 대화",
+    "chief_unavailable": "참모장을 사용할 수 없습니다. 조정 팀의 리더를 확인하세요.",
+    "chat_open_failed": "목표 대화를 열지 못했습니다. 다시 시도하세요.",
+    "project_chat_draft": "{{project}}의 목표를 상의하고 싶습니다. ",
+    "chat_intro": "달성하고 싶은 결과를 알려주세요. 결과가 명확해지면 참모장이 관련 작업을 찾아 목표를 저장합니다.",
     "filter_status": "상태",
     "all_statuses": "모든 상태",
     "empty_title": "아직 목표가 없습니다",
@@ -51,7 +55,6 @@
     "project_moved_scope": "이 목표는 이제 프로젝트가 없어 워크스페이스의 모든 사용자가 볼 수 있습니다."
   },
   "form": {
-    "create_title": "새 목표",
     "edit_title": "목표 편집",
     "title": "제목",
     "title_placeholder": "이 목표가 전달해야 할 결과는 무엇인가요?",
@@ -69,10 +72,7 @@
     "squads": "스쿼드",
     "save": "저장",
     "saving": "저장 중…",
-    "create": "목표 만들기",
-    "creating": "만드는 중…",
     "cancel": "취소",
-    "create_failed": "목표를 만들지 못했습니다. 입력은 유지되어 있으니 다시 시도하세요.",
     "save_failed": "목표를 저장하지 못했습니다. 변경 사항은 유지되어 있으니 다시 시도하세요.",
     "project_locked": "이 목표를 다른 프로젝트로 옮기기 전에 모든 작업 연결을 해제하세요.",
     "owner_cleared": "담당자를 사용할 수 없습니다. 다른 담당자를 선택하거나 비워 두세요."
@@ -103,7 +103,6 @@
     "unlinked": "작업 연결을 해제했습니다"
   },
   "toast": {
-    "created": "목표를 만들었습니다",
     "updated": "목표를 업데이트했습니다",
     "deleted": "목표를 삭제했습니다",
     "completed": "목표를 완료했습니다",

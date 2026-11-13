@@ -1,7 +1,11 @@
 {
   "list": {
     "title": "Objetivos",
-    "new_goal": "Nuevo objetivo",
+    "talk_to_chief": "Hablar con el jefe de gabinete",
+    "chief_unavailable": "El jefe de gabinete no está disponible. Comprueba quién dirige el equipo de coordinación.",
+    "chat_open_failed": "No se pudo abrir la conversación sobre objetivos. Inténtalo de nuevo.",
+    "project_chat_draft": "Me gustaría hablar de un objetivo para {{project}}: ",
+    "chat_intro": "Describe el resultado que buscas. El jefe de gabinete buscará las tareas pertinentes y guardará el objetivo cuando el resultado esté claro.",
     "filter_status": "Estado",
     "all_statuses": "Todos los estados",
     "empty_title": "Aún no hay objetivos",
@@ -51,7 +55,6 @@
     "project_moved_scope": "Este objetivo ya no tiene proyecto, así que todos los miembros del espacio de trabajo pueden verlo."
   },
   "form": {
-    "create_title": "Nuevo objetivo",
     "edit_title": "Editar objetivo",
     "title": "Título",
     "title_placeholder": "¿Qué resultado debe entregar este objetivo?",
@@ -69,10 +72,7 @@
     "squads": "Escuadrones",
     "save": "Guardar",
     "saving": "Guardando…",
-    "create": "Crear objetivo",
-    "creating": "Creando…",
     "cancel": "Cancelar",
-    "create_failed": "No se pudo crear el objetivo. Tus datos siguen aquí; inténtalo de nuevo.",
     "save_failed": "No se pudo guardar el objetivo. Tus cambios siguen aquí; inténtalo de nuevo.",
     "project_locked": "Desvincula todas las tareas antes de mover este objetivo a otro proyecto.",
     "owner_cleared": "Responsable no disponible. Elige otro responsable o déjalo vacío."
@@ -103,7 +103,6 @@
     "unlinked": "Tarea desvinculada"
   },
   "toast": {
-    "created": "Objetivo creado",
     "updated": "Objetivo actualizado",
     "deleted": "Objetivo eliminado",
     "completed": "Objetivo completado",
