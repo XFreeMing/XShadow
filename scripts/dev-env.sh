@@ -213,6 +213,10 @@ EOF
 # a function aborts the script under `set -e` when fn's last command fails, and
 # "no process is listening" is the normal answer here, not an error.
 port_listener_pid() {
+  if [ "$(uname -s)" = Linux ] && command -v ss >/dev/null 2>&1; then
+    ss -H -ltnp "sport = :$1" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\),.*/\1/p' | head -1 || true
+    return
+  fi
   lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
 }
 

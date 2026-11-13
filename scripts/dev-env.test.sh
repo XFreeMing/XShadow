@@ -161,6 +161,24 @@ assert_listener_ownership() {
   )
 }
 
+if [ "$(uname -s)" = Linux ] && command -v ss >/dev/null 2>&1; then
+  (
+    source "$root_dir/scripts/dev-env.sh"
+    node -e 'const fs = require("node:fs"); const s = require("node:net").createServer(); s.listen(0, "127.0.0.1", () => fs.writeFileSync(process.argv[1], String(s.address().port)));' "$tmp_dir/listener-port" &
+    listener=$!
+    trap 'kill "$listener" 2>/dev/null || true; wait "$listener" 2>/dev/null || true' EXIT
+    for attempt in $(seq 1 50); do
+      [ ! -s "$tmp_dir/listener-port" ] || break
+      sleep 0.1
+    done
+    port="$(cat "$tmp_dir/listener-port")"
+    [ "$(port_listener_pid "$port")" = "$listener" ] || fail "Linux listener PID did not match the actual server"
+    kill "$listener"
+    wait "$listener" 2>/dev/null || true
+    [ -z "$(port_listener_pid "$port")" ] || fail "closed port still reported a listener"
+  )
+fi
+
 assert_nested_listener_is_recorded() (
   # shellcheck disable=SC1090
   source "$root_dir/scripts/dev-env.sh"
