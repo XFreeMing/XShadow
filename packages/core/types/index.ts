@@ -216,6 +216,17 @@ export type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
+export type {
+  Goal,
+  GoalStatus,
+  GoalOwnerType,
+  CreateGoalRequest,
+  UpdateGoalRequest,
+  ListGoalsParams,
+  ListGoalsResponse,
+  ListGoalIssuesParams,
+  ListGoalIssuesResponse,
+} from "./goal";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   GitHubInstallation,
