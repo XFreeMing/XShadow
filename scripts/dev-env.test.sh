@@ -309,6 +309,14 @@ rewritten="$(bash -c 'source "$1"; database_url_with_name "$2" "$3"' _ \
 write_manifest "probe-901" "$tmp_dir/checkout" 901
 mkdir -p "$tmp_dir/checkout"
 
+# Without a registered environment there is no database target to verify, so
+# env-exec refuses instead of running a command against whatever DATABASE_URL
+# the calling shell happened to export (DEV-54).
+status=0
+dev_env exec -- true > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "env-exec without a registered environment must fail"
+require_contains "$out" "No environment registered"
+
 dev_env list > "$out" 2>&1 || fail "list must succeed with one environment"
 require_contains "$out" "probe-901"
 require_contains "$out" "18981"
@@ -376,6 +384,24 @@ dev_env exec cdp-exec-906 -- sh -c '
 MULTICA_DEV_DESKTOP_CDP_URL=http://127.0.0.1:1 dev_env exec clean-env-903 -- sh -c '
   test -z "${MULTICA_DEV_DESKTOP_CDP_URL:-}"
 ' > "$out" 2>&1 || fail "env-exec leaked a CDP URL into an environment without one"
+
+# The migration guard takes its expected target from the environment record,
+# not from the env file the child loads, and it protects every other
+# checkout's database. A leaked DATABASE_URL is how a task run migrated the
+# coordination database before DEV-54.
+MULTICA_PROTECTED_DATABASES= dev_env exec clean-env-903 -- sh -c '
+  test "$MULTICA_EXPECTED_DATABASE_URL" = "$1" &&
+  test "$MULTICA_DB_GUARD_ENV" = clean-env-903 &&
+  case ",$MULTICA_PROTECTED_DATABASES," in
+    *",multica_dev_env_test_901,"*) ;;
+    *) exit 1 ;;
+  esac &&
+  case ",$MULTICA_PROTECTED_DATABASES," in
+    *",multica_dev_env_test_903,"*) exit 1 ;;
+  esac
+' _ 'postgres://multica:multica@localhost:5432/multica_dev_env_test_903?sslmode=disable' \
+  > "$out" 2>&1 \
+  || fail "env-exec did not export the recorded database target and the other checkouts' databases"
 
 # A health response without process identity is never proof that the process is
 # this checkout's freshly launched API.
