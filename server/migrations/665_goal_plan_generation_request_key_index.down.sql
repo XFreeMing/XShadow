@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_goal_plan_generation_request_key;

@@ -2,6 +2,9 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 import type { ListGoalsParams } from "../types";
 
+/** How often a live planning run is polled, in milliseconds. */
+export const GOAL_PLAN_GENERATION_POLL_MS = 2500;
+
 /** Page size for both goal lists and a goal's linked tasks. */
 export const GOAL_PAGE_SIZE = 50;
 
@@ -20,7 +23,29 @@ export const goalKeys = {
   issuesAll: (wsId: string) => [...goalKeys.all(wsId), "issues"] as const,
   issues: (wsId: string, goalId: string) =>
     [...goalKeys.issuesAll(wsId), goalId] as const,
+  /** The goal's editable plan draft, under `goalKeys.all` so every existing
+   *  `goal:changed` / reconnect invalidation reaches it too. */
+  plan: (wsId: string, goalId: string) =>
+    [...goalKeys.all(wsId), "plan", goalId] as const,
+  planGenerationAll: (wsId: string, goalId: string) =>
+    [...goalKeys.plan(wsId, goalId), "generation"] as const,
+  planGeneration: (wsId: string, goalId: string, generationId: string) =>
+    [...goalKeys.planGenerationAll(wsId, goalId), generationId] as const,
 };
+
+/** Generation states that still represent live work on the server. */
+export function isGoalPlanGenerationPending(state: string): boolean {
+  return state === "preparing" || state === "queued" || state === "running";
+}
+
+/**
+ * A generation poll stops as soon as the server reports a terminal state.
+ * An unknown state is treated as terminal: this client must not assume a run
+ * is progressing, and must never assume it succeeded.
+ */
+export function isGoalPlanGenerationTerminal(state: string): boolean {
+  return state === "succeeded" || state === "failed";
+}
 
 export interface GoalListFilters {
   /** A project UUID, `"none"` for workspace-level goals, or null for all. */
@@ -74,5 +99,37 @@ export function goalIssuesPagesOptions(wsId: string, goalId: string) {
       return loaded < lastPage.total ? loaded : undefined;
     },
     enabled: !!wsId && !!goalId,
+  });
+}
+
+/**
+ * The goal's current plan draft. Server data (TanStack Query) only; local
+ * edits live in the editor component and are never written into this cache.
+ */
+export function goalPlanOptions(wsId: string, goalId: string) {
+  return queryOptions({
+    queryKey: goalKeys.plan(wsId, goalId),
+    queryFn: () => api.getGoalPlan(goalId),
+    enabled: !!wsId && !!goalId,
+  });
+}
+
+/**
+ * One planning run. Polls only while the server reports live work, so a
+ * terminal or unknown state stops the timer instead of hammering the API.
+ */
+export function goalPlanGenerationOptions(
+  wsId: string,
+  goalId: string,
+  generationId: string | null,
+) {
+  return queryOptions({
+    queryKey: goalKeys.planGeneration(wsId, goalId, generationId ?? ""),
+    queryFn: () => api.getGoalPlanGeneration(goalId, generationId ?? ""),
+    enabled: !!wsId && !!goalId && !!generationId,
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state && isGoalPlanGenerationPending(state) ? GOAL_PLAN_GENERATION_POLL_MS : false;
+    },
   });
 }
