@@ -232,6 +232,26 @@ func (q *Queries) DeleteWorkspaceConnections(ctx context.Context, workspaceID pg
 	return err
 }
 
+const deleteWorkspaceGoalIssues = `-- name: DeleteWorkspaceGoalIssues :exec
+DELETE FROM goal_issue WHERE goal_issue.workspace_id = $1
+`
+
+// Goal links go before goals and before the workspace row; no foreign keys
+// hold this order, so the teardown names it explicitly.
+func (q *Queries) DeleteWorkspaceGoalIssues(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceGoalIssues, workspaceID)
+	return err
+}
+
+const deleteWorkspaceGoals = `-- name: DeleteWorkspaceGoals :exec
+DELETE FROM goal WHERE goal.workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceGoals(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceGoals, workspaceID)
+	return err
+}
+
 const deleteWorkspaceIssueRoots = `-- name: DeleteWorkspaceIssueRoots :exec
 WITH deleted_wakeup_receipts AS (
  DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE workspace_id=$1)
