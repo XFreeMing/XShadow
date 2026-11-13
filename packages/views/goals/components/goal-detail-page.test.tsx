@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { goalKeys } from "@multica/core/goals";
-import type { Goal, Issue } from "@multica/core/types";
+import type { ClosureState, Goal, Issue } from "@multica/core/types";
 import { toast } from "sonner";
 import { renderWithI18n } from "../../test/i18n";
 import { NavigationProvider } from "../../navigation";
@@ -67,6 +67,24 @@ const issue = (overrides: Partial<Issue> = {}): Issue =>
     ...overrides,
   }) as Issue;
 
+const closureState = (overrides: Partial<ClosureState> = {}): ClosureState => ({
+  subject_type: "goal",
+  subject_id: "goal-1",
+  status: "planned",
+  managed: true,
+  delivery_version: "9f2c4a1",
+  delivery_tree: "",
+  criteria_revision: "plan-r2",
+  outcome: "can_close",
+  reason: "",
+  detail: "",
+  next_actor: "",
+  already_accepted: false,
+  authorization: null,
+  reviews: [],
+  ...overrides,
+});
+
 describe("GoalDetailPage", () => {
   let qc: QueryClient;
   const push = vi.fn();
@@ -78,6 +96,7 @@ describe("GoalDetailPage", () => {
     unlinkGoalIssue: vi.fn(),
     linkGoalIssue: vi.fn(),
     getGoalPlan: vi.fn(),
+    getGoalClosure: vi.fn(),
   };
 
   beforeEach(() => {
@@ -103,6 +122,7 @@ describe("GoalDetailPage", () => {
       created_at: null,
       updated_at: null,
     });
+    api.getGoalClosure.mockResolvedValue(closureState());
     setApiInstance(api as unknown as ApiClient);
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
@@ -130,33 +150,106 @@ describe("GoalDetailPage", () => {
     );
   }
 
-  it("completes a goal only through the confirmation dialog", async () => {
+  it("accepts a goal only through the confirmation dialog", async () => {
     renderPage();
     expect(await screen.findByText("Ship goal management")).toBeInTheDocument();
+    expect(await screen.findByTestId("closure-outcome")).toHaveTextContent("Ready to accept");
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Mark completed" }));
+    await user.click(screen.getByRole("button", { name: "Accept goal" }));
     expect(api.updateGoal).not.toHaveBeenCalled();
 
     const dialog = await screen.findByRole("alertdialog");
     expect(
-      within(dialog).getByText("Only this action marks the goal completed. Linked task statuses don't change it."),
+      within(dialog).getByText(
+        "Accepting marks this goal completed. It's your decision as a person; linked task statuses and run exits don't make it.",
+      ),
     ).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Mark completed" }));
+    await user.click(within(dialog).getByRole("button", { name: "Accept goal" }));
 
     await waitFor(() =>
       expect(api.updateGoal).toHaveBeenCalledWith("goal-1", { status: "completed" }),
     );
-    expect(toast.success).toHaveBeenCalledWith("Goal completed");
+    expect(toast.success).toHaveBeenCalledWith("Goal accepted");
+  });
+
+  it("warns before accepting against the server's decision and sends the human override", async () => {
+    api.getGoalClosure.mockResolvedValue(
+      closureState({ outcome: "wait_review", reason: "no_independent_review" }),
+    );
+    renderPage();
+    expect(await screen.findByTestId("closure-outcome")).toHaveTextContent("Waiting for review");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Accept goal" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(
+      within(dialog).getByText('The server\'s current decision is "Waiting for review".'),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("No valid review covers this delivery and scope."),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "Accepting now goes against the server's decision. The goal is completed, but its acceptance evidence stays incomplete.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Accept anyway" }));
+    await waitFor(() =>
+      expect(api.updateGoal).toHaveBeenCalledWith("goal-1", { status: "completed" }),
+    );
+  });
+
+  it("shows the server's refusal instead of reporting a completed goal", async () => {
+    api.updateGoal.mockRejectedValue(
+      new ApiError("closure refused", 409, "Conflict", {
+        code: "closure_not_allowed",
+        outcome: "blocked",
+        reason: "no_independent_review",
+        detail: "the review names an older delivery",
+        next_actor: "",
+      }),
+    );
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Accept goal" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Accept goal" }));
+
+    const refusal = await screen.findByTestId("closure-refusal");
+    expect(within(refusal).getByText("The server refused this acceptance.")).toBeInTheDocument();
+    expect(
+      within(refusal).getByText("Blocked · No valid review covers this delivery and scope."),
+    ).toBeInTheDocument();
+    expect(within(refusal).getByText("the review names an older delivery")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getAllByText("Planned").length).toBeGreaterThan(0);
+  });
+
+  it("never renders an unrecognized outcome as ready to accept", async () => {
+    api.getGoalClosure.mockResolvedValue(closureState({ outcome: "accepted_by_future_server" }));
+    renderPage();
+    expect(await screen.findByTestId("closure-outcome")).toHaveTextContent("Unknown decision");
+    expect(screen.queryByText("Ready to accept")).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Accept goal" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByRole("button", { name: "Accept anyway" })).toBeInTheDocument();
   });
 
   it("keeps a linked task's done status from reading as goal success", async () => {
     api.listGoalIssues.mockResolvedValue({ issues: [issue()], total: 1 });
+    api.getGoalClosure.mockResolvedValue(
+      closureState({ outcome: "wait_review", reason: "no_independent_review" }),
+    );
     renderPage();
     expect(await screen.findByText("MUL-1")).toBeInTheDocument();
     expect(screen.getAllByText("Planned").length).toBeGreaterThan(0);
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Mark completed" })).toBeInTheDocument();
+    expect(await screen.findByTestId("closure-outcome")).toHaveTextContent("Waiting for review");
+    expect(screen.getByRole("button", { name: "Accept goal" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reopen" })).not.toBeInTheDocument();
   });
 

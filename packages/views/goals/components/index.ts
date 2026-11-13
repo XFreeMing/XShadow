@@ -8,6 +8,8 @@ export { GoalList } from "./goal-list";
 export { GoalsPage } from "./goals-page";
 export { GoalDetailPage } from "./goal-detail-page";
 export { GoalPlanSection } from "./goal-plan-section";
+export { GoalPlanExecution } from "./goal-plan-execution";
+export { GoalClosureSection } from "./goal-closure-section";
 export { GoalPlanEditor } from "./goal-plan-editor";
 export {
   GoalPlanGenerationPanel,
