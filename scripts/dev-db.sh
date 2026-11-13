@@ -6,6 +6,8 @@
 #   make env-exec ARGS="-- bash scripts/dev-db.sh migrate"
 #   make env-exec ARGS="-- bash scripts/dev-db.sh test"
 #   make env-exec ARGS="-- bash scripts/dev-db.sh migrate-test"   # default
+#   make env-exec ARGS="-- bash scripts/dev-db.sh migrate-test ./internal/maintenance"
+#                                        # extra packages run with the default one
 #
 # scripts/dev-env.sh exec resolves the environment record and exports
 # MULTICA_EXPECTED_DATABASE_URL (the recorded target) plus
@@ -50,10 +52,13 @@ case "$mode" in
     ;;
   test)
     go run ./cmd/migrate verify
-    exec go test ./internal/testutil -count=1 "$@"
+    # Extra arguments are packages to add to the default one. Packages come
+    # before the test flags: `go test` forwards anything after a flag to the
+    # test binary, which would silently skip the added package.
+    exec go test ./internal/testutil "$@" -count=1
     ;;
   migrate-test)
     go run ./cmd/migrate up
-    exec go test ./internal/testutil -count=1 "$@"
+    exec go test ./internal/testutil "$@" -count=1
     ;;
 esac
