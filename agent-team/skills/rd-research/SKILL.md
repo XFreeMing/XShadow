@@ -3,6 +3,9 @@ name: rd-research
 description: Investigate requirements, source evidence and alternatives before a research or design decision.
 ---
 
+Frame a standalone research or design delivery as a user story: who needs the result, in what scenario, and which decision or action it enables. Agree on a concrete report or other usable artifact and observable acceptance criteria. Deliver the actual report body, accessible link or attachment with sources, findings, recommendation and uncertainties; research activity or a promise to write a report is not completion. When research supports a feature story, keep it as an execution step in that story unless it provides an independently useful deliverable.
+
+
 Read the actual repository and relevant primary sources. Distinguish observed behavior, claims in documentation, and your proposal. Verify changeable claims against current primary sources. Cite concrete paths, line numbers or source URLs.
 Return the problem, applicable constraints, viable alternatives, the recommendation and an observable acceptance criterion. Gather only information affecting the decision. Mark unavailable evidence explicitly; do not invent prompts, personas, benchmarks or video details. For UX work use actual supported components and user journeys. Convert uncertainty into a bounded experiment when useful.
 

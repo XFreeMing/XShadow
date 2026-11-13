@@ -5,6 +5,7 @@ This fork is the owner's personal, customizable agent workbench. Its operating m
 Multica is a task management platform where people and agents collaborate on issues. These instructions apply to all coding agents working in this repository.
 
 - The personal agent team serves the owner's chosen projects, including this platform when explicitly assigned; it is not dedicated to this repository.
+- Plan the personal team's delivery tasks as user stories with a concrete artifact, an accessible delivery or experience entry point, and observable acceptance criteria. Keep execution steps inside the story; report completion through the delivered result and evidence. See [the user story template](agent-team/skills/rd-project-management/references/user-story.md).
 - Switching the user's client device does not authorize moving agent execution, changing runtime bindings, or recreating the workspace. Shared task records do not automatically transfer local worktrees or provider CLI sessions.
 - Develop platform improvements in isolated development environments. Keep the shared service that coordinates the team separate from the revision being changed; record the actual platforms verified before claiming cross-platform support.
 
