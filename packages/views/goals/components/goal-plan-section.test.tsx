@@ -100,6 +100,7 @@ function plan(overrides: Partial<GoalPlan> = {}): GoalPlan {
     items: [],
     edges: [],
     context_snapshot: {},
+    execution: null,
     created_at: "",
     updated_at: "",
     ...overrides,

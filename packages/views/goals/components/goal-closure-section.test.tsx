@@ -7,7 +7,12 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
-import type { ClosureReview, ClosureState, Goal } from "@multica/core/types";
+import type {
+  ClosureDecision,
+  ClosureReview,
+  ClosureState,
+  Goal,
+} from "@multica/core/types";
 import { toast } from "sonner";
 import { renderWithI18n } from "../../test/i18n";
 import { GoalClosureSection } from "./goal-closure-section";
@@ -85,6 +90,23 @@ function closureState(overrides: Partial<ClosureState> = {}): ClosureState {
     already_accepted: false,
     authorization: null,
     reviews: [review()],
+    decisions: [],
+    ...overrides,
+  };
+}
+
+function decision(overrides: Partial<ClosureDecision> = {}): ClosureDecision {
+  return {
+    id: "decision-1",
+    subject_type: "goal",
+    subject_id: "goal-1",
+    decision: "reject",
+    reason: "The acceptance evidence is incomplete",
+    criteria_revision: "",
+    delivery_version: "",
+    actor_type: "member",
+    actor_id: "user-1",
+    recorded_at: "2026-11-11T08:00:00Z",
     ...overrides,
   };
 }
@@ -94,7 +116,7 @@ describe("GoalClosureSection", () => {
   const api = {
     getGoalClosure: vi.fn(),
     updateGoal: vi.fn(),
-    createGoalClosureReview: vi.fn(),
+    rejectGoalClosure: vi.fn(),
     grantGoalClosureAuthorization: vi.fn(),
   };
 
@@ -104,7 +126,7 @@ describe("GoalClosureSection", () => {
     });
     api.getGoalClosure.mockReset().mockResolvedValue(closureState());
     api.updateGoal.mockReset().mockResolvedValue({ ...goal, status: "completed" });
-    api.createGoalClosureReview.mockReset().mockResolvedValue(review({ verdict: "needs_changes" }));
+    api.rejectGoalClosure.mockReset().mockResolvedValue(decision());
     api.grantGoalClosureAuthorization.mockReset().mockResolvedValue({
       id: "grant-1",
       subject_type: "goal",
@@ -232,31 +254,7 @@ describe("GoalClosureSection", () => {
     expect(screen.queryByTestId("closure-refusal")).not.toBeInTheDocument();
   });
 
-  it("records a rejection against the server's delivery and scope", async () => {
-    renderSection();
-    await screen.findByTestId("closure-outcome");
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole("button", { name: "Reject" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("What must change"), "Cover the failure path");
-    await user.type(within(dialog).getByLabelText("Rework scope"), "goal-plan-execution");
-    await user.click(within(dialog).getByRole("button", { name: "Record rejection" }));
-
-    await waitFor(() =>
-      expect(api.createGoalClosureReview).toHaveBeenCalledWith("goal-1", {
-        delivery_version: "9f2c4a1",
-        delivery_tree: "tree-1",
-        criteria_revision: "plan-r2",
-        verdict: "needs_changes",
-        reason: "Cover the failure path",
-        missing: ["goal-plan-execution"],
-      }),
-    );
-    expect(toast.success).toHaveBeenCalledWith("Goal sent back for changes");
-  });
-
-  it("requires a reason and refuses to fabricate a delivery version", async () => {
+  it("records a human rejection with a reason and no delivery version", async () => {
     api.getGoalClosure.mockResolvedValue(
       closureState({ delivery_version: "", delivery_tree: "", criteria_revision: "", reviews: [] }),
     );
@@ -266,19 +264,33 @@ describe("GoalClosureSection", () => {
 
     await user.click(screen.getByRole("button", { name: "Reject" }));
     const dialog = await screen.findByRole("dialog");
-    expect(
-      within(dialog).getByText(
-        "A rejection is recorded against a fixed delivery version. None is registered yet, so nothing was recorded and the goal stays open.",
-      ),
-    ).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Record rejection" })).toBeDisabled();
-    expect(api.createGoalClosureReview).not.toHaveBeenCalled();
+    await user.type(within(dialog).getByLabelText("What must change"), "Cover the failure path");
+    await user.click(within(dialog).getByRole("button", { name: "Record rejection" }));
+
+    await waitFor(() =>
+      expect(api.rejectGoalClosure).toHaveBeenCalledWith("goal-1", {
+        reason: "Cover the failure path",
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Rejection recorded");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("explains a stale rejection and reloads the acceptance state", async () => {
-    api.createGoalClosureReview.mockRejectedValue(
-      new ApiError("stale", 409, "Conflict", { code: "closure_delivery_stale" }),
-    );
+  it("requires a reason before recording a rejection", async () => {
+    renderSection();
+    await screen.findByTestId("closure-outcome");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Record rejection" }));
+
+    expect(await within(dialog).findByText("Describe what must change.")).toBeVisible();
+    expect(api.rejectGoalClosure).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dialog open when the rejection was not recorded", async () => {
+    api.rejectGoalClosure.mockRejectedValue(new TypeError("Failed to fetch"));
     renderSection();
     await screen.findByTestId("closure-outcome");
     const user = userEvent.setup();
@@ -289,13 +301,61 @@ describe("GoalClosureSection", () => {
     await user.click(within(dialog).getByRole("button", { name: "Record rejection" }));
 
     expect(
-      await within(dialog).findByText(
-        "The delivery or scope changed. Reload the acceptance state and reject again.",
-      ),
+      await within(dialog).findByText("Couldn't record the rejection. Try again."),
     ).toBeVisible();
-    await waitFor(() =>
-      expect(api.getGoalClosure.mock.calls.length).toBeGreaterThan(1),
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("shows a human accept as a decision, never as an independent pass", async () => {
+    api.getGoalClosure.mockResolvedValue(
+      closureState({
+        outcome: "wait_review",
+        reason: "no_independent_review",
+        already_accepted: false,
+        reviews: [],
+        decisions: [decision({ decision: "accept", reason: "" })],
+      }),
     );
+    renderSection();
+
+    expect(await screen.findByTestId("closure-outcome")).toHaveTextContent("Waiting for review");
+    const row = screen.getByTestId("closure-decision");
+    expect(row).toHaveTextContent("Accepted by a person");
+    expect(row).toHaveTextContent("Ada");
+    expect(row).not.toHaveTextContent("Passed");
+    // The accept is a person's decision: it is neither an accepted review nor a
+    // server verdict that the goal can close.
+    expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ready to accept")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("closure-review")).not.toBeInTheDocument();
+  });
+
+  it("shows a recorded rejection reason from the read model", async () => {
+    api.getGoalClosure.mockResolvedValue(
+      closureState({
+        outcome: "needs_changes",
+        decisions: [
+          decision({
+            decision: "reject",
+            reason: "The failure path is untested",
+            criteria_revision: "plan-r2",
+          }),
+        ],
+      }),
+    );
+    renderSection();
+
+    const row = await screen.findByTestId("closure-decision");
+    expect(row).toHaveTextContent("Rejected by a person");
+    expect(row).toHaveTextContent("The failure path is untested");
+    expect(row).toHaveTextContent("plan-r2");
+    expect(screen.getByText("Human decisions")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Accept and reject decisions recorded by people. They aren't independent reviews and don't change the server's decision above.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("grants only the explicit acceptance action for the current scope", async () => {

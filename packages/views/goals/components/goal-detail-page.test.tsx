@@ -82,6 +82,7 @@ const closureState = (overrides: Partial<ClosureState> = {}): ClosureState => ({
   already_accepted: false,
   authorization: null,
   reviews: [],
+  decisions: [],
   ...overrides,
 });
 

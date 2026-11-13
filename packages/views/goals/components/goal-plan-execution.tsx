@@ -3,12 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type {
-  Goal,
-  GoalPlanItem,
-  MaterializedGoalPlanItem,
-  MaterializeGoalPlanResponse,
-} from "@multica/core/types";
+import type { Goal, GoalPlanItem, MaterializeGoalPlanResponse } from "@multica/core/types";
 import {
   goalKeys,
   goalPlanOptions,
@@ -23,43 +18,27 @@ import { Spinner } from "@multica/ui/components/ui/spinner";
 import { useQuery } from "@tanstack/react-query";
 import { AppLink } from "../../navigation";
 import { useT } from "../../i18n";
+import {
+  DEPENDENCY_WAIT_EVENT,
+  WAIT_MAIN_COPY_KEY,
+  knownIssueStatus,
+  executionWaitSummary,
+  mergeExecutionViews,
+  triggerCopyKey,
+  type ExecutionItemView,
+} from "../execution";
 import { GoalOwnerPicker, EMPTY_GOAL_OWNER, type GoalOwnerValue } from "./goal-owner-picker";
 
-type DependencyDisplay =
-  | "ready"
-  | "not_done"
-  | "not_accepted"
-  | "unknown"
-  | "unreadable"
-  | "unrecognized";
-
-function dependencyDisplay(reason: string): DependencyDisplay {
-  switch (reason) {
-    case "":
-      return "ready";
-    case "dependency_not_done":
-      return "not_done";
-    case "dependency_not_accepted":
-      return "not_accepted";
-    case "dependency_unknown":
-      return "unknown";
-    case "dependency_unreadable":
-      return "unreadable";
-    default:
-      return "unrecognized";
-  }
-}
-
 /**
- * Executes a saved plan: creates one task per `binding.type = new` item with an
- * optional assignee, then shows the server's own binding and dependency
- * verdicts. A repeated run is safe because the server is idempotent per plan
- * item; the UI never dedupes locally and never derives readiness itself.
+ * Executes a saved plan: creates one task per unbound `binding.type = new`
+ * item with an optional assignee, then shows the server's own bindings,
+ * dependency verdicts and the real event that releases a parked task.
  *
- * Everything is computed from the materialize reply. The page has no read API
- * for persisted bindings or task scheduling, so it does not claim to know that
- * a parked task will start by itself: it reports the server's dependency
- * verdict and that a real prerequisite event is what releases the work.
+ * Bindings survive a refresh through the plan's execution read model; the
+ * materialize reply is used only for what it alone reports (`created` vs
+ * reused, whether a run was enqueued). A repeated run is safe because the
+ * server is idempotent per plan item, and the panel never derives readiness
+ * or resumption from a timer, a retry or a task's own status.
  */
 export function GoalPlanExecution({
   goal,
@@ -79,6 +58,7 @@ export function GoalPlanExecution({
   blocked: boolean;
 }) {
   const { t } = useT("goals");
+  const { t: tIssues } = useT("issues");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const queryClient = useQueryClient();
@@ -97,23 +77,28 @@ export function GoalPlanExecution({
     setResult((current) => (current && current.plan_revision !== planRevision ? null : current));
   }, [planRevision]);
 
+  const execution =
+    planQuery.data && planQuery.data.goal_id === goal.id ? planQuery.data.execution : null;
+
+  const views = useMemo(
+    () => mergeExecutionViews({ execution, reply: result, goalId: goal.id, planRevision }),
+    [execution, result, goal.id, planRevision],
+  );
+
+  // Every unbound plan item keeps its row: once the read model reports a
+  // binding the row shows that task instead of offering to create it again.
   const newItems = useMemo(
     () => items.filter((item) => item.binding.type === "new" && !item.binding.issue_id),
     [items],
+  );
+  const runnableItems = useMemo(
+    () => newItems.filter((item) => !views?.get(item.id)),
+    [newItems, views],
   );
   const existingItems = useMemo(
     () => items.filter((item) => !!item.binding.issue_id),
     [items],
   );
-
-  const results = useMemo(() => {
-    if (!result || result.goal_id !== goal.id || result.plan_revision !== planRevision) return null;
-    const map = new Map<string, MaterializedGoalPlanItem>();
-    for (const item of result.items) {
-      if (item.item_id && item.issue_id) map.set(item.item_id, item);
-    }
-    return map;
-  }, [result, goal.id, planRevision]);
 
   const actionBlocked = dirty || blocked || !saved || materialize.isPending;
 
@@ -124,7 +109,7 @@ export function GoalPlanExecution({
       const payload = await materialize.mutateAsync({
         goalId: goal.id,
         data: {
-          items: newItems.map((item) => {
+          items: runnableItems.map((item) => {
             const assignee = assignees[item.id];
             return assignee?.type && assignee.id
               ? { item_id: item.id, assignee_type: assignee.type, assignee_id: assignee.id }
@@ -140,7 +125,7 @@ export function GoalPlanExecution({
         setRunError(t(($) => $.execution.unconfirmed));
         return;
       }
-      const missing = newItems.filter(
+      const missing = runnableItems.filter(
         (item) => !payload.items.some((row) => row.item_id === item.id && row.issue_id),
       );
       if (missing.length > 0) {
@@ -150,6 +135,9 @@ export function GoalPlanExecution({
         return;
       }
       setResult(payload);
+      // The durable read model is the page's source after a refresh; reread it
+      // so the reply is backed by persisted bindings.
+      void queryClient.invalidateQueries({ queryKey: goalKeys.plan(wsId, goal.id) });
       const created = payload.items.filter((row) => row.created).length;
       const reused = payload.items.length - created;
       toast.success(t(($) => $.execution.created_summary, { created, reused }));
@@ -166,61 +154,114 @@ export function GoalPlanExecution({
     void queryClient.invalidateQueries({ queryKey: goalKeys.issues(wsId, goal.id) });
   };
 
-  const renderResult = (row: MaterializedGoalPlanItem) => {
-    const dependency = dependencyDisplay(row.dependency.ready ? "" : row.dependency.reason);
-    const assigneeName =
-      row.assignee_type && row.assignee_id
-        ? getActorName(row.assignee_type, row.assignee_id)
-        : null;
+  const statusLabel = (status: string) => {
+    const known = knownIssueStatus(status);
+    return known ? tIssues(($) => $.status[known]) : status;
+  };
+
+  const triggerLabel = (code: string) => {
+    const key = triggerCopyKey(code);
+    return key ? t(($) => $.execution[key]) : code;
+  };
+
+  const assigneeName = (view: ExecutionItemView) =>
+    view.assigneeType && view.assigneeId
+      ? getActorName(view.assigneeType, view.assigneeId)
+      : null;
+
+  /**
+   * The primary wait message comes from the structured reason and prerequisite
+   * statuses, so it reads in the reader's language. The server's own English
+   * sentences are diagnostics, shown after the localized lines.
+   */
+  const renderDependency = (view: ExecutionItemView) => {
+    const summary = executionWaitSummary(view.dependency, view.wait);
+    if (!summary) {
+      return view.dependency ? (
+        <p className="text-caption text-success">{t(($) => $.execution.dep_ready)}</p>
+      ) : null;
+    }
+    const statuses = summary.statuses.map(statusLabel).join(" · ");
+    const triggers = summary.triggers.map(triggerLabel).join(", ");
+    const unknownEvent = !!summary.event && summary.event !== DEPENDENCY_WAIT_EVENT;
     return (
-      <div className="space-y-1" data-testid={`execution-result-${row.item_id}`}>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Badge
-            variant="outline"
-            className={row.created ? "border-success/40 text-success" : "text-muted-foreground"}
-          >
-            {row.created ? t(($) => $.execution.created) : t(($) => $.execution.reused)}
-          </Badge>
-          <AppLink
-            href={paths.issueDetail(row.issue_id)}
-            className="text-caption underline-offset-2 hover:underline"
-          >
-            {t(($) => $.execution.open_task)}
-          </AppLink>
-          <span className="text-caption text-muted-foreground">
-            {assigneeName ?? t(($) => $.execution.unassigned)}
-          </span>
-        </div>
-        <p
-          className={
-            dependency === "ready"
-              ? "text-caption text-success"
-              : "text-caption text-warning"
-          }
-        >
-          {t(($) => $.execution[`dep_${dependency}`])}
-          {dependency === "unrecognized" ? ` (${row.dependency.reason})` : ""}
+      <div className="space-y-1" data-testid={`execution-wait-${view.itemId}`}>
+        <p className="text-caption text-warning">
+          {t(($) => $.execution[WAIT_MAIN_COPY_KEY[summary.reason]], {
+            reason: summary.dependencyReason,
+          })}
         </p>
-        {row.dependency.detail ? (
-          <p className="break-words font-mono text-caption text-muted-foreground">
-            {row.dependency.detail}
+        {statuses ? (
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.execution.wait_statuses, { statuses })}
           </p>
         ) : null}
-        {dependency !== "ready" ? (
-          <p className="text-caption text-muted-foreground">{t(($) => $.execution.dep_recovery)}</p>
+        {triggers ? (
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.execution.wait_triggers, { triggers })}
+          </p>
+        ) : (
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.execution.dep_recovery)}
+          </p>
+        )}
+        {unknownEvent ? (
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.execution.wait_event_unknown, { event: summary.event })}
+          </p>
         ) : null}
-        <p className="text-caption text-muted-foreground">
-          {row.task_enqueued
-            ? t(($) => $.execution.run_started)
-            : !row.assignee_id
-              ? t(($) => $.execution.run_no_assignee)
-              : dependency !== "ready"
-                ? t(($) => $.execution.run_waiting_dependency)
-                : t(($) => $.execution.run_not_enqueued)}
-        </p>
+        {summary.detail ? (
+          <p className="break-words font-mono text-caption text-muted-foreground">
+            {summary.detail}
+          </p>
+        ) : null}
       </div>
     );
   };
+
+  const renderRunState = (view: ExecutionItemView) => {
+    if (view.taskEnqueued === null) return null;
+    const waiting = !!view.dependency && !view.dependency.ready;
+    return (
+      <p className="text-caption text-muted-foreground">
+        {view.taskEnqueued
+          ? t(($) => $.execution.run_started)
+          : !view.assigneeId
+            ? t(($) => $.execution.run_no_assignee)
+            : waiting
+              ? t(($) => $.execution.run_waiting_dependency)
+              : t(($) => $.execution.run_not_enqueued)}
+      </p>
+    );
+  };
+
+  const renderView = (view: ExecutionItemView) => (
+    <div className="space-y-1" data-testid={`execution-result-${view.itemId}`}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge
+          variant="outline"
+          className={
+            view.created === true ? "border-success/40 text-success" : "text-muted-foreground"
+          }
+        >
+          {view.created === true
+            ? t(($) => $.execution.created)
+            : t(($) => $.execution.reused)}
+        </Badge>
+        <AppLink
+          href={paths.issueDetail(view.issueId)}
+          className="text-caption underline-offset-2 hover:underline"
+        >
+          {t(($) => $.execution.open_task)}
+        </AppLink>
+        <span className="text-caption text-muted-foreground">
+          {assigneeName(view) ?? t(($) => $.execution.unassigned)}
+        </span>
+      </div>
+      {renderDependency(view)}
+      {renderRunState(view)}
+    </div>
+  );
 
   return (
     <section className="space-y-2" data-testid="goal-plan-execution">
@@ -232,7 +273,7 @@ export function GoalPlanExecution({
           </Button>
           <Button
             size="sm"
-            disabled={actionBlocked || newItems.length === 0}
+            disabled={actionBlocked || runnableItems.length === 0}
             aria-busy={materialize.isPending}
             onClick={() => void handleRun()}
           >
@@ -255,45 +296,63 @@ export function GoalPlanExecution({
         <p className="text-caption text-muted-foreground">{t(($) => $.execution.none)}</p>
       ) : (
         <ul className="divide-y divide-border/60 rounded-md border">
-          {existingItems.map((item) => (
-            <li
-              key={item.id}
-              className="flex flex-wrap items-center gap-2 px-3 py-2"
-              data-testid={`execution-existing-${item.id}`}
-            >
-              <Badge variant="outline" className="text-muted-foreground">
-                {t(($) => $.plan.binding_existing)}
-              </Badge>
-              <span className="min-w-0 flex-1 truncate text-body">{item.title}</span>
-              {item.binding.issue_id ? (
-                <AppLink
-                  href={paths.issueDetail(item.binding.issue_id)}
-                  className="text-caption underline-offset-2 hover:underline"
-                >
-                  {t(($) => $.execution.open_task)}
-                </AppLink>
-              ) : null}
-            </li>
-          ))}
-          {newItems.map((item) => (
-            <li
-              key={item.id}
-              className="space-y-2 px-3 py-2"
-              data-testid={`execution-item-${item.id}`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{t(($) => $.plan.binding_new)}</Badge>
-                <span className="min-w-0 flex-1 truncate text-body">{item.title}</span>
-                <GoalOwnerPicker
-                  value={assignees[item.id] ?? EMPTY_GOAL_OWNER}
-                  onChange={(next) =>
-                    setAssignees((current) => ({ ...current, [item.id]: next }))
-                  }
-                />
-              </div>
-              {results?.get(item.id) ? renderResult(results.get(item.id)!) : null}
-            </li>
-          ))}
+          {existingItems.map((item) => {
+            const view = views?.get(item.id);
+            return (
+              <li
+                key={item.id}
+                className="space-y-1 px-3 py-2"
+                data-testid={`execution-existing-${item.id}`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="text-muted-foreground">
+                    {t(($) => $.plan.binding_existing)}
+                  </Badge>
+                  <span className="min-w-0 flex-1 truncate text-body">{item.title}</span>
+                  {item.binding.issue_id ? (
+                    <AppLink
+                      href={paths.issueDetail(item.binding.issue_id)}
+                      className="text-caption underline-offset-2 hover:underline"
+                    >
+                      {t(($) => $.execution.open_task)}
+                    </AppLink>
+                  ) : null}
+                </div>
+                {view ? (
+                  <>
+                    {renderDependency(view)}
+                    <p className="text-caption text-muted-foreground">
+                      {assigneeName(view) ?? t(($) => $.execution.unassigned)}
+                    </p>
+                  </>
+                ) : null}
+              </li>
+            );
+          })}
+          {newItems.map((item) => {
+            const view = views?.get(item.id);
+            return (
+              <li
+                key={item.id}
+                className="space-y-2 px-3 py-2"
+                data-testid={`execution-item-${item.id}`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{t(($) => $.plan.binding_new)}</Badge>
+                  <span className="min-w-0 flex-1 truncate text-body">{item.title}</span>
+                  {view ? null : (
+                    <GoalOwnerPicker
+                      value={assignees[item.id] ?? EMPTY_GOAL_OWNER}
+                      onChange={(next) =>
+                        setAssignees((current) => ({ ...current, [item.id]: next }))
+                      }
+                    />
+                  )}
+                </div>
+                {view ? renderView(view) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
 

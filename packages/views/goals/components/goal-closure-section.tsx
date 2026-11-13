@@ -3,16 +3,21 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { ClosureAuthorization, ClosureReview, ClosureState, Goal } from "@multica/core/types";
+import type {
+  ClosureAuthorization,
+  ClosureDecision,
+  ClosureReview,
+  ClosureState,
+  Goal,
+} from "@multica/core/types";
 import {
   goalClosureOptions,
-  useCreateGoalClosureReview,
   useGrantGoalClosureAuthorization,
+  useRejectGoalClosure,
   useUpdateGoal,
 } from "@multica/core/goals";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { errorCode } from "@multica/core/api";
 import { Button } from "@multica/ui/components/ui/button";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Spinner } from "@multica/ui/components/ui/spinner";
@@ -44,6 +49,7 @@ import { useT } from "../../i18n";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { isGoalUnavailableError } from "../status";
 import {
+  DECISION_COPY_KEY,
   OUTCOME_COPY_KEY,
   OUTCOME_HINT_KEY,
   REASON_COPY_KEY,
@@ -52,10 +58,11 @@ import {
   closureOutcomeTone,
   closureReasonGroup,
   closureToneClass,
+  decisionKindDisplay,
+  decisionTone,
   isClosureAcceptable,
   isSupersededReview,
   parseClosureRefusal,
-  rejectionDelivery,
   reviewVerdictDisplay,
   verdictTone,
   type ClosureRefusal,
@@ -211,6 +218,52 @@ function AuthorizationRow({ authorization }: { authorization: ClosureAuthorizati
 }
 
 /**
+ * One human accept/reject. Rendered apart from reviews on purpose: an accept
+ * is a person's decision, not independent verification, and it never feeds the
+ * server's evaluated outcome.
+ */
+function DecisionRow({ decision }: { decision: ClosureDecision }) {
+  const { t } = useT("goals");
+  const { getActorName } = useActorName();
+  const timeAgo = useTimeAgo();
+  const kind = decisionKindDisplay(decision.decision);
+  const actor = decision.actor_type
+    ? getActorName(decision.actor_type, decision.actor_id ?? "")
+    : "";
+
+  return (
+    <li className="space-y-1 rounded-md border px-3 py-2" data-testid="closure-decision">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className={closureToneClass(decisionTone(decision.decision))}>
+          {t(($) => $.closure[DECISION_COPY_KEY[kind]])}
+        </Badge>
+        {decision.recorded_at ? (
+          <span className="text-caption text-muted-foreground">{timeAgo(decision.recorded_at)}</span>
+        ) : null}
+      </div>
+      <div className={ROW_CLASS}>
+        <span className="text-muted-foreground">{t(($) => $.closure.decision_actor)}</span>
+        <span>
+          {actor || decision.actor_type || t(($) => $.closure.review_unknown_reviewer)}
+        </span>
+      </div>
+      {decision.reason ? (
+        <div className={ROW_CLASS}>
+          <span className="text-muted-foreground">{t(($) => $.closure.decision_reason)}</span>
+          <span className="whitespace-pre-wrap">{decision.reason}</span>
+        </div>
+      ) : null}
+      {decision.criteria_revision ? (
+        <div className={ROW_CLASS}>
+          <span className="text-muted-foreground">{t(($) => $.closure.decision_scope)}</span>
+          <code className={CODE_CLASS}>{decision.criteria_revision}</code>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/**
  * The goal's acceptance surface. Every verdict shown here comes from the
  * server's closure read model; the panel never derives readiness from linked
  * task statuses, run exits or the absence of a scheduled time. Accepting is
@@ -224,7 +277,7 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
   const closureQuery = useQuery(goalClosureOptions(wsId, goal.id));
   const updateGoal = useUpdateGoal();
   const grantAuthorization = useGrantGoalClosureAuthorization();
-  const createReview = useCreateGoalClosureReview();
+  const rejectGoal = useRejectGoalClosure();
 
   // A degraded reply (or a cached payload for another goal) is not a decision.
   const closure: ClosureState | null =
@@ -237,7 +290,6 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
   const [refusal, setRefusal] = useState<ClosureRefusal | null>(null);
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
-  const [rejectScope, setRejectScope] = useState("");
   const [rejectError, setRejectError] = useState<string | null>(null);
   const [grantSource, setGrantSource] = useState("");
   const [grantCoversChildren, setGrantCoversChildren] = useState(false);
@@ -248,7 +300,6 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
   const outcome = closureOutcomeDisplay(closure?.outcome ?? "");
   const acceptable = isClosureAcceptable(closure?.outcome ?? "");
   const reasonGroup = closureReasonGroup(closure?.reason ?? "");
-  const delivery = closure ? rejectionDelivery(closure) : null;
   const nextActor = closure?.next_actor
     ? (["member", "agent", "squad"].find(
         (type) => hasActor(type, closure.next_actor),
@@ -283,8 +334,12 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
     );
   };
 
+  /**
+   * A refusal is a human decision: it needs a reason, not a delivery version,
+   * and it writes no review. The server keeps the goal open and the evaluated
+   * outcome unchanged, so nothing here is shown as accepted.
+   */
   const handleReject = async () => {
-    if (!closure || !delivery) return;
     const reason = rejectReason.trim();
     if (!reason) {
       setRejectError(t(($) => $.closure.reject_needs_reason));
@@ -292,29 +347,11 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
     }
     setRejectError(null);
     try {
-      const created = await createReview.mutateAsync({
-        goalId: goal.id,
-        data: {
-          delivery_version: delivery.version,
-          delivery_tree: delivery.tree,
-          criteria_revision: delivery.criteriaRevision,
-          verdict: "needs_changes",
-          reason,
-          missing: rejectScope.trim() ? [rejectScope.trim()] : [],
-        },
-      });
-      if (!created.id) throw new Error("The server did not confirm the review.");
+      await rejectGoal.mutateAsync({ goalId: goal.id, data: { reason } });
       toast.success(t(($) => $.closure.rejected));
       setRejectOpen(false);
       setRejectReason("");
-      setRejectScope("");
-    } catch (error) {
-      const code = errorCode(error);
-      if (code === "closure_delivery_stale" || code === "closure_criteria_stale") {
-        setRejectError(t(($) => $.closure.reject_stale));
-        void closureQuery.refetch();
-        return;
-      }
+    } catch {
       setRejectError(t(($) => $.closure.reject_failed));
     }
   };
@@ -533,6 +570,20 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
       </div>
 
       <div className="space-y-2">
+        <h3 className="text-body font-medium">{t(($) => $.closure.decisions_title)}</h3>
+        <p className="text-caption text-muted-foreground">{t(($) => $.closure.decisions_note)}</p>
+        {closure.decisions.length === 0 ? (
+          <p className="text-caption text-muted-foreground">{t(($) => $.closure.decisions_empty)}</p>
+        ) : (
+          <ul className="space-y-2">
+            {closure.decisions.map((decision) => (
+              <DecisionRow key={decision.id} decision={decision} />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="space-y-2">
         <h3 className="text-body font-medium">{t(($) => $.closure.reviews_title)}</h3>
         <p className="text-caption text-muted-foreground">{t(($) => $.closure.reviews_note)}</p>
         {closure.reviews.length === 0 ? (
@@ -602,7 +653,7 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
       <Dialog
         open={rejectOpen}
         onOpenChange={(open) => {
-          if (!createReview.isPending) {
+          if (!rejectGoal.isPending) {
             setRejectOpen(open);
             if (!open) setRejectError(null);
           }
@@ -623,21 +674,6 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
               rows={3}
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="goal-reject-scope">{t(($) => $.closure.reject_scope)}</Label>
-            <Textarea
-              id="goal-reject-scope"
-              value={rejectScope}
-              onChange={(event) => setRejectScope(event.target.value)}
-              placeholder={t(($) => $.closure.reject_scope_placeholder)}
-              rows={2}
-            />
-          </div>
-          {!delivery ? (
-            <p className="text-caption text-warning" role="alert">
-              {t(($) => $.closure.reject_needs_delivery)}
-            </p>
-          ) : null}
           {rejectError ? (
             <p className="text-caption text-destructive" role="alert">
               {rejectError}
@@ -646,19 +682,19 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
           <DialogFooter>
             <Button
               variant="outline"
-              disabled={createReview.isPending}
+              disabled={rejectGoal.isPending}
               onClick={() => setRejectOpen(false)}
             >
               {t(($) => $.form.cancel)}
             </Button>
             <Button
               variant="destructive"
-              disabled={createReview.isPending || !delivery}
-              aria-busy={createReview.isPending}
+              disabled={rejectGoal.isPending}
+              aria-busy={rejectGoal.isPending}
               onClick={() => void handleReject()}
             >
-              {createReview.isPending ? <Spinner className="size-3.5" aria-hidden="true" /> : null}
-              {createReview.isPending
+              {rejectGoal.isPending ? <Spinner className="size-3.5" aria-hidden="true" /> : null}
+              {rejectGoal.isPending
                 ? t(($) => $.closure.rejecting)
                 : t(($) => $.closure.reject_action)}
             </Button>

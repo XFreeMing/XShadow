@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@multica/core/api";
-import type { ClosureReview, ClosureState } from "@multica/core/types";
+import type { ClosureReview } from "@multica/core/types";
 import {
   OUTCOME_COPY_KEY,
   OUTCOME_HINT_KEY,
@@ -10,10 +10,12 @@ import {
   closureOutcomeDisplay,
   closureOutcomeTone,
   closureReasonGroup,
+  decisionKindDisplay,
+  decisionTone,
+  DECISION_COPY_KEY,
   isClosureAcceptable,
   isSupersededReview,
   parseClosureRefusal,
-  rejectionDelivery,
   reviewVerdictDisplay,
 } from "./closure";
 import { RESOURCES } from "../locales";
@@ -45,26 +47,6 @@ function review(overrides: Partial<ClosureReview> = {}): ClosureReview {
     accepted_by_type: "",
     accepted_by_id: null,
     recorded_at: "",
-    ...overrides,
-  };
-}
-
-function closure(overrides: Partial<ClosureState> = {}): ClosureState {
-  return {
-    subject_type: "goal",
-    subject_id: "goal-1",
-    status: "in_progress",
-    managed: true,
-    delivery_version: "",
-    delivery_tree: "",
-    criteria_revision: "",
-    outcome: "blocked",
-    reason: "",
-    detail: "",
-    next_actor: "",
-    already_accepted: false,
-    authorization: null,
-    reviews: [],
     ...overrides,
   };
 }
@@ -153,42 +135,20 @@ describe("closure display mapping", () => {
   });
 });
 
-describe("rejectionDelivery", () => {
-  it("uses the server's own delivery for the goal", () => {
-    expect(
-      rejectionDelivery(
-        closure({
-          delivery_version: "head-sha",
-          delivery_tree: "tree",
-          criteria_revision: "plan-r4",
-        }),
-      ),
-    ).toEqual({ version: "head-sha", tree: "tree", criteriaRevision: "plan-r4" });
+describe("human decisions", () => {
+  it("keeps accept and reject as decisions, never as a verdict", () => {
+    expect(decisionKindDisplay("accept")).toBe("accept");
+    expect(decisionKindDisplay("reject")).toBe("reject");
+    expect(decisionKindDisplay("approved")).toBe("unknown");
+    for (const kind of ["accept", "reject", "unknown"] as const) {
+      expect(DECISION_COPY_KEY[kind]).toBeTruthy();
+    }
   });
 
-  it("falls back to the newest non-superseded review", () => {
-    const delivery = rejectionDelivery(
-      closure({
-        reviews: [
-          review({ id: "newest", delivery_version: "new", delivery_tree: "new-tree" }),
-          review({ id: "old", superseded_by: "newest", delivery_version: "old" }),
-        ],
-        criteria_revision: "plan-r7",
-      }),
-    );
-    expect(delivery).toEqual({ version: "new", tree: "new-tree", criteriaRevision: "plan-r7" });
-  });
-
-  it("returns null when nothing names a delivery version", () => {
-    expect(rejectionDelivery(closure())).toBeNull();
-  });
-
-  it("ignores a superseded review when no other delivery exists", () => {
-    expect(
-      rejectionDelivery(
-        closure({ reviews: [review({ superseded_by: "review-2", delivery_version: "old" })] }),
-      ),
-    ).toBeNull();
+  it("never gives a decision a success tone", () => {
+    expect(decisionTone("accept")).toBe("muted");
+    expect(decisionTone("reject")).toBe("attention");
+    expect(decisionTone("approved")).toBe("muted");
   });
 });
 

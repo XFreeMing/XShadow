@@ -213,32 +213,44 @@ export function isAcceptedReview(review: ClosureReview): boolean {
   return !!review.accepted_at;
 }
 
-/**
- * A rejection is recorded against a fixed delivery version. The goal's own
- * closure read already falls back to the newest review's delivery, so use it
- * before giving up; without any delivery there is nothing the contract lets us
- * reject, and the caller must not invent one.
- */
-export function rejectionDelivery(
-  closure: ClosureState,
-): { version: string; tree: string; criteriaRevision: string } | null {
-  const newest = closure.reviews.find((review) => !isSupersededReview(review));
-  const version = closure.delivery_version || newest?.delivery_version || "";
-  if (!version) return null;
-  return {
-    version,
-    tree: closure.delivery_version
-      ? closure.delivery_tree
-      : (newest?.delivery_tree ?? ""),
-    criteriaRevision: closure.criteria_revision || newest?.criteria_revision || "",
-  };
-}
-
 export interface ClosureRefusal {
   outcome: string;
   reason: string;
   detail: string;
   nextActor: string;
+}
+
+export type DecisionKindDisplay = "accept" | "reject" | "unknown";
+
+/**
+ * A human accept/reject decision. It is deliberately its own bucket: an
+ * `accept` is a person's decision, not an independent pass, and must never be
+ * rendered with a success tone or as evidence the goal can be closed.
+ */
+export function decisionKindDisplay(decision: string): DecisionKindDisplay {
+  switch (decision) {
+    case "accept":
+    case "reject":
+      return decision;
+    default:
+      return "unknown";
+  }
+}
+
+export const DECISION_COPY_KEY = {
+  accept: "decision_accept",
+  reject: "decision_reject",
+  unknown: "decision_unknown",
+} as const satisfies Record<DecisionKindDisplay, string>;
+
+/** No decision is a success: accept stays muted, reject is a refusal. */
+export function decisionTone(decision: string): ClosureTone {
+  switch (decisionKindDisplay(decision)) {
+    case "reject":
+      return "attention";
+    default:
+      return "muted";
+  }
 }
 
 /**
@@ -282,5 +294,6 @@ export function decisionFromRefusal(refusal: ClosureRefusal): ClosureState {
     already_accepted: false,
     authorization: null,
     reviews: [],
+    decisions: [],
   };
 }
