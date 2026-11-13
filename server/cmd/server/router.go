@@ -2290,6 +2290,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/", h.DeleteGoal)
 					r.Get("/closure", h.GetGoalClosure)
 					r.Post("/closure/reviews", h.CreateGoalClosureReview)
+					// A human can refuse a goal before any reviewable delivery
+					// exists. This records the reason only; it is not a review.
+					r.With(handler.RequireHumanActor).Post("/closure/rejections", h.CreateGoalClosureRejection)
 					r.With(handler.RequireHumanActor).Post("/closure/authorizations", h.GrantGoalClosureAuthorization)
 					r.Get("/issues", h.ListGoalIssues)
 					r.Put("/issues/{issueId}", h.LinkGoalIssue)

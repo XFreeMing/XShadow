@@ -3111,19 +3111,30 @@ SET status = 'deferred',
     fire_at = NULL,
     dispatched_at = NULL,
     prepare_lease_expires_at = NULL,
-    delivered_comment_ids = '{}'
-WHERE id = $1
-  AND runtime_id = $2
+    delivered_comment_ids = '{}',
+    context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
+        'dependency_wait', jsonb_build_object(
+            'reason', $1::text,
+            'detail', $2::text,
+            'event', 'dependency_changed',
+            'prerequisites', $3::jsonb
+        )
+    )
+WHERE id = $4
+  AND runtime_id = $5
   AND status = 'dispatched'
   AND started_at IS NULL
-  AND dispatched_at = $3
+  AND dispatched_at = $6
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
 `
 
 type DeferAgentTaskForUnmetDependenciesParams struct {
-	TaskID       pgtype.UUID        `json:"task_id"`
-	RuntimeID    pgtype.UUID        `json:"runtime_id"`
-	DispatchedAt pgtype.Timestamptz `json:"dispatched_at"`
+	WaitReason        string             `json:"wait_reason"`
+	WaitDetail        string             `json:"wait_detail"`
+	WaitPrerequisites []byte             `json:"wait_prerequisites"`
+	TaskID            pgtype.UUID        `json:"task_id"`
+	RuntimeID         pgtype.UUID        `json:"runtime_id"`
+	DispatchedAt      pgtype.Timestamptz `json:"dispatched_at"`
 }
 
 // A claim whose issue still has an unmet strong prerequisite is not a claim
@@ -3133,8 +3144,19 @@ type DeferAgentTaskForUnmetDependenciesParams struct {
 // dependency change (see ReleaseDeferredDependentTasksForIssue) makes it due
 // again, and the ordinary promotion path puts it back in the claim queue with
 // the existing single-pending fence intact.
+//
+// The wait verdict is persisted with the row so a task read can explain the
+// park without re-evaluating the dependency graph, and so `deferred` with a
+// NULL fire_at is distinguishable from a timed retry. Release removes it.
 func (q *Queries) DeferAgentTaskForUnmetDependencies(ctx context.Context, arg DeferAgentTaskForUnmetDependenciesParams) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, deferAgentTaskForUnmetDependencies, arg.TaskID, arg.RuntimeID, arg.DispatchedAt)
+	row := q.db.QueryRow(ctx, deferAgentTaskForUnmetDependencies,
+		arg.WaitReason,
+		arg.WaitDetail,
+		arg.WaitPrerequisites,
+		arg.TaskID,
+		arg.RuntimeID,
+		arg.DispatchedAt,
+	)
 	var i AgentTaskQueue
 	err := row.Scan(
 		&i.ID,
@@ -8612,7 +8634,8 @@ func (q *Queries) RegisterPlannedCommentForActiveTask(ctx context.Context, arg R
 
 const releaseDeferredDependentTasksForIssue = `-- name: ReleaseDeferredDependentTasksForIssue :many
 UPDATE agent_task_queue
-SET fire_at = now()
+SET fire_at = now(),
+    context = context - 'dependency_wait'
 WHERE issue_id = $1
   AND status = 'deferred'
   AND fire_at IS NULL
@@ -8622,7 +8645,8 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 // Arms every task parked by DeferAgentTaskForUnmetDependencies for the next
 // promotion tick. Only rows with fire_at IS NULL are touched: ordinary retry /
 // channel-media deferred rows already have their own trigger and are never
-// pulled forward by a dependency event.
+// pulled forward by a dependency event. The stale wait verdict is removed so a
+// later unrelated defer cannot inherit it.
 func (q *Queries) ReleaseDeferredDependentTasksForIssue(ctx context.Context, issueID pgtype.UUID) ([]AgentTaskQueue, error) {
 	rows, err := q.db.Query(ctx, releaseDeferredDependentTasksForIssue, issueID)
 	if err != nil {

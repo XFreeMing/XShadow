@@ -4818,6 +4818,11 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 		}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue closure reviews: %w", err)
 		}
+		if err := qtx.DeleteClosureDecisionsBySubject(ctx, db.DeleteClosureDecisionsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure rejections: %w", err)
+		}
 		if err := qtx.DeleteClosureAuthorizationsBySubject(ctx, db.DeleteClosureAuthorizationsBySubjectParams{
 			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
 		}); err != nil {

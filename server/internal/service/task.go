@@ -3824,16 +3824,25 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 				outcome = "error_dependency_check"
 				return fmt.Errorf("load issue for dependency check: %w", err)
 			}
-			state, err := IssueDependenciesReady(ctx, qtx, issue)
+			blockers, err := IssueDependencyBlockers(ctx, qtx, issue)
 			if err != nil {
 				outcome = "error_dependency_check"
 				return fmt.Errorf("check issue dependencies: %w", err)
 			}
-			if !state.Ready {
+			if len(blockers) > 0 {
+				prerequisites, err := json.Marshal(DependencyWaitPrerequisites(blockers))
+				if err != nil {
+					outcome = "error_defer_dependency"
+					return fmt.Errorf("encode dependency wait prerequisites: %w", err)
+				}
+				state := IssueDependencyState{Reason: blockers[0].Reason, Detail: blockers[0].Detail}
 				if _, err := qtx.DeferAgentTaskForUnmetDependencies(ctx, db.DeferAgentTaskForUnmetDependenciesParams{
-					TaskID:       task.ID,
-					RuntimeID:    task.RuntimeID,
-					DispatchedAt: task.DispatchedAt,
+					TaskID:            task.ID,
+					RuntimeID:         task.RuntimeID,
+					DispatchedAt:      task.DispatchedAt,
+					WaitReason:        state.Reason,
+					WaitDetail:        state.Detail,
+					WaitPrerequisites: prerequisites,
 				}); err != nil {
 					outcome = "error_defer_dependency"
 					return fmt.Errorf("defer task blocked by dependencies: %w", err)

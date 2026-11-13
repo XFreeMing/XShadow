@@ -50,6 +50,22 @@ SELECT * FROM closure_review
 WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
 ORDER BY recorded_at DESC, id DESC;
 
+-- name: ListClosureDecisions :many
+SELECT * FROM closure_decision
+WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
+ORDER BY created_at DESC, id DESC;
+
+-- name: CreateClosureDecision :one
+INSERT INTO closure_decision (
+    workspace_id, project_id, subject_kind, subject_id,
+    decision, reason, criteria_revision, delivery_version,
+    actor_type, actor_id, actor_model
+) VALUES (
+    sqlc.arg('workspace_id'), sqlc.arg('project_id'), sqlc.arg('subject_kind'), sqlc.arg('subject_id'),
+    sqlc.arg('decision'), sqlc.arg('reason'), sqlc.arg('criteria_revision'), sqlc.arg('delivery_version'),
+    sqlc.arg('actor_type'), sqlc.arg('actor_id'), sqlc.arg('actor_model')
+) RETURNING *;
+
 -- name: GetClosureReviewByIdempotencyKey :one
 SELECT * FROM closure_review
 WHERE workspace_id = $1 AND idempotency_key = $2 AND idempotency_key <> '';
@@ -129,6 +145,13 @@ LIMIT 1;
 -- name: DeleteClosureReviewsBySubject :exec
 DELETE FROM closure_review
 WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3;
+
+-- name: DeleteClosureDecisionsBySubject :exec
+DELETE FROM closure_decision
+WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3;
+
+-- name: DeleteWorkspaceClosureDecisions :exec
+DELETE FROM closure_decision WHERE workspace_id = $1;
 
 -- name: DeleteClosureAuthorizationsBySubject :exec
 DELETE FROM closure_authorization

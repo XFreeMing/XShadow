@@ -264,6 +264,54 @@ func (f *dependencyFixture) loadIssue(t *testing.T, issueID string) db.Issue {
 	return issue
 }
 
+// The wait verdict is durable, not only visible in the claim call that parked
+// the row. A reader can explain `deferred` with no fire_at, and the release
+// event clears the stale verdict before arming the row.
+func TestParkedTaskPersistsDependencyWaitAndReleaseClearsIt(t *testing.T) {
+	f := newDependencyFixture(t)
+	taskID := f.queueTaskForC(t)
+	if task := f.claim(t); task != nil {
+		t.Fatalf("claimed %s while A is unaccepted", task.ID)
+	}
+
+	var reason, detail, event string
+	var prerequisites []byte
+	f.fx.QueryRow(t, `SELECT COALESCE(context->'dependency_wait'->>'reason', ''),
+		COALESCE(context->'dependency_wait'->>'detail', ''),
+		COALESCE(context->'dependency_wait'->>'event', ''),
+		COALESCE(context->'dependency_wait'->'prerequisites', '[]'::jsonb)
+		FROM agent_task_queue WHERE id = $1`, taskID).Scan(&reason, &detail, &event, &prerequisites)
+	if reason != DependencyReasonNotDone || detail == "" || event != "dependency_changed" {
+		t.Fatalf("persisted wait = %q/%q/%q, want %q with detail and dependency_changed",
+			reason, detail, event, DependencyReasonNotDone)
+	}
+	// The structured prerequisite facts are persisted too, so a client can
+	// localize the wait without parsing the English detail.
+	var stored []DependencyWaitPrerequisite
+	if err := json.Unmarshal(prerequisites, &stored); err != nil {
+		t.Fatalf("persisted prerequisites = %s: %v", prerequisites, err)
+	}
+	if len(stored) != 1 || stored[0].ItemID != "node-a" || stored[0].IssueID != f.issueA ||
+		stored[0].Status != "in_review" || stored[0].Reason != DependencyReasonNotDone {
+		t.Fatalf("persisted prerequisites = %+v, want node-a/in_review/%s", stored, DependencyReasonNotDone)
+	}
+
+	f.acceptA(t)
+	if armed := f.releaseDependents(t); armed != 1 {
+		t.Fatalf("release armed %d rows, want 1", armed)
+	}
+	var fireAtNull bool
+	var waitCleared bool
+	f.fx.QueryRow(t, `SELECT fire_at IS NULL, context->'dependency_wait' IS NULL
+		FROM agent_task_queue WHERE id = $1`, taskID).Scan(&fireAtNull, &waitCleared)
+	if fireAtNull {
+		t.Fatal("released task still has no fire_at")
+	}
+	if !waitCleared {
+		t.Fatal("released task kept its dependency_wait verdict")
+	}
+}
+
 // A dependent queued while A is still in review is parked: the rejected claim
 // takes it out of the claim queue instead of handing it back for every later
 // poll. Once A is a done issue with a valid accepted review, a real dependency
