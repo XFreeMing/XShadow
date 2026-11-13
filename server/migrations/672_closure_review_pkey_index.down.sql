@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS closure_review_pkey_uidx;

@@ -2156,6 +2156,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/comments", h.ListComments)
 					r.Get("/timeline", h.ListTimeline)
 					r.Get("/workflow-handoff", h.PreviewWorkflowHandoff)
+					// DEV-7 closure contract: the read model the gate uses, the
+					// independent review record, and a human-only scoped grant.
+					r.Get("/closure", h.GetIssueClosure)
+					r.Post("/closure/reviews", h.CreateIssueClosureReview)
+					r.With(handler.RequireHumanActor).Post("/closure/authorizations", h.GrantIssueClosureAuthorization)
 					r.Get("/subscribers", h.ListIssueSubscribers)
 					r.Post("/subscribe", h.SubscribeToIssue)
 					r.Post("/unsubscribe", h.UnsubscribeFromIssue)
@@ -2283,6 +2288,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.GetGoal)
 					r.Put("/", h.UpdateGoal)
 					r.Delete("/", h.DeleteGoal)
+					r.Get("/closure", h.GetGoalClosure)
+					r.Post("/closure/reviews", h.CreateGoalClosureReview)
+					r.With(handler.RequireHumanActor).Post("/closure/authorizations", h.GrantGoalClosureAuthorization)
 					r.Get("/issues", h.ListGoalIssues)
 					r.Put("/issues/{issueId}", h.LinkGoalIssue)
 					r.Delete("/issues/{issueId}", h.UnlinkGoalIssue)

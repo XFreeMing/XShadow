@@ -580,6 +580,23 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// DEV-7: completing a goal that is under the closure contract is the
+	// accepted close, not an arbitrary status write. A member's write is the
+	// human endpoint and is not gated.
+	if params.Status.Valid && params.Status.String == "completed" && locked.Status != "completed" && actorType == "agent" {
+		caller := h.closureRequestAgentPrincipal(r.Context(), r, actorID)
+		if err := h.closureGateGoalCompleted(r.Context(), locked, caller, locked.OwnerType.String == "agent" && uuidToString(locked.OwnerID) == caller.ID); err != nil {
+			if writeIssueWorkflowError(w, err) {
+				return
+			}
+			if isNotFound(err) {
+				writeError(w, http.StatusNotFound, "goal not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to evaluate goal closure")
+			return
+		}
+	}
 	goal, err := qtx.UpdateGoal(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -649,6 +666,20 @@ func (h *Handler) DeleteGoal(w http.ResponseWriter, r *http.Request) {
 	if err := qtx.DeleteGoalPlansByGoal(r.Context(), db.DeleteGoalPlansByGoalParams{
 		WorkspaceID: goal.WorkspaceID,
 		GoalID:      goal.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete goal")
+		return
+	}
+	// Closure evidence hangs off the goal by value only (no foreign keys by
+	// project rule), so it is removed with the goal.
+	if err := qtx.DeleteClosureReviewsBySubject(r.Context(), db.DeleteClosureReviewsBySubjectParams{
+		WorkspaceID: goal.WorkspaceID, SubjectKind: "goal", SubjectID: goal.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete goal")
+		return
+	}
+	if err := qtx.DeleteClosureAuthorizationsBySubject(r.Context(), db.DeleteClosureAuthorizationsBySubjectParams{
+		WorkspaceID: goal.WorkspaceID, SubjectKind: "goal", SubjectID: goal.ID,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete goal")
 		return

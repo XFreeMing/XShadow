@@ -4803,6 +4803,18 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 		if goalLinks > 0 {
 			result.GoalLinksChanged = true
 		}
+		// Closure evidence hangs off the subject by value only (no foreign
+		// keys by project rule), so it is removed with the issue.
+		if err := qtx.DeleteClosureReviewsBySubject(ctx, db.DeleteClosureReviewsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure reviews: %w", err)
+		}
+		if err := qtx.DeleteClosureAuthorizationsBySubject(ctx, db.DeleteClosureAuthorizationsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure authorizations: %w", err)
+		}
 		if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue: %w", err)
 		}

@@ -1367,6 +1367,16 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceIssueRoots(ctx, requester.WorkspaceID) },
 		},
 		{
+			// Closure evidence is workspace-owned and hangs off its subject by
+			// value only; it is swept before the goals and issues it names.
+			name: "delete closure reviews",
+			run:  func() error { return qtx.DeleteWorkspaceClosureReviews(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete closure authorizations",
+			run:  func() error { return qtx.DeleteWorkspaceClosureAuthorizations(ctx, requester.WorkspaceID) },
+		},
+		{
 			// goal and goal_issue carry no foreign keys by project rule, so
 			// both are swept explicitly. Links go first so no relation to a
 			// goal outlives the goal row.

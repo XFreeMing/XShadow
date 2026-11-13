@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS uq_closure_review_idempotency;

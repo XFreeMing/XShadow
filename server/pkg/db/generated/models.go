@@ -668,6 +668,57 @@ type ClientUsageDaily struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ClosureAuthorization struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	SubjectKind      string             `json:"subject_kind"`
+	SubjectID        pgtype.UUID        `json:"subject_id"`
+	Actions          []string           `json:"actions"`
+	CoversChildren   bool               `json:"covers_children"`
+	CriteriaRevision string             `json:"criteria_revision"`
+	State            string             `json:"state"`
+	Revision         int32              `json:"revision"`
+	SourceRef        string             `json:"source_ref"`
+	GrantedByType    string             `json:"granted_by_type"`
+	GrantedByID      pgtype.UUID        `json:"granted_by_id"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ClosureReview struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	SubjectKind      string             `json:"subject_kind"`
+	SubjectID        pgtype.UUID        `json:"subject_id"`
+	Action           string             `json:"action"`
+	DeliveryVersion  string             `json:"delivery_version"`
+	DeliveryTree     string             `json:"delivery_tree"`
+	CriteriaRevision string             `json:"criteria_revision"`
+	AuthorType       string             `json:"author_type"`
+	AuthorID         pgtype.UUID        `json:"author_id"`
+	AuthorRunID      pgtype.UUID        `json:"author_run_id"`
+	AuthorModel      string             `json:"author_model"`
+	ReviewerType     string             `json:"reviewer_type"`
+	ReviewerID       pgtype.UUID        `json:"reviewer_id"`
+	ReviewerRunID    pgtype.UUID        `json:"reviewer_run_id"`
+	ReviewerModel    string             `json:"reviewer_model"`
+	Verdict          string             `json:"verdict"`
+	Criteria         []byte             `json:"criteria"`
+	Platforms        []byte             `json:"platforms"`
+	Missing          []byte             `json:"missing"`
+	Reason           string             `json:"reason"`
+	IdempotencyKey   string             `json:"idempotency_key"`
+	SupersededBy     pgtype.UUID        `json:"superseded_by"`
+	AcceptedAt       pgtype.Timestamptz `json:"accepted_at"`
+	AcceptedByType   string             `json:"accepted_by_type"`
+	AcceptedByID     pgtype.UUID        `json:"accepted_by_id"`
+	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
+}
+
 type CloudAgentConnection struct {
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
 	Provider         string             `json:"provider"`
