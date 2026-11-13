@@ -130,6 +130,15 @@ import type {
   GoalPlanGeneration,
   SaveGoalPlanRequest,
   CreateGoalPlanGenerationRequest,
+  ClosureState,
+  ClosureReview,
+  ClosureAuthorization,
+  ClosureDecision,
+  CreateClosureAuthorizationRequest,
+  CreateClosureRejectionRequest,
+  CreateClosureReviewRequest,
+  MaterializeGoalPlanRequest,
+  MaterializeGoalPlanResponse,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -401,6 +410,14 @@ import {
   GoalPlanGenerationSchema,
   EMPTY_GOAL_PLAN,
   EMPTY_GOAL_PLAN_GENERATION,
+  ClosureStateSchema,
+  EMPTY_CLOSURE_STATE,
+  ClosureReviewSchema,
+  ClosureAuthorizationSchema,
+  ClosureDecisionSchema,
+  EMPTY_CLOSURE_DECISION,
+  MaterializeGoalPlanResponseSchema,
+  EMPTY_MATERIALIZE_GOAL_PLAN_RESPONSE,
   SearchProjectsResponseSchema,
   SearchIndexManifestSchema,
   SearchIndexSnapshotPageSchema,
@@ -4534,6 +4551,129 @@ export class ApiClient {
     return parseWithFallback(raw, GoalPlanGenerationSchema, EMPTY_GOAL_PLAN_GENERATION, {
       endpoint: "GET /api/goals/:id/plan/generations/:generationId",
     });
+  }
+
+  // DEV-7 closure contract. The read model is the server's own decision; this
+  // client never derives success from issue statuses, runs or review lists.
+  // A degraded body keeps `subject_id` empty, so the caller can tell it apart
+  // from a real "not enrolled" answer (managed=false, subject_id present).
+  async getGoalClosure(goalId: string): Promise<ClosureState> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/closure`);
+    return parseWithFallback(raw, ClosureStateSchema, EMPTY_CLOSURE_STATE, {
+      endpoint: "GET /api/goals/:id/closure",
+    });
+  }
+
+  async getIssueClosure(issueId: string): Promise<ClosureState> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/closure`);
+    return parseWithFallback(raw, ClosureStateSchema, EMPTY_CLOSURE_STATE, {
+      endpoint: "GET /api/issues/:id/closure",
+    });
+  }
+
+  /**
+   * Grants a scoped closure action. The route requires a human actor; the
+   * grant is never inferred from a project, a parent relation or an empty
+   * workflow, so the caller must state the actions explicitly.
+   */
+  async grantGoalClosureAuthorization(
+    goalId: string,
+    data: CreateClosureAuthorizationRequest,
+  ): Promise<ClosureAuthorization> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/closure/authorizations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ClosureAuthorizationSchema, {
+      id: "",
+      subject_type: "goal",
+      subject_id: "",
+      actions: [],
+      covers_children: false,
+      criteria_revision: "",
+      state: "",
+      revision: 0,
+      source_ref: "",
+      granted_by_type: "",
+      granted_by_id: null,
+      expires_at: null,
+      revoked_at: null,
+    }, { endpoint: "POST /api/goals/:id/closure/authorizations" });
+  }
+
+  async createGoalClosureReview(
+    goalId: string,
+    data: CreateClosureReviewRequest,
+  ): Promise<ClosureReview> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/closure/reviews`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ClosureReviewSchema, {
+      id: "",
+      subject_type: "goal",
+      subject_id: "",
+      action: "",
+      delivery_version: "",
+      delivery_tree: "",
+      criteria_revision: "",
+      author_type: "",
+      author_id: null,
+      author_model: "",
+      reviewer_type: "",
+      reviewer_id: null,
+      reviewer_model: "",
+      verdict: "",
+      criteria: [],
+      platforms: [],
+      missing: [],
+      reason: "",
+      superseded_by: null,
+      accepted_at: null,
+      accepted_by_type: "",
+      accepted_by_id: null,
+      recorded_at: "",
+    }, { endpoint: "POST /api/goals/:id/closure/reviews" });
+  }
+
+  /**
+   * Records a person's refusal of a goal. Deliberately not a review: it takes
+   * a reason and no delivery version, so a goal can be refused before any
+   * reviewable delivery exists. The route requires a human actor, writes no
+   * closure_review row and changes neither the goal's status nor its outcome.
+   */
+  async rejectGoalClosure(
+    goalId: string,
+    data: CreateClosureRejectionRequest,
+  ): Promise<ClosureDecision> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/closure/rejections`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ClosureDecisionSchema, EMPTY_CLOSURE_DECISION, {
+      endpoint: "POST /api/goals/:id/closure/rejections",
+    });
+  }
+
+  /**
+   * Turns saved-plan items into tasks. The endpoint is idempotent per
+   * (goal, item id): a retried or concurrent request returns the same issue
+   * with `created=false` instead of creating a second one.
+   */
+  async materializeGoalPlan(
+    goalId: string,
+    data: MaterializeGoalPlanRequest,
+  ): Promise<MaterializeGoalPlanResponse> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/plan/materialize`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      MaterializeGoalPlanResponseSchema,
+      EMPTY_MATERIALIZE_GOAL_PLAN_RESPONSE,
+      { endpoint: "POST /api/goals/:id/plan/materialize" },
+    );
   }
 
   async addProjectMembers(id: string, userIds: string[]): Promise<ListProjectMembersResponse> {

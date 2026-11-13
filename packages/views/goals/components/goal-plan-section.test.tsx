@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { goalKeys } from "@multica/core/goals";
+import { WorkspaceSlugProvider } from "@multica/core/paths";
 import type {
   Goal,
   GoalPlan,
@@ -16,6 +17,7 @@ import type {
 } from "@multica/core/types";
 import { toast } from "sonner";
 import { renderWithI18n } from "../../test/i18n";
+import { NavigationProvider } from "../../navigation";
 import { GoalPlanSection } from "./goal-plan-section";
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -34,6 +36,28 @@ vi.mock("../../modals/issue-picker-modal", () => ({
   IssuePickerModal: () => null,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+// The page shell normally supplies the workspace slug and navigation; the
+// section's execution panel builds task links from them.
+function Section({ goal: override }: { goal: Goal }) {
+  return (
+    <WorkspaceSlugProvider slug="test">
+      <NavigationProvider
+        value={{
+          push: vi.fn(),
+          replace: vi.fn(),
+          back: vi.fn(),
+          pathname: "/test/goals/goal-1",
+          searchParams: new URLSearchParams(),
+          hash: "",
+          getShareableUrl: (path) => path,
+        }}
+      >
+        <GoalPlanSection goal={override} />
+      </NavigationProvider>
+    </WorkspaceSlugProvider>
+  );
+}
 
 const goal: Goal = {
   id: "goal-1",
@@ -76,6 +100,7 @@ function plan(overrides: Partial<GoalPlan> = {}): GoalPlan {
     items: [],
     edges: [],
     context_snapshot: {},
+    execution: null,
     created_at: "",
     updated_at: "",
     ...overrides,
@@ -142,7 +167,7 @@ describe("GoalPlanSection", () => {
   function renderSection(goalOverride: Goal = goal) {
     return renderWithI18n(
       <QueryClientProvider client={qc}>
-        <GoalPlanSection goal={goalOverride} />
+        <Section goal={goalOverride} />
       </QueryClientProvider>,
     );
   }
@@ -531,7 +556,7 @@ describe("GoalPlanSection", () => {
     api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-2", revision: 0 }));
     view.rerender(
       <QueryClientProvider client={qc}>
-        <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+        <Section goal={{ ...goal, project_id: "project-2" }} />
       </QueryClientProvider>,
     );
 
@@ -1466,7 +1491,7 @@ describe("GoalPlanSection", () => {
     api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-2", revision: 0 }));
     view.rerender(
       <QueryClientProvider client={qc}>
-        <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+        <Section goal={{ ...goal, project_id: "project-2" }} />
       </QueryClientProvider>,
     );
 
@@ -1483,7 +1508,7 @@ describe("GoalPlanSection", () => {
     return renderWithI18n(
       <QueryClientProvider client={qc}>
         <div>
-          <GoalPlanSection goal={goalOverride} />
+          <Section goal={goalOverride} />
           <button type="button">Outside control</button>
         </div>
       </QueryClientProvider>,
@@ -1549,7 +1574,7 @@ describe("GoalPlanSection", () => {
     view.rerender(
       <QueryClientProvider client={qc}>
         <div>
-          <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+          <Section goal={{ ...goal, project_id: "project-2" }} />
           <button type="button">Outside control</button>
         </div>
       </QueryClientProvider>,

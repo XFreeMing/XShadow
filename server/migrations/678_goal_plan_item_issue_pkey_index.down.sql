@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS goal_plan_item_issue_pkey_uidx;

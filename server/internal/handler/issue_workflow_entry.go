@@ -46,6 +46,23 @@ type workflowHandoff struct {
 // move the issue from the step it works on. It returns the handoff that write
 // triggers, or nil.
 func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params *db.UpdateIssueParams, statusExplicit, assigneeTouched, enterOnMove bool, run *db.AgentTaskQueue) (*workflowHandoff, error) {
+	hand, err := h.applyIssueWorkflowSteps(ctx, prev, params, statusExplicit, assigneeTouched, enterOnMove, run)
+	if err != nil {
+		return nil, err
+	}
+	// DEV-7: the success-terminal status is the closure write. An agent's own
+	// `done` must earn close through the closure contract; a member's write is
+	// the human endpoint and is not gated here.
+	if params.Status.Valid && params.Status.String == issuestatus.Done && params.Status.String != prev.Status {
+		if err := h.closureGateIssueDone(ctx, prev, run); err != nil {
+			return nil, err
+		}
+	}
+	return hand, nil
+}
+
+// applyIssueWorkflowSteps resolves and enforces the project workflow itself.
+func (h *Handler) applyIssueWorkflowSteps(ctx context.Context, prev db.Issue, params *db.UpdateIssueParams, statusExplicit, assigneeTouched, enterOnMove bool, run *db.AgentTaskQueue) (*workflowHandoff, error) {
 	def, project, err := issueworkflow.ForProject(ctx, h.Queries, prev.WorkspaceID, params.ProjectID)
 	if err != nil {
 		return nil, err
@@ -159,6 +176,11 @@ func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
 			"step":           moved.Step,
 			"current_status": moved.Current,
 		})
+		return true
+	}
+	var refusal *closureRefusal
+	if errors.As(err, &refusal) {
+		writeClosureRefusal(w, refusal.decision)
 		return true
 	}
 	return false

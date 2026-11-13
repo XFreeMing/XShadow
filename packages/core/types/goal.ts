@@ -1,4 +1,5 @@
 import type { Issue } from "./issue";
+import type { PlanDependencyState } from "./closure";
 
 /**
  * A goal is a first-class deliverable object. It owns its intent, scope,
@@ -149,6 +150,57 @@ export interface GoalPlanEdge {
 /** Arbitrary JSON recorded about what a plan was based on. */
 export type GoalPlanContextSnapshot = Record<string, unknown>;
 
+/** One blocker keeping a plan item parked. `reason` is a stable code. */
+export interface GoalPlanExecutionPrerequisite {
+  item_id: string;
+  issue_id: string;
+  /** Issue status at read time; empty when the issue could not be read. */
+  status: string;
+  /** dependency_not_done | dependency_not_accepted | ... or a newer code. */
+  reason: string;
+  /** Free text, may be English: diagnostics only, never the primary message. */
+  detail: string;
+}
+
+/**
+ * The real event that releases a parked item. Triggers are the writes that
+ * re-check readiness today; the UI must not imply a timer or a retry.
+ */
+export interface GoalPlanExecutionWait {
+  /** dependency_changed, or a newer value. */
+  event: string;
+  /** prerequisite.issue_status_changed | goal_plan.saved | ... */
+  triggers: string[];
+  /** Free text, may be English: diagnostics only. */
+  description: string;
+  prerequisites: GoalPlanExecutionPrerequisite[];
+}
+
+/**
+ * One item's durable execution binding, restored after a refresh. The
+ * materialize reply describes a single write; this is what the read path can
+ * confirm. `dependency` is absent while the item has no bound task.
+ */
+export interface GoalPlanExecutionItem {
+  item_id: string;
+  /** The plan's own vocabulary: new | existing. */
+  binding_type: string;
+  issue_id: string;
+  /** True only when the persisted materialization row supplied the issue. */
+  materialized: boolean;
+  issue_status: string;
+  assignee_type: string;
+  assignee_id: string | null;
+  dependency: PlanDependencyState | null;
+  wait: GoalPlanExecutionWait | null;
+}
+
+/** The saved plan's execution read model, keyed by stable plan item id. */
+export interface GoalPlanExecution {
+  plan_revision: number;
+  items: GoalPlanExecutionItem[];
+}
+
 export interface GoalPlan {
   /** null for a goal that has never saved a plan (synthetic empty draft). */
   id: string | null;
@@ -159,6 +211,8 @@ export interface GoalPlan {
   items: GoalPlanItem[];
   edges: GoalPlanEdge[];
   context_snapshot: GoalPlanContextSnapshot;
+  /** null when the server predates the execution read model. */
+  execution: GoalPlanExecution | null;
   created_at: string | null;
   updated_at: string | null;
 }

@@ -217,6 +217,22 @@ export type {
   ListProjectResourcesResponse,
 } from "./project";
 export type {
+  ClosureOutcomeKind,
+  ClosureSubjectKind,
+  ClosureCriterionResult,
+  ClosureReview,
+  ClosureAuthorization,
+  ClosureDecision,
+  ClosureState,
+  CreateClosureAuthorizationRequest,
+  CreateClosureRejectionRequest,
+  CreateClosureReviewRequest,
+  MaterializedGoalPlanItem,
+  PlanDependencyState,
+  MaterializeGoalPlanRequest,
+  MaterializeGoalPlanResponse,
+} from "./closure";
+export type {
   Goal,
   GoalStatus,
   GoalOwnerType,
@@ -234,6 +250,10 @@ export type {
   GoalPlanProposedOwner,
   GoalPlanCoordination,
   GoalPlanContextSnapshot,
+  GoalPlanExecution,
+  GoalPlanExecutionItem,
+  GoalPlanExecutionPrerequisite,
+  GoalPlanExecutionWait,
   GoalPlanCandidate,
   GoalPlanGeneration,
   SaveGoalPlanRequest,

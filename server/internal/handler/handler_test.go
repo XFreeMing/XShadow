@@ -236,17 +236,23 @@ func handlerTestRuntimeID(t *testing.T) string {
 	return runtimeID
 }
 
-func createHandlerTestAgent(t *testing.T, name string, mcpConfig []byte) string {
+func createHandlerTestAgent(t *testing.T, name string, mcpConfig []byte, over ...testutil.Cols) string {
 	t.Helper()
 
-	agentID := dbfx.Agent(t, name, handlerTestRuntimeID(t), testutil.Cols{
+	cols := testutil.Cols{
 		"visibility":      "workspace",
 		"permission_mode": "public_to",
 		"instructions":    "",
 		"custom_env":      testutil.Raw("'{}'::jsonb"),
 		"custom_args":     testutil.Raw("'[]'::jsonb"),
 		"mcp_config":      mcpConfig,
-	})
+	}
+	for _, o := range over {
+		for k, v := range o {
+			cols[k] = v
+		}
+	}
+	agentID := dbfx.Agent(t, name, handlerTestRuntimeID(t), cols)
 	// Generic test agents are workspace-invocable (MUL-3963): seed the
 	// matching workspace invocation target so canInvokeAgent admits workspace
 	// members and A2A triggers, mirroring the pre-permission-model behavior

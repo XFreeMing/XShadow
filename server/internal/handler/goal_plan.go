@@ -39,6 +39,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
@@ -122,16 +123,72 @@ type GoalPlanContent struct {
 }
 
 type GoalPlanResponse struct {
-	ID              *string         `json:"id"`
-	GoalID          string          `json:"goal_id"`
-	ProjectID       *string         `json:"project_id"`
-	Revision        int32           `json:"revision"`
-	State           string          `json:"state"`
-	Items           []GoalPlanItem  `json:"items"`
-	Edges           []GoalPlanEdge  `json:"edges"`
-	ContextSnapshot json.RawMessage `json:"context_snapshot"`
-	CreatedAt       *string         `json:"created_at"`
-	UpdatedAt       *string         `json:"updated_at"`
+	ID              *string                 `json:"id"`
+	GoalID          string                  `json:"goal_id"`
+	ProjectID       *string                 `json:"project_id"`
+	Revision        int32                   `json:"revision"`
+	State           string                  `json:"state"`
+	Items           []GoalPlanItem          `json:"items"`
+	Edges           []GoalPlanEdge          `json:"edges"`
+	ContextSnapshot json.RawMessage         `json:"context_snapshot"`
+	Execution       *GoalPlanExecutionState `json:"execution"`
+	CreatedAt       *string                 `json:"created_at"`
+	UpdatedAt       *string                 `json:"updated_at"`
+}
+
+// GoalPlanExecutionState is the durable read model of plan execution. The
+// materialize reply describes one write; this is what a refreshed page reads:
+// every item's persisted binding, its current dependency verdict, and the real
+// event that will release it. It is derived from the saved plan plus durable
+// rows, never from an in-memory materialize result.
+type GoalPlanExecutionState struct {
+	PlanRevision int32                   `json:"plan_revision"`
+	Items        []GoalPlanExecutionItem `json:"items"`
+}
+
+// GoalPlanExecutionItem restores one item→issue binding after a refresh.
+// BindingType keeps the plan's own vocabulary ("new" or "existing");
+// Materialized is true only when the persisted materialization row supplied the
+// issue. Dependency is absent while the item has no issue to evaluate.
+type GoalPlanExecutionItem struct {
+	ItemID       string                 `json:"item_id"`
+	BindingType  string                 `json:"binding_type"`
+	IssueID      string                 `json:"issue_id,omitempty"`
+	Materialized bool                   `json:"materialized"`
+	IssueStatus  string                 `json:"issue_status,omitempty"`
+	AssigneeType string                 `json:"assignee_type,omitempty"`
+	AssigneeID   *string                `json:"assignee_id,omitempty"`
+	Dependency   *PlanDependencyState   `json:"dependency,omitempty"`
+	Wait         *GoalPlanExecutionWait `json:"wait,omitempty"`
+}
+
+// GoalPlanExecutionWait names the real release event instead of implying that a
+// timer or the task's own retry will resume the item. Triggers are the writes
+// that actually re-check readiness today.
+type GoalPlanExecutionWait struct {
+	Event         string                          `json:"event"`
+	Triggers      []string                        `json:"triggers"`
+	Description   string                          `json:"description"`
+	Prerequisites []GoalPlanExecutionPrerequisite `json:"prerequisites"`
+}
+
+type GoalPlanExecutionPrerequisite struct {
+	ItemID  string `json:"item_id"`
+	IssueID string `json:"issue_id,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+const (
+	goalPlanDependencyWaitEvent = "dependency_changed"
+	goalPlanDependencyWaitText  = "Released only by a real dependency change: a status write on a prerequisite issue, saving the plan, or materializing it. No timer starts this task."
+)
+
+var goalPlanDependencyWaitTriggers = []string{
+	"prerequisite.issue_status_changed",
+	"goal_plan.saved",
+	"goal_plan.materialized",
 }
 
 type PutGoalPlanRequest struct {
@@ -196,6 +253,10 @@ func emptyGoalPlanResponse(goal db.Goal) GoalPlanResponse {
 		Items:           []GoalPlanItem{},
 		Edges:           []GoalPlanEdge{},
 		ContextSnapshot: json.RawMessage("{}"),
+		Execution: &GoalPlanExecutionState{
+			PlanRevision: 0,
+			Items:        []GoalPlanExecutionItem{},
+		},
 	}
 }
 
@@ -231,6 +292,132 @@ func goalPlanToResponse(goal db.Goal, plan db.GoalPlan) (GoalPlanResponse, error
 		CreatedAt:       &createdAt,
 		UpdatedAt:       &updatedAt,
 	}, nil
+}
+
+// goalPlanResponse decodes a saved plan and adds its durable execution view.
+// Both the read and the write reply use it so the page gets the same bindings
+// and dependency verdicts whether it refreshed or just saved.
+func (h *Handler) goalPlanResponse(ctx context.Context, goal db.Goal, plan db.GoalPlan) (GoalPlanResponse, error) {
+	resp, err := goalPlanToResponse(goal, plan)
+	if err != nil {
+		return resp, err
+	}
+	execution, err := h.goalPlanExecutionState(ctx, goal, resp.Revision, resp.Items)
+	if err != nil {
+		return resp, err
+	}
+	resp.Execution = execution
+	return resp, nil
+}
+
+// goalPlanExecutionState rebuilds item→issue from durable rows: an explicit
+// `binding.type = "existing"` link wins, otherwise the persisted
+// materialization row supplies the issue. A dependency verdict is produced only
+// for an item that has a readable issue; an unbound or unreadable item never
+// claims readiness it cannot prove.
+func (h *Handler) goalPlanExecutionState(ctx context.Context, goal db.Goal, revision int32, items []GoalPlanItem) (*GoalPlanExecutionState, error) {
+	mappings, err := h.Queries.ListGoalPlanItemIssues(ctx, db.ListGoalPlanItemIssuesParams{
+		WorkspaceID: goal.WorkspaceID,
+		GoalID:      goal.ID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	materialized := make(map[string]string, len(mappings))
+	for _, row := range mappings {
+		materialized[row.ItemID] = uuidToString(row.IssueID)
+	}
+
+	state := &GoalPlanExecutionState{
+		PlanRevision: revision,
+		Items:        make([]GoalPlanExecutionItem, 0, len(items)),
+	}
+	for _, item := range items {
+		out := GoalPlanExecutionItem{
+			ItemID:      item.ID,
+			BindingType: item.Binding.Type,
+		}
+		if out.BindingType == "" {
+			out.BindingType = "new"
+		}
+		if bound := strings.TrimSpace(derefString(item.Binding.IssueID)); bound != "" {
+			out.IssueID = bound
+		} else if bound := materialized[item.ID]; bound != "" {
+			out.IssueID = bound
+			out.Materialized = true
+		}
+		if out.IssueID == "" {
+			state.Items = append(state.Items, out)
+			continue
+		}
+
+		// An id that is not a UUID can only come from corrupted content, but
+		// the read model still reports the binding rather than dropping it.
+		issueID, err := util.ParseUUID(out.IssueID)
+		if err != nil {
+			out.Dependency = &PlanDependencyState{
+				Reason: service.DependencyReasonUnreadable,
+				Detail: "the bound issue id is invalid",
+			}
+			state.Items = append(state.Items, out)
+			continue
+		}
+		issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+			ID:          issueID,
+			WorkspaceID: goal.WorkspaceID,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			out.Dependency = &PlanDependencyState{
+				Reason: service.DependencyReasonUnreadable,
+				Detail: "the bound issue is not readable in this workspace",
+			}
+			state.Items = append(state.Items, out)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out.IssueStatus = issue.Status
+		if issue.AssigneeType.Valid {
+			out.AssigneeType = issue.AssigneeType.String
+		}
+		if issue.AssigneeID.Valid {
+			id := uuidToString(issue.AssigneeID)
+			out.AssigneeID = &id
+		}
+		blockers, err := service.IssueDependencyBlockers(ctx, h.Queries, issue)
+		if err != nil {
+			return nil, err
+		}
+		dependency := &PlanDependencyState{Ready: len(blockers) == 0}
+		if len(blockers) > 0 {
+			dependency.Reason = blockers[0].Reason
+			dependency.Detail = blockers[0].Detail
+			out.Wait = goalPlanExecutionWait(blockers)
+		}
+		out.Dependency = dependency
+		state.Items = append(state.Items, out)
+	}
+	return state, nil
+}
+
+func goalPlanExecutionWait(blockers []service.IssueDependencyBlocker) *GoalPlanExecutionWait {
+	wait := &GoalPlanExecutionWait{
+		Event:         goalPlanDependencyWaitEvent,
+		Triggers:      append([]string(nil), goalPlanDependencyWaitTriggers...),
+		Description:   goalPlanDependencyWaitText,
+		Prerequisites: make([]GoalPlanExecutionPrerequisite, 0, len(blockers)),
+	}
+	for _, blocker := range blockers {
+		wait.Prerequisites = append(wait.Prerequisites, GoalPlanExecutionPrerequisite{
+			ItemID:  blocker.ItemID,
+			IssueID: blocker.IssueID,
+			Status:  blocker.Status,
+			Reason:  blocker.Reason,
+			Detail:  blocker.Detail,
+		})
+	}
+	return wait
 }
 
 func goalPlanGenerationToResponse(gen db.GoalPlanGeneration, state string, currentRevision int32) GoalPlanGenerationResponse {
@@ -363,7 +550,7 @@ func (h *Handler) GetGoalPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	// The goal's project may have become invisible since the plan was saved;
 	// the loaded goal already answered 404 in that case.
-	resp, err := goalPlanToResponse(goal, plan)
+	resp, err := h.goalPlanResponse(r.Context(), goal, plan)
 	if err != nil {
 		slog.Error("decode goal plan failed",
 			append(logger.RequestAttrs(r), "goal_id", uuidToString(goal.ID), "error", err)...)
@@ -539,7 +726,13 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(locked.WorkspaceID))
 	h.publishGoalChanged(uuidToString(locked.WorkspaceID), actorType, actorID)
 
-	resp, err := goalPlanToResponse(locked, saved)
+	// A saved revision is a dependency-graph change: new bindings or edges can
+	// make a previously blocked item runnable, and a revision bump invalidates
+	// earlier acceptances. Re-check each bound issue against the persisted
+	// evidence; only the ones that are ready now are released.
+	h.releaseGoalPlanIssues(r.Context(), locked.WorkspaceID, locked.ID)
+
+	resp, err := h.goalPlanResponse(r.Context(), locked, saved)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load plan")
 		return
