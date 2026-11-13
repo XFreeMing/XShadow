@@ -1,0 +1,1 @@
+ALTER TABLE goal_plan_generation DROP CONSTRAINT IF EXISTS goal_plan_generation_pkey;

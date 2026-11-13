@@ -234,6 +234,11 @@ This keeps Docker simple while still isolating schema and data.
 - `pnpm` `10.28.2`
 - Go `1.26.9`
 - Docker
+- PostgreSQL client (`psql`) on the host `PATH`, including when PostgreSQL runs in Docker
+
+On Ubuntu/Debian, install the client with `sudo apt-get install postgresql-client`.
+On macOS, run `brew install libpq` and add `$(brew --prefix libpq)/bin` to
+your shell's `PATH`. Verify with `psql --version`.
 
 Outside mobile, `pnpm typecheck` uses the native TypeScript 7 compiler (`tsc`,
 provided by the `@typescript/native` npm alias). The `typescript` dependency
@@ -830,6 +835,42 @@ Multiple environments run simultaneously without conflict; `make list` shows
 all of them.
 
 ## Troubleshooting
+
+### Missing PostgreSQL Client During Environment Cleanup
+
+`make up` and `make destroy` require the host's `psql` to connect through the
+environment's recorded `DATABASE_URL`. A client inside Docker does not satisfy
+this requirement. Install the client as described in [Prerequisites](#prerequisites).
+
+If cleanup previously stopped with `psql not found`, retry the named environment:
+
+```bash
+make destroy ARGS="<environment-name> --yes"
+```
+
+This deletes that environment's database and local data. Use `make list` to
+check the name first. Failed cleanup keeps the manifest and slot for a retry;
+do not delete them manually.
+
+### Electron SUID Sandbox Error on Linux
+
+If Electron reports that `chrome-sandbox` needs root ownership and mode `4755`,
+repair the installed helper from the repository root:
+
+```bash
+ELECTRON_BIN="$(cd apps/desktop && node -p "require('electron')")"
+SANDBOX="$(dirname "$ELECTRON_BIN")/chrome-sandbox"
+sudo chown root:root "$SANDBOX"
+sudo chmod 4755 "$SANDBOX"
+stat -c '%U:%G %a %n' "$SANDBOX"
+make up C=desktop
+```
+
+The expected ownership and mode are `root:root 4755`. Reinstalling dependencies
+or upgrading Electron can replace this file and require repeating the repair.
+Change only this helper; do not recursively change `node_modules` permissions
+or run the application as root. `--no-sandbox` disables process sandboxing
+and is not a persistent fix.
 
 ### Missing Env File
 

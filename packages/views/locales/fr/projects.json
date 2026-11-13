@@ -153,7 +153,7 @@
   "delete_dialog": {
     "offline_error": "Vous êtes hors ligne. Reconnectez-vous, puis réessayez la suppression.",
     "title": "Supprimer le projet",
-    "description": "Le projet sera supprimé. Les tâches ne seront pas supprimées, mais elles seront détachées.",
+    "description": "Le projet et ses objectifs seront supprimés. Les tâches ne seront pas supprimées, mais elles seront détachées.",
     "confirm": "Supprimer",
     "cancel": "Annuler"
   },

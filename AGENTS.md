@@ -1,11 +1,16 @@
 # Repository Instructions
 
-This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
+This fork is the owner's personal, customizable agent workbench. Its operating model is one shared service/workspace accessed from multiple computers and operating systems, with machine-local execution runtimes. Preserve this intent when choosing features and workflows; see [the personal workbench operating model](docs/personal-workbench.md).
 
 Multica is a task management platform where people and agents collaborate on issues. These instructions apply to all coding agents working in this repository.
 
+- The personal agent team serves the owner's chosen projects, including this platform when explicitly assigned; it is not dedicated to this repository.
+- Switching the user's client device does not authorize moving agent execution, changing runtime bindings, or recreating the workspace. Shared task records do not automatically transfer local worktrees or provider CLI sessions.
+- Develop platform improvements in isolated development environments. Keep the shared service that coordinates the team separate from the revision being changed; record the actual platforms verified before claiming cross-platform support.
+
 ## Scope and Reading Order
 
+- When a chat adds, removes, reviews or reconfigures the personal agent team, first read [agent-team/CONTEXT.md](agent-team/CONTEXT.md) and run `make agent context` against the intended profile. Distinguish the tracked template from live workspace state; unavailable live access is not evidence that the team is missing. Do not run initialization just to discover context. After authorized changes, reconcile the portable template, read back the affected live configuration and regenerate the read-only context.
 - Before changing `apps/mobile/`, also read [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md), even if your tool does not load nested instructions automatically. Platform-specific sections below apply only to the named platform.
 - For naming, translations, or Chinese UI/docs copy, read [conventions.mdx](apps/docs/content/docs/developers/conventions.mdx) and [conventions.zh.mdx](apps/docs/content/docs/developers/conventions.zh.mdx).
 - Maintain shared rules here and mobile-specific rules in the mobile file. `CLAUDE.md` files only import them. Update instructions in the same change that alters the referenced workflow or boundary; do not add incident timelines, dependency version lists, or duplicate rules.
@@ -34,7 +39,7 @@ Multica is a task management platform where people and agents collaborate on iss
 Use `Makefile`, workspace `package.json` files, and `pnpm-workspace.yaml` for current commands and versions. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and worktree operations.
 
 - Use the checkout's managed environment: `make up`, `make status`, `make down`. `make down` preserves data; `make destroy` removes the environment and its data.
-- `make agent init` initializes the personal, cross-project team from `agent-team/team.json` using the managed API/daemon environment. Keep templates free of machine paths, credentials and source-instance IDs; model/provider changes are explicit template edits. See `agent-team/README.md` for existing-profile initialization and preflight.
+- `make agent init` initializes the personal, cross-project team from `agent-team/team.json` using the managed API/daemon environment. `make agent sync` runs the reverse direction: it reads the live workspace and writes the template files, leaving live state unchanged; use `--check` to preview files without writing. Keep templates free of machine paths, credentials and source-instance IDs; model/provider changes are explicit template edits. See `agent-team/README.md` for existing-profile initialization and preflight.
 - Worktrees share PostgreSQL but have isolated databases/ports. Use the environment scripts and `.env.worktree`; do not copy the main checkout's `.env` or manually create a database through an assumed PostgreSQL instance.
 - Regenerate sqlc with `make sqlc` after SQL changes.
 - Run the narrowest useful checks while iterating, then broaden when risk warrants it. Report what actually ran and any skipped checks.

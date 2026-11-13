@@ -5,6 +5,7 @@
     "my_issues": "Mis tareas",
     "issues": "Tareas",
     "projects": "Proyectos",
+    "goals": "Objetivos",
     "autopilots": "Automatizaciones",
     "agents": "Agentes",
     "squads": "Squads",
@@ -17,6 +18,7 @@
   "tab": {
     "issue": "Tarea",
     "project": "Proyecto",
+    "goal": "Objetivo",
     "autopilot": "Automatización",
     "agent": "Agente",
     "member": "Miembro",

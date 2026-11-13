@@ -37,6 +37,7 @@ import { ProjectAccessControl } from "./project-access";
 import { ProjectWorkflowControl } from "../../workflows/project-workflow-row";
 import { ProjectWorkflowMenuItem, ProjectWorkflowSheet } from "../../workflows/project-workflow-sheet";
 import { IssueSurface } from "../../issues/surface/issue-surface";
+import { ProjectGoalsTab } from "../../goals/components/project-goals-tab";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { TooltipHint } from "@multica/ui/components/common/tooltip-hint";
@@ -117,11 +118,14 @@ function ProjectWorkflowPropRow({ project, onOpen }: { project: Project; onOpen:
 
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
+  const { t: tGoals } = useT("goals");
   const statusLabels = useProjectStatusLabels();
   const priorityLabels = useProjectPriorityLabels();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const router = useNavigation();
+  // `?tab=goals` is a view of the same project page, not a second route.
+  const activeTab = router.searchParams.get("tab") === "goals" ? "goals" : "tasks";
   const userId = useAuthStore((s) => s.user?.id);
   const deleteProject = useDeleteProject();
   const deleted = deleteProject.isSuccess && deleteProject.variables === projectId;
@@ -552,6 +556,40 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
       <ResizablePanel id="content" minSize="50%">
         <div ref={rightSidebarShortcutTargetRef} className="flex h-full flex-col">
+          <nav
+            aria-label={tGoals(($) => $.list.title)}
+            className="flex h-10 shrink-0 items-center gap-4 border-b px-4"
+          >
+            <button
+              type="button"
+              aria-current={activeTab === "tasks" ? "page" : undefined}
+              onClick={() => router.push(wsPaths.projectDetail(projectId))}
+              className={cn(
+                "-mb-px border-b-2 px-1 pb-2 text-body transition-colors",
+                activeTab === "tasks"
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tGoals(($) => $.tab.tasks)}
+            </button>
+            <button
+              type="button"
+              aria-current={activeTab === "goals" ? "page" : undefined}
+              onClick={() => router.push(`${wsPaths.projectDetail(projectId)}?tab=goals`)}
+              className={cn(
+                "-mb-px border-b-2 px-1 pb-2 text-body transition-colors",
+                activeTab === "goals"
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tGoals(($) => $.tab.goals)}
+            </button>
+          </nav>
+          {activeTab === "goals" ? (
+            <ProjectGoalsTab projectId={projectId} />
+          ) : (
           <IssueSurface
             scope={issueScope}
             modes={["board", "list", "table", "swimlane", "gantt"]}
@@ -634,6 +672,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               />
             )}
           />
+          )}
           </div>
         </ResizablePanel>
         {!isMobile && <ResizableHandle />}
