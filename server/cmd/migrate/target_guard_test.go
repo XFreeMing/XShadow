@@ -89,7 +89,7 @@ func TestNormalizeDatabaseHost(t *testing.T) {
 	}
 }
 
-func TestDatabaseTargetSameServer(t *testing.T) {
+func TestDatabaseTargetSameEndpoint(t *testing.T) {
 	cases := []struct {
 		name  string
 		left  databaseTarget
@@ -100,6 +100,12 @@ func TestDatabaseTargetSameServer(t *testing.T) {
 			name:  "same database with different loopback spellings",
 			left:  databaseTarget{Database: "appdb", Host: "localhost", Port: 5432},
 			right: databaseTarget{Database: "appdb", Host: "127.0.0.1", Port: 5432},
+			want:  true,
+		},
+		{
+			name:  "same database with different host casing",
+			left:  databaseTarget{Database: "appdb", Host: "db.example.com", Port: 5432},
+			right: databaseTarget{Database: "appdb", Host: "DB.Example.COM", Port: 5432},
 			want:  true,
 		},
 		{
@@ -115,33 +121,45 @@ func TestDatabaseTargetSameServer(t *testing.T) {
 			want:  false,
 		},
 		{
-			// A Docker-published port makes the server report its container
-			// address and internal port, so the endpoints are not comparable.
-			name:  "published port versus container address with same database",
-			left:  databaseTarget{Database: "appdb", Host: "localhost", Port: 15432},
-			right: databaseTarget{Database: "appdb", Host: "172.22.0.2", Port: 5432},
-			want:  true,
-		},
-		{
-			// Remote hosts are not comparable across NAT; the database name is
-			// the contract.
+			// Both targets are connection strings written by the caller, so a
+			// different remote endpoint names a different server even when the
+			// database name matches. The earlier guard ignored host and port off
+			// loopback and accepted the wrong target.
 			name:  "different remote hosts with same database",
 			left:  databaseTarget{Database: "appdb", Host: "db.example.com", Port: 5432},
 			right: databaseTarget{Database: "appdb", Host: "other.example.com", Port: 5432},
+			want:  false,
+		},
+		{
+			name:  "different remote port with same database",
+			left:  databaseTarget{Database: "appdb", Host: "db.example.com", Port: 6543},
+			right: databaseTarget{Database: "appdb", Host: "db.example.com", Port: 5432},
+			want:  false,
+		},
+		{
+			name:  "published port versus container address with same database",
+			left:  databaseTarget{Database: "appdb", Host: "localhost", Port: 15432},
+			right: databaseTarget{Database: "appdb", Host: "172.22.0.2", Port: 5432},
+			want:  false,
+		},
+		{
+			name:  "same unix socket path",
+			left:  databaseTarget{Database: "appdb", Host: "/var/run/postgresql", Port: 5432},
+			right: databaseTarget{Database: "appdb", Host: "/var/run/postgresql", Port: 5432},
 			want:  true,
 		},
 		{
-			name:  "empty actual host skips host comparison",
-			left:  databaseTarget{Database: "appdb", Host: "", Port: 5432},
-			right: databaseTarget{Database: "appdb", Host: "db.example.com", Port: 5432},
-			want:  true,
+			name:  "different unix socket paths",
+			left:  databaseTarget{Database: "appdb", Host: "/var/run/postgresql", Port: 5432},
+			right: databaseTarget{Database: "appdb", Host: "/tmp", Port: 5432},
+			want:  false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.left.sameServer(tc.right); got != tc.want {
-				t.Fatalf("%+v.sameServer(%+v) = %v, want %v", tc.left, tc.right, got, tc.want)
+			if got := tc.left.sameEndpoint(tc.right); got != tc.want {
+				t.Fatalf("%+v.sameEndpoint(%+v) = %v, want %v", tc.left, tc.right, got, tc.want)
 			}
 		})
 	}
@@ -163,14 +181,14 @@ func TestDatabaseGuardActive(t *testing.T) {
 	}
 }
 
-func TestEvaluateDatabaseTarget(t *testing.T) {
+func TestEvaluateConnectionTarget(t *testing.T) {
 	const password = "sup3rs3cret"
-	actual := databaseTarget{Database: "appdb", Host: "127.0.0.1", Port: 5432}
+	connection := databaseTarget{Database: "appdb", Host: "127.0.0.1", Port: 5432}
 
 	cases := []struct {
 		name          string
 		guard         databaseGuard
-		actual        databaseTarget
+		connection    databaseTarget
 		wantErr       bool
 		wantContains  []string
 		forbidSubstrs []string
@@ -178,7 +196,7 @@ func TestEvaluateDatabaseTarget(t *testing.T) {
 		{
 			name:          "protected database",
 			guard:         databaseGuard{Protected: map[string]bool{"stable": true}},
-			actual:        databaseTarget{Database: "stable", Host: "127.0.0.1", Port: 5432},
+			connection:    databaseTarget{Database: "stable", Host: "127.0.0.1", Port: 5432},
 			wantErr:       true,
 			wantContains:  []string{"protected database", "database=stable"},
 			forbidSubstrs: []string{password},
@@ -186,15 +204,33 @@ func TestEvaluateDatabaseTarget(t *testing.T) {
 		{
 			name:          "expected database mismatch",
 			guard:         databaseGuard{Expected: "postgres://user:" + password + "@127.0.0.1:5432/other"},
-			actual:        actual,
+			connection:    connection,
 			wantErr:       true,
 			wantContains:  []string{"database=appdb", "database=other"},
 			forbidSubstrs: []string{password},
 		},
 		{
+			// A same-named database on a different endpoint is a different
+			// server and must be refused before any connection is opened.
+			name:          "expected remote endpoint mismatch",
+			guard:         databaseGuard{Expected: "postgres://user:" + password + "@db.example.com:5432/appdb"},
+			connection:    connection,
+			wantErr:       true,
+			wantContains:  []string{"the connection targets", "server=127.0.0.1:5432", "server=db.example.com:5432"},
+			forbidSubstrs: []string{password},
+		},
+		{
+			name:          "expected port mismatch",
+			guard:         databaseGuard{Expected: "postgres://user:" + password + "@127.0.0.1:6543/appdb"},
+			connection:    connection,
+			wantErr:       true,
+			wantContains:  []string{"the connection targets", "server=127.0.0.1:5432", "server=127.0.0.1:6543"},
+			forbidSubstrs: []string{password},
+		},
+		{
 			name:          "missing expected while an environment is selected",
 			guard:         databaseGuard{SelectedEnv: "dev-xshadow"},
-			actual:        actual,
+			connection:    connection,
 			wantErr:       true,
 			wantContains:  []string{"dev-xshadow", "has no verified target"},
 			forbidSubstrs: []string{password},
@@ -202,7 +238,7 @@ func TestEvaluateDatabaseTarget(t *testing.T) {
 		{
 			name:          "missing expected in a linked worktree",
 			guard:         databaseGuard{LinkedWorktree: true},
-			actual:        actual,
+			connection:    connection,
 			wantErr:       true,
 			wantContains:  []string{"make up", "make env-exec"},
 			forbidSubstrs: []string{password},
@@ -210,47 +246,115 @@ func TestEvaluateDatabaseTarget(t *testing.T) {
 		{
 			name:          "invalid expected URL",
 			guard:         databaseGuard{Expected: "postgres://user:" + password + "@127.0.0.1:not-a-port/appdb"},
-			actual:        actual,
+			connection:    connection,
 			wantErr:       true,
 			wantContains:  []string{"invalid MULTICA_EXPECTED_DATABASE_URL"},
 			forbidSubstrs: []string{password},
 		},
 		{
-			name:   "legacy run without a declared target",
-			guard:  databaseGuard{},
-			actual: actual,
+			name:       "legacy run without a declared target",
+			guard:      databaseGuard{},
+			connection: connection,
 		},
 		{
-			name:   "matching verified target",
-			guard:  databaseGuard{Expected: "postgres://user:" + password + "@localhost:5432/appdb"},
-			actual: actual,
+			name:       "matching loopback spellings and database",
+			guard:      databaseGuard{Expected: "postgres://user:" + password + "@localhost:5432/appdb"},
+			connection: connection,
+		},
+		{
+			name:       "matching remote endpoint and database",
+			guard:      databaseGuard{Expected: "postgres://user:" + password + "@DB.Example.com:5432/appdb"},
+			connection: databaseTarget{Database: "appdb", Host: "db.example.com", Port: 5432},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := evaluateDatabaseTarget(tc.actual, tc.guard)
+			err := evaluateConnectionTarget(tc.connection, tc.guard)
 			if !tc.wantErr {
 				if err != nil {
 					t.Fatalf("expected acceptance, got %v", err)
 				}
 				return
 			}
-			if err == nil {
-				t.Fatal("expected refusal, got nil")
-			}
-			msg := err.Error()
-			for _, want := range tc.wantContains {
-				if !strings.Contains(msg, want) {
-					t.Fatalf("refusal %q does not contain %q", msg, want)
-				}
-			}
-			for _, forbid := range tc.forbidSubstrs {
-				if strings.Contains(msg, forbid) {
-					t.Fatalf("refusal %q leaks %q", msg, forbid)
-				}
-			}
+			assertRefusal(t, err, tc.wantContains, tc.forbidSubstrs)
 		})
+	}
+}
+
+func TestEvaluateLiveIdentity(t *testing.T) {
+	const password = "sup3rs3cret"
+	live := databaseTarget{Database: "appdb", Host: "172.22.0.2", Port: 5432}
+
+	cases := []struct {
+		name          string
+		guard         databaseGuard
+		live          databaseTarget
+		wantErr       bool
+		wantContains  []string
+		forbidSubstrs []string
+	}{
+		{
+			name:          "protected database reported by the server",
+			guard:         databaseGuard{Protected: map[string]bool{"stable": true}},
+			live:          databaseTarget{Database: "stable", Host: "172.22.0.2", Port: 5432},
+			wantErr:       true,
+			wantContains:  []string{"protected database", "database=stable"},
+			forbidSubstrs: []string{password},
+		},
+		{
+			name:          "server reached a different database",
+			guard:         databaseGuard{Expected: "postgres://user:" + password + "@localhost:15432/appdb"},
+			live:          databaseTarget{Database: "other", Host: "172.22.0.2", Port: 5432},
+			wantErr:       true,
+			wantContains:  []string{"connected to", "database=other", "database=appdb"},
+			forbidSubstrs: []string{password},
+		},
+		{
+			// A published Docker port reports the container's internal address,
+			// so the live check compares the database name only.
+			name:  "published container address and internal port are accepted",
+			guard: databaseGuard{Expected: "postgres://user:" + password + "@localhost:15432/appdb"},
+			live:  live,
+		},
+		{
+			name:  "legacy run without a declared target",
+			guard: databaseGuard{},
+			live:  live,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := evaluateLiveIdentity(tc.live, tc.guard)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("expected acceptance, got %v", err)
+				}
+				return
+			}
+			assertRefusal(t, err, tc.wantContains, tc.forbidSubstrs)
+		})
+	}
+}
+
+// assertRefusal fails when err is nil, its message is missing an expected
+// fragment, or it leaks a credential the case forbids.
+func assertRefusal(t *testing.T, err error, wantContains, forbidSubstrs []string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected refusal, got nil")
+	}
+	msg := err.Error()
+	for _, want := range wantContains {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("refusal %q does not contain %q", msg, want)
+		}
+	}
+	for _, forbid := range forbidSubstrs {
+		if strings.Contains(msg, forbid) {
+			t.Fatalf("refusal %q leaks %q", msg, forbid)
+		}
 	}
 }
 
@@ -319,13 +423,25 @@ func TestDatabaseGuardFromEnvLinkedWorktree(t *testing.T) {
 	})
 }
 
-// TestDatabaseTargetReadIdentityLive is the only test in this file that touches
-// a database. It only reads the live identity, and it skips when no disposable
-// DATABASE_URL is exported.
-func TestDatabaseTargetReadIdentityLive(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
+// TestDatabaseTargetLive is the only test in this file that touches a database.
+// It only reads the live identity, and it runs only when an operator passes an
+// explicit disposable DSN in MULTICA_MIGRATE_TEST_DATABASE_URL. It never reads
+// an inherited DATABASE_URL: a default test run must not connect to whatever
+// database the surrounding shell happens to export.
+func TestDatabaseTargetLive(t *testing.T) {
+	dsn := os.Getenv("MULTICA_MIGRATE_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("explicit disposable DATABASE_URL required")
+		t.Skip("explicit MULTICA_MIGRATE_TEST_DATABASE_URL required")
+	}
+
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test DSN: %v", err)
+	}
+	connection := databaseTarget{Database: config.Database, Host: config.Host, Port: int(config.Port)}
+	guard := databaseGuard{Expected: dsn}
+	if err := evaluateConnectionTarget(connection, guard); err != nil {
+		t.Fatalf("expected the connection to match the recorded target: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -336,26 +452,24 @@ func TestDatabaseTargetReadIdentityLive(t *testing.T) {
 	}
 	defer pool.Close()
 
-	actual, err := readDatabaseIdentity(ctx, pool)
+	actual, err := verifyDatabaseTarget(ctx, pool, guard)
 	if err != nil {
 		t.Skipf("live database identity unavailable: %v", err)
-	}
-
-	config, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		t.Fatalf("parse DATABASE_URL: %v", err)
 	}
 	if actual.Database != config.Database {
 		t.Fatalf("identity database = %q, want %q", actual.Database, config.Database)
 	}
 
-	if err := evaluateDatabaseTarget(actual, databaseGuard{Expected: dsn}); err != nil {
-		t.Fatalf("expected DATABASE_URL to match the live identity: %v", err)
+	otherDSN := testDatabaseDSNWithName(t, dsn, config.Database+"_other")
+	if err := evaluateConnectionTarget(connection, databaseGuard{Expected: otherDSN}); err == nil {
+		t.Fatal("expected a database-name mismatch to be refused")
 	}
 
-	otherDSN := testDatabaseDSNWithName(t, dsn, config.Database+"_other")
-	if err := evaluateDatabaseTarget(actual, databaseGuard{Expected: otherDSN}); err == nil {
-		t.Fatal("expected a database-name mismatch to be refused")
+	// A same-named database on another endpoint is a different server.
+	moved := connection
+	moved.Host, moved.Port = "db.invalid", 6543
+	if err := evaluateConnectionTarget(moved, guard); err == nil {
+		t.Fatal("expected a same-named database on another endpoint to be refused")
 	}
 }
 

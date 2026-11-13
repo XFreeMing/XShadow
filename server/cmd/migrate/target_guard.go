@@ -27,9 +27,9 @@ const (
 	databaseGuardEnvEnv = "MULTICA_DB_GUARD_ENV"
 )
 
-// databaseTarget is the subset of a live database identity that can safely
-// appear in logs. User and password are deliberately absent so a refusal never
-// leaks credentials.
+// databaseTarget is the subset of a database identity that can safely appear in
+// logs. User and password are deliberately absent so a refusal never leaks
+// credentials.
 type databaseTarget struct {
 	Database string
 	Host     string
@@ -57,8 +57,8 @@ func parseDatabaseTarget(raw string) (databaseTarget, error) {
 	}, nil
 }
 
-// normalizeDatabaseHost collapses loopback spellings so a caller that verified
-// "localhost" matches a server that reports "127.0.0.1". Anything that is not a
+// normalizeDatabaseHost collapses loopback spellings so a caller that wrote
+// "localhost" matches a record that wrote "127.0.0.1". Anything that is not a
 // known loopback spelling is returned untouched.
 func normalizeDatabaseHost(host string) string {
 	switch host {
@@ -69,30 +69,20 @@ func normalizeDatabaseHost(host string) string {
 	}
 }
 
-// sameServer reports whether two targets identify the same database. The
-// database name is the contract: a stale DATABASE_URL pointing at a different or
-// protected database is what the guard exists to catch. Host and port are only
-// comparable for direct local connections — Docker publishes a host port while
-// the server reports its container-internal address and port, so comparing them
-// there would reject the verified database itself. Whenever either host is not a
-// loopback spelling (container address, remote host, NAT, empty host), host and
-// port are ignored.
-func (t databaseTarget) sameServer(other databaseTarget) bool {
+// sameEndpoint reports whether two connection targets name the same database on
+// the same server. Both sides are parsed from connection strings written by the
+// caller, so host and port are directly comparable. A server-reported
+// inet_server_addr is not: behind Docker's published port it is the container's
+// internal address and never equals the host port in the DSN, which is why the
+// live identity check compares only the database name.
+func (t databaseTarget) sameEndpoint(other databaseTarget) bool {
 	if t.Database != other.Database {
 		return false
 	}
-	if isLoopbackHost(t.Host) && isLoopbackHost(other.Host) {
-		if t.Port != 0 && other.Port != 0 && t.Port != other.Port {
-			return false
-		}
+	if !strings.EqualFold(normalizeDatabaseHost(t.Host), normalizeDatabaseHost(other.Host)) {
+		return false
 	}
-	return true
-}
-
-// isLoopbackHost reports whether host is one of the loopback spellings a DSN or
-// a server may report for a direct local connection.
-func isLoopbackHost(host string) bool {
-	return normalizeDatabaseHost(host) == "127.0.0.1"
+	return t.Port == other.Port
 }
 
 // readDatabaseIdentity asks the server which database the connection actually
@@ -162,18 +152,21 @@ func isLinkedWorktree(cwd string) bool {
 	}
 }
 
-// evaluateDatabaseTarget is pure so every refusal can be unit-tested without a
-// database. It returns a redacted error for every refusal.
-func evaluateDatabaseTarget(actual databaseTarget, guard databaseGuard) error {
-	if guard.Protected[actual.Database] {
-		return fmt.Errorf("refusing to migrate protected database: %s", actual.redacted())
+// evaluateConnectionTarget checks a parsed connection string before the process
+// opens a connection. Both the recorded target and the connection come from the
+// caller's configuration, so their endpoints must agree exactly; nothing is
+// learned from a live server here. Refusing here costs no network round trip
+// and cannot touch any database.
+func evaluateConnectionTarget(connection databaseTarget, guard databaseGuard) error {
+	if guard.Protected[connection.Database] {
+		return fmt.Errorf("refusing to migrate protected database: %s", connection.redacted())
 	}
 	if guard.Expected == "" {
 		if guard.SelectedEnv != "" {
-			return fmt.Errorf("refusing to migrate: environment %q has no verified target (%s)", guard.SelectedEnv, actual.redacted())
+			return fmt.Errorf("refusing to migrate: environment %q has no verified target (%s)", guard.SelectedEnv, connection.redacted())
 		}
 		if guard.LinkedWorktree {
-			return fmt.Errorf("refusing to migrate from a task worktree without a verified target; run through make up or make env-exec (%s)", actual.redacted())
+			return fmt.Errorf("refusing to migrate from a task worktree without a verified target; run through make up or make env-exec (%s)", connection.redacted())
 		}
 		// Legacy main checkout, CI, and containers have no declaration to check
 		// against. Keep them working unchanged.
@@ -183,33 +176,58 @@ func evaluateDatabaseTarget(actual databaseTarget, guard databaseGuard) error {
 	expected, err := parseDatabaseTarget(guard.Expected)
 	if err != nil {
 		// The raw URL is never echoed: it can contain a password.
-		return fmt.Errorf("invalid MULTICA_EXPECTED_DATABASE_URL: the verified target cannot be parsed (%s)", actual.redacted())
+		return fmt.Errorf("invalid MULTICA_EXPECTED_DATABASE_URL: the verified target cannot be parsed (%s)", connection.redacted())
 	}
-	if !expected.sameServer(actual) {
-		return fmt.Errorf("refusing to migrate: connected to %s but the verified target is %s", actual.redacted(), expected.redacted())
+	if !connection.sameEndpoint(expected) {
+		return fmt.Errorf("refusing to migrate: the connection targets %s but the verified target is %s", connection.redacted(), expected.redacted())
 	}
 	return nil
 }
 
-// verifyDatabaseTarget reads the live identity and applies the guard. It is
-// called before migrations run, so a refusal always precedes any DDL.
-func verifyDatabaseTarget(ctx context.Context, pool *pgxpool.Pool, rawDatabaseURL string) (databaseTarget, error) {
-	guard := databaseGuardFromEnv(os.Getenv, currentDirectory())
-	// The binary falls back to a built-in localhost URL when DATABASE_URL is
-	// empty. Under a guard that fallback would silently migrate a database the
-	// caller never verified, so refuse before connecting.
-	if guard.active() && rawDatabaseURL == "" {
-		return databaseTarget{}, emptyDatabaseURLError(guard)
+// evaluateLiveIdentity checks what the server reports after connecting. The
+// endpoint was already compared against the record from the connection strings;
+// here only the database the server actually reached can be trusted, because a
+// published container port reports an internal server address.
+func evaluateLiveIdentity(live databaseTarget, guard databaseGuard) error {
+	if guard.Protected[live.Database] {
+		return fmt.Errorf("refusing to migrate protected database: %s", live.redacted())
 	}
+	if guard.Expected == "" {
+		return nil
+	}
+	expected, err := parseDatabaseTarget(guard.Expected)
+	if err != nil {
+		return fmt.Errorf("invalid MULTICA_EXPECTED_DATABASE_URL: the verified target cannot be parsed (%s)", live.redacted())
+	}
+	if live.Database != expected.Database {
+		return fmt.Errorf("refusing to migrate: connected to %s but the verified target is %s", live.redacted(), expected.redacted())
+	}
+	return nil
+}
 
-	actual, err := readDatabaseIdentity(ctx, pool)
+// verifyConnectionTarget parses DATABASE_URL and applies the pre-connect guard.
+// It runs before the pool is created so a polluted connection never reaches a
+// server.
+func verifyConnectionTarget(rawDatabaseURL string, guard databaseGuard) error {
+	connection, err := parseDatabaseTarget(rawDatabaseURL)
+	if err != nil {
+		return errors.New("invalid DATABASE_URL: the connection target cannot be parsed")
+	}
+	return evaluateConnectionTarget(connection, guard)
+}
+
+// verifyDatabaseTarget reads the live identity through the pool and applies the
+// guard. It is called before migrations run, so a refusal always precedes any
+// DDL.
+func verifyDatabaseTarget(ctx context.Context, pool *pgxpool.Pool, guard databaseGuard) (databaseTarget, error) {
+	live, err := readDatabaseIdentity(ctx, pool)
 	if err != nil {
 		return databaseTarget{}, err
 	}
-	if err := evaluateDatabaseTarget(actual, guard); err != nil {
-		return actual, err
+	if err := evaluateLiveIdentity(live, guard); err != nil {
+		return live, err
 	}
-	return actual, nil
+	return live, nil
 }
 
 // emptyDatabaseURLError explains why a guarded run cannot use the built-in

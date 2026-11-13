@@ -845,6 +845,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "database target check failed: %v\n", emptyDatabaseURLError(guard))
 		os.Exit(2)
 	}
+	// Compare the connection string with the recorded target before dialing.
+	// A polluted DATABASE_URL then never reaches a server at all, and an
+	// unreachable-but-wrong endpoint cannot be mistaken for a guard refusal.
+	if guard.active() {
+		if err := verifyConnectionTarget(rawDBURL, guard); err != nil {
+			fmt.Fprintf(os.Stderr, "database target check failed: %v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	dbURL := rawDBURL
 	if dbURL == "" {
@@ -869,7 +878,7 @@ func main() {
 	// reports it, then returns before any migration files are touched.
 	if direction == "verify" {
 		verifyCtx, cancelVerify := context.WithTimeout(context.Background(), 15*time.Second)
-		target, verifyErr := verifyDatabaseTarget(verifyCtx, pool, rawDBURL)
+		target, verifyErr := verifyDatabaseTarget(verifyCtx, pool, guard)
 		cancelVerify()
 		if verifyErr != nil {
 			fmt.Fprintf(os.Stderr, "database target check failed: %v\n", verifyErr)
@@ -907,14 +916,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Verify the live identity only when the caller declared a target. Inactive
-	// production and CI runs must not pay for an extra round trip. The check
-	// runs after the retry-on-unavailable loop so transient startup outages keep
-	// their existing behavior, and before runMigrations so any refusal precedes
-	// DDL.
+	// Confirm the live identity for a guard-active run. Inactive production and
+	// CI runs must not pay for an extra round trip. The check runs after the
+	// retry-on-unavailable loop so transient startup outages keep their existing
+	// behavior, and before runMigrations so any refusal precedes DDL.
 	if guard.active() {
 		verifyCtx, cancelVerify := context.WithTimeout(startupCtx, 15*time.Second)
-		target, verifyErr := verifyDatabaseTarget(verifyCtx, pool, rawDBURL)
+		target, verifyErr := verifyDatabaseTarget(verifyCtx, pool, guard)
 		cancelVerify()
 		if verifyErr != nil {
 			fmt.Fprintf(os.Stderr, "database target check failed: %v\n", verifyErr)
