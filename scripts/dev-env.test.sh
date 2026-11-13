@@ -71,6 +71,64 @@ EOF
 
 out="$tmp_dir/out"
 
+# Missing host tools must fail before GC, process stops, or local data removal.
+write_manifest "missing-psql-907" "$root_dir" 907
+missing_profile="$MULTICA_DEV_PROFILES_HOME/dev-dev-env-test-907"
+mkdir -p "$missing_profile"
+printf 'keep\n' > "$missing_profile/config.json"
+for action in up destroy; do
+  status=0
+  (
+    source "$root_dir/scripts/dev-env.sh"
+    command() {
+      if [ "$*" = "-v psql" ]; then return 1; fi
+      builtin command "$@"
+    }
+    cmd_gc() { touch "$tmp_dir/unexpected-gc"; }
+    stop_component() { touch "$tmp_dir/unexpected-stop"; }
+    ensure_database() { die "Database setup must not run without psql"; }
+    if [ "$action" = up ]; then
+      cmd_up --components api
+    else
+      cmd_destroy missing-psql-907 --yes
+    fi
+  ) > "$out" 2>&1 || status=$?
+  [ "$status" -ne 0 ] || fail "$action succeeded without psql"
+  require_contains "$out" "PostgreSQL client (psql)"
+  require_contains "$out" "postgresql-client"
+  [ ! -e "$tmp_dir/unexpected-gc" ] || fail "up ran GC before checking psql"
+  [ ! -e "$tmp_dir/unexpected-stop" ] || fail "destroy stopped processes without psql"
+  [ -f "$missing_profile/config.json" ] || fail "destroy removed the profile without psql"
+  [ -f "$MULTICA_DEV_HOME/envs/missing-psql-907/manifest.env" ] \
+    || fail "$action discarded the manifest without psql"
+done
+dev_env destroy missing-psql-907 --yes > "$out" 2>&1 \
+  || fail "destroy retry failed after restoring psql"
+
+# Background process groups still share the terminal session. Login-shell
+# environment discovery can then stop the entire group through job control.
+if [ "$(uname -s)" = Linux ]; then
+  (
+    source "$root_dir/scripts/dev-env.sh"
+    STATE_DIR="$tmp_dir/detached"
+    LOG_DIR="$STATE_DIR/logs"
+    mkdir -p "$LOG_DIR"
+    launch_detached probe sh -c 'printf "ready\n"; sleep 30'
+    launcher="$(cat "$(pid_file probe)")"
+    trap 'kill -TERM -- -"$launcher" 2>/dev/null || true' EXIT
+    for attempt in $(seq 1 50); do
+      grep -q ready "$(log_file probe)" && break
+      sleep 0.1
+    done
+    require_contains "$(log_file probe)" ready
+    session="$(ps -p "$launcher" -o sid= | tr -d ' ')"
+    [ "$session" = "$launcher" ] \
+      || fail "detached launcher inherited terminal session $session instead of creating $launcher"
+    [ "$(process_group_id "$launcher")" = "$launcher" ] \
+      || fail "detached launcher does not own its process group"
+  )
+fi
+
 assert_listener_ownership() {
   local case_name=$1 expected=$2 launcher=$3 listener=$4 listener_pgid=$5 recorded=${6:-}
   (
