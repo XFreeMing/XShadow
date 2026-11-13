@@ -21,7 +21,7 @@ make agent init
 - 使用仓库支持的开发环境，安装 Git、Make、Bash、Node.js、Go、curl 和 PostgreSQL 启动所需依赖；具体版本与数据库方式见 [CONTRIBUTING.md](../CONTRIBUTING.md)。Linux/macOS 可使用本机工具链；Windows 使用具备这些依赖的 WSL 环境。
 - 安装并登录 Claude Code、Codex 和 Grok，使 daemon 能发现它们。模型账号、API Key 和认证不会随模板迁移。
 - Claude Code 的本机提供商配置需要支持 `deepseek-v4.1-flash`，推理等级为 `high`。
-- 当前快照保留实际配置：4 个 Codex 角色使用 `gpt-6-astra / high`，Grok 角色使用 `grok-4.7 / high`。之前讨论的 Sol/Terra 替换尚未应用；需要时明确修改 `team.json` 中相应角色的模型。
+- 各角色的提供商、模型、推理等级和并发以 `team.json` 为准。`thinking_level: ""` 明确使用运行时默认推理等级；非空值必须由所选模型支持，字段不能省略。
 - Cursor 暂不纳入初始化。
 
 初始化前会核对全部运行时、模型和推理等级。任一项缺失时，军团配置不会开始写入；已启动的本地环境会保留，修正后重跑同一命令即可。模型目录可用只代表配置可选，不代表真实任务已经验收。

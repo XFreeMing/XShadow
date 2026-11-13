@@ -110,7 +110,7 @@ function checkAgent(agent, runtime, issues) {
   if (agent.runtime_mode && agent.runtime_mode !== "local") add("runtime_mode", "is not local, which init does not configure");
   if ((agent.disabled_runtime_skills ?? []).length) add("disabled_runtime_skills", "has disabled runtime skills the template cannot express");
   if (!agent.model) add("model", "is empty");
-  if (!agent.thinking_level) add("thinking_level", "is empty, so a runtime default would be written silently");
+  if (typeof agent.thinking_level !== "string") add("thinking_level", "must be a string; an explicit empty string selects the runtime default");
   if (!Number.isInteger(agent.max_concurrent_tasks) || agent.max_concurrent_tasks < 1) add("max_concurrent_tasks", "is not a positive integer");
   const starters = agent.conversation_starters ?? [];
   if (!Array.isArray(starters) || starters.some((s) => !s || typeof s.label !== "string" || typeof s.prompt !== "string")) {

@@ -565,6 +565,23 @@ async function syncInto(f, dir, runtimeIds = {}) {
   return { plan, report, template: loadTemplate(join(dir, "team.json")) };
 }
 
+test("explicit runtime-default thinking survives sync and initialization", async (t) => {
+  const source = fixture();
+  await initializeTeam(source.api, template, options);
+  const agent = source.state.agents[0];
+  agent.thinking_level = "";
+  const { template: exported } = await syncInto(source, scratchTeam(t));
+  assert.equal(exported.agents.find((a) => a.name === agent.name).thinking_level, "");
+
+  const destination = fixture();
+  await initializeTeam(destination.api, template, options);
+  await initializeTeam(destination.api, exported, options);
+  assert.equal(destination.state.agents.find((a) => a.name === agent.name).thinking_level, "");
+  const writes = destination.mutations().length;
+  await initializeTeam(destination.api, exported, options);
+  assert.equal(destination.mutations().length, writes);
+});
+
 test("sync round-trips live agents, skills and squads into a template that init recreates", async (t) => {
   const source = fixture("source");
   const ids = await initializeTeam(source.api, template, options);

@@ -140,7 +140,7 @@ export async function initializeTeam(api, template, { runtimeIds = {}, daemonId,
   const catalogs = Object.fromEntries(await Promise.all(Object.entries(runtimes).map(async ([p, r]) => [p, await catalog(api, r, wait, timeoutMs)])));
   for (const a of template.agents) {
     const model = catalogs[a.provider].find((m) => m.id === a.model);
-    if (!model?.thinking?.supported_levels?.some((level) => level.value === a.thinking_level)) throw new Error(`${a.name}: ${a.provider} does not advertise ${a.model} / ${a.thinking_level}. Configure that model or deliberately edit the template; no automatic substitution was made.`);
+    if (!model || (a.thinking_level !== "" && !model.thinking?.supported_levels?.some((level) => level.value === a.thinking_level))) throw new Error(`${a.name}: ${a.provider} does not advertise ${a.model} / ${a.thinking_level}. Configure that model or deliberately edit the template; no automatic substitution was made.`);
     if (a.service_tier === "default" && !model.supports_explicit_standard_service_tier) throw new Error(`${a.name}: this runtime cannot select Standard service tier; update its CLI or edit the template.`);
   }
   log(`Preflight passed: ${template.agents.length} agents, ${template.skills.length} skills, ${template.squads.length} squads.`);

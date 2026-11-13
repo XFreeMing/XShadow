@@ -38,7 +38,7 @@ export function validateTemplateObject(template) {
   const agentKeys = new Set(template.agents.map((a) => a.key));
   const skillKeys = new Set(template.skills.map((s) => s.key));
   for (const agent of template.agents) {
-    if (!(agent.provider in template.runtime_limits) || !agent.model || !agent.thinking_level || agent.permission_mode !== "private" || !Array.isArray(agent.skills) || agent.skills.some((s) => !skillKeys.has(s))) throw new Error(`Invalid agent configuration: ${agent.name}`);
+    if (!(agent.provider in template.runtime_limits) || !agent.model || typeof agent.thinking_level !== "string" || agent.permission_mode !== "private" || !Array.isArray(agent.skills) || agent.skills.some((s) => !skillKeys.has(s))) throw new Error(`Invalid agent configuration: ${agent.name}`);
     if (agent.include_common !== undefined && typeof agent.include_common !== "boolean") throw new Error(`Invalid agent configuration: ${agent.name}`);
   }
   for (const squad of template.squads) {

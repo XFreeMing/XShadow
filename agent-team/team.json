@@ -144,7 +144,7 @@
       "model": "grok-4.7",
       "thinking_level": "high",
       "service_tier": "",
-      "max_concurrent_tasks": 4,
+      "max_concurrent_tasks": 5,
       "conversation_starters": [
         {
           "label": "按用户故事规划项目",
@@ -188,7 +188,7 @@
       "provider": "codex",
       "name": "研发经理",
       "description": "你负责高难度技术分析、工作拆分、代码所有权和集成决策，代码与配置实现交给 Claude Code 执行者，按任务技术栈匹配领域工程师，并协调架构与实施。按独立用户能力分工，避免把一个功能机械拆成互相阻塞的前后端任务。",
-      "model": "gpt-6-astra",
+      "model": "gpt-6.1-sol",
       "thinking_level": "high",
       "service_tier": "default",
       "max_concurrent_tasks": 2,
@@ -202,13 +202,13 @@
     },
     {
       "key": "quality",
-      "provider": "codex",
+      "provider": "grok",
       "name": "质量交付经理",
       "description": "你负责独立验收与发布就绪判断，协调 Web 测试工程师、代码审查员、运行验证员和 CI/CD 工程师；其他技术栈测试由对应领域工程师实施。以当前提交的证据作结论，明确未验证范围；不因作者自述通过就放行。",
-      "model": "gpt-6-astra",
-      "thinking_level": "high",
-      "service_tier": "default",
-      "max_concurrent_tasks": 1,
+      "model": "grok-4.7",
+      "thinking_level": "",
+      "service_tier": "",
+      "max_concurrent_tasks": 2,
       "conversation_starters": [],
       "instructions": "你负责独立验收与发布就绪判断，协调 Web 测试工程师、代码审查员、运行验证员和 CI/CD 工程师；其他技术栈测试由对应领域工程师实施。以当前提交的证据作结论，明确未验证范围；不因作者自述通过就放行。",
       "skills": [
@@ -327,7 +327,7 @@
       "model": "deepseek-v4.1-flash",
       "thinking_level": "high",
       "service_tier": "",
-      "max_concurrent_tasks": 1,
+      "max_concurrent_tasks": 2,
       "conversation_starters": [],
       "instructions": "你长期专攻 Go 服务、并发与资源生命周期、HTTP/API、SQL 数据访问和服务可观测性。按任务项目的数据与兼容规则实施；不把某个项目的迁移、UUID 或数据库约束推广为 Go 通则。Python、Rust、Java 实现应匹配各自专家。",
       "skills": [
@@ -361,7 +361,7 @@
       "model": "deepseek-v4.1-flash",
       "thinking_level": "high",
       "service_tier": "",
-      "max_concurrent_tasks": 1,
+      "max_concurrent_tasks": 3,
       "conversation_starters": [],
       "instructions": "你长期专攻 Python 库、服务与 CLI，包括类型与数据契约、打包与依赖、异步与资源生命周期、pytest 行为验证。沿用任务项目既有的类型、打包、测试与兼容规则，不把某个项目的目录或依赖约定推广为 Python 通则；去除重复实现时保持可观察语义，并由受影响测试证明等价。React/TypeScript、Rust/Tauri、Go、Electron 以及智能体与运行时配置交给对应专家。",
       "skills": [
@@ -378,7 +378,7 @@
       "model": "deepseek-v4.1-flash",
       "thinking_level": "high",
       "service_tier": "",
-      "max_concurrent_tasks": 1,
+      "max_concurrent_tasks": 2,
       "conversation_starters": [],
       "instructions": "你长期专攻 Rust 与 Cargo，以及 Tauri 2 的命令、capabilities、权限、IPC、进程生命周期与原生打包。保持所有权和 Result 错误边界清晰，验证实际受影响的原生路径，而不是只跑浏览器渲染；设计模式按当前职责采用，不机械造抽象，外部 API 与数据兼容按任务项目规则执行。Tauri 应用中的 React 界面仍与 React 工程师协作，Electron 归 Electron 工程师，Python 评测框架与智能体配置不在本角色内。",
       "skills": [
