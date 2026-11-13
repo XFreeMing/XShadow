@@ -177,6 +177,7 @@ manifest_field() {
     case "$key" in
       DIR) printf '%s' "$DIR" ;;
       OFFSET) printf '%s' "$OFFSET" ;;
+      DB_NAME) printf '%s' "$DB_NAME" ;;
       DESKTOP_CDP_PORT) printf '%s' "${DESKTOP_CDP_PORT:-}" ;;
       *) return 1 ;;
     esac
@@ -465,6 +466,9 @@ migrate_database() {
   # `migrate up` connects with DATABASE_URL and pings before doing anything, so
   # a successful run is the proof that the application can reach the database
   # this script just prepared. That is why nothing above prints a checkmark.
+  # The guard makes the record authoritative: the migration refuses a live
+  # connection that is not this environment's database.
+  export_db_guard "$DATABASE_URL" "$NAME"
   if ! (cd "$REPO_ROOT/server" && go run ./cmd/migrate up) > "$LOG_DIR/migrate.log" 2>&1; then
     tail -5 "$LOG_DIR/migrate.log" | sed 's/^/    /' >&2 || true
     if grep -q '3D000\|does not exist' "$LOG_DIR/migrate.log"; then
@@ -1307,6 +1311,37 @@ resolve_env_for_read() {
   bind_paths
 }
 
+# Databases recorded for OTHER checkouts. A leaked DATABASE_URL is exactly how
+# a task run migrated the coordination database before (DEV-54), so a guarded
+# migration from this environment lists every other checkout's database as
+# protected and cmd/migrate refuses to write any of them.
+protected_database_list() {
+  local name db
+  while read -r name; do
+    [ -n "$name" ] || continue
+    [ "$(manifest_field "$name" DIR)" = "$REPO_ROOT" ] && continue
+    db="$(manifest_field "$name" DB_NAME)"
+    [ -n "$db" ] && printf '%s,' "$db"
+  done <<EOF
+$(list_env_names)
+EOF
+}
+
+# Tells cmd/migrate which connection the environment record expects and which
+# databases it must never touch. The expected target comes from the record, not
+# from whatever DATABASE_URL the calling shell exported, so a stale value
+# cannot become the migration target by inheritance.
+export_db_guard() {
+  local expected=$1 name=$2 protected
+  protected="$(protected_database_list)"
+  protected="${protected%,}"
+  export MULTICA_DB_GUARD_ENV="$name"
+  export MULTICA_EXPECTED_DATABASE_URL="$expected"
+  # The registry is authoritative: an inherited value could narrow the list and
+  # hide a database this run must never write.
+  export MULTICA_PROTECTED_DATABASES="$protected"
+}
+
 bind_paths() {
   STATE_DIR="$(env_dir "$NAME")"
   LOG_DIR="$STATE_DIR/logs"
@@ -1771,16 +1806,21 @@ EOF
 # production MULTICA_* values and with a durable TMPDIR. Replaces the prefix
 # people used to have to copy out of a document by hand.
 cmd_exec() {
-  local name=""
+  local name="" expected_database_url=""
   if [ "${1:-}" != "--" ] && [ $# -gt 0 ]; then name="$1"; shift; fi
   [ "${1:-}" = "--" ] && shift
   [ $# -gt 0 ] || die "Usage: dev-env.sh exec [name] -- <command> [args...]"
 
   resolve_env_for_read "$name"
+  # The record loaded by resolve_env_for_read is the expected target; the env
+  # file below is the connection the child will actually use. Keeping the two
+  # separate is what lets cmd/migrate refuse a stale or polluted DATABASE_URL.
+  expected_database_url="$DATABASE_URL"
   mkdir -p "$DEV_TMPDIR"
   cd "$DIR"
   load_env_file "$ENV_FILE" "$DIR"
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export_db_guard "$expected_database_url" "$NAME"
   export TMPDIR="$DEV_TMPDIR" TMP="$DEV_TMPDIR" TEMP="$DEV_TMPDIR"
   export MULTICA_DEV_PROFILE="$PROFILE"
   # Read by scripts/desktop-cdp.mjs to find this environment's Desktop.
@@ -1815,6 +1855,14 @@ through its CLI profile; scripts/dev-fixtures.mjs adds chat, Agent Builder and
 wide-markdown issue content. desktop starts signed in. --cdp exposes a Chrome
 DevTools Protocol port (printed by up and status --json) for Playwright's
 connectOverCDP; the port is kept for later runs until --no-cdp.
+
+The environment record is authoritative for database writes. exec exports the
+recorded target as MULTICA_EXPECTED_DATABASE_URL and other checkouts'
+databases as MULTICA_PROTECTED_DATABASES, and cmd/migrate refuses before any
+DDL when the live connection is not that target. Run migrations and database
+tests through the verified connection:
+
+  make env-exec ARGS="-- bash scripts/dev-db.sh migrate-test"
 
 down keeps the database, the CLI profile and the allocated slot.
 destroy consumes them.

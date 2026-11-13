@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -825,17 +826,27 @@ func main() {
 	logger.Init()
 
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run ./cmd/migrate <up|down>")
+		fmt.Println("Usage: go run ./cmd/migrate <up|down|verify>")
 		os.Exit(1)
 	}
 
 	direction := os.Args[1]
-	if direction != "up" && direction != "down" {
-		fmt.Println("Usage: go run ./cmd/migrate <up|down>")
+	if direction != "up" && direction != "down" && direction != "verify" {
+		fmt.Println("Usage: go run ./cmd/migrate <up|down|verify>")
 		os.Exit(1)
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
+	rawDBURL := os.Getenv("DATABASE_URL")
+	guard := databaseGuardFromEnv(os.Getenv, currentDirectory())
+	// A guarded run must never fall back to the built-in localhost URL: an empty
+	// DATABASE_URL means the caller's environment record did not resolve and
+	// nothing was verified. Refuse before connecting.
+	if guard.active() && rawDBURL == "" {
+		fmt.Fprintf(os.Stderr, "database target check failed: %v\n", emptyDatabaseURLError(guard))
+		os.Exit(2)
+	}
+
+	dbURL := rawDBURL
 	if dbURL == "" {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
 	}
@@ -853,6 +864,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	// "verify" is an explicit probe: it always reads the live identity and
+	// reports it, then returns before any migration files are touched.
+	if direction == "verify" {
+		verifyCtx, cancelVerify := context.WithTimeout(context.Background(), 15*time.Second)
+		target, verifyErr := verifyDatabaseTarget(verifyCtx, pool, rawDBURL)
+		cancelVerify()
+		if verifyErr != nil {
+			fmt.Fprintf(os.Stderr, "database target check failed: %v\n", verifyErr)
+			os.Exit(2)
+		}
+		fmt.Printf("database target verified: %s\n", target.redacted())
+		return
+	}
 
 	files, err := migrations.Files(direction)
 	if err != nil {
@@ -880,6 +905,22 @@ func main() {
 	if err := dbstartup.Retry(startupCtx, retryOptions, pool.Ping); err != nil {
 		slog.Error("unable to ping database", "error", err)
 		os.Exit(1)
+	}
+
+	// Verify the live identity only when the caller declared a target. Inactive
+	// production and CI runs must not pay for an extra round trip. The check
+	// runs after the retry-on-unavailable loop so transient startup outages keep
+	// their existing behavior, and before runMigrations so any refusal precedes
+	// DDL.
+	if guard.active() {
+		verifyCtx, cancelVerify := context.WithTimeout(startupCtx, 15*time.Second)
+		target, verifyErr := verifyDatabaseTarget(verifyCtx, pool, rawDBURL)
+		cancelVerify()
+		if verifyErr != nil {
+			fmt.Fprintf(os.Stderr, "database target check failed: %v\n", verifyErr)
+			os.Exit(2)
+		}
+		fmt.Printf("database target verified: %s\n", target.redacted())
 	}
 
 	migrationErr := runMigrations(startupCtx, pool, options)

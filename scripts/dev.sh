@@ -43,6 +43,10 @@ set +a
 # shellcheck disable=SC1091
 . scripts/local-env.sh
 
+# Migrations below must reach the database this checkout's env file declares;
+# cmd/migrate refuses anything else before DDL (DEV-54).
+export MULTICA_EXPECTED_DATABASE_URL="${DATABASE_URL:-}"
+
 # ---------- Install dependencies ----------
 if [ ! -d node_modules ]; then
   echo "==> Installing dependencies..."

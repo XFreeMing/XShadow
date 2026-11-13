@@ -83,7 +83,8 @@ func IsolatedDB(t *testing.T, dsn string) *pgxpool.Pool {
 	}
 	cmd := exec.CommandContext(migrateCtx, binary, "up")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "DATABASE_URL="+targetDSN)
+	// The child's own verified target is the isolated database, not the parent's.
+	cmd.Env = append(os.Environ(), "DATABASE_URL="+targetDSN, "MULTICA_EXPECTED_DATABASE_URL="+targetDSN)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("migrate isolated test database: %v\n%s", err, output)
 	}
