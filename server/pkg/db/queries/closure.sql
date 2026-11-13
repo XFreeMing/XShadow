@@ -98,6 +98,14 @@ RETURNING *;
 -- backed by an authorization that is still active, unexpired and still allows
 -- closing. accepted_at alone is not evidence: a revoked grant, a replaced
 -- delivery or a stale row must not release a downstream dependent.
+--
+-- The caller also passes the CURRENT authoritative facts when it knows them:
+-- delivery_version is the head SHA registered on the issue's linked PR and
+-- criteria_revision is the goal plan revision the issue is bound to. A stored
+-- acceptance that names an earlier delivery or an earlier plan revision stops
+-- matching the moment that fact changes — no new review is needed to
+-- invalidate it. An empty parameter means the fact is not registered for this
+-- issue and therefore cannot constrain the acceptance.
 SELECT r.* FROM closure_review AS r
 JOIN closure_authorization AS a
   ON a.id = r.authorization_id AND a.workspace_id = r.workspace_id
@@ -108,6 +116,10 @@ WHERE r.workspace_id = sqlc.arg('workspace_id')
   AND r.verdict = 'pass'
   AND r.accepted_at IS NOT NULL
   AND r.superseded_by IS NULL
+  AND (COALESCE(sqlc.narg('delivery_version')::text, '') = ''
+       OR r.delivery_version = sqlc.narg('delivery_version')::text)
+  AND (COALESCE(sqlc.narg('criteria_revision')::text, '') = ''
+       OR r.criteria_revision = sqlc.narg('criteria_revision')::text)
   AND a.state = 'active'
   AND (a.expires_at IS NULL OR a.expires_at > now())
   AND 'issue_close' = ANY(a.actions)

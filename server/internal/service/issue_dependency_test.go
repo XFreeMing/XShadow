@@ -119,23 +119,24 @@ func newDependencyFixture(t *testing.T) *dependencyFixture {
 		"granted_by_id":   ownerID,
 	})
 	review := fx.Insert(t, "closure_review", testutil.Cols{
-		"workspace_id":     workspaceID,
-		"project_id":       projectID,
-		"subject_kind":     "issue",
-		"subject_id":       issueA,
-		"action":           "issue_close",
-		"delivery_version": "e7206f4d5ca0967b4868c70fae3f82e99f16ccf1",
-		"delivery_tree":    "50c145a22f6e099fc68f9be21933a89fb2d7c790",
-		"author_type":      "agent",
-		"author_id":        agentID,
-		"author_model":     "deepseek-v4.1-flash",
-		"reviewer_type":    "member",
-		"reviewer_id":      ownerID,
-		"verdict":          "pass",
-		"criteria":         testutil.Raw("'[]'::jsonb"),
-		"platforms":        testutil.Raw("'[]'::jsonb"),
-		"missing":          testutil.Raw("'[]'::jsonb"),
-		"authorization_id": authorization,
+		"workspace_id":      workspaceID,
+		"project_id":        projectID,
+		"subject_kind":      "issue",
+		"subject_id":        issueA,
+		"action":            "issue_close",
+		"delivery_version":  "e7206f4d5ca0967b4868c70fae3f82e99f16ccf1",
+		"delivery_tree":     "50c145a22f6e099fc68f9be21933a89fb2d7c790",
+		"criteria_revision": PlanCriteriaRevision(util.MustParseUUID(goalID), 1),
+		"author_type":       "agent",
+		"author_id":         agentID,
+		"author_model":      "deepseek-v4.1-flash",
+		"reviewer_type":     "member",
+		"reviewer_id":       ownerID,
+		"verdict":           "pass",
+		"criteria":          testutil.Raw("'[]'::jsonb"),
+		"platforms":         testutil.Raw("'[]'::jsonb"),
+		"missing":           testutil.Raw("'[]'::jsonb"),
+		"authorization_id":  authorization,
 	})
 
 	taskSvc := NewTaskService(db.New(pool), pool, nil, events.New())
@@ -189,6 +190,71 @@ func (f *dependencyFixture) taskStatus(t *testing.T, taskID string) string {
 	return status
 }
 
+// fireAtIsNull reports whether the parked row is invisible to time-based
+// promotion. That is the difference between "parked until a real event" and
+// "retried every poll".
+func (f *dependencyFixture) fireAtIsNull(t *testing.T, taskID string) bool {
+	t.Helper()
+	var isNull bool
+	f.fx.QueryRow(t, `SELECT fire_at IS NULL FROM agent_task_queue WHERE id = $1`, taskID).Scan(&isNull)
+	return isNull
+}
+
+// releaseDependents is the service-level equivalent of the handler's dependency
+// event: it arms only rows parked with no fire_at and returns how many moved.
+func (f *dependencyFixture) releaseDependents(t *testing.T) int {
+	t.Helper()
+	armed, err := f.svc.Queries.ReleaseDeferredDependentTasksForIssue(context.Background(), util.MustParseUUID(f.issueC))
+	if err != nil {
+		t.Fatalf("ReleaseDeferredDependentTasksForIssue: %v", err)
+	}
+	return len(armed)
+}
+
+// linkPullRequest registers an authoritative delivery version for A: the head
+// SHA of a linked pull request, which is exactly what the release check reads.
+func (f *dependencyFixture) linkPullRequest(t *testing.T, headSHA string) string {
+	t.Helper()
+	prID := f.fx.Insert(t, "github_pull_request", testutil.Cols{
+		"workspace_id":    f.workspaceID,
+		"installation_id": int64(1),
+		"repo_owner":      "XFreeMing",
+		"repo_name":       "XShadow",
+		"pr_number":       time.Now().UnixNano() % 1_000_000_000,
+		"title":           "dependency delivery",
+		"state":           "open",
+		"html_url":        "https://github.com/XFreeMing/XShadow/pull/1",
+		"pr_created_at":   testutil.Raw("now()"),
+		"pr_updated_at":   testutil.Raw("now()"),
+		"head_sha":        headSHA,
+	})
+	f.fx.InsertNoID(t, "issue_pull_request", testutil.Cols{
+		"issue_id":        f.issueA,
+		"pull_request_id": prID,
+	}, "issue_id = $1 AND pull_request_id = $2", f.issueA, prID)
+	return prID
+}
+
+// acceptReviewFor stamps the persisted acceptance against the current plan
+// revision, as the closure endpoint would.
+func (f *dependencyFixture) acceptReviewFor(t *testing.T, deliveryVersion string) {
+	t.Helper()
+	f.fx.Exec(t, `UPDATE closure_review
+		SET accepted_at = now(), accepted_by_type = 'member', accepted_by_id = $2,
+		    delivery_version = $3,
+		    criteria_revision = $4
+		WHERE id = $1`, f.review, f.ownerID, deliveryVersion, PlanCriteriaRevision(util.MustParseUUID(f.goalID), 1))
+}
+
+func (f *dependencyFixture) ready(t *testing.T) IssueDependencyState {
+	t.Helper()
+	state, err := IssueDependenciesReady(context.Background(), f.svc.Queries, f.loadIssue(t, f.issueC))
+	if err != nil {
+		t.Fatalf("IssueDependenciesReady: %v", err)
+	}
+	return state
+}
+
 func (f *dependencyFixture) loadIssue(t *testing.T, issueID string) db.Issue {
 	t.Helper()
 	issue, err := f.svc.Queries.GetIssue(context.Background(), util.MustParseUUID(issueID))
@@ -198,28 +264,36 @@ func (f *dependencyFixture) loadIssue(t *testing.T, issueID string) db.Issue {
 	return issue
 }
 
-// A dependent queued while A is still in review stays queued: no claim, no
-// dispatch. Once A is a done issue with a valid accepted review, the same
-// queued task is claimed. B never being finished is irrelevant.
+// A dependent queued while A is still in review is parked: the rejected claim
+// takes it out of the claim queue instead of handing it back for every later
+// poll. Once A is a done issue with a valid accepted review, a real dependency
+// event re-arms the same row and the dependent starts exactly once. B never
+// being finished is irrelevant.
 func TestDependentStartsOnlyAfterPrerequisiteIsAccepted(t *testing.T) {
 	f := newDependencyFixture(t)
 	taskID := f.queueTaskForC(t)
 
 	if task := f.claim(t); task != nil {
-		t.Fatalf("claimed %s while A is in review; dependent must stay queued", task.ID)
+		t.Fatalf("claimed %s while A is in review; dependent must stay parked", task.ID)
 	}
-	if got := f.taskStatus(t, taskID); got != "queued" {
-		t.Fatalf("task status = %q, want queued", got)
+	if got := f.taskStatus(t, taskID); got != "deferred" {
+		t.Fatalf("task status after a rejected claim = %q, want deferred", got)
 	}
-	// The dependent is still queued, not failed or cancelled: it starts when
-	// the evidence appears, without a second enqueue.
+	if !f.fireAtIsNull(t, taskID) {
+		t.Fatal("parked task has a fire_at; time-based promotion would retry it every poll")
+	}
+	// The dependent is not failed or cancelled and owns no second queue entry:
+	// it starts when the evidence appears, after the dependency-change event.
 	f.acceptA(t)
+	if armed := f.releaseDependents(t); armed != 1 {
+		t.Fatalf("dependency release armed %d rows, want 1", armed)
+	}
 	claimed := f.claim(t)
 	if claimed == nil {
 		t.Fatal("dependent was not claimed after A became an accepted success")
 	}
 	if uuid := util.UUIDToString(claimed.ID); uuid != taskID {
-		t.Fatalf("claimed task = %s, want the already queued %s", uuid, taskID)
+		t.Fatalf("claimed task = %s, want the already parked %s", uuid, taskID)
 	}
 	if got := util.UUIDToString(claimed.IssueID); got != f.issueC {
 		t.Fatalf("claimed issue = %s, want C %s", got, f.issueC)
@@ -274,8 +348,8 @@ func TestDependentRefusedWithoutCurrentlyValidAcceptance(t *testing.T) {
 			if task := f.claim(t); task != nil {
 				t.Fatalf("claimed %s although the prerequisite acceptance is not currently valid", task.ID)
 			}
-			if got := f.taskStatus(t, taskID); got != "queued" {
-				t.Fatalf("task status = %q, want queued", got)
+			if got := f.taskStatus(t, taskID); got != "deferred" {
+				t.Fatalf("task status = %q, want deferred (parked, not retried every poll)", got)
 			}
 		})
 	}
@@ -356,5 +430,146 @@ func TestAcceptedDependentDispatchesOnce(t *testing.T) {
 	}
 	if count := f.fx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, f.issueC); count != 1 {
 		t.Fatalf("task rows for C = %d, want 1 (the existing %s)", count, taskID)
+	}
+}
+
+// A rejected claim must not be retried by the scheduler. Once parked, repeated
+// polls and the ordinary deferred promotion both leave the row alone; only a
+// real dependency event re-arms it.
+func TestRejectedDependencyClaimIsNotPickedUpEveryPoll(t *testing.T) {
+	f := newDependencyFixture(t)
+	taskID := f.queueTaskForC(t)
+
+	for poll := 0; poll < 4; poll++ {
+		if task := f.claim(t); task != nil {
+			t.Fatalf("poll %d claimed %s although the prerequisite is unaccepted", poll, task.ID)
+		}
+	}
+	if got := f.taskStatus(t, taskID); got != "deferred" {
+		t.Fatalf("task status after repeated polls = %q, want deferred", got)
+	}
+	if !f.fireAtIsNull(t, taskID) {
+		t.Fatal("parked task has a fire_at; every promotion tick would retry it")
+	}
+	// Even an explicit promotion sweep must not pull a NULL-fire_at row forward.
+	if err := f.svc.PromoteDueDeferredTasksForRuntime(context.Background(), util.MustParseUUID(f.runtimeID)); err != nil {
+		t.Fatalf("PromoteDueDeferredTasksForRuntime: %v", err)
+	}
+	if got := f.taskStatus(t, taskID); got != "deferred" {
+		t.Fatalf("task status after promotion = %q, want deferred", got)
+	}
+	if count := f.fx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, f.issueC); count != 1 {
+		t.Fatalf("task rows for C = %d, want 1", count)
+	}
+}
+
+// Replaying the dependency-change event is harmless: the first event arms the
+// parked row, later duplicates find no NULL-fire_at row, and the queue still
+// dispatches exactly one task.
+func TestDuplicateDependencyEventDispatchesOnce(t *testing.T) {
+	f := newDependencyFixture(t)
+	taskID := f.queueTaskForC(t)
+	if task := f.claim(t); task != nil {
+		t.Fatalf("claimed %s while A is unaccepted", task.ID)
+	}
+	f.acceptA(t)
+
+	if armed := f.releaseDependents(t); armed != 1 {
+		t.Fatalf("first release armed %d rows, want 1", armed)
+	}
+	if armed := f.releaseDependents(t); armed != 0 {
+		t.Fatalf("duplicate release armed %d rows, want 0 (already armed)", armed)
+	}
+	first := f.claim(t)
+	if first == nil {
+		t.Fatal("dependent was not claimed after the dependency event")
+	}
+	if util.UUIDToString(first.ID) != taskID {
+		t.Fatalf("claimed task = %s, want %s", util.UUIDToString(first.ID), taskID)
+	}
+	if second := f.claim(t); second != nil {
+		t.Fatalf("second claim dispatched %s; want no duplicate", second.ID)
+	}
+	if count := f.fx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, f.issueC); count != 1 {
+		t.Fatalf("task rows for C = %d, want 1", count)
+	}
+}
+
+// Acceptance names a delivery and an acceptance scope. A registered delivery
+// that advances without a new review invalidates it immediately: the parked
+// dependent stays parked and is not released by a duplicate event.
+func TestNewRegisteredDeliveryBlocksReleaseWithoutNewReview(t *testing.T) {
+	f := newDependencyFixture(t)
+	prID := f.linkPullRequest(t, "aaaa1111")
+	taskID := f.queueTaskForC(t)
+	if task := f.claim(t); task != nil {
+		t.Fatalf("claimed %s before A was accepted", task.ID)
+	}
+
+	// A is delivered and accepted at the registered head.
+	f.fx.Exec(t, `UPDATE issue SET status = 'done' WHERE id = $1`, f.issueA)
+	f.acceptReviewFor(t, "aaaa1111")
+	if state := f.ready(t); !state.Ready {
+		t.Fatalf("release blocked while the acceptance matches the registered delivery: %+v", state)
+	}
+
+	// HEAD advances. No new review exists yet.
+	f.fx.Exec(t, `UPDATE github_pull_request SET head_sha = 'bbbb2222' WHERE id = $1`, prID)
+	state := f.ready(t)
+	if state.Ready {
+		t.Fatal("acceptance for the old head still releases the dependent")
+	}
+	if state.Reason != DependencyReasonNotAccepted {
+		t.Fatalf("reason = %q, want %q", state.Reason, DependencyReasonNotAccepted)
+	}
+	if armed := f.releaseDependents(t); armed != 1 {
+		t.Fatalf("release event armed %d rows, want the parked 1", armed)
+	}
+	if task := f.claim(t); task != nil {
+		t.Fatalf("claim dispatched %s although the registered delivery has no accepted review", task.ID)
+	}
+	if got := f.taskStatus(t, taskID); got != "deferred" {
+		t.Fatalf("task status = %q, want deferred after the failed re-check", got)
+	}
+
+	// A review against the new head is the fact that releases it.
+	f.acceptReviewFor(t, "bbbb2222")
+	if armed := f.releaseDependents(t); armed != 1 {
+		t.Fatalf("release after the new review armed %d rows, want 1", armed)
+	}
+	if claimed := f.claim(t); claimed == nil {
+		t.Fatal("dependent was not released after the delivery was re-reviewed")
+	}
+}
+
+// Saving the plan bumps its revision; acceptance recorded against the old
+// revision stops being valid even when no new review arrives.
+func TestPlanRevisionBumpInvalidatesAcceptance(t *testing.T) {
+	f := newDependencyFixture(t)
+	taskID := f.queueTaskForC(t)
+	if task := f.claim(t); task != nil {
+		t.Fatalf("claimed %s before A was accepted", task.ID)
+	}
+	f.acceptA(t)
+	if state := f.ready(t); !state.Ready {
+		t.Fatalf("release blocked at the accepted plan revision: %+v", state)
+	}
+
+	f.fx.Exec(t, `UPDATE goal_plan SET revision = 2 WHERE goal_id = $1`, f.goalID)
+	state := f.ready(t)
+	if state.Ready {
+		t.Fatal("acceptance for plan revision 1 still releases after the plan moved to revision 2")
+	}
+	if state.Reason != DependencyReasonNotAccepted {
+		t.Fatalf("reason = %q, want %q", state.Reason, DependencyReasonNotAccepted)
+	}
+	if armed := f.releaseDependents(t); armed != 1 {
+		t.Fatalf("release event armed %d rows, want the parked 1", armed)
+	}
+	if task := f.claim(t); task != nil {
+		t.Fatalf("claim dispatched %s although the plan revision moved past the acceptance", task.ID)
+	}
+	if got := f.taskStatus(t, taskID); got != "deferred" {
+		t.Fatalf("task status = %q, want deferred after the failed re-check", got)
 	}
 }

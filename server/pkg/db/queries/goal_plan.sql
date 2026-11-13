@@ -43,11 +43,48 @@ RETURNING *;
 -- name: DeleteGoalPlansByGoal :exec
 DELETE FROM goal_plan WHERE workspace_id = $1 AND goal_id = $2;
 
+-- name: GetGoalPlanItemIssue :one
+-- The persisted materialization of one stable plan item id.
+SELECT * FROM goal_plan_item_issue
+WHERE goal_id = $1 AND item_id = $2;
+
+-- name: ListGoalPlanItemIssues :many
+SELECT * FROM goal_plan_item_issue
+WHERE workspace_id = $1 AND goal_id = $2
+ORDER BY item_id;
+
+-- name: CreateGoalPlanItemIssue :one
+-- The unique (goal_id, item_id) index is the idempotency key. A retried or
+-- concurrent materialize loses this insert and reads the winner's row instead
+-- of creating a second issue.
+INSERT INTO goal_plan_item_issue (
+    workspace_id, goal_id, item_id, issue_id, plan_revision
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+ON CONFLICT (goal_id, item_id) DO NOTHING
+RETURNING *;
+
 -- name: DeleteGoalPlansByProject :exec
 DELETE FROM goal_plan WHERE workspace_id = $1 AND project_id = $2;
 
 -- name: DeleteWorkspaceGoalPlans :exec
 DELETE FROM goal_plan WHERE workspace_id = $1;
+
+-- name: DeleteGoalPlanItemIssuesByProject :exec
+-- Materialized plan bindings name a goal and an issue by value only, so a
+-- project teardown has to sweep them explicitly before the goals disappear.
+DELETE FROM goal_plan_item_issue AS b
+WHERE b.workspace_id = $1
+  AND b.goal_id IN (
+    SELECT g.id FROM goal AS g WHERE g.workspace_id = $1 AND g.project_id = $2
+  );
+
+-- name: DeleteGoalPlanItemIssuesByGoal :exec
+DELETE FROM goal_plan_item_issue WHERE workspace_id = $1 AND goal_id = $2;
+
+-- name: DeleteWorkspaceGoalPlanItemIssues :exec
+DELETE FROM goal_plan_item_issue WHERE workspace_id = $1;
 
 -- name: CreateGoalPlanGeneration :one
 -- Every generation is one explicit user request: its request_key is unique per

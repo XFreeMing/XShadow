@@ -2299,6 +2299,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// endpoint is called by the planning run's own task token.
 					r.Get("/plan", h.GetGoalPlan)
 					r.Put("/plan", h.PutGoalPlan)
+					// Materialize creates the issues for `binding.type = "new"`
+					// items and persists the item→issue binding. It is the
+					// idempotent execution step for a saved plan (DEV-7).
+					r.Post("/plan/materialize", h.MaterializeGoalPlan)
 					r.Post("/plan/generations", h.CreateGoalPlanGeneration)
 					r.Get("/plan/generations/{generationId}", h.GetGoalPlanGeneration)
 					r.Post("/plan/generations/{generationId}/result", h.SubmitGoalPlanGenerationResult)

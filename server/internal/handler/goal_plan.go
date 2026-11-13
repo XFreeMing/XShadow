@@ -539,6 +539,12 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(locked.WorkspaceID))
 	h.publishGoalChanged(uuidToString(locked.WorkspaceID), actorType, actorID)
 
+	// A saved revision is a dependency-graph change: new bindings or edges can
+	// make a previously blocked item runnable, and a revision bump invalidates
+	// earlier acceptances. Re-check each bound issue against the persisted
+	// evidence; only the ones that are ready now are released.
+	h.releaseGoalPlanIssues(r.Context(), locked.WorkspaceID, locked.ID)
+
 	resp, err := goalPlanToResponse(locked, saved)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load plan")

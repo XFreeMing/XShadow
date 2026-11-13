@@ -528,6 +528,10 @@ WHERE r.workspace_id = $1
   AND r.verdict = 'pass'
   AND r.accepted_at IS NOT NULL
   AND r.superseded_by IS NULL
+  AND (COALESCE($3::text, '') = ''
+       OR r.delivery_version = $3::text)
+  AND (COALESCE($4::text, '') = ''
+       OR r.criteria_revision = $4::text)
   AND a.state = 'active'
   AND (a.expires_at IS NULL OR a.expires_at > now())
   AND 'issue_close' = ANY(a.actions)
@@ -536,8 +540,10 @@ LIMIT 1
 `
 
 type GetValidAcceptedClosureReviewParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	SubjectID   pgtype.UUID `json:"subject_id"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	SubjectID        pgtype.UUID `json:"subject_id"`
+	DeliveryVersion  pgtype.Text `json:"delivery_version"`
+	CriteriaRevision pgtype.Text `json:"criteria_revision"`
 }
 
 // The currently valid acceptance for one issue. Valid means: a pass verdict
@@ -545,8 +551,21 @@ type GetValidAcceptedClosureReviewParams struct {
 // backed by an authorization that is still active, unexpired and still allows
 // closing. accepted_at alone is not evidence: a revoked grant, a replaced
 // delivery or a stale row must not release a downstream dependent.
+//
+// The caller also passes the CURRENT authoritative facts when it knows them:
+// delivery_version is the head SHA registered on the issue's linked PR and
+// criteria_revision is the goal plan revision the issue is bound to. A stored
+// acceptance that names an earlier delivery or an earlier plan revision stops
+// matching the moment that fact changes — no new review is needed to
+// invalidate it. An empty parameter means the fact is not registered for this
+// issue and therefore cannot constrain the acceptance.
 func (q *Queries) GetValidAcceptedClosureReview(ctx context.Context, arg GetValidAcceptedClosureReviewParams) (ClosureReview, error) {
-	row := q.db.QueryRow(ctx, getValidAcceptedClosureReview, arg.WorkspaceID, arg.SubjectID)
+	row := q.db.QueryRow(ctx, getValidAcceptedClosureReview,
+		arg.WorkspaceID,
+		arg.SubjectID,
+		arg.DeliveryVersion,
+		arg.CriteriaRevision,
+	)
 	var i ClosureReview
 	err := row.Scan(
 		&i.ID,

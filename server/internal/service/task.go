@@ -3808,9 +3808,16 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 		// Last gate before a run starts. A dependent issue may have been
 		// queued while its prerequisite was still in review, or by an event
 		// that predates the prerequisite being reopened. Re-check the
-		// persisted evidence here and put the claim straight back when it no
-		// longer holds: status alone (a human write, a merged-PR automation)
-		// is never release evidence.
+		// persisted evidence here and park the claim when it no longer holds:
+		// status alone (a human write, a merged-PR automation) is never
+		// release evidence.
+		//
+		// The parked row is 'deferred' with no fire_at, not 'queued'. Returning
+		// it to the claim queue would make every later poll list it, claim it
+		// and reject it again — the repeated pickup this gate exists to avoid.
+		// A real dependency change re-arms it through
+		// ReleaseDeferredDependentTasksForIssue, and the ordinary deferred
+		// promotion path then puts it back into the claim queue once.
 		if task.IssueID.Valid {
 			issue, err := qtx.GetIssue(ctx, task.IssueID)
 			if err != nil {
@@ -3823,16 +3830,16 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 				return fmt.Errorf("check issue dependencies: %w", err)
 			}
 			if !state.Ready {
-				if _, err := qtx.RequeueAgentTaskAfterClaimFailure(ctx, db.RequeueAgentTaskAfterClaimFailureParams{
+				if _, err := qtx.DeferAgentTaskForUnmetDependencies(ctx, db.DeferAgentTaskForUnmetDependenciesParams{
 					TaskID:       task.ID,
 					RuntimeID:    task.RuntimeID,
 					DispatchedAt: task.DispatchedAt,
 				}); err != nil {
-					outcome = "error_requeue_dependency"
-					return fmt.Errorf("requeue task blocked by dependencies: %w", err)
+					outcome = "error_defer_dependency"
+					return fmt.Errorf("defer task blocked by dependencies: %w", err)
 				}
 				outcome = "dependencies_unmet"
-				slog.Debug("task claim held: issue dependencies are not accepted",
+				slog.Debug("task claim parked: issue dependencies are not accepted",
 					"task_id", util.UUIDToString(task.ID),
 					"issue_id", util.UUIDToString(task.IssueID),
 					"reason", state.Reason,

@@ -61,6 +61,11 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
+	// ID optionally pins the new issue's primary key. Plan-item materialization
+	// uses a deterministic id so a retried trigger resolves the same issue
+	// instead of creating a second one; leaving it invalid keeps the ordinary
+	// generated id.
+	ID            pgtype.UUID
 	WorkspaceID   pgtype.UUID
 	Title         string
 	Description   pgtype.Text
@@ -452,7 +457,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
-			ID:            dbid.NewV7(),
+			ID:            p.ID,
 			WorkspaceID:   p.WorkspaceID,
 			Title:         p.Title,
 			Description:   p.Description,

@@ -193,6 +193,49 @@ func (q *Queries) CreateGoalPlanGeneration(ctx context.Context, arg CreateGoalPl
 	return i, err
 }
 
+const createGoalPlanItemIssue = `-- name: CreateGoalPlanItemIssue :one
+INSERT INTO goal_plan_item_issue (
+    workspace_id, goal_id, item_id, issue_id, plan_revision
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+ON CONFLICT (goal_id, item_id) DO NOTHING
+RETURNING id, workspace_id, goal_id, item_id, issue_id, plan_revision, created_at, updated_at
+`
+
+type CreateGoalPlanItemIssueParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	GoalID       pgtype.UUID `json:"goal_id"`
+	ItemID       string      `json:"item_id"`
+	IssueID      pgtype.UUID `json:"issue_id"`
+	PlanRevision int32       `json:"plan_revision"`
+}
+
+// The unique (goal_id, item_id) index is the idempotency key. A retried or
+// concurrent materialize loses this insert and reads the winner's row instead
+// of creating a second issue.
+func (q *Queries) CreateGoalPlanItemIssue(ctx context.Context, arg CreateGoalPlanItemIssueParams) (GoalPlanItemIssue, error) {
+	row := q.db.QueryRow(ctx, createGoalPlanItemIssue,
+		arg.WorkspaceID,
+		arg.GoalID,
+		arg.ItemID,
+		arg.IssueID,
+		arg.PlanRevision,
+	)
+	var i GoalPlanItemIssue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.GoalID,
+		&i.ItemID,
+		&i.IssueID,
+		&i.PlanRevision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteGoalPlanGenerationsByGoal = `-- name: DeleteGoalPlanGenerationsByGoal :exec
 DELETE FROM goal_plan_generation WHERE workspace_id = $1 AND goal_id = $2
 `
@@ -218,6 +261,40 @@ type DeleteGoalPlanGenerationsByProjectParams struct {
 
 func (q *Queries) DeleteGoalPlanGenerationsByProject(ctx context.Context, arg DeleteGoalPlanGenerationsByProjectParams) error {
 	_, err := q.db.Exec(ctx, deleteGoalPlanGenerationsByProject, arg.WorkspaceID, arg.ProjectID)
+	return err
+}
+
+const deleteGoalPlanItemIssuesByGoal = `-- name: DeleteGoalPlanItemIssuesByGoal :exec
+DELETE FROM goal_plan_item_issue WHERE workspace_id = $1 AND goal_id = $2
+`
+
+type DeleteGoalPlanItemIssuesByGoalParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GoalID      pgtype.UUID `json:"goal_id"`
+}
+
+func (q *Queries) DeleteGoalPlanItemIssuesByGoal(ctx context.Context, arg DeleteGoalPlanItemIssuesByGoalParams) error {
+	_, err := q.db.Exec(ctx, deleteGoalPlanItemIssuesByGoal, arg.WorkspaceID, arg.GoalID)
+	return err
+}
+
+const deleteGoalPlanItemIssuesByProject = `-- name: DeleteGoalPlanItemIssuesByProject :exec
+DELETE FROM goal_plan_item_issue AS b
+WHERE b.workspace_id = $1
+  AND b.goal_id IN (
+    SELECT g.id FROM goal AS g WHERE g.workspace_id = $1 AND g.project_id = $2
+  )
+`
+
+type DeleteGoalPlanItemIssuesByProjectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+}
+
+// Materialized plan bindings name a goal and an issue by value only, so a
+// project teardown has to sweep them explicitly before the goals disappear.
+func (q *Queries) DeleteGoalPlanItemIssuesByProject(ctx context.Context, arg DeleteGoalPlanItemIssuesByProjectParams) error {
+	_, err := q.db.Exec(ctx, deleteGoalPlanItemIssuesByProject, arg.WorkspaceID, arg.ProjectID)
 	return err
 }
 
@@ -255,6 +332,15 @@ DELETE FROM goal_plan_generation WHERE workspace_id = $1
 
 func (q *Queries) DeleteWorkspaceGoalPlanGenerations(ctx context.Context, workspaceID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteWorkspaceGoalPlanGenerations, workspaceID)
+	return err
+}
+
+const deleteWorkspaceGoalPlanItemIssues = `-- name: DeleteWorkspaceGoalPlanItemIssues :exec
+DELETE FROM goal_plan_item_issue WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceGoalPlanItemIssues(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceGoalPlanItemIssues, workspaceID)
 	return err
 }
 
@@ -435,6 +521,33 @@ func (q *Queries) GetGoalPlanGenerationByTask(ctx context.Context, arg GetGoalPl
 	return i, err
 }
 
+const getGoalPlanItemIssue = `-- name: GetGoalPlanItemIssue :one
+SELECT id, workspace_id, goal_id, item_id, issue_id, plan_revision, created_at, updated_at FROM goal_plan_item_issue
+WHERE goal_id = $1 AND item_id = $2
+`
+
+type GetGoalPlanItemIssueParams struct {
+	GoalID pgtype.UUID `json:"goal_id"`
+	ItemID string      `json:"item_id"`
+}
+
+// The persisted materialization of one stable plan item id.
+func (q *Queries) GetGoalPlanItemIssue(ctx context.Context, arg GetGoalPlanItemIssueParams) (GoalPlanItemIssue, error) {
+	row := q.db.QueryRow(ctx, getGoalPlanItemIssue, arg.GoalID, arg.ItemID)
+	var i GoalPlanItemIssue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.GoalID,
+		&i.ItemID,
+		&i.IssueID,
+		&i.PlanRevision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const goalPlanExists = `-- name: GoalPlanExists :one
 SELECT EXISTS (
     SELECT 1 FROM goal_plan
@@ -452,6 +565,46 @@ func (q *Queries) GoalPlanExists(ctx context.Context, arg GoalPlanExistsParams) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const listGoalPlanItemIssues = `-- name: ListGoalPlanItemIssues :many
+SELECT id, workspace_id, goal_id, item_id, issue_id, plan_revision, created_at, updated_at FROM goal_plan_item_issue
+WHERE workspace_id = $1 AND goal_id = $2
+ORDER BY item_id
+`
+
+type ListGoalPlanItemIssuesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GoalID      pgtype.UUID `json:"goal_id"`
+}
+
+func (q *Queries) ListGoalPlanItemIssues(ctx context.Context, arg ListGoalPlanItemIssuesParams) ([]GoalPlanItemIssue, error) {
+	rows, err := q.db.Query(ctx, listGoalPlanItemIssues, arg.WorkspaceID, arg.GoalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GoalPlanItemIssue{}
+	for rows.Next() {
+		var i GoalPlanItemIssue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.GoalID,
+			&i.ItemID,
+			&i.IssueID,
+			&i.PlanRevision,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockGoalPlanAdvisory = `-- name: LockGoalPlanAdvisory :exec

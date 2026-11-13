@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -93,20 +94,16 @@ func IssueDependenciesReady(ctx context.Context, q *db.Queries, issue db.Issue) 
 	if err := json.Unmarshal(plan.Content, &content); err != nil {
 		return dependencyNotReady(DependencyReasonUnreadable, "the saved plan could not be read: %v", err), nil
 	}
+	itemIssue, err := goalPlanItemIssues(ctx, q, issue.WorkspaceID, link.GoalID, content)
+	if err != nil {
+		return IssueDependencyState{}, err
+	}
 	issueID := util.UUIDToString(issue.ID)
-	itemIssue := make(map[string]string, len(content.Items))
 	issueItem := ""
 	for _, item := range content.Items {
-		if item.ID == "" {
-			continue
-		}
-		bound := strings.TrimSpace(item.Binding.IssueID)
-		if bound == "" {
-			continue
-		}
-		itemIssue[item.ID] = bound
-		if bound == issueID {
+		if item.ID != "" && itemIssue[item.ID] == issueID {
 			issueItem = item.ID
+			break
 		}
 	}
 	if issueItem == "" {
@@ -164,10 +161,26 @@ func acceptedPrerequisite(ctx context.Context, q *db.Queries, workspaceID pgtype
 			"prerequisite %s is %q (%s); only success releases a dependent",
 			issueIDText, prerequisite.Status, cancellationNote(category)), nil
 	}
-	if _, err := q.GetValidAcceptedClosureReview(ctx, db.GetValidAcceptedClosureReviewParams{
+	// Acceptance is evidence for the delivery and scope it was recorded
+	// against. Re-read the facts that can move without a new review — the head
+	// SHA registered on the linked PR and the goal plan revision — so a new
+	// commit or a plan edit invalidates the old acceptance immediately instead
+	// of waiting for the next review to supersede it.
+	params := db.GetValidAcceptedClosureReviewParams{
 		WorkspaceID: workspaceID,
 		SubjectID:   issueID,
-	}); errors.Is(err, pgx.ErrNoRows) {
+	}
+	if delivery, known, err := IssueRegisteredDeliveryVersion(ctx, q, issueID); err != nil {
+		return IssueDependencyState{}, err
+	} else if known {
+		params.DeliveryVersion = pgtype.Text{String: delivery, Valid: true}
+	}
+	if criteria, known, err := IssueCriteriaRevision(ctx, q, workspaceID, issueID); err != nil {
+		return IssueDependencyState{}, err
+	} else if known {
+		params.CriteriaRevision = pgtype.Text{String: criteria, Valid: true}
+	}
+	if _, err := q.GetValidAcceptedClosureReview(ctx, params); errors.Is(err, pgx.ErrNoRows) {
 		return dependencyNotReady(DependencyReasonNotAccepted,
 			"prerequisite %s has no currently valid acceptance for its delivery", issueIDText), nil
 	} else if err != nil {
@@ -181,4 +194,195 @@ func cancellationNote(category string) string {
 		return "cancellation is not success"
 	}
 	return "not a success terminal"
+}
+
+// PlanCriteriaRevision is the opaque closure criteria revision derived from a
+// saved goal plan revision. It is derived rather than supplied by a caller so
+// the review, the grant and the downstream readiness check all compare the
+// same value: saving the plan changes it and invalidates earlier evidence.
+func PlanCriteriaRevision(goalID pgtype.UUID, revision int32) string {
+	return "plan:" + util.UUIDToString(goalID) + ":r" + strconv.FormatInt(int64(revision), 10)
+}
+
+// IssueCriteriaRevision returns the plan revision the issue is currently bound
+// to. known is false when the issue has no goal link or the goal has no saved
+// plan; an unreadable row is an error and callers fail closed.
+func IssueCriteriaRevision(ctx context.Context, q *db.Queries, workspaceID, issueID pgtype.UUID) (string, bool, error) {
+	link, err := q.GetGoalIssueLink(ctx, db.GetGoalIssueLinkParams{
+		WorkspaceID: workspaceID,
+		IssueID:     issueID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return GoalCriteriaRevision(ctx, q, workspaceID, link.GoalID)
+}
+
+// GoalCriteriaRevision returns the goal's saved plan revision as a closure
+// criteria revision. known is false when the goal has no saved plan.
+func GoalCriteriaRevision(ctx context.Context, q *db.Queries, workspaceID, goalID pgtype.UUID) (string, bool, error) {
+	plan, err := q.GetGoalPlan(ctx, db.GetGoalPlanParams{
+		WorkspaceID: workspaceID,
+		GoalID:      goalID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return PlanCriteriaRevision(goalID, plan.Revision), true, nil
+}
+
+// IssueRegisteredDeliveryVersion returns the delivery version the closure
+// contract treats as authoritative for an issue: the head SHA recorded on its
+// linked pull request(s). known is false when no PR has been registered, in
+// which case no registered fact can invalidate an acceptance yet.
+func IssueRegisteredDeliveryVersion(ctx context.Context, q *db.Queries, issueID pgtype.UUID) (string, bool, error) {
+	sha, err := q.GetIssueReviewHeadSha(ctx, issueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return "", false, nil
+	}
+	return sha, true, nil
+}
+
+// goalPlanItemIssues resolves every plan item to the issue it is bound to,
+// combining explicit `binding.type = "existing"` links with the persisted
+// materialization rows that turn a `binding.type = "new"` intent into an
+// issue. Content bindings win: an explicit link is the user's own statement.
+func goalPlanItemIssues(ctx context.Context, q *db.Queries, workspaceID, goalID pgtype.UUID, content goalPlanDependencyContent) (map[string]string, error) {
+	itemIssue := make(map[string]string, len(content.Items))
+	for _, item := range content.Items {
+		if item.ID == "" {
+			continue
+		}
+		if bound := strings.TrimSpace(item.Binding.IssueID); bound != "" {
+			itemIssue[item.ID] = bound
+		}
+	}
+	rows, err := q.ListGoalPlanItemIssues(ctx, db.ListGoalPlanItemIssuesParams{
+		WorkspaceID: workspaceID,
+		GoalID:      goalID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if _, exists := itemIssue[row.ItemID]; exists {
+			continue
+		}
+		itemIssue[row.ItemID] = util.UUIDToString(row.IssueID)
+	}
+	return itemIssue, nil
+}
+
+// DependentIssueIDsForPrerequisite returns the issues whose plan item declares
+// this issue's item as a strong prerequisite. It is the event lookup used to
+// release parked dependents after a real dependency change; a plan that cannot
+// be read yields no release (callers treat that as "nothing to release", and
+// the claim path still refuses an unready issue).
+func DependentIssueIDsForPrerequisite(ctx context.Context, q *db.Queries, prerequisite db.Issue) ([]pgtype.UUID, error) {
+	link, err := q.GetGoalIssueLink(ctx, db.GetGoalIssueLinkParams{
+		WorkspaceID: prerequisite.WorkspaceID,
+		IssueID:     prerequisite.ID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	plan, err := q.GetGoalPlan(ctx, db.GetGoalPlanParams{
+		WorkspaceID: prerequisite.WorkspaceID,
+		GoalID:      link.GoalID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var content goalPlanDependencyContent
+	if err := json.Unmarshal(plan.Content, &content); err != nil {
+		return nil, nil
+	}
+	itemIssue, err := goalPlanItemIssues(ctx, q, prerequisite.WorkspaceID, link.GoalID, content)
+	if err != nil {
+		return nil, err
+	}
+	prerequisiteID := util.UUIDToString(prerequisite.ID)
+	prerequisiteItems := make(map[string]bool, 1)
+	for _, item := range content.Items {
+		if item.ID != "" && itemIssue[item.ID] == prerequisiteID {
+			prerequisiteItems[item.ID] = true
+		}
+	}
+	if len(prerequisiteItems) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool)
+	var out []pgtype.UUID
+	for _, edge := range content.Edges {
+		if !prerequisiteItems[edge.PrerequisiteItemID] {
+			continue
+		}
+		bound := itemIssue[edge.DependentItemID]
+		if bound == "" || seen[bound] {
+			continue
+		}
+		id, err := util.ParseUUID(bound)
+		if err != nil {
+			continue
+		}
+		seen[bound] = true
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// GoalBoundIssueIDs returns every issue currently bound to a plan item of the
+// goal, whether by an explicit binding or by a persisted materialization.
+func GoalBoundIssueIDs(ctx context.Context, q *db.Queries, workspaceID, goalID pgtype.UUID) ([]pgtype.UUID, error) {
+	plan, err := q.GetGoalPlan(ctx, db.GetGoalPlanParams{
+		WorkspaceID: workspaceID,
+		GoalID:      goalID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var content goalPlanDependencyContent
+	if err := json.Unmarshal(plan.Content, &content); err != nil {
+		return nil, nil
+	}
+	itemIssue, err := goalPlanItemIssues(ctx, q, workspaceID, goalID, content)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(itemIssue))
+	var out []pgtype.UUID
+	for _, bound := range itemIssue {
+		if seen[bound] {
+			continue
+		}
+		id, err := util.ParseUUID(bound)
+		if err != nil {
+			continue
+		}
+		seen[bound] = true
+		out = append(out, id)
+	}
+	return out, nil
 }

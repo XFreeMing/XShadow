@@ -843,6 +843,13 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project plan generations")
 		return
 	}
+	if err := qtx.DeleteGoalPlanItemIssuesByProject(r.Context(), db.DeleteGoalPlanItemIssuesByProjectParams{
+		WorkspaceID: project.WorkspaceID,
+		ProjectID:   project.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project plan item issues")
+		return
+	}
 	if err := qtx.DeleteGoalPlansByProject(r.Context(), db.DeleteGoalPlansByProjectParams{
 		WorkspaceID: project.WorkspaceID,
 		ProjectID:   project.ID,

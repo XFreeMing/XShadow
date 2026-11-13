@@ -4432,6 +4432,14 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.processChildEvents(r.Context(), issue.ParentIssueID, prevIssue.ParentIssueID)
 	}
 
+	// A status write is a real dependency-change event: dependents that were
+	// parked (or never enqueued) because this issue was not accepted yet get
+	// one chance to run. The release re-checks the persisted acceptance, so an
+	// unaccepted or reopened prerequisite still releases nothing.
+	if statusChanged {
+		h.releaseDependentsOfIssue(r.Context(), issue)
+	}
+
 	// The broadcast reaches every member; the caller's own copy names the
 	// original only when the caller can see it.
 	if resp.DuplicateOf != nil {

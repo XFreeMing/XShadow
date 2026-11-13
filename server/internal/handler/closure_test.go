@@ -283,3 +283,110 @@ func TestGoalCompletedIsGatedOnceEnrolled(t *testing.T) {
 		t.Fatalf("goal status = %q, want completed", status)
 	}
 }
+
+// The review write path stamps acceptance with the delivery and scope that are
+// current on the server. A caller holding an older view cannot record a review
+// that is stale the moment it lands: it is told to re-read and review the
+// current delivery instead.
+func TestClosureReviewRefusesStaleDelivery(t *testing.T) {
+	author := closureTestAgent(t, "closure author", "deepseek-v4.1-flash")
+	reviewer := closureTestAgent(t, "closure reviewer", "gpt-5-codex")
+	issueID, _ := closureTestManagedIssue(t, author)
+	reviewerTask := createHandlerTestTaskForAgentOnIssue(t, reviewer, issueID)
+
+	prID := closureLinkPullRequest(t, issueID, "open")
+	dbfx.Exec(t, `UPDATE github_pull_request SET head_sha = 'aaaa1111' WHERE id = $1`, prID)
+
+	post := func(version, criteria string) *testutil.Response {
+		body := map[string]any{
+			"delivery_version": version,
+			"verdict":          "pass",
+			"criteria":         []map[string]any{{"criterion": "delivered", "result": "pass", "evidence": "tests"}},
+			"platforms":        []string{"linux"},
+		}
+		if criteria != "" {
+			body["criteria_revision"] = criteria
+		}
+		req := closureAgentRequest("POST", "/api/issues/"+issueID, body, reviewer, reviewerTask)
+		return testutil.Call(t, testHandler.CreateIssueClosureReview, withURLParam(req, "id", issueID))
+	}
+
+	if got := post("bbbb2222", "").Want(http.StatusConflict).Map(); got["code"] != "closure_delivery_stale" {
+		t.Fatalf("stale delivery code = %v, want closure_delivery_stale", got)
+	}
+	if got := post("aaaa1111", "").Want(http.StatusCreated).Map(); got["delivery_version"] != "aaaa1111" {
+		t.Fatalf("review delivery = %v, want aaaa1111", got)
+	}
+
+	// The registered head moves. The old acceptance is invalid immediately and
+	// a review for it can no longer be recorded — no new review is needed to
+	// make the old one stale.
+	dbfx.Exec(t, `UPDATE github_pull_request SET head_sha = 'cccc3333' WHERE id = $1`, prID)
+	if got := post("aaaa1111", "").Want(http.StatusConflict).Map(); got["code"] != "closure_delivery_stale" {
+		t.Fatalf("code after head advance = %v, want closure_delivery_stale", got)
+	}
+	if got := post("cccc3333", "").Want(http.StatusCreated).Map(); got["delivery_version"] != "cccc3333" {
+		t.Fatalf("review against the new head delivery = %v", got)
+	}
+}
+
+// Saving the plan bumps its revision. Acceptance scope follows that revision,
+// so reviews against the old scope are refused and the closure view reports
+// the revision facts were recorded for.
+func TestClosureReviewRefusesStalePlanRevision(t *testing.T) {
+	author := closureTestAgent(t, "closure author", "deepseek-v4.1-flash")
+	reviewer := closureTestAgent(t, "closure reviewer", "gpt-5-codex")
+	issueID, goalID := closureTestManagedIssue(t, author)
+	reviewerTask := createHandlerTestTaskForAgentOnIssue(t, reviewer, issueID)
+
+	projectID := createProjectForPlan(t, "Closure criteria project "+t.Name())
+	dbfx.Exec(t, `UPDATE goal SET project_id = $2 WHERE id = $1`, goalID, projectID)
+	dbfx.Insert(t, "goal_plan", testutil.Cols{
+		"workspace_id": testWorkspaceID,
+		"goal_id":      goalID,
+		"project_id":   projectID,
+		"revision":     1,
+		"content":      testutil.Raw(`'{"items": [], "edges": []}'::jsonb`),
+	})
+	revision1 := "plan:" + goalID + ":r1"
+
+	post := func(criteria string) *testutil.Response {
+		body := map[string]any{
+			"delivery_version": closureTestDelivery,
+			"verdict":          "pass",
+			"criteria":         []map[string]any{{"criterion": "delivered", "result": "pass", "evidence": "tests"}},
+			"platforms":        []string{"linux"},
+		}
+		if criteria != "" {
+			body["criteria_revision"] = criteria
+		}
+		req := closureAgentRequest("POST", "/api/issues/"+issueID, body, reviewer, reviewerTask)
+		return testutil.Call(t, testHandler.CreateIssueClosureReview, withURLParam(req, "id", issueID))
+	}
+
+	if got := post("dev-7-criteria-r1").Want(http.StatusConflict).Map(); got["code"] != "closure_criteria_stale" {
+		t.Fatalf("stale criteria code = %v, want closure_criteria_stale", got)
+	}
+	// An omitted revision is stamped with the authoritative scope.
+	if got := post("").Want(http.StatusCreated).Map(); got["criteria_revision"] != revision1 {
+		t.Fatalf("review criteria_revision = %v, want %s", got["criteria_revision"], revision1)
+	}
+	view := testutil.Call(t, testHandler.GetIssueClosure,
+		withURLParam(newRequest("GET", "/api/issues/"+issueID+"/closure", nil), "id", issueID)).
+		Want(http.StatusOK).Map()
+	if view["criteria_revision"] != revision1 {
+		t.Fatalf("closure view criteria_revision = %v, want %s", view["criteria_revision"], revision1)
+	}
+
+	dbfx.Exec(t, `UPDATE goal_plan SET revision = 2 WHERE goal_id = $1`, goalID)
+	revision2 := "plan:" + goalID + ":r2"
+	view = testutil.Call(t, testHandler.GetIssueClosure,
+		withURLParam(newRequest("GET", "/api/issues/"+issueID+"/closure", nil), "id", issueID)).
+		Want(http.StatusOK).Map()
+	if view["criteria_revision"] != revision2 {
+		t.Fatalf("closure view after plan save = %v, want %s", view["criteria_revision"], revision2)
+	}
+	if got := post(revision1).Want(http.StatusConflict).Map(); got["code"] != "closure_criteria_stale" {
+		t.Fatalf("code after plan revision bump = %v, want closure_criteria_stale", got)
+	}
+}

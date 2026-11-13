@@ -1391,6 +1391,11 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceGoalPlanGenerations(ctx, requester.WorkspaceID) },
 		},
 		{
+			// Materialized bindings name goals and issues by value only.
+			name: "delete goal plan item issues",
+			run:  func() error { return qtx.DeleteWorkspaceGoalPlanItemIssues(ctx, requester.WorkspaceID) },
+		},
+		{
 			name: "delete goal plans",
 			run:  func() error { return qtx.DeleteWorkspaceGoalPlans(ctx, requester.WorkspaceID) },
 		},

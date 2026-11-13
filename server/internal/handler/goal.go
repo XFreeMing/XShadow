@@ -663,6 +663,13 @@ func (h *Handler) DeleteGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete goal")
 		return
 	}
+	if err := qtx.DeleteGoalPlanItemIssuesByGoal(r.Context(), db.DeleteGoalPlanItemIssuesByGoalParams{
+		WorkspaceID: goal.WorkspaceID,
+		GoalID:      goal.ID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete goal")
+		return
+	}
 	if err := qtx.DeleteGoalPlansByGoal(r.Context(), db.DeleteGoalPlansByGoalParams{
 		WorkspaceID: goal.WorkspaceID,
 		GoalID:      goal.ID,

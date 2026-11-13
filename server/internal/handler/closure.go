@@ -30,6 +30,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/issueclosure"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -324,15 +325,85 @@ func closureDelivery(reviews []db.ClosureReview) issueclosure.DeliveryVersion {
 	return issueclosure.DeliveryVersion{}
 }
 
-func closureAcceptance(reviews []db.ClosureReview) *issueclosure.Acceptance {
+// authoritativeDelivery returns the delivery the closure contract evaluates
+// against when the subject has one: the head SHA recorded on the issue's linked
+// pull request(s). A goal has no single registered head, so it keeps the
+// review-derived delivery. An unreadable lookup is treated as "no registered
+// delivery" here; the write path's own error handling still fails closed.
+func (h *Handler) authoritativeDelivery(ctx context.Context, s closureSubject) (issueclosure.DeliveryVersion, bool) {
+	if s.kind != issueclosure.SubjectIssue {
+		return issueclosure.DeliveryVersion{}, false
+	}
+	sha, known, err := service.IssueRegisteredDeliveryVersion(ctx, h.Queries, s.id)
+	if err != nil || !known {
+		return issueclosure.DeliveryVersion{}, false
+	}
+	return issueclosure.DeliveryVersion{Version: sha}, true
+}
+
+// authoritativeCriteria returns the acceptance scope the subject is currently
+// bound to: the saved goal plan revision. Saving the plan changes it, which
+// invalidates every earlier review and acceptance without waiting for a new
+// review to supersede them. known is false when no plan exists.
+func (h *Handler) authoritativeCriteria(ctx context.Context, s closureSubject) (string, bool) {
+	var (
+		value string
+		known bool
+		err   error
+	)
+	if s.kind == issueclosure.SubjectIssue {
+		value, known, err = service.IssueCriteriaRevision(ctx, h.Queries, s.workspaceID, s.id)
+	} else {
+		value, known, err = service.GoalCriteriaRevision(ctx, h.Queries, s.workspaceID, s.id)
+	}
+	if err != nil || !known {
+		return "", false
+	}
+	return value, true
+}
+
+// deliveryTreeForVersion keeps the optional tree of a review about the current
+// authoritative version. The version alone is authoritative (it is the
+// registered head); the tree is supplemental and never overrides it.
+func deliveryTreeForVersion(reviews []db.ClosureReview, version string) string {
 	for _, r := range reviews {
-		if !r.AcceptedAt.Valid {
+		if r.SupersededBy.Valid || strings.TrimSpace(r.DeliveryVersion) != version {
+			continue
+		}
+		if tree := strings.TrimSpace(r.DeliveryTree); tree != "" {
+			return tree
+		}
+	}
+	return ""
+}
+
+// effectiveCriteriaRevision is what the closure view reports: the saved plan
+// revision when one exists, otherwise the caller's preview value.
+func (h *Handler) effectiveCriteriaRevision(r *http.Request, s closureSubject) string {
+	if value, known := h.authoritativeCriteria(r.Context(), s); known {
+		return value
+	}
+	return strings.TrimSpace(r.URL.Query().Get("criteria_revision"))
+}
+
+func closureAcceptance(reviews []db.ClosureReview, delivery issueclosure.DeliveryVersion, deliveryKnown bool, criteria string, criteriaKnown bool) *issueclosure.Acceptance {
+	for _, r := range reviews {
+		if !r.AcceptedAt.Valid || r.SupersededBy.Valid {
+			continue
+		}
+		// A new commit registered on the linked PR invalidates the old
+		// acceptance immediately — no new review has to arrive first.
+		if deliveryKnown && strings.TrimSpace(r.DeliveryVersion) != delivery.Version {
+			continue
+		}
+		// A plan edit (revision bump) invalidates the acceptance the same way.
+		if criteriaKnown && strings.TrimSpace(r.CriteriaRevision) != criteria {
 			continue
 		}
 		return &issueclosure.Acceptance{
 			ReviewID:        uuidToString(r.ID),
 			AuthorizationID: uuidToString(r.AuthorizationID),
-			Delivery:        issueclosure.DeliveryVersion{Version: r.DeliveryVersion, Tree: r.DeliveryTree},
+			Delivery:        issueclosure.DeliveryVersion{Version: r.DeliveryVersion, Tree: delivery.Tree},
 			AcceptedBy: issueclosure.Principal{
 				Type: r.AcceptedByType,
 				ID:   uuidToString(r.AcceptedByID),
@@ -419,10 +490,23 @@ func (h *Handler) evaluateClosure(ctx context.Context, s closureSubject, deliver
 	if err != nil {
 		return issueclosure.Decision{}, nil, nil, err
 	}
-	if !delivery.Valid() {
+	// The registered facts win over a caller-supplied preview and over the
+	// newest review: an acceptance must name the delivery and scope that are
+	// current now, not the one that was current when it was written.
+	authorityDelivery, deliveryKnown := h.authoritativeDelivery(ctx, s)
+	authorityCriteria, criteriaKnown := h.authoritativeCriteria(ctx, s)
+	switch {
+	case deliveryKnown:
+		delivery = issueclosure.DeliveryVersion{
+			Version: authorityDelivery.Version,
+			Tree:    deliveryTreeForVersion(reviews, authorityDelivery.Version),
+		}
+	case !delivery.Valid():
 		delivery = closureDelivery(reviews)
 	}
-	if criteriaRevision == "" {
+	if criteriaKnown {
+		criteriaRevision = authorityCriteria
+	} else if criteriaRevision == "" {
 		for _, r := range reviews {
 			if !r.SupersededBy.Valid {
 				criteriaRevision = r.CriteriaRevision
@@ -439,11 +523,12 @@ func (h *Handler) evaluateClosure(ctx context.Context, s closureSubject, deliver
 		Managed:          s.managed,
 		Delivery:         delivery,
 		CriteriaRevision: criteriaRevision,
+		LinkedGoalID:     uuidToString(s.linkedGoalID),
 		Author:           s.author,
 		Caller:           caller,
 		CallerCanClose:   callerCanClose,
 		Authorization:    closureAuthorizationInput(authRow),
-		Acceptance:       closureAcceptance(reviews),
+		Acceptance:       closureAcceptance(reviews, delivery, deliveryKnown, criteriaRevision, criteriaKnown),
 		Reviews:          closureReviewInputs(reviews),
 	}
 	if s.kind == issueclosure.SubjectIssue {
@@ -614,6 +699,27 @@ func (h *Handler) createClosureReview(w http.ResponseWriter, r *http.Request, ki
 		writeError(w, http.StatusForbidden, "reviewer identity is unavailable")
 		return
 	}
+	// A review must name the delivery and acceptance scope that are current on
+	// the server, not whatever the caller last saw. The registered head SHA of
+	// the linked PR is the authoritative delivery; the saved plan revision is
+	// the authoritative criteria scope. Recording an older value would create
+	// an acceptance that is already stale, so the caller is told to re-read and
+	// review the current delivery instead.
+	if authority, known := h.authoritativeDelivery(r.Context(), subject); known && req.DeliveryVersion != authority.Version {
+		writeErrorCode(w, http.StatusConflict, "closure_delivery_stale",
+			"the registered delivery is "+authority.Version+"; review that delivery version")
+		return
+	}
+	criteriaRevision := clampText(req.CriteriaRevision)
+	if authority, known := h.authoritativeCriteria(r.Context(), subject); known {
+		if strings.TrimSpace(req.CriteriaRevision) == "" {
+			criteriaRevision = authority
+		} else if strings.TrimSpace(req.CriteriaRevision) != authority {
+			writeErrorCode(w, http.StatusConflict, "closure_criteria_stale",
+				"the current acceptance scope is "+authority+"; review that revision")
+			return
+		}
+	}
 	criteriaJSON, _ := json.Marshal(nonNilCriteria(req.Criteria))
 	platformsJSON, _ := json.Marshal(nonNilStrings(req.Platforms))
 	missingJSON, _ := json.Marshal(nonNilStrings(req.Missing))
@@ -648,7 +754,7 @@ func (h *Handler) createClosureReview(w http.ResponseWriter, r *http.Request, ki
 		Action:           string(actionForSubject(kind)),
 		DeliveryVersion:  req.DeliveryVersion,
 		DeliveryTree:     req.DeliveryTree,
-		CriteriaRevision: clampText(req.CriteriaRevision),
+		CriteriaRevision: criteriaRevision,
 		AuthorType:       subject.author.Type,
 		AuthorID:         subject.authorID(),
 		AuthorRunID:      subject.authorRunID(),
@@ -736,7 +842,7 @@ func (h *Handler) writeClosureState(w http.ResponseWriter, r *http.Request, subj
 		Managed:          subject.managed,
 		DeliveryVersion:  decision.Delivery.Version,
 		DeliveryTree:     decision.Delivery.Tree,
-		CriteriaRevision: strings.TrimSpace(r.URL.Query().Get("criteria_revision")),
+		CriteriaRevision: h.effectiveCriteriaRevision(r, subject),
 		Outcome:          string(decision.Outcome),
 		Reason:           string(decision.Reason),
 		Detail:           decision.Detail,
