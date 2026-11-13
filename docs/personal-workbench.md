@@ -49,13 +49,27 @@
 
 平台改进的跨平台声明以实际证据为准。Linux 上验证通过，不代表 Windows/macOS 桌面生命周期、文件路径、进程管理、CLI 发现和打包均已通过。当前初始化入口依赖 Bash/Make；Windows 的已文档化使用路径是 WSL，原生 Windows 一键入口不能标记为已支持。
 
-## 使用、反馈与经验沉淀
+## 日常客户端与研发客户端
 
-日常使用与研发体验按[用户故事交付循环](../agent-team/skills/rd-project-management/references/user-story.md#边使用边研发的交付循环)衔接：真实任务与反馈保留在日常工作区，功能在隔离环境实现并交付入口，用户在原事项反馈，负责人修改后更新同一入口与版本。通用协作规则经过验证和审核再进入军团模板，具体环境信息保留在项目资源。预览只按需要准备示例数据，不为每个体验环境复制或重新初始化日常军团。
+日常客户端连接共享服务，保存真实项目、军团、任务和反馈。研发客户端使用独立的 Git worktree、API 端口、数据库和 Electron 数据目录。功能实现、测试和用户体验都在同一套研发环境完成。
 
-这套流程通过项目、事项、评论接续及托管开发环境组合执行，不代表平台已经具备自动部署预览、自动晋级稳定版本或自动提炼模板的能力。
+首次初始化时，从 XShadow 仓库根目录基于 `dev` 创建研发 worktree，再启动桌面端：
 
-代码故事由项目经理在验收交接中推进合并，集成负责人按项目指定的目标分支和仓库检查执行。GitHub 负责已启用自动合并的 PR 及合并后删除远端源分支。集成负责人确认结果后清理本地临时分支和闲置工作副本，将合并版本和清理结果写回原事项。共享预览继续提供体验入口。
+```bash
+git worktree add -b codex/xshadow-development ../XShadow-development dev
+cd ../XShadow-development
+make up C=desktop
+make status
+```
+
+启动命令会准备独立数据库和本地开发账号，并打开连接该环境的 Electron 窗口。安装依赖和 PostgreSQL 配置见[开发指南](../CONTRIBUTING.md)。如果本机 PostgreSQL 使用自定义端口，先在研发目录运行 `make worktree-env` 生成 `.env.worktree`，同时修改其中的 `POSTGRES_PORT` 和 `DATABASE_URL`，保留独立库名，再启动桌面端。如果已有 JavaScript 依赖但启动时报 `Electron uninstall`，运行 `node apps/desktop/node_modules/electron/install.js` 补齐 Electron 后重试。
+
+仅体验界面时，用研发账号和示例数据即可。需要验证智能体执行时，再在研发目录运行 `make agent init` 初始化研发军团。下次直接在同一 worktree 运行 `make up C=desktop`，保留上轮测试数据。
+
+1. 在研发客户端体验当前用户故事，到日常客户端的原事项反馈。集成负责人修改并重新打开同一研发客户端，在原事项写明版本、入口和复验步骤。
+2. 你在研发客户端确认通过后，集成负责人按仓库检查合并已验收版本，并清理已合并的临时分支和闲置工作副本。长期使用的研发环境继续用于下一个故事。
+3. 你更新日常客户端到已验收版本，再用真实项目复验。涉及后端和数据库的变更，按日常服务的升级流程安排备份、迁移和回退。使用中的新反馈继续写回原事项，下一轮仍从研发客户端验证。
+4. 有证据、可复用的协作经验，经审核写回军团模板。环境地址与版本记在项目资源和交付记录里。详见[用户故事交付循环](../agent-team/skills/rd-project-management/references/user-story.md#边使用边研发的交付循环)。
 
 ## 后续功能优先级
 
