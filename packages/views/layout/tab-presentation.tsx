@@ -15,6 +15,7 @@ import {
 } from "@multica/core/paths";
 import { useCanonicalIssue } from "@multica/core/issues/canonical-id";
 import { projectDetailOptions } from "@multica/core/projects/queries";
+import { goalDetailOptions } from "@multica/core/goals";
 import { autopilotDetailOptions } from "@multica/core/autopilots/queries";
 import {
   skillDetailOptions,
@@ -38,6 +39,7 @@ import { ProjectIcon } from "../projects/components/project-icon";
 import { ActorAvatar } from "../common/actor-avatar";
 import { getInboxDisplayTitle } from "../inbox/components/inbox-display";
 import { useT } from "../i18n";
+import { isGoalUnavailableError } from "../goals/status";
 import { ROUTE_ICON_COMPONENTS } from "./route-icon-components";
 
 /**
@@ -65,6 +67,7 @@ const NONE = "__tab_presentation_none__";
 const PENDING_RESOURCE_KEYS: ReadonlySet<TabLabelKey> = new Set<TabLabelKey>([
   "issue",
   "project",
+  "goal",
   "autopilot",
   "agent",
   "member",
@@ -74,7 +77,13 @@ const PENDING_RESOURCE_KEYS: ReadonlySet<TabLabelKey> = new Set<TabLabelKey>([
   "runtime",
 ]);
 
-function useTabEntityData(subject: TabSubject, wsId: string, fetch: boolean): TabEntityData {
+// A goal detail request that failed terminally means the goal is gone for this
+// viewer; its retained cache entry must stop feeding the tab title.
+function useTabEntityData(
+  subject: TabSubject,
+  wsId: string,
+  fetch: boolean,
+): { data: TabEntityData; missing: boolean } {
   const { t: chatT } = useT("chat");
 
   // Read both inbox lists cache-only; the archived view keeps its own list, so
@@ -127,6 +136,15 @@ function useTabEntityData(subject: TabSubject, wsId: string, fetch: boolean): Ta
     ...projectDetailOptions(wsId, subject.kind === "project" ? subject.id : NONE),
     enabled: false,
   }).data;
+  const goalQuery = useQuery({
+    ...goalDetailOptions(wsId, subject.kind === "goal" ? subject.id : NONE),
+    enabled: false,
+  });
+  const goal = goalQuery.data;
+  // The detail page renders its not-found state from `isError`; a retained
+  // cached goal must not keep feeding the tab title once that happens.
+  const goalMissing =
+    subject.kind === "goal" && goalQuery.isError && isGoalUnavailableError(goalQuery.error);
   const autopilot = useQuery({
     ...autopilotDetailOptions(
       wsId,
@@ -159,6 +177,9 @@ function useTabEntityData(subject: TabSubject, wsId: string, fetch: boolean): Ta
       break;
     case "project":
       if (project) data.project = { icon: project.icon, title: project.title };
+      break;
+    case "goal":
+      if (goal && !goalMissing) data.goal = { title: goal.title };
       break;
     case "autopilot":
       if (autopilot) data.autopilot = { title: autopilot.autopilot.title };
@@ -211,7 +232,7 @@ function useTabEntityData(subject: TabSubject, wsId: string, fetch: boolean): Ta
       }
       break;
   }
-  return data;
+  return { data, missing: goalMissing };
 }
 
 /**
@@ -223,11 +244,17 @@ function useTabEntityData(subject: TabSubject, wsId: string, fetch: boolean): Ta
  * selection resolves to the container's own nav label, which is
  * indistinguishable from a container with nothing selected — so the caller,
  * which still has the subject, decides.
+ *
+ * `missing` overrides both fallbacks: the entity is known to be gone for this
+ * viewer, so keeping the persisted name would show a title the page no longer
+ * represents. The caller then also marks the title resolved so the tab bar
+ * overwrites the stale persisted title.
  */
 function useTabTitle(
   spec: TabTitleSpec,
   fallbackTitle?: string,
   pending = false,
+  missing = false,
 ): string {
   const { t: layoutT } = useT("layout");
   const persisted = fallbackTitle?.trim();
@@ -239,7 +266,7 @@ function useTabTitle(
         ? persisted
         : layoutT(($) => $.nav[spec.navKey]);
     case "tab": {
-      if (pending || PENDING_RESOURCE_KEYS.has(spec.tabKey)) {
+      if (!missing && (pending || PENDING_RESOURCE_KEYS.has(spec.tabKey))) {
         if (persisted) return persisted;
       }
       return layoutT(($) => $.tab[spec.tabKey]);
@@ -269,7 +296,7 @@ export function useTabPresentation(
   const subject = useMemo(() => parseTabSubject(url), [url]);
   const ws = useCurrentWorkspace();
   const wsId = ws?.id ?? "";
-  const data = useTabEntityData(subject, wsId, fetch);
+  const { data, missing } = useTabEntityData(subject, wsId, fetch);
   const statuses = useQuery({
     ...issueStatusListOptions(wsId),
     enabled: fetch && !!wsId && subject.kind === "issue",
@@ -282,7 +309,7 @@ export function useTabPresentation(
   const selectionPending =
     (subject.kind === "inbox" && !!subject.selectedKey && !data.inboxSelection) ||
     (subject.kind === "chat" && !!subject.sessionId && !data.chatSessionTitle);
-  const title = useTabTitle(titleSpec, fallbackTitle, selectionPending);
+  const title = useTabTitle(titleSpec, fallbackTitle, selectionPending, missing);
 
   // The actor avatar resolves through workspace directory queries and throws
   // if rendered before the workspace exists. Until it does, show a type icon.
@@ -309,8 +336,9 @@ export function useTabPresentation(
         }
       : safeVisual,
     title,
-    titleResolved: !selectionPending &&
-      (titleSpec.kind !== "tab" || !PENDING_RESOURCE_KEYS.has(titleSpec.tabKey)),
+    titleResolved: missing ||
+      (!selectionPending &&
+        (titleSpec.kind !== "tab" || !PENDING_RESOURCE_KEYS.has(titleSpec.tabKey))),
   };
 }
 

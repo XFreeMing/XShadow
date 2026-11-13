@@ -9,6 +9,7 @@ import { onIssueUpdated } from "@multica/core/issues";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { issueStatusListOptions } from "@multica/core/issue-statuses/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
+import { goalDetailOptions } from "@multica/core/goals";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
 import {
   inboxListOptions,
@@ -70,6 +71,10 @@ function seed(qc: QueryClient) {
     id: "p1",
     icon: "🚀",
     title: "Apollo",
+  } as never);
+  qc.setQueryData(goalDetailOptions("ws1", "g1").queryKey, {
+    id: "g1",
+    title: "Ship v1",
   } as never);
   qc.setQueryData(chatSessionsOptions("ws1").queryKey, [
     { id: "s1", title: "Deploy plan", status: "active" },
@@ -160,6 +165,20 @@ describe("useTabPresentation — live from cache", () => {
     expect(presentationOf("/acme/projects/p1")).toEqual({
       visual: { kind: "project-icon", icon: "🚀" },
       title: "Apollo",
+    });
+  });
+
+  it("goal: Target icon + title", () => {
+    expect(presentationOf("/acme/goals/g1")).toEqual({
+      visual: { kind: "icon", icon: "Target" },
+      title: "Ship v1",
+    });
+  });
+
+  it("goals list page: Target icon + localized page name", () => {
+    expect(presentationOf("/acme/goals")).toEqual({
+      visual: { kind: "icon", icon: "Target" },
+      title: "Goals",
     });
   });
 
@@ -329,6 +348,13 @@ describe("useTabPresentation — pending / fallback", () => {
     const p = presentationOf("/acme/issues/unloaded");
     expect(p.visual).toEqual({ kind: "issue-status", status: null });
     expect(p.title).toBe("Issue");
+  });
+
+  it("pending goal keeps the persisted title instead of collapsing to Goal", () => {
+    expect(presentationOf("/acme/goals/unloaded", "Prior goal")).toEqual({
+      visual: { kind: "icon", icon: "Target" },
+      title: "Prior goal",
+    });
   });
 
   it("unknown route is neutral, never Issues", () => {
@@ -533,5 +559,70 @@ describe("useTabPresentation — restored issue tabs", () => {
     await act(() => qc.invalidateQueries({ queryKey: ["issues", "ws1"] }));
     await waitFor(() => expect(result.current.title).toBe("MUL-7: Changed while offline"));
     expect(result.current.visual).toMatchObject({ status: "done", category: "done" });
+  });
+});
+
+describe("useTabPresentation — a goal that becomes unavailable", () => {
+  const goal: { id: string; workspace_id: string; title: string } = {
+    id: "g1",
+    workspace_id: "ws1",
+    title: "Perm private goal",
+  };
+
+  function goalWrapper(qc: QueryClient) {
+    return function GoalTabWrapper({ children }: { children: ReactNode }) {
+      return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+    };
+  }
+
+  it("replaces the persisted title once the detail request fails terminally", async () => {
+    const qc = makeClient();
+    const key = goalDetailOptions("ws1", "g1").queryKey;
+    qc.setQueryData(key, goal as never);
+    const { result } = renderHook(
+      () => useTabPresentation("/acme/goals/g1", "Perm private goal"),
+      { wrapper: goalWrapper(qc) },
+    );
+    expect(result.current).toMatchObject({ title: "Perm private goal", titleResolved: true });
+
+    await act(async () => {
+      await qc
+        .fetchQuery({
+          ...goalDetailOptions("ws1", "g1"),
+          queryFn: async () => {
+            throw new ApiError("Not found", 404, "Not Found");
+          },
+        })
+        .catch(() => undefined);
+    });
+
+    // The cached title survives on the query state (v5 keeps data on error) —
+    // the tab must stop reading it, or the revoked name outlives access.
+    expect(qc.getQueryData(key)).toEqual(goal);
+    expect(qc.getQueryState(key)?.status).toBe("error");
+    await waitFor(() =>
+      expect(result.current).toMatchObject({ title: "Goal", titleResolved: true }),
+    );
+    expect(result.current.visual).toEqual({ kind: "icon", icon: "Target" });
+  });
+
+  it.each([
+    new Error("offline"),
+    new ApiError("Server error", 500, "Internal Server Error"),
+  ])("keeps the persisted title on a non-terminal failure: %s", async (error) => {
+    const qc = makeClient();
+    await qc
+      .fetchQuery({
+        ...goalDetailOptions("ws1", "g9"),
+        queryFn: async () => {
+          throw error;
+        },
+      })
+      .catch(() => undefined);
+    const { result } = renderHook(
+      () => useTabPresentation("/acme/goals/g9", "Prior goal"),
+      { wrapper: goalWrapper(qc) },
+    );
+    expect(result.current).toMatchObject({ title: "Prior goal", titleResolved: false });
   });
 });

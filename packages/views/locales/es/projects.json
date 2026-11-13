@@ -153,7 +153,7 @@
   "delete_dialog": {
     "offline_error": "Estás sin conexión. Vuelve a conectarte e intenta eliminar de nuevo.",
     "title": "Eliminar proyecto",
-    "description": "Esto eliminará el proyecto. Las tareas no se eliminarán, pero se desenlazarán.",
+    "description": "Esto eliminará el proyecto y sus objetivos. Las tareas no se eliminarán, pero se desenlazarán.",
     "confirm": "Eliminar",
     "cancel": "Cancelar"
   },
