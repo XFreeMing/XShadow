@@ -77,6 +77,27 @@ export interface ClosureAuthorization {
 }
 
 /**
+ * One persisted human decision — an explicit accept or reject. It is not a
+ * review: it carries no verdict, grants no acceptance and never changes the
+ * evaluated outcome. An accept recorded beside incomplete verification stays
+ * visibly unverified.
+ */
+export interface ClosureDecision {
+  id: string;
+  subject_type: string;
+  subject_id: string;
+  /** accept | reject, or a newer value. Never a review verdict. */
+  decision: string;
+  reason: string;
+  criteria_revision: string;
+  /** Empty by design for a goal decision, not a missing field. */
+  delivery_version: string;
+  actor_type: string;
+  actor_id: string | null;
+  recorded_at: string;
+}
+
+/**
  * The single read model shared by Web, Desktop and the server's status-write
  * gate. `outcome` is the server's current judgement; the UI may explain it but
  * must not recompute success from issue statuses, runs or accepted reviews.
@@ -98,6 +119,13 @@ export interface ClosureState {
   already_accepted: boolean;
   authorization: ClosureAuthorization | null;
   reviews: ClosureReview[];
+  /** Human accept/reject history, newest first. Never a review or a pass. */
+  decisions: ClosureDecision[];
+}
+
+export interface CreateClosureRejectionRequest {
+  /** Required: a human refusal must say what must change. */
+  reason: string;
 }
 
 export interface CreateClosureAuthorizationRequest {

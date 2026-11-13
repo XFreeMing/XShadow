@@ -11,6 +11,7 @@ const plan = {
   items: [],
   edges: [],
   context_snapshot: {},
+  execution: null,
   created_at: null,
   updated_at: null,
 };
@@ -80,8 +81,83 @@ describe("goal plan API contract", () => {
       items: [],
       edges: [],
       context_snapshot: {},
+      execution: null,
       created_at: null,
       updated_at: null,
+    });
+  });
+
+  it("keeps the durable execution read model after a refresh", async () => {
+    stubFetch({
+      ...plan,
+      execution: {
+        plan_revision: 2,
+        items: [
+          {
+            item_id: "item-a",
+            binding_type: "new",
+            issue_id: "issue-a",
+            materialized: true,
+            issue_status: "deferred",
+            assignee_type: "agent",
+            assignee_id: "agent-1",
+            dependency: {
+              ready: false,
+              reason: "dependency_not_done",
+              detail: "prerequisite issue is not done",
+            },
+            wait: {
+              event: "dependency_changed",
+              triggers: ["prerequisite.issue_status_changed"],
+              description: "released only by a real dependency change",
+              prerequisites: [
+                {
+                  item_id: "item-b",
+                  issue_id: "issue-b",
+                  status: "in_progress",
+                  reason: "dependency_not_done",
+                  detail: "no",
+                },
+              ],
+            },
+          },
+          { item_id: "item-c", binding_type: "new", materialized: false },
+        ],
+      },
+    });
+    const client = new ApiClient("https://api.example.test");
+    const execution = (await client.getGoalPlan("goal-1")).execution;
+
+    expect(execution?.plan_revision).toBe(2);
+    expect(execution?.items[0]).toMatchObject({
+      item_id: "item-a",
+      issue_id: "issue-a",
+      materialized: true,
+      assignee_id: "agent-1",
+      dependency: { ready: false, reason: "dependency_not_done" },
+      wait: { event: "dependency_changed", prerequisites: [{ status: "in_progress" }] },
+    });
+    // An unbound item stays visible as unbound instead of inventing a task.
+    expect(execution?.items[1]).toMatchObject({ item_id: "item-c", issue_id: "" });
+    expect(execution?.items[1]?.dependency).toBeNull();
+  });
+
+  it("degrades a malformed execution row without failing the plan read", async () => {
+    stubFetch({
+      ...plan,
+      execution: { plan_revision: "two", items: [{ item_id: 7, dependency: "yes", wait: 4 }] },
+    });
+    const client = new ApiClient("https://api.example.test");
+    const planRead = await client.getGoalPlan("goal-1");
+
+    expect(planRead.revision).toBe(2);
+    expect(planRead.execution?.plan_revision).toBe(0);
+    expect(planRead.execution?.items[0]).toMatchObject({
+      item_id: "",
+      issue_id: "",
+      materialized: false,
+      dependency: null,
+      wait: null,
     });
   });
 

@@ -22,5 +22,6 @@ export {
   useCreateGoalPlanGeneration,
   useGrantGoalClosureAuthorization,
   useCreateGoalClosureReview,
+  useRejectGoalClosure,
   useMaterializeGoalPlan,
 } from "./mutations";

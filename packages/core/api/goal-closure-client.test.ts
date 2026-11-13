@@ -34,6 +34,20 @@ const closureState = {
   next_actor: "user-1",
   already_accepted: false,
   authorization: null,
+  decisions: [
+    {
+      id: "decision-1",
+      subject_type: "goal",
+      subject_id: "goal-1",
+      decision: "reject",
+      reason: "The acceptance evidence is incomplete",
+      criteria_revision: "plan-r2",
+      delivery_version: "",
+      actor_type: "member",
+      actor_id: "user-1",
+      recorded_at: "2026-11-11T08:00:00Z",
+    },
+  ],
   reviews: [
     {
       id: "review-1",
@@ -130,6 +144,7 @@ describe("goal closure API contract", () => {
       already_accepted: false,
       authorization: null,
       reviews: [],
+      decisions: [],
     });
   });
 
@@ -197,6 +212,59 @@ describe("goal closure API contract", () => {
         verdict: "needs_changes",
       }),
     ).toMatchObject({ id: "", verdict: "" });
+  });
+
+  it("reads human decisions separately from reviews", async () => {
+    stubFetch(closureState);
+    const client = new ApiClient("https://api.example.test");
+    const state = await client.getGoalClosure("goal-1");
+
+    expect(state.reviews).toHaveLength(1);
+    expect(state.decisions).toHaveLength(1);
+    expect(state.decisions[0]).toMatchObject({
+      decision: "reject",
+      reason: "The acceptance evidence is incomplete",
+      delivery_version: "",
+    });
+    // Neither field stands in for the other.
+    expect(state.already_accepted).toBe(false);
+    expect(state.outcome).toBe("wait_review");
+  });
+
+  it("records a rejection with only a reason", async () => {
+    const rejection = {
+      id: "decision-2",
+      subject_type: "goal",
+      subject_id: "goal-1",
+      decision: "reject",
+      reason: "Cover the failure path",
+      criteria_revision: "plan-r2",
+      delivery_version: "",
+      actor_type: "member",
+      actor_id: "user-1",
+      recorded_at: "2026-11-12T08:00:00Z",
+    };
+    const fetch = stubFetch(rejection, 201);
+    const client = new ApiClient("https://api.example.test");
+    const decision = await client.rejectGoalClosure("goal-1", {
+      reason: "Cover the failure path",
+    });
+
+    expect(decision).toMatchObject({ id: "decision-2", decision: "reject" });
+    const [url, init] = lastCall(fetch);
+    expect(url).toContain("/api/goals/goal-1/closure/rejections");
+    expect(init?.method).toBe("POST");
+    // No delivery version is invented for a human decision.
+    expect(JSON.parse(String(init?.body))).toEqual({ reason: "Cover the failure path" });
+  });
+
+  it("does not report a rejection when the reply is malformed", async () => {
+    stubFetch({ id: 3, decision: null });
+    const client = new ApiClient("https://api.example.test");
+    expect(await client.rejectGoalClosure("goal-1", { reason: "No" })).toMatchObject({
+      id: "",
+      decision: "",
+    });
   });
 
   it("materializes the saved plan and keeps per-item dependency verdicts", async () => {

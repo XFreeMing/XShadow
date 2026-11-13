@@ -4,6 +4,7 @@ import { useWorkspaceId } from "../hooks";
 import { goalKeys } from "./queries";
 import type {
   CreateClosureAuthorizationRequest,
+  CreateClosureRejectionRequest,
   CreateClosureReviewRequest,
   CreateGoalPlanGenerationRequest,
   CreateGoalRequest,
@@ -214,6 +215,35 @@ export function useCreateGoalClosureReview() {
       // A new verdict can change whether the goal may be accepted, and the
       // goal detail's own status is unchanged by recording evidence.
       void qc.invalidateQueries({ queryKey: goalKeys.detail(wsId, goalId) });
+    },
+  });
+}
+
+/**
+ * Records a person's explicit refusal. This is a human decision, not a review:
+ * it needs only a reason (no delivery version) and leaves the goal's status and
+ * evaluated outcome untouched. A reply without the stored decision fails the
+ * mutation, so the caller never shows a refusal that was not recorded.
+ */
+export function useRejectGoalClosure() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: async ({
+      goalId,
+      data,
+    }: {
+      goalId: string;
+      data: CreateClosureRejectionRequest;
+    }) => {
+      const decision = await api.rejectGoalClosure(goalId, data);
+      if (!decision.id || decision.decision !== "reject" || decision.subject_id !== goalId) {
+        throw new Error("The server did not confirm the rejection.");
+      }
+      return decision;
+    },
+    onSettled: (_decision, _error, { goalId }) => {
+      void qc.invalidateQueries({ queryKey: goalKeys.closure(wsId, goalId) });
     },
   });
 }

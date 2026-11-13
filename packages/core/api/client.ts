@@ -133,7 +133,9 @@ import type {
   ClosureState,
   ClosureReview,
   ClosureAuthorization,
+  ClosureDecision,
   CreateClosureAuthorizationRequest,
+  CreateClosureRejectionRequest,
   CreateClosureReviewRequest,
   MaterializeGoalPlanRequest,
   MaterializeGoalPlanResponse,
@@ -412,6 +414,8 @@ import {
   EMPTY_CLOSURE_STATE,
   ClosureReviewSchema,
   ClosureAuthorizationSchema,
+  ClosureDecisionSchema,
+  EMPTY_CLOSURE_DECISION,
   MaterializeGoalPlanResponseSchema,
   EMPTY_MATERIALIZE_GOAL_PLAN_RESPONSE,
   SearchProjectsResponseSchema,
@@ -4630,6 +4634,25 @@ export class ApiClient {
       accepted_by_id: null,
       recorded_at: "",
     }, { endpoint: "POST /api/goals/:id/closure/reviews" });
+  }
+
+  /**
+   * Records a person's refusal of a goal. Deliberately not a review: it takes
+   * a reason and no delivery version, so a goal can be refused before any
+   * reviewable delivery exists. The route requires a human actor, writes no
+   * closure_review row and changes neither the goal's status nor its outcome.
+   */
+  async rejectGoalClosure(
+    goalId: string,
+    data: CreateClosureRejectionRequest,
+  ): Promise<ClosureDecision> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/closure/rejections`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ClosureDecisionSchema, EMPTY_CLOSURE_DECISION, {
+      endpoint: "POST /api/goals/:id/closure/rejections",
+    });
   }
 
   /**

@@ -71,6 +71,7 @@ import type {
   GoalPlan,
   GoalPlanGeneration,
   ClosureState,
+  ClosureDecision,
   MaterializeGoalPlanResponse,
   MemberWithUser,
   IssueProperty,
@@ -1921,6 +1922,60 @@ const GoalPlanContextSnapshotSchema = z
   .catch({})
   .default({});
 
+// The server's release verdict for one item. `reason` is a stable code;
+// `detail` is free text and may be English.
+const PlanDependencyStateSchema = z
+  .object({
+    ready: z.boolean().catch(false).default(false),
+    reason: z.string().catch("").default(""),
+    detail: z.string().catch("").default(""),
+  })
+  .loose();
+
+// DEV-7 execution read model. It describes durable state after a refresh, so
+// every field degrades: a malformed row stays visible (empty ids) instead of
+// failing the plan read and blanking the editor. The UI never treats a
+// degraded row as a binding.
+const GoalPlanExecutionPrerequisiteSchema = z
+  .object({
+    item_id: z.string().catch("").default(""),
+    issue_id: z.string().catch("").default(""),
+    status: z.string().catch("").default(""),
+    reason: z.string().catch("").default(""),
+    detail: z.string().catch("").default(""),
+  })
+  .loose();
+
+const GoalPlanExecutionWaitSchema = z
+  .object({
+    event: z.string().catch("").default(""),
+    triggers: z.array(z.string()).catch([]).default([]),
+    description: z.string().catch("").default(""),
+    prerequisites: z.array(GoalPlanExecutionPrerequisiteSchema).catch([]).default([]),
+  })
+  .loose();
+
+const GoalPlanExecutionItemSchema = z
+  .object({
+    item_id: z.string().catch("").default(""),
+    binding_type: z.string().catch("new").default("new"),
+    issue_id: z.string().catch("").default(""),
+    materialized: z.boolean().catch(false).default(false),
+    issue_status: z.string().catch("").default(""),
+    assignee_type: z.string().catch("").default(""),
+    assignee_id: z.string().nullable().catch(null).default(null),
+    dependency: PlanDependencyStateSchema.nullable().catch(null).default(null),
+    wait: GoalPlanExecutionWaitSchema.nullable().catch(null).default(null),
+  })
+  .loose();
+
+export const GoalPlanExecutionSchema = z
+  .object({
+    plan_revision: z.number().catch(0).default(0),
+    items: z.array(GoalPlanExecutionItemSchema).catch([]).default([]),
+  })
+  .loose();
+
 export const GoalPlanSchema = z
   .object({
     id: z.string().nullable().catch(null).default(null),
@@ -1932,6 +1987,9 @@ export const GoalPlanSchema = z
     items: z.array(GoalPlanItemSchema).catch([]).default([]),
     edges: z.array(GoalPlanEdgeSchema).catch([]).default([]),
     context_snapshot: GoalPlanContextSnapshotSchema,
+    // Null when the server predates the execution read model: the panel then
+    // has no durable bindings to show and must not invent any.
+    execution: GoalPlanExecutionSchema.nullable().catch(null).default(null),
     created_at: z.string().nullable().catch(null).default(null),
     updated_at: z.string().nullable().catch(null).default(null),
   })
@@ -1946,6 +2004,7 @@ export const EMPTY_GOAL_PLAN: GoalPlan = {
   items: [],
   edges: [],
   context_snapshot: {},
+  execution: null,
   created_at: null,
   updated_at: null,
 };
@@ -2049,6 +2108,37 @@ export const ClosureReviewSchema = z
   })
   .loose();
 
+// One persisted human accept/reject. A decision is not a review: it carries no
+// verdict, and a client must not render one as a pass.
+export const ClosureDecisionSchema = z
+  .object({
+    id: z.string().catch("").default(""),
+    subject_type: z.string().catch("").default(""),
+    subject_id: z.string().catch("").default(""),
+    decision: z.string().catch("").default(""),
+    reason: z.string().catch("").default(""),
+    criteria_revision: z.string().catch("").default(""),
+    delivery_version: z.string().catch("").default(""),
+    actor_type: z.string().catch("").default(""),
+    actor_id: z.string().nullable().catch(null).default(null),
+    recorded_at: z.string().catch("").default(""),
+  })
+  .loose();
+
+/** No id: a caller must treat this as "the decision was not recorded". */
+export const EMPTY_CLOSURE_DECISION: ClosureDecision = {
+  id: "",
+  subject_type: "",
+  subject_id: "",
+  decision: "",
+  reason: "",
+  criteria_revision: "",
+  delivery_version: "",
+  actor_type: "",
+  actor_id: null,
+  recorded_at: "",
+};
+
 export const ClosureAuthorizationSchema = z
   .object({
     id: z.string().catch("").default(""),
@@ -2083,6 +2173,10 @@ export const ClosureStateSchema = z
     already_accepted: z.boolean().catch(false).default(false),
     authorization: ClosureAuthorizationSchema.nullable().catch(null).default(null),
     reviews: z.array(ClosureReviewSchema).catch([]).default([]),
+    // Newest first. Kept separate from `reviews`: a human accept is a decision,
+    // not independent verification, and never feeds `outcome` or
+    // `already_accepted`.
+    decisions: z.array(ClosureDecisionSchema).catch([]).default([]),
   })
   .loose();
 
@@ -2102,19 +2196,12 @@ export const EMPTY_CLOSURE_STATE: ClosureState = {
   already_accepted: false,
   authorization: null,
   reviews: [],
+  decisions: [],
 };
 
 // One materialized plan item. Identity (`item_id`, `issue_id`) is required by
 // the caller's own check, not the parser: a degraded row must be visible as
 // unusable rather than silently dropped from the plan's execution list.
-const PlanDependencyStateSchema = z
-  .object({
-    ready: z.boolean().catch(false).default(false),
-    reason: z.string().catch("").default(""),
-    detail: z.string().catch("").default(""),
-  })
-  .loose();
-
 const MaterializedGoalPlanItemSchema = z
   .object({
     item_id: z.string().catch("").default(""),
