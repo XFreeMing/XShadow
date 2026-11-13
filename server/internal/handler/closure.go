@@ -88,6 +88,36 @@ type ClosureAuthorizationResponse struct {
 	RevokedAt        *string  `json:"revoked_at,omitempty"`
 }
 
+// Stable human decision kinds recorded beside the closure contract.
+const (
+	ClosureDecisionAccept = "accept"
+	ClosureDecisionReject = "reject"
+)
+
+// ClosureDecisionResponse is one persisted human decision — an explicit accept
+// or reject. It is not a review: no verdict, delivery acceptance or success is
+// implied. Coexisting with incomplete verification is expected; the evaluated
+// closure outcome is still derived from closure_review rows alone.
+type ClosureDecisionResponse struct {
+	ID               string  `json:"id"`
+	SubjectType      string  `json:"subject_type"`
+	SubjectID        string  `json:"subject_id"`
+	Decision         string  `json:"decision"`
+	Reason           string  `json:"reason,omitempty"`
+	CriteriaRevision string  `json:"criteria_revision,omitempty"`
+	DeliveryVersion  string  `json:"delivery_version,omitempty"`
+	ActorType        string  `json:"actor_type"`
+	ActorID          *string `json:"actor_id,omitempty"`
+	RecordedAt       string  `json:"recorded_at"`
+}
+
+// CreateClosureRejectionRequest records why a human refuses a goal. A delivery
+// version is deliberately absent: a goal can be rejected before any reviewable
+// delivery exists.
+type CreateClosureRejectionRequest struct {
+	Reason string `json:"reason"`
+}
+
 // ClosureResponse is the single read model shared by Web, Desktop and the
 // status-write gate.
 type ClosureResponse struct {
@@ -105,6 +135,11 @@ type ClosureResponse struct {
 	AlreadyAccepted  bool                          `json:"already_accepted"`
 	Authorization    *ClosureAuthorizationResponse `json:"authorization,omitempty"`
 	Reviews          []ClosureReviewResponse       `json:"reviews"`
+	// Decisions is the subject's append-only human decision history (accept or
+	// reject), newest first. It never changes the evaluated outcome and never
+	// fabricates a review, acceptance or success: an accept recorded beside
+	// incomplete verification stays visibly unverified.
+	Decisions []ClosureDecisionResponse `json:"decisions"`
 }
 
 // CreateClosureReviewRequest is what a reviewer submits. Delivery identity and
@@ -795,6 +830,123 @@ func (h *Handler) createClosureReview(w http.ResponseWriter, r *http.Request, ki
 	writeJSON(w, http.StatusCreated, closureReviewResponse(created))
 }
 
+// CreateGoalClosureRejection records a human refusal of a goal. It is
+// deliberately not a review: it requires no delivery version, writes no
+// closure_review row, grants no acceptance and leaves the goal's status and
+// evaluated outcome untouched. Only the decision, reason and actor are
+// persisted, so a rejection made before any reviewable delivery exists is
+// still readable.
+func (h *Handler) CreateGoalClosureRejection(w http.ResponseWriter, r *http.Request) {
+	goal, ok := h.loadVisibleGoal(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	var req CreateClosureRejectionRequest
+	if !h.mustDecodeJSON(w, r, &req) {
+		return
+	}
+	reason := clampText(req.Reason)
+	if reason == "" {
+		writeError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+	criteriaRevision, ok := h.goalCriteriaRevisionForDecision(w, r, goal)
+	if !ok {
+		return
+	}
+	actorType, actorIDText := h.resolveActor(r, userID, uuidToString(goal.WorkspaceID))
+	actorID, _ := util.ParseUUID(actorIDText)
+	created, err := h.Queries.CreateClosureDecision(r.Context(), db.CreateClosureDecisionParams{
+		WorkspaceID:      goal.WorkspaceID,
+		ProjectID:        goal.ProjectID,
+		SubjectKind:      string(issueclosure.SubjectGoal),
+		SubjectID:        goal.ID,
+		Decision:         ClosureDecisionReject,
+		Reason:           reason,
+		CriteriaRevision: criteriaRevision,
+		// A goal has no registered delivery of its own; the column is empty by
+		// design, not because a caller failed to supply a version.
+		DeliveryVersion: "",
+		ActorType:       actorType,
+		ActorID:         actorID,
+		ActorModel:      "",
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record the rejection")
+		return
+	}
+	writeJSON(w, http.StatusCreated, closureDecisionResponse(created))
+}
+
+func (h *Handler) goalCriteriaRevisionForDecision(w http.ResponseWriter, r *http.Request, goal db.Goal) (string, bool) {
+	value, known, err := service.GoalCriteriaRevision(r.Context(), h.Queries, goal.WorkspaceID, goal.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read the goal's acceptance scope")
+		return "", false
+	}
+	if !known {
+		return "", true
+	}
+	return value, true
+}
+
+// recordGoalAcceptanceDecision persists a member's explicit accept of a goal.
+// It is called from the status write, so the decision exists even when
+// independent delivery verification is still incomplete; it grants nothing and
+// never makes the goal read as verified. Only human requests are recorded:
+// an agent's completion is represented by review/acceptance evidence, not a
+// human decision.
+func recordGoalAcceptanceDecision(ctx context.Context, q *db.Queries, goal db.Goal, actorType, actorIDText string) error {
+	actorID, _ := util.ParseUUID(actorIDText)
+	criteriaRevision := ""
+	if value, known, err := service.GoalCriteriaRevision(ctx, q, goal.WorkspaceID, goal.ID); err != nil {
+		return err
+	} else if known {
+		criteriaRevision = value
+	}
+	_, err := q.CreateClosureDecision(ctx, db.CreateClosureDecisionParams{
+		WorkspaceID:      goal.WorkspaceID,
+		ProjectID:        goal.ProjectID,
+		SubjectKind:      string(issueclosure.SubjectGoal),
+		SubjectID:        goal.ID,
+		Decision:         ClosureDecisionAccept,
+		Reason:           "",
+		CriteriaRevision: criteriaRevision,
+		DeliveryVersion:  "",
+		ActorType:        actorType,
+		ActorID:          actorID,
+		ActorModel:       "",
+	})
+	return err
+}
+
+func (h *Handler) closureDecisions(ctx context.Context, s closureSubject) ([]db.ClosureDecision, error) {
+	return h.Queries.ListClosureDecisions(ctx, db.ListClosureDecisionsParams{
+		WorkspaceID: s.workspaceID,
+		SubjectKind: string(s.kind),
+		SubjectID:   s.id,
+	})
+}
+
+func closureDecisionResponse(d db.ClosureDecision) ClosureDecisionResponse {
+	return ClosureDecisionResponse{
+		ID:               uuidToString(d.ID),
+		SubjectType:      d.SubjectKind,
+		SubjectID:        uuidToString(d.SubjectID),
+		Decision:         d.Decision,
+		Reason:           d.Reason,
+		CriteriaRevision: d.CriteriaRevision,
+		DeliveryVersion:  d.DeliveryVersion,
+		ActorType:        d.ActorType,
+		ActorID:          uuidToPtr(d.ActorID),
+		RecordedAt:       timestampToString(d.CreatedAt),
+	}
+}
+
 func (h *Handler) GetIssueClosure(w http.ResponseWriter, r *http.Request) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
@@ -835,6 +987,11 @@ func (h *Handler) writeClosureState(w http.ResponseWriter, r *http.Request, subj
 		writeError(w, http.StatusInternalServerError, "failed to evaluate closure")
 		return
 	}
+	decisions, err := h.closureDecisions(r.Context(), subject)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load decisions")
+		return
+	}
 	resp := ClosureResponse{
 		SubjectType:      string(subject.kind),
 		SubjectID:        uuidToString(subject.id),
@@ -850,9 +1007,13 @@ func (h *Handler) writeClosureState(w http.ResponseWriter, r *http.Request, subj
 		AlreadyAccepted:  decision.AlreadyAccepted,
 		Authorization:    closureAuthorizationResponse(authRow),
 		Reviews:          make([]ClosureReviewResponse, 0, len(reviews)),
+		Decisions:        make([]ClosureDecisionResponse, 0, len(decisions)),
 	}
 	for _, review := range reviews {
 		resp.Reviews = append(resp.Reviews, closureReviewResponse(review))
+	}
+	for _, decision := range decisions {
+		resp.Decisions = append(resp.Decisions, closureDecisionResponse(decision))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

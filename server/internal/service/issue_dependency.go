@@ -66,37 +66,89 @@ type goalPlanDependencyContent struct {
 	} `json:"edges"`
 }
 
+// IssueDependencyBlocker is one strong prerequisite that is not currently
+// satisfied. It carries the concrete facts a read model needs to explain the
+// wait: the plan item, the issue bound to it (empty when nothing is bound), its
+// status when readable, and the stable reason/detail pair.
+type IssueDependencyBlocker struct {
+	ItemID  string
+	IssueID string
+	Status  string
+	Reason  string
+	Detail  string
+}
+
+// DependencyWaitPrerequisite is the persisted, structured form of one unmet
+// strong prerequisite. A client localizes the prompt from Reason plus the
+// item/issue/status facts; Detail stays diagnostic English.
+type DependencyWaitPrerequisite struct {
+	ItemID  string `json:"item_id,omitempty"`
+	IssueID string `json:"issue_id,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// DependencyWaitPrerequisites narrows blockers to the structured facts stored
+// with a parked task.
+func DependencyWaitPrerequisites(blockers []IssueDependencyBlocker) []DependencyWaitPrerequisite {
+	out := make([]DependencyWaitPrerequisite, 0, len(blockers))
+	for _, blocker := range blockers {
+		out = append(out, DependencyWaitPrerequisite{
+			ItemID:  blocker.ItemID,
+			IssueID: blocker.IssueID,
+			Status:  blocker.Status,
+			Reason:  blocker.Reason,
+		})
+	}
+	return out
+}
+
 // IssueDependenciesReady reports whether every strong prerequisite of this
 // issue is successfully accepted. An issue with no goal link, no saved plan or
 // no plan item is not under a declared dependency and is released unchanged.
 func IssueDependenciesReady(ctx context.Context, q *db.Queries, issue db.Issue) (IssueDependencyState, error) {
+	blockers, err := IssueDependencyBlockers(ctx, q, issue)
+	if err != nil {
+		return IssueDependencyState{}, err
+	}
+	if len(blockers) == 0 {
+		return IssueDependencyState{Ready: true}, nil
+	}
+	return IssueDependencyState{Reason: blockers[0].Reason, Detail: blockers[0].Detail}, nil
+}
+
+// IssueDependencyBlockers returns every unmet strong prerequisite for the
+// issue, in plan edge order and deduplicated by prerequisite issue. It is the
+// same check the claim path and the release event use; callers only read it.
+func IssueDependencyBlockers(ctx context.Context, q *db.Queries, issue db.Issue) ([]IssueDependencyBlocker, error) {
 	link, err := q.GetGoalIssueLink(ctx, db.GetGoalIssueLinkParams{
 		WorkspaceID: issue.WorkspaceID,
 		IssueID:     issue.ID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return IssueDependencyState{Ready: true}, nil
+		return nil, nil
 	}
 	if err != nil {
-		return IssueDependencyState{}, err
+		return nil, err
 	}
 	plan, err := q.GetGoalPlan(ctx, db.GetGoalPlanParams{
 		WorkspaceID: issue.WorkspaceID,
 		GoalID:      link.GoalID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return IssueDependencyState{Ready: true}, nil
+		return nil, nil
 	}
 	if err != nil {
-		return IssueDependencyState{}, err
+		return nil, err
 	}
 	var content goalPlanDependencyContent
 	if err := json.Unmarshal(plan.Content, &content); err != nil {
-		return dependencyNotReady(DependencyReasonUnreadable, "the saved plan could not be read: %v", err), nil
+		state := dependencyNotReady(DependencyReasonUnreadable, "the saved plan could not be read: %v", err)
+		return []IssueDependencyBlocker{{Reason: state.Reason, Detail: state.Detail}}, nil
 	}
 	itemIssue, err := goalPlanItemIssues(ctx, q, issue.WorkspaceID, link.GoalID, content)
 	if err != nil {
-		return IssueDependencyState{}, err
+		return nil, err
 	}
 	issueID := util.UUIDToString(issue.ID)
 	issueItem := ""
@@ -107,9 +159,10 @@ func IssueDependenciesReady(ctx context.Context, q *db.Queries, issue db.Issue) 
 		}
 	}
 	if issueItem == "" {
-		return IssueDependencyState{Ready: true}, nil
+		return nil, nil
 	}
 
+	blockers := make([]IssueDependencyBlocker, 0, len(content.Edges))
 	checked := make(map[string]bool, len(content.Edges))
 	for _, edge := range content.Edges {
 		if edge.DependentItemID != issueItem {
@@ -117,49 +170,70 @@ func IssueDependenciesReady(ctx context.Context, q *db.Queries, issue db.Issue) 
 		}
 		prerequisite, ok := itemIssue[edge.PrerequisiteItemID]
 		if !ok {
-			return dependencyNotReady(DependencyReasonUnknown,
-				"prerequisite plan item %q has no linked issue, so its success cannot be verified", edge.PrerequisiteItemID), nil
+			state := dependencyNotReady(DependencyReasonUnknown,
+				"prerequisite plan item %q has no linked issue, so its success cannot be verified", edge.PrerequisiteItemID)
+			blockers = append(blockers, IssueDependencyBlocker{
+				ItemID: edge.PrerequisiteItemID,
+				Reason: state.Reason,
+				Detail: state.Detail,
+			})
+			continue
 		}
 		if checked[prerequisite] {
 			continue
 		}
 		checked[prerequisite] = true
-		state, err := acceptedPrerequisite(ctx, q, issue.WorkspaceID, prerequisite)
+		verdict, err := acceptedPrerequisite(ctx, q, issue.WorkspaceID, prerequisite)
 		if err != nil {
-			return IssueDependencyState{}, err
+			return nil, err
 		}
-		if !state.Ready {
-			return state, nil
+		if !verdict.State.Ready {
+			blockers = append(blockers, IssueDependencyBlocker{
+				ItemID:  edge.PrerequisiteItemID,
+				IssueID: prerequisite,
+				Status:  verdict.Status,
+				Reason:  verdict.State.Reason,
+				Detail:  verdict.State.Detail,
+			})
 		}
 	}
-	return IssueDependencyState{Ready: true}, nil
+	return blockers, nil
+}
+
+type prerequisiteVerdict struct {
+	State  IssueDependencyState
+	Status string
 }
 
 // acceptedPrerequisite verifies one prerequisite issue against both halves of
 // the contract: success terminal status and a valid persisted acceptance.
-func acceptedPrerequisite(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, issueIDText string) (IssueDependencyState, error) {
+func acceptedPrerequisite(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, issueIDText string) (prerequisiteVerdict, error) {
 	issueID, err := util.ParseUUID(issueIDText)
 	if err != nil {
-		return dependencyNotReady(DependencyReasonUnknown, "prerequisite issue id %q is invalid", issueIDText), nil
+		return prerequisiteVerdict{State: dependencyNotReady(DependencyReasonUnknown, "prerequisite issue id %q is invalid", issueIDText)}, nil
 	}
 	prerequisite, err := q.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID:          issueID,
 		WorkspaceID: workspaceID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return dependencyNotReady(DependencyReasonUnknown, "prerequisite issue %s is not readable in this workspace", issueIDText), nil
+		return prerequisiteVerdict{State: dependencyNotReady(DependencyReasonUnknown, "prerequisite issue %s is not readable in this workspace", issueIDText)}, nil
 	}
 	if err != nil {
-		return IssueDependencyState{}, err
+		return prerequisiteVerdict{}, err
 	}
-	category, err := issuestatus.CategoryWithError(ctx, q, workspaceID, prerequisite.Status)
+	status := prerequisite.Status
+	category, err := issuestatus.CategoryWithError(ctx, q, workspaceID, status)
 	if err != nil {
-		return IssueDependencyState{}, err
+		return prerequisiteVerdict{}, err
 	}
 	if category != issuestatus.CategoryDone {
-		return dependencyNotReady(DependencyReasonNotDone,
-			"prerequisite %s is %q (%s); only success releases a dependent",
-			issueIDText, prerequisite.Status, cancellationNote(category)), nil
+		return prerequisiteVerdict{
+			State: dependencyNotReady(DependencyReasonNotDone,
+				"prerequisite %s is %q (%s); only success releases a dependent",
+				issueIDText, status, cancellationNote(category)),
+			Status: status,
+		}, nil
 	}
 	// Acceptance is evidence for the delivery and scope it was recorded
 	// against. Re-read the facts that can move without a new review — the head
@@ -171,22 +245,25 @@ func acceptedPrerequisite(ctx context.Context, q *db.Queries, workspaceID pgtype
 		SubjectID:   issueID,
 	}
 	if delivery, known, err := IssueRegisteredDeliveryVersion(ctx, q, issueID); err != nil {
-		return IssueDependencyState{}, err
+		return prerequisiteVerdict{}, err
 	} else if known {
 		params.DeliveryVersion = pgtype.Text{String: delivery, Valid: true}
 	}
 	if criteria, known, err := IssueCriteriaRevision(ctx, q, workspaceID, issueID); err != nil {
-		return IssueDependencyState{}, err
+		return prerequisiteVerdict{}, err
 	} else if known {
 		params.CriteriaRevision = pgtype.Text{String: criteria, Valid: true}
 	}
 	if _, err := q.GetValidAcceptedClosureReview(ctx, params); errors.Is(err, pgx.ErrNoRows) {
-		return dependencyNotReady(DependencyReasonNotAccepted,
-			"prerequisite %s has no currently valid acceptance for its delivery", issueIDText), nil
+		return prerequisiteVerdict{
+			State: dependencyNotReady(DependencyReasonNotAccepted,
+				"prerequisite %s has no currently valid acceptance for its delivery", issueIDText),
+			Status: status,
+		}, nil
 	} else if err != nil {
-		return IssueDependencyState{}, err
+		return prerequisiteVerdict{}, err
 	}
-	return IssueDependencyState{Ready: true}, nil
+	return prerequisiteVerdict{State: IssueDependencyState{Ready: true}, Status: status}, nil
 }
 
 func cancellationNote(category string) string {

@@ -136,6 +136,65 @@ func (q *Queries) CreateClosureAuthorization(ctx context.Context, arg CreateClos
 	return i, err
 }
 
+const createClosureDecision = `-- name: CreateClosureDecision :one
+INSERT INTO closure_decision (
+    workspace_id, project_id, subject_kind, subject_id,
+    decision, reason, criteria_revision, delivery_version,
+    actor_type, actor_id, actor_model
+) VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7, $8,
+    $9, $10, $11
+) RETURNING id, workspace_id, project_id, subject_kind, subject_id, decision, reason, criteria_revision, delivery_version, actor_type, actor_id, actor_model, created_at
+`
+
+type CreateClosureDecisionParams struct {
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	ProjectID        pgtype.UUID `json:"project_id"`
+	SubjectKind      string      `json:"subject_kind"`
+	SubjectID        pgtype.UUID `json:"subject_id"`
+	Decision         string      `json:"decision"`
+	Reason           string      `json:"reason"`
+	CriteriaRevision string      `json:"criteria_revision"`
+	DeliveryVersion  string      `json:"delivery_version"`
+	ActorType        string      `json:"actor_type"`
+	ActorID          pgtype.UUID `json:"actor_id"`
+	ActorModel       string      `json:"actor_model"`
+}
+
+func (q *Queries) CreateClosureDecision(ctx context.Context, arg CreateClosureDecisionParams) (ClosureDecision, error) {
+	row := q.db.QueryRow(ctx, createClosureDecision,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.SubjectKind,
+		arg.SubjectID,
+		arg.Decision,
+		arg.Reason,
+		arg.CriteriaRevision,
+		arg.DeliveryVersion,
+		arg.ActorType,
+		arg.ActorID,
+		arg.ActorModel,
+	)
+	var i ClosureDecision
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.SubjectKind,
+		&i.SubjectID,
+		&i.Decision,
+		&i.Reason,
+		&i.CriteriaRevision,
+		&i.DeliveryVersion,
+		&i.ActorType,
+		&i.ActorID,
+		&i.ActorModel,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createClosureReview = `-- name: CreateClosureReview :one
 INSERT INTO closure_review (
     workspace_id, project_id, subject_kind, subject_id, action,
@@ -253,6 +312,22 @@ func (q *Queries) DeleteClosureAuthorizationsBySubject(ctx context.Context, arg 
 	return err
 }
 
+const deleteClosureDecisionsBySubject = `-- name: DeleteClosureDecisionsBySubject :exec
+DELETE FROM closure_decision
+WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
+`
+
+type DeleteClosureDecisionsBySubjectParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SubjectKind string      `json:"subject_kind"`
+	SubjectID   pgtype.UUID `json:"subject_id"`
+}
+
+func (q *Queries) DeleteClosureDecisionsBySubject(ctx context.Context, arg DeleteClosureDecisionsBySubjectParams) error {
+	_, err := q.db.Exec(ctx, deleteClosureDecisionsBySubject, arg.WorkspaceID, arg.SubjectKind, arg.SubjectID)
+	return err
+}
+
 const deleteClosureReviewsBySubject = `-- name: DeleteClosureReviewsBySubject :exec
 DELETE FROM closure_review
 WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
@@ -275,6 +350,15 @@ DELETE FROM closure_authorization WHERE workspace_id = $1
 
 func (q *Queries) DeleteWorkspaceClosureAuthorizations(ctx context.Context, workspaceID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteWorkspaceClosureAuthorizations, workspaceID)
+	return err
+}
+
+const deleteWorkspaceClosureDecisions = `-- name: DeleteWorkspaceClosureDecisions :exec
+DELETE FROM closure_decision WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceClosureDecisions(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceClosureDecisions, workspaceID)
 	return err
 }
 
@@ -599,6 +683,52 @@ func (q *Queries) GetValidAcceptedClosureReview(ctx context.Context, arg GetVali
 		&i.AuthorizationID,
 	)
 	return i, err
+}
+
+const listClosureDecisions = `-- name: ListClosureDecisions :many
+SELECT id, workspace_id, project_id, subject_kind, subject_id, decision, reason, criteria_revision, delivery_version, actor_type, actor_id, actor_model, created_at FROM closure_decision
+WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
+ORDER BY created_at DESC, id DESC
+`
+
+type ListClosureDecisionsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SubjectKind string      `json:"subject_kind"`
+	SubjectID   pgtype.UUID `json:"subject_id"`
+}
+
+func (q *Queries) ListClosureDecisions(ctx context.Context, arg ListClosureDecisionsParams) ([]ClosureDecision, error) {
+	rows, err := q.db.Query(ctx, listClosureDecisions, arg.WorkspaceID, arg.SubjectKind, arg.SubjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClosureDecision{}
+	for rows.Next() {
+		var i ClosureDecision
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Decision,
+			&i.Reason,
+			&i.CriteriaRevision,
+			&i.DeliveryVersion,
+			&i.ActorType,
+			&i.ActorID,
+			&i.ActorModel,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listClosureReviews = `-- name: ListClosureReviews :many

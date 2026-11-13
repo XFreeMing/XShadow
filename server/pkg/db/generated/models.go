@@ -688,6 +688,22 @@ type ClosureAuthorization struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ClosureDecision struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	SubjectKind      string             `json:"subject_kind"`
+	SubjectID        pgtype.UUID        `json:"subject_id"`
+	Decision         string             `json:"decision"`
+	Reason           string             `json:"reason"`
+	CriteriaRevision string             `json:"criteria_revision"`
+	DeliveryVersion  string             `json:"delivery_version"`
+	ActorType        string             `json:"actor_type"`
+	ActorID          pgtype.UUID        `json:"actor_id"`
+	ActorModel       string             `json:"actor_model"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type ClosureReview struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`

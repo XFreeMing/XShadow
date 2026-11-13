@@ -396,6 +396,20 @@ type TaskCancellationActor struct {
 	Name string `json:"name,omitempty"`
 }
 
+// AgentTaskWaiting is the persisted reason a dependency-blocked task is
+// parked. Event names the real release class; Triggers lists the writes that
+// currently re-check readiness. Prerequisites carries the structured item /
+// issue / status facts so a client can localize the prompt from the stable
+// reason codes instead of showing the English Detail as the primary text. A
+// client never has to infer a start time from the task status.
+type AgentTaskWaiting struct {
+	Reason        string                               `json:"reason"`
+	Detail        string                               `json:"detail,omitempty"`
+	Event         string                               `json:"event"`
+	Triggers      []string                             `json:"triggers,omitempty"`
+	Prerequisites []service.DependencyWaitPrerequisite `json:"prerequisites,omitempty"`
+}
+
 type AgentTaskResponse struct {
 	// Restricted marks a run on an issue in a private project the caller
 	// cannot see (MUL-8472): only identity, status, timing and usage remain.
@@ -444,31 +458,39 @@ type AgentTaskResponse struct {
 	IssueStatusesOmitted int `json:"issue_statuses_omitted,omitempty"`
 	// ProjectWorkflow is the issue's project workflow, when it has one other
 	// than the Default (MUL-7420). Absent keeps the brief unchanged.
-	ProjectWorkflow    *TaskProjectWorkflowData `json:"project_workflow,omitempty"`
-	ThreadName         string                   `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Status             string                   `json:"status"`
-	Priority           int32                    `json:"priority"`
-	DispatchedAt       *string                  `json:"dispatched_at"`
-	StartedAt          *string                  `json:"started_at"`
-	CompletedAt        *string                  `json:"completed_at"`
-	Result             any                      `json:"result"`
-	Error              *string                  `json:"error"`
-	FailureReason      string                   `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
-	Attempt            int32                    `json:"attempt"`
-	MaxAttempts        int32                    `json:"max_attempts"`
-	ParentTaskID       *string                  `json:"parent_task_id,omitempty"`
-	IsLeaderTask       bool                     `json:"is_leader_task,omitempty"`
-	LeaderRoleResolved bool                     `json:"leader_role_resolved,omitempty"` // claim-only capability, always true here: IsLeaderTask/SquadID authoritatively answer "is this a leader run", so the daemon must not infer the role from briefing text. Servers predating it make no such promise — before #4951 they sent no is_leader_task at all, after it they sent the flag without guaranteeing a briefing — so a daemon seeing no capability keeps the legacy inference. Never rendered into a prompt; see daemon.taskIsSquadLeader (MUL-5811). Mirror field: internal/daemon/types.go, same JSON name
-	Agent              *TaskAgentData           `json:"agent,omitempty"`
-	ConnectedApps      []ConnectedAppData       `json:"connected_apps,omitempty"` // daemon-claim only: per-run app capabilities mounted through runtime MCP overlays
-	Repos              []RepoData               `json:"repos,omitempty"`
-	ProjectID          string                   `json:"project_id,omitempty"`          // issue's project, when present
-	ProjectTitle       string                   `json:"project_title,omitempty"`       // for surfacing in agent context
-	ProjectDescription string                   `json:"project_description,omitempty"` // durable project-level context injected into the brief
-	ProjectResources   []ProjectResourceData    `json:"project_resources,omitempty"`   // resources attached to the project
-	CreatedAt          string                   `json:"created_at"`
-	PriorSessionID     string                   `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
-	PriorWorkDir       string                   `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
+	ProjectWorkflow *TaskProjectWorkflowData `json:"project_workflow,omitempty"`
+	ThreadName      string                   `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Status          string                   `json:"status"`
+	Priority        int32                    `json:"priority"`
+	DispatchedAt    *string                  `json:"dispatched_at"`
+	StartedAt       *string                  `json:"started_at"`
+	CompletedAt     *string                  `json:"completed_at"`
+	// FireAt is the due time of a time-based deferred task. It is always
+	// present (null when there is none) so `deferred` + null is an explicit
+	// fact instead of a missing field. A dependency-parked task carries null
+	// and explains itself in Waiting; no timer will resume it.
+	FireAt *string `json:"fire_at"`
+	// Waiting explains a dependency-parked task. It is absent for every other
+	// status, and for timed retries whose FireAt is set.
+	Waiting            *AgentTaskWaiting     `json:"waiting,omitempty"`
+	Result             any                   `json:"result"`
+	Error              *string               `json:"error"`
+	FailureReason      string                `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt            int32                 `json:"attempt"`
+	MaxAttempts        int32                 `json:"max_attempts"`
+	ParentTaskID       *string               `json:"parent_task_id,omitempty"`
+	IsLeaderTask       bool                  `json:"is_leader_task,omitempty"`
+	LeaderRoleResolved bool                  `json:"leader_role_resolved,omitempty"` // claim-only capability, always true here: IsLeaderTask/SquadID authoritatively answer "is this a leader run", so the daemon must not infer the role from briefing text. Servers predating it make no such promise — before #4951 they sent no is_leader_task at all, after it they sent the flag without guaranteeing a briefing — so a daemon seeing no capability keeps the legacy inference. Never rendered into a prompt; see daemon.taskIsSquadLeader (MUL-5811). Mirror field: internal/daemon/types.go, same JSON name
+	Agent              *TaskAgentData        `json:"agent,omitempty"`
+	ConnectedApps      []ConnectedAppData    `json:"connected_apps,omitempty"` // daemon-claim only: per-run app capabilities mounted through runtime MCP overlays
+	Repos              []RepoData            `json:"repos,omitempty"`
+	ProjectID          string                `json:"project_id,omitempty"`          // issue's project, when present
+	ProjectTitle       string                `json:"project_title,omitempty"`       // for surfacing in agent context
+	ProjectDescription string                `json:"project_description,omitempty"` // durable project-level context injected into the brief
+	ProjectResources   []ProjectResourceData `json:"project_resources,omitempty"`   // resources attached to the project
+	CreatedAt          string                `json:"created_at"`
+	PriorSessionID     string                `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
+	PriorWorkDir       string                `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
 	// ModelOverride snapshots the agent's persistent OpenClaw model override at
 	// claim time. Later config edits affect subsequent claims, not this payload.
 	// Mirrors internal/daemon/types.go with the same JSON name; empty for other
@@ -912,6 +934,32 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		SystemRule string `json:"wakeup_system"`
 	}
 	_ = json.Unmarshal(t.Context, &wakeupContext)
+	var dependencyWait struct {
+		DependencyWait *struct {
+			Reason        string                               `json:"reason"`
+			Detail        string                               `json:"detail"`
+			Event         string                               `json:"event"`
+			Prerequisites []service.DependencyWaitPrerequisite `json:"prerequisites"`
+		} `json:"dependency_wait"`
+	}
+	_ = json.Unmarshal(t.Context, &dependencyWait)
+	// Only a deferred task with no due time is dependency-parked. A timed
+	// retry can carry a stale key only if release failed to clear it; showing
+	// "waiting on dependencies" there would misstate why it is not running.
+	var waiting *AgentTaskWaiting
+	if t.Status == "deferred" && !t.FireAt.Valid && dependencyWait.DependencyWait != nil {
+		event := dependencyWait.DependencyWait.Event
+		if event == "" {
+			event = goalPlanDependencyWaitEvent
+		}
+		waiting = &AgentTaskWaiting{
+			Reason:        dependencyWait.DependencyWait.Reason,
+			Detail:        dependencyWait.DependencyWait.Detail,
+			Event:         event,
+			Triggers:      append([]string(nil), goalPlanDependencyWaitTriggers...),
+			Prerequisites: dependencyWait.DependencyWait.Prerequisites,
+		}
+	}
 	handoffNote := ""
 	if t.HandoffNote.Valid {
 		handoffNote = t.HandoffNote.String
@@ -931,6 +979,8 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		DispatchedAt:           timestampToPtr(t.DispatchedAt),
 		StartedAt:              timestampToPtr(t.StartedAt),
 		CompletedAt:            timestampToPtr(t.CompletedAt),
+		FireAt:                 timestampToPtr(t.FireAt),
+		Waiting:                waiting,
 		Result:                 result,
 		Error:                  textToPtr(t.Error),
 		FailureReason:          failureReason,

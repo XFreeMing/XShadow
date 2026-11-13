@@ -284,6 +284,128 @@ func TestGoalCompletedIsGatedOnceEnrolled(t *testing.T) {
 	}
 }
 
+// A human can reject a goal before any delivery exists. The reason is
+// persisted and read back through the closure view, while no review,
+// acceptance or success state is invented to carry it.
+func TestGoalRejectionPersistsReasonWithoutDelivery(t *testing.T) {
+	goal := createGoalViaAPI(t, testUserID, map[string]any{"title": "Rejected goal " + t.Name()})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM closure_decision WHERE subject_id = $1`, goal.ID)
+	})
+
+	post := func(reason string) *testutil.Response {
+		req := newRequest("POST", "/api/goals/"+goal.ID+"/closure/rejections", map[string]any{"reason": reason})
+		return testutil.Call(t, testHandler.CreateGoalClosureRejection, withURLParam(req, "id", goal.ID))
+	}
+	reason := "The plan targets the wrong audience; do not accept this goal yet."
+	created := post(reason).Want(http.StatusCreated).Map()
+	if created["reason"] != reason || created["decision"] != ClosureDecisionReject {
+		t.Fatalf("created decision = %v", created)
+	}
+	if created["actor_type"] != "member" {
+		t.Fatalf("created decision actor = %v", created["actor_type"])
+	}
+	if _, present := created["delivery_version"]; present {
+		t.Fatalf("rejection invented a delivery version: %v", created)
+	}
+
+	view := testutil.Call(t, testHandler.GetGoalClosure,
+		withURLParam(newRequest("GET", "/api/goals/"+goal.ID+"/closure", nil), "id", goal.ID)).
+		Want(http.StatusOK).Map()
+	decisions, ok := view["decisions"].([]any)
+	if !ok || len(decisions) != 1 {
+		t.Fatalf("closure decisions = %v, want one", view["decisions"])
+	}
+	decision, ok := decisions[0].(map[string]any)
+	if !ok || decision["reason"] != reason || decision["subject_id"] != goal.ID || decision["decision"] != ClosureDecisionReject {
+		t.Fatalf("read-back decision = %v", decisions[0])
+	}
+	if decision["actor_type"] != "member" || decision["actor_id"] != testUserID {
+		t.Fatalf("read-back decision actor = %v", decision)
+	}
+	if view["outcome"] == string(issueclosure.CanClose) || view["already_accepted"] == true {
+		t.Fatalf("rejection fabricated success: %v", view)
+	}
+	if reviews, ok := view["reviews"].([]any); !ok || len(reviews) != 0 {
+		t.Fatalf("rejection fabricated a review: %v", view["reviews"])
+	}
+	var reviewCount, acceptedCount int
+	dbfx.QueryRow(t, `SELECT count(*) FROM closure_review WHERE subject_id = $1`, goal.ID).Scan(&reviewCount)
+	dbfx.QueryRow(t, `SELECT count(*) FROM closure_review WHERE subject_id = $1 AND accepted_at IS NOT NULL`, goal.ID).Scan(&acceptedCount)
+	if reviewCount != 0 || acceptedCount != 0 {
+		t.Fatalf("reviews = %d (accepted %d) after a rejection, want 0/0", reviewCount, acceptedCount)
+	}
+
+	// An empty reason is not a rejection; it must not be persisted as one.
+	post("  ").Want(http.StatusBadRequest)
+	var stored int
+	dbfx.QueryRow(t, `SELECT count(*) FROM closure_decision WHERE subject_id = $1`, goal.ID).Scan(&stored)
+	if stored != 1 {
+		t.Fatalf("stored decisions = %d after an empty reason, want 1", stored)
+	}
+}
+
+// A human acceptance is the explicit goal status write. It is persisted as a
+// readable decision even though the closure contract still reports the goal as
+// unverified; the decision must not be mistaken for a review, an acceptance or
+// a successful close.
+func TestGoalAcceptanceDecisionReadBackDespiteIncompleteVerification(t *testing.T) {
+	author := closureTestAgent(t, "accept decision author", "deepseek-v4.1-flash")
+	issueID, goalID := closureTestManagedIssue(t, author)
+	createHandlerTestTaskForAgentOnIssue(t, author, issueID)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM closure_decision WHERE subject_id = $1`, goalID)
+	})
+
+	accept := newRequest("PUT", "/api/goals/"+goalID, map[string]any{"status": "completed"})
+	testutil.Call(t, testHandler.UpdateGoal, withURLParam(accept, "id", goalID)).Want(http.StatusOK)
+
+	var status string
+	dbfx.QueryRow(t, `SELECT status FROM goal WHERE id = $1`, goalID).Scan(&status)
+	if status != "completed" {
+		t.Fatalf("goal status = %q, want completed", status)
+	}
+
+	read := func() map[string]any {
+		t.Helper()
+		return testutil.Call(t, testHandler.GetGoalClosure,
+			withURLParam(newRequest("GET", "/api/goals/"+goalID+"/closure", nil), "id", goalID)).
+			Want(http.StatusOK).Map()
+	}
+	// Refresh twice: the decision is durable, not a response-side echo.
+	for attempt := 0; attempt < 2; attempt++ {
+		view := read()
+		decisions, ok := view["decisions"].([]any)
+		if !ok || len(decisions) != 1 {
+			t.Fatalf("closure decisions = %v, want one", view["decisions"])
+		}
+		decision, ok := decisions[0].(map[string]any)
+		if !ok || decision["decision"] != ClosureDecisionAccept || decision["subject_id"] != goalID {
+			t.Fatalf("read-back decision = %v", decisions[0])
+		}
+		if decision["actor_type"] != "member" || decision["actor_id"] != testUserID {
+			t.Fatalf("read-back decision actor = %v", decision)
+		}
+		if _, present := decision["delivery_version"]; present {
+			t.Fatalf("acceptance invented a delivery version: %v", decision)
+		}
+		// The human decision coexists with incomplete verification: the
+		// evaluated closure is still not success and no review was fabricated.
+		if view["outcome"] == string(issueclosure.CanClose) || view["already_accepted"] == true {
+			t.Fatalf("acceptance fabricated verified success: %v", view)
+		}
+		if reviews, ok := view["reviews"].([]any); !ok || len(reviews) != 0 {
+			t.Fatalf("acceptance fabricated a review: %v", view["reviews"])
+		}
+	}
+	var reviewCount, acceptedCount int
+	dbfx.QueryRow(t, `SELECT count(*) FROM closure_review WHERE subject_id = $1`, goalID).Scan(&reviewCount)
+	dbfx.QueryRow(t, `SELECT count(*) FROM closure_review WHERE subject_id = $1 AND accepted_at IS NOT NULL`, goalID).Scan(&acceptedCount)
+	if reviewCount != 0 || acceptedCount != 0 {
+		t.Fatalf("reviews = %d (accepted %d) after a human acceptance, want 0/0", reviewCount, acceptedCount)
+	}
+}
+
 // The review write path stamps acceptance with the delivery and scope that are
 // current on the server. A caller holding an older view cannot record a review
 // that is stale the moment it lands: it is told to re-read and review the

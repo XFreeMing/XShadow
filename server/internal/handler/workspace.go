@@ -1373,6 +1373,10 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceClosureReviews(ctx, requester.WorkspaceID) },
 		},
 		{
+			name: "delete closure rejections",
+			run:  func() error { return qtx.DeleteWorkspaceClosureDecisions(ctx, requester.WorkspaceID) },
+		},
+		{
 			name: "delete closure authorizations",
 			run:  func() error { return qtx.DeleteWorkspaceClosureAuthorizations(ctx, requester.WorkspaceID) },
 		},
