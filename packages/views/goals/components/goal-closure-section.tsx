@@ -436,7 +436,11 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
     );
   }
 
-  const accepted = closure.already_accepted || completed;
+  // `already_accepted` is the server's idempotent replay of an acceptance it
+  // derived from an independent review. A goal's own `completed` status is a
+  // person's decision and says nothing about review: deriving this badge from
+  // it would show a green "accepted" beside a blocked server verdict.
+  const accepted = closure.already_accepted;
 
   return (
     <section className="space-y-3" data-testid="goal-closure-section">
@@ -479,7 +483,11 @@ export function GoalClosureSection({ goal }: { goal: Goal }) {
             {t(($) => $.closure[OUTCOME_COPY_KEY[outcome]])}
           </Badge>
           {accepted ? (
-            <Badge variant="outline" className="border-success/40 text-success">
+            <Badge
+              variant="outline"
+              className="border-success/40 text-success"
+              data-testid="closure-accepted"
+            >
               {t(($) => $.closure.review_accepted)}
             </Badge>
           ) : null}

@@ -149,10 +149,10 @@ describe("GoalClosureSection", () => {
 
   afterEach(() => qc.clear());
 
-  function renderSection() {
+  function renderSection(goalOverride: Goal = goal) {
     return renderWithI18n(
       <QueryClientProvider client={qc}>
-        <GoalClosureSection goal={goal} />
+        <GoalClosureSection goal={goalOverride} />
       </QueryClientProvider>,
     );
   }
@@ -329,6 +329,46 @@ describe("GoalClosureSection", () => {
     expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
     expect(screen.queryByText("Ready to accept")).not.toBeInTheDocument();
     expect(screen.queryByTestId("closure-review")).not.toBeInTheDocument();
+  });
+
+  it("does not show an accepted-review badge for a completed goal a person accepted", async () => {
+    // The real combination after a human accept on a goal with no independent
+    // review: completed + decisions.accept + reviews=[] + outcome still blocked.
+    api.getGoalClosure.mockResolvedValue(
+      closureState({
+        outcome: "blocked",
+        reason: "missing_delivery_version",
+        already_accepted: false,
+        reviews: [],
+        decisions: [decision({ decision: "accept", reason: "" })],
+      }),
+    );
+    renderSection({ ...goal, status: "completed" });
+
+    expect(await screen.findByTestId("closure-outcome")).toHaveTextContent("Blocked");
+    expect(screen.getByText("This goal is completed.")).toBeInTheDocument();
+    expect(screen.getByTestId("closure-decision")).toHaveTextContent("Accepted by a person");
+    // Completion and a person's accept are not an accepted independent review:
+    // no success-toned "Accepted" signal may appear beside the blocked verdict.
+    expect(screen.queryByTestId("closure-accepted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("closure-review")).not.toBeInTheDocument();
+  });
+
+  it("shows the accepted-review badge when an independent review was accepted", async () => {
+    api.getGoalClosure.mockResolvedValue(
+      closureState({
+        outcome: "can_close",
+        already_accepted: true,
+        reviews: [review({ accepted_at: "2026-11-12T08:00:00Z", accepted_by_type: "member" })],
+      }),
+    );
+    renderSection({ ...goal, status: "completed" });
+
+    const badge = await screen.findByTestId("closure-accepted");
+    expect(badge).toHaveTextContent("Accepted");
+    expect(badge.className).toContain("text-success");
+    expect(screen.getByTestId("closure-review")).toHaveTextContent("Accepted");
   });
 
   it("shows a recorded rejection reason from the read model", async () => {
