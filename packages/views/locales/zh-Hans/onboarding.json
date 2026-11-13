@@ -52,32 +52,9 @@
     "close": "关闭",
     "log_out": "退出登录"
   },
-  "source_backfill": {
-    "eyebrow": "顺便问一句",
-    "lede": "帮助我们了解你从哪里知道 Multica。",
-    "submit": "提交",
-    "save_failed_toast": "保存失败"
-  },
   "questions": {
     "about_you": {
       "question": "简单介绍一下你自己。"
-    },
-    "source": {
-      "question": "你是从哪里了解到 Multica 的？",
-      "friends_colleagues": "朋友或同事",
-      "search": "Google / 搜索",
-      "social_x": "X / Twitter",
-      "social_linkedin": "LinkedIn",
-      "social_youtube": "YouTube",
-      "social_github": "GitHub",
-      "social_misc": "其他社交平台",
-      "blog_newsletter": "博客 / Newsletter",
-      "ai_assistant": "ChatGPT / Claude / Cursor",
-      "from_work": "在工作中接触到",
-      "event_conference": "线下活动 / Meetup",
-      "dont_remember": "想不起来了",
-      "other": "其他",
-      "other_placeholder": "例如：一档播客"
     },
     "role": {
       "question": "哪一项最符合你？",

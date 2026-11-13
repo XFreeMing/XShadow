@@ -52,32 +52,9 @@
     "close": "닫기",
     "log_out": "로그아웃"
   },
-  "source_backfill": {
-    "eyebrow": "간단한 질문 하나",
-    "lede": "Multica를 알게 된 경로를 알려주세요.",
-    "submit": "제출",
-    "save_failed_toast": "저장하지 못했습니다"
-  },
   "questions": {
     "about_you": {
       "question": "당신에 대해 간단히 알려주세요."
-    },
-    "source": {
-      "question": "Multica를 어디서 알게 되셨나요?",
-      "friends_colleagues": "친구 또는 동료",
-      "search": "Google / 검색",
-      "social_x": "X / Twitter",
-      "social_linkedin": "LinkedIn",
-      "social_youtube": "YouTube",
-      "social_github": "GitHub",
-      "social_misc": "기타 소셜",
-      "blog_newsletter": "블로그 / 뉴스레터",
-      "ai_assistant": "ChatGPT / Claude / Cursor",
-      "from_work": "직장에서",
-      "event_conference": "컨퍼런스 / 밋업",
-      "dont_remember": "기억나지 않음",
-      "other": "기타",
-      "other_placeholder": "예: 자주 듣는 팟캐스트"
     },
     "role": {
       "question": "어떤 역할에 가장 가까우신가요?",

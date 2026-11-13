@@ -9,7 +9,6 @@ import { useAuthStore } from "@multica/core/auth";
 import { useChatStore } from "@multica/core/chat";
 import { formatStarCount, githubStarsOptions, MULTICA_GITHUB_URL } from "@multica/core/github/stars";
 import { createLogger } from "@multica/core/logger";
-import { needsSourceBackfill } from "@multica/core/onboarding";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useSessionPromptStore } from "@multica/core/session-prompt";
 import {
@@ -26,7 +25,6 @@ import { isFloatingChatRouteSuppressed } from "../chat/floating-chat-visibility"
 import { useT } from "../i18n";
 import { useNavigation } from "../navigation";
 import { GitHubIcon } from "../onboarding/components/brand-icons";
-import { readSourceBackfillDismissCount } from "../onboarding/source-backfill-dismiss";
 
 const logger = createLogger("star-prompt");
 
@@ -94,8 +92,6 @@ export function StarPrompt() {
       if (useSessionPromptStore.getState().prompted) return;
       const user = useAuthStore.getState().user;
       if (!starPromptDue(user, Date.now())) return;
-      // The attribution survey owns this session's one interruption.
-      if (needsSourceBackfill(user, readSourceBackfillDismissCount(user?.id))) return;
       if (!isQuietMoment()) return;
 
       const [doneCount, agents] = await Promise.all([

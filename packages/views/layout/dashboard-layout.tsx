@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { SidebarProvider } from "@multica/ui/components/ui/sidebar";
 import { AppearanceSync } from "../common/appearance-sync";
 import { ModalRegistry } from "../modals/registry";
-import { SourceBackfillModal } from "../onboarding";
 import { AppRail } from "./app-rail";
 import { AppBottomBar } from "./bottom-bar";
 import { AppShellProvider } from "./app-shell-context";
@@ -66,7 +65,6 @@ export function DashboardLayout({
                   <NavigationProgress />
                   {children}
                   <ModalRegistry />
-                  <SourceBackfillModal />
                   {extra}
                 </AppShellCard>
                 <AppBottomBar />

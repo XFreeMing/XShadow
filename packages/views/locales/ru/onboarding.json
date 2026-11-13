@@ -52,32 +52,9 @@
     "close": "Закрыть",
     "log_out": "Выйти"
   },
-  "source_backfill": {
-    "eyebrow": "Быстрый вопрос",
-    "lede": "Помогите нам понять, как вы узнали о Multica.",
-    "submit": "Отправить",
-    "save_failed_toast": "Не удалось сохранить"
-  },
   "questions": {
     "about_you": {
       "question": "Расскажите немного о себе."
-    },
-    "source": {
-      "question": "Как вы узнали о Multica?",
-      "friends_colleagues": "От друзей или коллег",
-      "search": "Google / поиск",
-      "social_x": "X / Twitter",
-      "social_linkedin": "LinkedIn",
-      "social_youtube": "YouTube",
-      "social_github": "GitHub",
-      "social_misc": "Другая соцсеть",
-      "blog_newsletter": "Блог / рассылка",
-      "ai_assistant": "ChatGPT / Claude / Cursor",
-      "from_work": "На работе",
-      "event_conference": "Конференция / митап",
-      "dont_remember": "Не помню",
-      "other": "Другое",
-      "other_placeholder": "например, подкаст, который я слушаю"
     },
     "role": {
       "question": "Что лучше всего вас описывает?",

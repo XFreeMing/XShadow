@@ -7,14 +7,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 const state = vi.hoisted(() => ({
   user: null as { id: string } | null,
   isAuthLoading: false,
-  overlay: null as { type: string } | null,
   workspace: null as { id: string; slug: string } | null,
   workspaceError: false,
   listFetched: true,
   wsList: [] as { id: string; slug: string }[],
   workspaceSeen: true,
-  modalRenders: 0,
-  modalAriaLabel: "source-backfill-modal-marker",
   currentSlug: null as string | null,
   pendingDeletes: new Set<string>(),
   childQuerySlugs: [] as (string | null)[],
@@ -93,28 +90,11 @@ vi.mock("@multica/views/layout", () => ({
   WorkspacePresencePrefetch: () => null,
 }));
 
-// The point of this whole test: assert the desktop layout mounts the
-// SourceBackfillModal. We stub the real component with a marker that
-// renders only when the layout actually rendered it (and not e.g.
-// suppressed by overlayActive).
-vi.mock("@multica/views/onboarding", () => ({
-  SourceBackfillModal: () => {
-    state.modalRenders += 1;
-    return <div data-testid={state.modalAriaLabel} />;
-  },
-}));
-
 vi.mock("@/stores/tab-store", () => ({
   useTabStore: Object.assign(() => null, {
     getState: () => ({ validateWorkspaceSlugs: vi.fn() }),
   }),
 }));
-
-vi.mock("@/stores/window-overlay-store", () => {
-  const useWindowOverlayStore = (selector: (s: typeof state) => unknown) =>
-    selector(state);
-  return { useWindowOverlayStore };
-});
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WorkspaceRouteLayout } from "./workspace-route-layout";
@@ -144,32 +124,17 @@ function renderLayout() {
 beforeEach(() => {
   state.user = { id: "u1" };
   state.isAuthLoading = false;
-  state.overlay = null;
   state.workspace = { id: "ws-1", slug: "acme" };
   state.workspaceError = false;
   state.listFetched = true;
   state.wsList = [{ id: "ws-1", slug: "acme" }];
   state.workspaceSeen = true;
-  state.modalRenders = 0;
   state.currentSlug = null;
   state.pendingDeletes = new Set<string>();
   state.childQuerySlugs = [];
 });
 
 describe("WorkspaceRouteLayout", () => {
-  it("mounts SourceBackfillModal when no WindowOverlay is active", () => {
-    const { queryByTestId } = renderLayout();
-    expect(queryByTestId(state.modalAriaLabel)).not.toBeNull();
-    expect(state.modalRenders).toBeGreaterThan(0);
-  });
-
-  it("suppresses SourceBackfillModal while a WindowOverlay is active", () => {
-    state.overlay = { type: "new-workspace" };
-    const { queryByTestId } = renderLayout();
-    expect(queryByTestId(state.modalAriaLabel)).toBeNull();
-    expect(state.modalRenders).toBe(0);
-  });
-
   it("keeps workspace content mounted when a background refetch fails", async () => {
     const { queryByTestId, queryClient } = renderLayout();
     expect(queryByTestId("outlet")).not.toBeNull();

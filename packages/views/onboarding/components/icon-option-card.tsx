@@ -9,13 +9,8 @@ const OTHER_INPUT_MAX_LENGTH = 80;
 
 /**
  * One option in a questionnaire card grid. `slug` is the persisted
- * enum value; `icon` is a React node (product icon, brand SVG, or emoji
- * span); `label` is the localized string already resolved by the
- * caller. `isOther` flips this card into a free-text input row.
- *
- * Shared by the About-you onboarding step and the workspace
- * source-backfill prompt, which both render their options through the
- * cards below.
+ * enum value, and `label` is localized by the caller. `isOther` flips
+ * this card into a free-text input row.
  */
 export interface QuestionOption {
   slug: string;

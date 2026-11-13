@@ -52,32 +52,9 @@
     "close": "閉じる",
     "log_out": "ログアウト"
   },
-  "source_backfill": {
-    "eyebrow": "ちょっと質問",
-    "lede": "Multica を知ったきっかけを教えてください。",
-    "submit": "送信",
-    "save_failed_toast": "保存できませんでした"
-  },
   "questions": {
     "about_you": {
       "question": "あなたについて少し教えてください。"
-    },
-    "source": {
-      "question": "Multica をどこで知りましたか?",
-      "friends_colleagues": "友人または同僚",
-      "search": "Google / 検索",
-      "social_x": "X / Twitter",
-      "social_linkedin": "LinkedIn",
-      "social_youtube": "YouTube",
-      "social_misc": "その他の SNS",
-      "blog_newsletter": "ブログ / ニュースレター",
-      "ai_assistant": "ChatGPT / Claude / Cursor",
-      "from_work": "職場で",
-      "event_conference": "カンファレンス / ミートアップ",
-      "dont_remember": "覚えていない",
-      "other": "その他",
-      "other_placeholder": "例: よく聴くポッドキャスト",
-      "social_github": "GitHub"
     },
     "role": {
       "question": "あなたに最も近いのはどれですか?",

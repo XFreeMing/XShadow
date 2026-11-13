@@ -170,10 +170,7 @@ export class TestApiClient {
       const result = await client.query(
         `
           UPDATE "user"
-          SET
-            onboarded_at = COALESCE(onboarded_at, now()),
-            onboarding_questionnaire = COALESCE(onboarding_questionnaire, '{}'::jsonb)
-              || '{"source":["friends_colleagues"],"source_other":null,"source_skipped":false}'::jsonb
+          SET onboarded_at = COALESCE(onboarded_at, now())
           WHERE email = $1
         `,
         [this.email],

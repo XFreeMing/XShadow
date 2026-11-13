@@ -52,32 +52,9 @@
     "close": "Cerrar",
     "log_out": "Cerrar sesión"
   },
-  "source_backfill": {
-    "eyebrow": "Una pregunta rápida",
-    "lede": "Ayúdanos a entender cómo conociste Multica.",
-    "submit": "Enviar",
-    "save_failed_toast": "No se ha podido guardar"
-  },
   "questions": {
     "about_you": {
       "question": "Cuéntanos un poco sobre ti."
-    },
-    "source": {
-      "question": "¿Cómo conociste Multica?",
-      "friends_colleagues": "Amigos o colegas",
-      "search": "Google / buscador",
-      "social_x": "X / Twitter",
-      "social_linkedin": "LinkedIn",
-      "social_youtube": "YouTube",
-      "social_github": "GitHub",
-      "social_misc": "Otras redes",
-      "blog_newsletter": "Blog / boletín",
-      "ai_assistant": "ChatGPT / Claude / Cursor",
-      "from_work": "En el trabajo",
-      "event_conference": "Conferencia / meetup",
-      "dont_remember": "No me acuerdo",
-      "other": "Otro",
-      "other_placeholder": "p. ej. un podcast que escucho"
     },
     "role": {
       "question": "¿Cuál te describe mejor?",
