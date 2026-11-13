@@ -45,6 +45,7 @@ import { GoalStatusBadge } from "./goal-status-badge";
 import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
+import { GoalPlanSection } from "./goal-plan-section";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
 const LAYOUT_ID = "multica_goal_detail_layout";
@@ -267,6 +268,8 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
           {goal.acceptance_criteria || t(($) => $.detail.no_criteria)}
         </p>
       </Section>
+
+      <GoalPlanSection key={goal.id} goal={goal} />
 
       {!goal.project_id && (
         <p className="rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">

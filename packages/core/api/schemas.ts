@@ -68,6 +68,8 @@ import type {
   Goal,
   ListGoalsResponse,
   ListGoalIssuesResponse,
+  GoalPlan,
+  GoalPlanGeneration,
   MemberWithUser,
   IssueProperty,
   ListPropertiesResponse,
@@ -1850,6 +1852,158 @@ export const ListGoalIssuesResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_LIST_GOAL_ISSUES_RESPONSE: ListGoalIssuesResponse = { issues: [], total: 0 };
+
+// Goal plans (DEV-6). A draft is editable data, so every editable body
+// degrades to a safe default rather than failing the whole plan: losing one
+// malformed node is better than blanking the editor. Identity that a caller
+// must never mistake for success (`id`) stays strict; the plan itself may
+// legitimately have `id: null` before the first save.
+const GoalPlanEvidenceRefSchema = z
+  .object({
+    kind: z.string().catch("other").default("other"),
+    ref: z.string().catch("").default(""),
+    note: z.string().catch("").default(""),
+    version: z.string().catch("").default(""),
+  })
+  .loose();
+
+const GoalPlanBindingSchema = z
+  .object({
+    type: z.string().catch("new").default("new"),
+    issue_id: z.string().nullable().catch(null).default(null),
+  })
+  .loose();
+
+const GoalPlanProposedOwnerSchema = z
+  .object({
+    type: z.string().catch("").default(""),
+    id: z.string().catch("").default(""),
+  })
+  .loose();
+
+const GoalPlanCoordinationSchema = z
+  .object({
+    parallel_reason: z.string().catch("").default(""),
+    write_scope: z.array(z.string()).catch([]).default([]),
+    exclusive_resources: z.array(z.string()).catch([]).default([]),
+    integration_owner: z.string().catch("").default(""),
+    next_evaluation: z.string().catch("").default(""),
+  })
+  .loose();
+
+export const GoalPlanItemSchema = z
+  .object({
+    // Empty only for a candidate whose server-assigned id has not arrived.
+    id: z.string().catch("").default(""),
+    title: z.string().catch("").default(""),
+    outcome: z.string().catch("").default(""),
+    acceptance_criteria: z.string().catch("").default(""),
+    evidence_refs: z.array(GoalPlanEvidenceRefSchema).catch([]).default([]),
+    binding: GoalPlanBindingSchema.default({ type: "new", issue_id: null }),
+    proposed_owner: GoalPlanProposedOwnerSchema.nullable().catch(null).default(null),
+    stage: z.number().nullable().catch(null).default(null),
+    coordination: GoalPlanCoordinationSchema.nullable().catch(null).default(null),
+  })
+  .loose();
+
+export const GoalPlanEdgeSchema = z
+  .object({
+    dependent_item_id: z.string().catch("").default(""),
+    prerequisite_item_id: z.string().catch("").default(""),
+    reason: z.string().catch("").default(""),
+  })
+  .loose();
+
+const GoalPlanContextSnapshotSchema = z
+  .record(z.string(), z.unknown())
+  .catch({})
+  .default({});
+
+export const GoalPlanSchema = z
+  .object({
+    id: z.string().nullable().catch(null).default(null),
+    goal_id: z.string().catch("").default(""),
+    project_id: z.string().nullable().catch(null).default(null),
+    revision: z.number().catch(0).default(0),
+    // Server may add states; treat an unknown one conservatively in the UI.
+    state: z.string().catch("draft").default("draft"),
+    items: z.array(GoalPlanItemSchema).catch([]).default([]),
+    edges: z.array(GoalPlanEdgeSchema).catch([]).default([]),
+    context_snapshot: GoalPlanContextSnapshotSchema,
+    created_at: z.string().nullable().catch(null).default(null),
+    updated_at: z.string().nullable().catch(null).default(null),
+  })
+  .loose();
+
+export const EMPTY_GOAL_PLAN: GoalPlan = {
+  id: null,
+  goal_id: "",
+  project_id: null,
+  revision: 0,
+  state: "draft",
+  items: [],
+  edges: [],
+  context_snapshot: {},
+  created_at: null,
+  updated_at: null,
+};
+
+export const GoalPlanCandidateSchema = z
+  .object({
+    items: z.array(GoalPlanItemSchema).catch([]).default([]),
+    edges: z.array(GoalPlanEdgeSchema).catch([]).default([]),
+    context_snapshot: GoalPlanContextSnapshotSchema,
+  })
+  .loose();
+
+export const GoalPlanGenerationSchema = z
+  .object({
+    id: z.string().min(1),
+    goal_id: z.string().catch("").default(""),
+    project_id: z.string().catch("").default(""),
+    request_key: z.string().catch("").default(""),
+    intent: z.string().catch("").default(""),
+    agent_id: z.string().catch("").default(""),
+    base_revision: z.number().catch(0).default(0),
+    // Preparing/queued/running/succeeded/failed; unknown stays unknown.
+    state: z.string().catch("").default(""),
+    chat_session_id: z.string().nullable().catch(null).default(null),
+    task_id: z.string().nullable().catch(null).default(null),
+    input_context: GoalPlanContextSnapshotSchema,
+    candidate: GoalPlanCandidateSchema.nullable().catch(null).default(null),
+    applied: z.boolean().catch(false).default(false),
+    applied_revision: z.number().nullable().catch(null).default(null),
+    observed_revision: z.number().nullable().catch(null).default(null),
+    current_revision: z.number().catch(0).default(0),
+    stale: z.boolean().catch(false).default(false),
+    error: z.string().catch("").default(""),
+    created_at: z.string().catch("").default(""),
+    updated_at: z.string().catch("").default(""),
+  })
+  .loose();
+
+export const EMPTY_GOAL_PLAN_GENERATION: GoalPlanGeneration = {
+  id: "",
+  goal_id: "",
+  project_id: "",
+  request_key: "",
+  intent: "",
+  agent_id: "",
+  base_revision: 0,
+  state: "",
+  chat_session_id: null,
+  task_id: null,
+  input_context: {},
+  candidate: null,
+  applied: false,
+  applied_revision: null,
+  observed_revision: null,
+  current_revision: 0,
+  stale: false,
+  error: "",
+  created_at: "",
+  updated_at: "",
+};
 
 export const ProjectMemberSchema = z.object({
   project_id: z.string(),

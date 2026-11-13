@@ -1374,6 +1374,17 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceGoalIssues(ctx, requester.WorkspaceID) },
 		},
 		{
+			// Plan drafts and their generations hang off goals by value only.
+			// They go before the goals; the agent tasks that ran a generation
+			// are swept by the task steps and are never deleted here.
+			name: "delete goal plan generations",
+			run:  func() error { return qtx.DeleteWorkspaceGoalPlanGenerations(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete goal plans",
+			run:  func() error { return qtx.DeleteWorkspaceGoalPlans(ctx, requester.WorkspaceID) },
+		},
+		{
 			name: "delete goals",
 			run:  func() error { return qtx.DeleteWorkspaceGoals(ctx, requester.WorkspaceID) },
 		},

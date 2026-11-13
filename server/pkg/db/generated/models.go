@@ -910,6 +910,41 @@ type GoalIssue struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type GoalPlan struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	GoalID          pgtype.UUID        `json:"goal_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	Revision        int32              `json:"revision"`
+	State           string             `json:"state"`
+	Content         []byte             `json:"content"`
+	ContextSnapshot []byte             `json:"context_snapshot"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GoalPlanGeneration struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	GoalID           pgtype.UUID        `json:"goal_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	RequestKey       string             `json:"request_key"`
+	Intent           string             `json:"intent"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	BaseRevision     int32              `json:"base_revision"`
+	State            string             `json:"state"`
+	ChatSessionID    pgtype.UUID        `json:"chat_session_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	InputContext     []byte             `json:"input_context"`
+	Candidate        []byte             `json:"candidate"`
+	Applied          bool               `json:"applied"`
+	AppliedRevision  pgtype.Int4        `json:"applied_revision"`
+	ObservedRevision pgtype.Int4        `json:"observed_revision"`
+	Error            string             `json:"error"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`

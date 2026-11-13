@@ -11,8 +11,10 @@ import type { ApiClient } from "../api/client";
 import { goalKeys } from "./queries";
 import {
   useCreateGoal,
+  useCreateGoalPlanGeneration,
   useDeleteGoal,
   useLinkGoalIssue,
+  useSaveGoalPlan,
   useUnlinkGoalIssue,
   useUpdateGoal,
 } from "./mutations";
@@ -44,6 +46,42 @@ const goal: Goal = {
   updated_at: "",
 };
 
+const plan = {
+  id: "plan-1",
+  goal_id: "goal-1",
+  project_id: "project-1",
+  revision: 3,
+  state: "draft",
+  items: [],
+  edges: [],
+  context_snapshot: {},
+  created_at: null,
+  updated_at: null,
+};
+
+const generation = {
+  id: "gen-1",
+  goal_id: "goal-1",
+  project_id: "project-1",
+  request_key: "req-1",
+  intent: "Plan it",
+  agent_id: "agent-1",
+  base_revision: 2,
+  state: "queued",
+  chat_session_id: null,
+  task_id: null,
+  input_context: {},
+  candidate: null,
+  applied: false,
+  applied_revision: null,
+  observed_revision: null,
+  current_revision: 3,
+  stale: false,
+  error: "",
+  created_at: "",
+  updated_at: "",
+};
+
 describe("goal mutations", () => {
   let qc: QueryClient;
   const api = {
@@ -54,6 +92,8 @@ describe("goal mutations", () => {
     listGoalIssues: vi.fn(),
     linkGoalIssue: vi.fn(),
     unlinkGoalIssue: vi.fn(),
+    saveGoalPlan: vi.fn(),
+    createGoalPlanGeneration: vi.fn(),
   };
 
   beforeEach(() => {
@@ -65,6 +105,8 @@ describe("goal mutations", () => {
     api.listGoalIssues.mockResolvedValue({ issues: [], total: 0 } satisfies ListGoalIssuesResponse);
     api.linkGoalIssue.mockResolvedValue(undefined);
     api.unlinkGoalIssue.mockResolvedValue(undefined);
+    api.saveGoalPlan.mockResolvedValue(plan);
+    api.createGoalPlanGeneration.mockResolvedValue(generation);
     setApiInstance(api as unknown as ApiClient);
   });
 
@@ -180,5 +222,102 @@ describe("goal mutations", () => {
     });
     expect(errorCode(error)).toBe("goal_project_mismatch");
     expect(qc.getQueryData(goalKeys.issues(WS, "goal-1"))).toEqual({ pages: [], pageParams: [] });
+  });
+
+  it("saves a plan and caches the confirmed revision", async () => {
+    qc.setQueryData(goalKeys.planGeneration(WS, "goal-1", "gen-1"), generation);
+    const { result } = renderHook(() => useSaveGoalPlan(), { wrapper: createWrapper(qc) });
+    await act(async () => {
+      await result.current.mutateAsync({
+        goalId: "goal-1",
+        data: {
+          expected_revision: 2,
+          items: [],
+          edges: [],
+          context_snapshot: {},
+          generation_id: "gen-1",
+        },
+      });
+    });
+    expect(api.saveGoalPlan).toHaveBeenCalledWith("goal-1", {
+      expected_revision: 2,
+      items: [],
+      edges: [],
+      context_snapshot: {},
+      generation_id: "gen-1",
+    });
+    expect(qc.getQueryData(goalKeys.plan(WS, "goal-1"))).toEqual(plan);
+    await waitFor(() =>
+      expect(
+        qc.getQueryState(goalKeys.planGeneration(WS, "goal-1", "gen-1"))?.isInvalidated,
+      ).toBe(true),
+    );
+  });
+
+  it("does not cache a save the server did not confirm", async () => {
+    api.saveGoalPlan.mockResolvedValue({
+      ...plan,
+      goal_id: "",
+      id: null,
+      revision: 0,
+    });
+    const { result } = renderHook(() => useSaveGoalPlan(), { wrapper: createWrapper(qc) });
+    await expect(
+      act(async () => {
+        await result.current.mutateAsync({
+          goalId: "goal-1",
+          data: { expected_revision: 2, items: [], edges: [], context_snapshot: {} },
+        });
+      }),
+    ).rejects.toThrow(/did not confirm/i);
+    expect(qc.getQueryData(goalKeys.plan(WS, "goal-1"))).toBeUndefined();
+  });
+
+  it("seeds the generation query after a confirmed start", async () => {
+    const { result } = renderHook(() => useCreateGoalPlanGeneration(), {
+      wrapper: createWrapper(qc),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({
+        goalId: "goal-1",
+        data: {
+          intent: "Plan it",
+          request_key: "req-1",
+          expected_revision: 2,
+          agent_id: "agent-1",
+        },
+      });
+    });
+    expect(api.createGoalPlanGeneration).toHaveBeenCalledWith("goal-1", {
+      intent: "Plan it",
+      request_key: "req-1",
+      expected_revision: 2,
+      agent_id: "agent-1",
+    });
+    expect(qc.getQueryData(goalKeys.planGeneration(WS, "goal-1", "gen-1"))).toEqual(generation);
+  });
+
+  it("fails a generation start the server did not confirm", async () => {
+    api.createGoalPlanGeneration.mockResolvedValue({
+      ...generation,
+      id: "",
+      goal_id: "",
+    });
+    const { result } = renderHook(() => useCreateGoalPlanGeneration(), {
+      wrapper: createWrapper(qc),
+    });
+    await expect(
+      act(async () => {
+        await result.current.mutateAsync({
+          goalId: "goal-1",
+          data: {
+            intent: "Plan it",
+            request_key: "req-1",
+            expected_revision: 2,
+            agent_id: "agent-1",
+          },
+        });
+      }),
+    ).rejects.toThrow(/did not confirm/i);
   });
 });

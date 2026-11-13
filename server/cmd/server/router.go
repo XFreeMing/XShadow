@@ -2286,6 +2286,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/issues", h.ListGoalIssues)
 					r.Put("/issues/{issueId}", h.LinkGoalIssue)
 					r.Delete("/issues/{issueId}", h.UnlinkGoalIssue)
+					// Plan drafts (DEV-6): an editable plan that is independent of
+					// execution. Generations reuse the chat/task chain; the result
+					// endpoint is called by the planning run's own task token.
+					r.Get("/plan", h.GetGoalPlan)
+					r.Put("/plan", h.PutGoalPlan)
+					r.Post("/plan/generations", h.CreateGoalPlanGeneration)
+					r.Get("/plan/generations/{generationId}", h.GetGoalPlanGeneration)
+					r.Post("/plan/generations/{generationId}/result", h.SubmitGoalPlanGenerationResult)
 				})
 			})
 
