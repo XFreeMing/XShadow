@@ -43,9 +43,10 @@ set +a
 # shellcheck disable=SC1091
 . scripts/local-env.sh
 
-# Migrations below must reach the database this checkout's env file declares;
-# cmd/migrate refuses anything else before DDL (DEV-54).
-export MULTICA_EXPECTED_DATABASE_URL="${DATABASE_URL:-}"
+# cmd/migrate below refuses a connection that is not the target the caller's
+# environment record declares (DEV-54). The target is deliberately not derived
+# from the env file loaded here: a linked worktree must enter through
+# `make up` or `make env-exec`, which export the recorded target.
 
 # ---------- Install dependencies ----------
 if [ ! -d node_modules ]; then

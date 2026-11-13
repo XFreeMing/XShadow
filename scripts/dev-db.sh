@@ -11,10 +11,11 @@
 #
 # scripts/dev-env.sh exec resolves the environment record and exports
 # MULTICA_EXPECTED_DATABASE_URL (the recorded target) plus
-# MULTICA_PROTECTED_DATABASES (other checkouts' databases). cmd/migrate reads
-# the live identity through DATABASE_URL and refuses before any DDL when it is
-# not the recorded database. Running this script outside that entry has no
-# verified target and is refused here.
+# MULTICA_PROTECTED_DATABASES (other checkouts' databases). cmd/migrate compares
+# the DATABASE_URL endpoint and database name with the recorded target before it
+# connects, then confirms the live current_database(), and refuses before any
+# DDL when they disagree. Running this script outside that entry has no verified
+# target and is refused here.
 #
 # A refusal stops the run. Nothing in this script stops, resets or rolls back
 # the environment, so a wrong target leaves the database untouched.

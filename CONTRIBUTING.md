@@ -386,16 +386,22 @@ make env-exec ARGS="-- bash scripts/dev-db.sh migrate-test"   # migrate, then DB
 make env-exec ARGS="-- bash scripts/dev-db.sh verify"          # read-only target check
 ```
 
-`cmd/migrate` reads the live `current_database()` before any DDL and refuses
-when it is not the database the selected environment record names, when a linked
-worktree has no selected environment and therefore no verified target, or when
-the connection reaches another checkout's or the coordination database. The
-refusal stops the run and leaves the database untouched; it never runs
-`make down`. A direct `go run ./cmd/migrate up` from a task worktree is refused
-for the same reason, so use `make up`, `make migrate-up`, or `make env-exec`.
-The database name is the identity; the host and port are compared only when
-both sides are loopback addresses, because a published container port reports
-the container's internal endpoint rather than the host port in `DATABASE_URL`.
+`cmd/migrate` compares the `DATABASE_URL` endpoint and database name with the
+target the selected environment record declares, before it opens a connection,
+then confirms the live `current_database()` before any DDL. It refuses when the
+endpoints disagree even though the database names match, when a linked worktree
+has no selected environment and therefore no verified target, when
+`DATABASE_URL` is empty under a verified target, or when the connection reaches
+another checkout's or the coordination database. The target always comes from
+the environment record, never from the connection being verified. The refusal
+stops the run and leaves the database untouched; it never runs `make down`.
+Because `make check`, `make dev`, and `make migrate-up` do not select an
+environment themselves, a linked worktree must run them through the verified
+connection:
+
+```bash
+make env-exec ARGS="-- make check"
+```
 
 `make dev` (below) still runs backend and frontend in the foreground of your
 terminal, which is the right thing when you want Ctrl-C to stop everything.

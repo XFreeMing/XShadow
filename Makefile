@@ -28,11 +28,12 @@ LOCAL_UPLOAD_BASE_URL ?= http://localhost:$(PORT)
 
 export
 
-# cmd/migrate refuses a live connection that is not the target this checkout's
-# env file declares, so a stale DATABASE_URL exported by a parent shell cannot
-# silently become the migration target. scripts/dev-env.sh overrides this with
-# the managed environment record when one is selected (DEV-54).
-export MULTICA_EXPECTED_DATABASE_URL := $(DATABASE_URL)
+# cmd/migrate refuses a live connection that is not the target the caller's
+# environment record declares (DEV-54). The expected target and the protected
+# database list come from that record through scripts/dev-env.sh; they are never
+# derived here from the connection they are meant to verify. A linked worktree
+# that runs a write target without a selected environment therefore refuses and
+# must use `make up` or `make env-exec`.
 
 MULTICA_ARGS ?= $(ARGS)
 
