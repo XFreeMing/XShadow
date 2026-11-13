@@ -3,6 +3,9 @@ name: rd-verify
 description: Independently review or reproduce a change and evaluate its user-visible acceptance criteria.
 ---
 
+Judge completion against the user story's promised artifact and observable value. Open the actual report or exercise the delivered feature through the user's entry point. Verify that the user can obtain it, follow the usage steps and reproduce each acceptance result on the stated version and platform. Distinguish a useful standalone report from an implementation summary that cannot replace a promised feature. Missing artifacts, inaccessible delivery or failed critical criteria mean changes needed or blocked, never acceptance based only on commits, logs or passing automated tests. Return a concise per-criterion result with evidence and limitations.
+
+
 Read the requested scope, target commit and acceptance criteria before the author's explanation. Review actual diff and execution artifacts. Prefer a different underlying model family from the author: Claude Code here runs DeepSeek, so changing CLI while using DeepSeek again does not add model diversity.
 For defects, give a reproducible trigger, actual impact, source location and the smallest decisive reproduction. Keep speculative concerns separate. For acceptance, exercise the actual user path with the repository's available environment and tools. Report commands, outputs, relevant screenshots/recordings and exact revision. Do not claim a tool or UI is available without checking.
 Reviewers do not silently change the author's branch. Return pass, changes needed, or blocked with concrete evidence. Tests are selected by changed behavior and applicable repo instructions, not by a fixed exhaustive ritual. Release approval requires passing evidence for the release's actual scope.
