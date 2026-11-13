@@ -4432,6 +4432,14 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.processChildEvents(r.Context(), issue.ParentIssueID, prevIssue.ParentIssueID)
 	}
 
+	// A status write is a real dependency-change event: dependents that were
+	// parked (or never enqueued) because this issue was not accepted yet get
+	// one chance to run. The release re-checks the persisted acceptance, so an
+	// unaccepted or reopened prerequisite still releases nothing.
+	if statusChanged {
+		h.releaseDependentsOfIssue(r.Context(), issue)
+	}
+
 	// The broadcast reaches every member; the caller's own copy names the
 	// original only when the caller can see it.
 	if resp.DuplicateOf != nil {
@@ -4802,6 +4810,23 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 		}
 		if goalLinks > 0 {
 			result.GoalLinksChanged = true
+		}
+		// Closure evidence hangs off the subject by value only (no foreign
+		// keys by project rule), so it is removed with the issue.
+		if err := qtx.DeleteClosureReviewsBySubject(ctx, db.DeleteClosureReviewsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure reviews: %w", err)
+		}
+		if err := qtx.DeleteClosureDecisionsBySubject(ctx, db.DeleteClosureDecisionsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure rejections: %w", err)
+		}
+		if err := qtx.DeleteClosureAuthorizationsBySubject(ctx, db.DeleteClosureAuthorizationsBySubjectParams{
+			WorkspaceID: issue.WorkspaceID, SubjectKind: "issue", SubjectID: issue.ID,
+		}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue closure authorizations: %w", err)
 		}
 		if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue: %w", err)

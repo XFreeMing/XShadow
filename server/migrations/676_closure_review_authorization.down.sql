@@ -1,0 +1,1 @@
+ALTER TABLE closure_review DROP COLUMN IF EXISTS authorization_id;

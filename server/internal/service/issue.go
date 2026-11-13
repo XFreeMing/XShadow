@@ -61,6 +61,11 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
+	// ID optionally pins the new issue's primary key. Plan-item materialization
+	// uses a deterministic id so a retried trigger resolves the same issue
+	// instead of creating a second one; leaving it invalid keeps the ordinary
+	// generated id.
+	ID            pgtype.UUID
 	WorkspaceID   pgtype.UUID
 	Title         string
 	Description   pgtype.Text
@@ -138,6 +143,14 @@ type IssueCreateOpts struct {
 	// still resolving, then promotes the returned task after attachment binding.
 	// Zero preserves the ordinary immediate enqueue path.
 	AssignedAgentRunFireAt time.Time
+
+	// SuppressAssignedRunEnqueue leaves the automatic assigned-agent task to the
+	// caller. The issue is still committed and published, but no task is created
+	// and no daemon is notified. Goal plan materialization uses this to commit
+	// the goal link and (goal_id, item_id) binding first, then enqueue through
+	// IssueService.WillEnqueueRun: the dependency gate can only see the plan
+	// graph once those rows exist.
+	SuppressAssignedRunEnqueue bool
 }
 
 // ErrActiveDuplicate signals that the duplicate guard found an active
@@ -452,7 +465,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
-			ID:            dbid.NewV7(),
+			ID:            p.ID,
 			WorkspaceID:   p.WorkspaceID,
 			Title:         p.Title,
 			Description:   p.Description,
@@ -613,7 +626,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 
 	s.publishIssueCreated(issue, attachments, labels, p.CreatorType, actorID, opts)
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
-	if opts.AssignedAgentRunFireAt.IsZero() {
+	if opts.AssignedAgentRunFireAt.IsZero() && !opts.SuppressAssignedRunEnqueue {
 		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
 	}
 

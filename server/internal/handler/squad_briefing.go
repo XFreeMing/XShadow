@@ -119,8 +119,11 @@ const squadParentStatusOwned = `6. **Own the parent issue status.** This issue i
    routine progress updates. When you confirm the overall goal is met, run
    ` + "`" + `multica issue status <issue-id> in_review` + "`" + ` — this responsibility is
    itself the standing instruction that authorizes that change, so do it even
-   when no comment asked you to. Leave ` + "`" + `done` + "`" + ` to a human reviewer or
-   existing integrations (for example a PR with close intent that merges).`
+   when no comment asked you to. ` + "`" + `done` + "`" + ` follows the closure contract:
+   it is written only when a scoped grant and an independent acceptance cover
+   the fixed delivery; otherwise a human reviewer or an existing integration
+   (for example a PR with close intent that merges) closes it. Never retry a
+   refused close.`
 
 // leaderWorkflow says whether an owning leader's issue follows a project
 // workflow that came with the claim, and whether the daemon's runtime brief

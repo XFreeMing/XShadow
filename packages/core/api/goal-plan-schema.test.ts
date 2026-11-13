@@ -42,6 +42,7 @@ const plan = {
   items: [item],
   edges: [],
   context_snapshot: { repo_sha: "abc123", missing: [] },
+  execution: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
@@ -95,6 +96,7 @@ describe("GoalPlanSchema", () => {
       items: [],
       edges: [],
       context_snapshot: {},
+      execution: null,
       created_at: null,
       updated_at: null,
     };

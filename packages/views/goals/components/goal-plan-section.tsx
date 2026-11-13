@@ -36,6 +36,7 @@ import {
   type ApplyCandidateOutcome,
 } from "./goal-plan-generate-panel";
 import { PlanActualBasis } from "./goal-plan-basis";
+import { GoalPlanExecution } from "./goal-plan-execution";
 
 type SaveOutcome = "saved" | "revision_conflict" | "generation_project_conflict" | "failed";
 
@@ -643,6 +644,19 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
           {Object.keys(draft.context_snapshot).length > 0 ? (
             <PlanActualBasis snapshot={draft.context_snapshot} />
           ) : null}
+          <GoalPlanExecution
+            goal={goal}
+            items={plan?.items ?? []}
+            planRevision={planRevision}
+            saved={!!plan?.id}
+            dirty={dirty}
+            blocked={
+              savePlan.isPending ||
+              conflictRevision !== null ||
+              projectConflictNotice ||
+              !draftIsCurrentProject
+            }
+          />
         </>
       ) : null}
     </section>

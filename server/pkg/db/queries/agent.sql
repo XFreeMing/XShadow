@@ -889,6 +889,53 @@ WHERE id = @task_id
   AND dispatched_at = @dispatched_at
 RETURNING *;
 
+-- name: DeferAgentTaskForUnmetDependencies :one
+-- A claim whose issue still has an unmet strong prerequisite is not a claim
+-- the queue should retry every poll: returning the row to 'queued' makes every
+-- later poll list it, claim it and reject it again. Park it in 'deferred' with
+-- no fire_at instead, so time-based promotion never re-lists it. A real
+-- dependency change (see ReleaseDeferredDependentTasksForIssue) makes it due
+-- again, and the ordinary promotion path puts it back in the claim queue with
+-- the existing single-pending fence intact.
+--
+-- The wait verdict is persisted with the row so a task read can explain the
+-- park without re-evaluating the dependency graph, and so `deferred` with a
+-- NULL fire_at is distinguishable from a timed retry. Release removes it.
+UPDATE agent_task_queue
+SET status = 'deferred',
+    fire_at = NULL,
+    dispatched_at = NULL,
+    prepare_lease_expires_at = NULL,
+    delivered_comment_ids = '{}',
+    context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
+        'dependency_wait', jsonb_build_object(
+            'reason', @wait_reason::text,
+            'detail', @wait_detail::text,
+            'event', 'dependency_changed',
+            'prerequisites', @wait_prerequisites::jsonb
+        )
+    )
+WHERE id = @task_id
+  AND runtime_id = @runtime_id
+  AND status = 'dispatched'
+  AND started_at IS NULL
+  AND dispatched_at = @dispatched_at
+RETURNING *;
+
+-- name: ReleaseDeferredDependentTasksForIssue :many
+-- Arms every task parked by DeferAgentTaskForUnmetDependencies for the next
+-- promotion tick. Only rows with fire_at IS NULL are touched: ordinary retry /
+-- channel-media deferred rows already have their own trigger and are never
+-- pulled forward by a dependency event. The stale wait verdict is removed so a
+-- later unrelated defer cannot inherit it.
+UPDATE agent_task_queue
+SET fire_at = now(),
+    context = context - 'dependency_wait'
+WHERE issue_id = @issue_id
+  AND status = 'deferred'
+  AND fire_at IS NULL
+RETURNING *;
+
 -- name: ReclaimStaleDispatchedTaskForRuntime :one
 -- Re-delivers a task whose previous claim likely succeeded server-side but
 -- whose response never reached the daemon. The task is still in `dispatched`

@@ -3,7 +3,6 @@
 import { useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
-  Check,
   FileQuestion,
   Link2,
   Pencil,
@@ -46,6 +45,7 @@ import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
+import { GoalClosureSection } from "./goal-closure-section";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
 const LAYOUT_ID = "multica_goal_detail_layout";
@@ -87,7 +87,6 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
 
   const [editOpen, setEditOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
-  const [completeOpen, setCompleteOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -162,17 +161,14 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
     );
   };
 
-  const handleSetStatus = (status: "completed" | "planned") => {
+  // Completion is the explicit acceptance decision in GoalClosureSection.
+  // This handler only reopens a completed goal.
+  const handleSetStatus = (status: "planned") => {
     updateGoal.mutate(
       { id: goal.id, status },
       {
         onSuccess: () => {
-          toast.success(
-            status === "completed"
-              ? t(($) => $.toast.completed)
-              : t(($) => $.toast.reopened),
-          );
-          setCompleteOpen(false);
+          toast.success(t(($) => $.toast.reopened));
           setReopenOpen(false);
         },
         onError: () => toast.error(t(($) => $.form.save_failed)),
@@ -212,12 +208,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
           <RotateCcw className="size-3.5" />
           {t(($) => $.detail.reopen)}
         </Button>
-      ) : (
-        <Button size="sm" onClick={() => setCompleteOpen(true)}>
-          <Check className="size-3.5" />
-          {t(($) => $.detail.mark_completed)}
-        </Button>
-      )}
+      ) : null}
       <Button
         size="icon-sm"
         variant="ghost"
@@ -270,6 +261,8 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
       </Section>
 
       <GoalPlanSection key={goal.id} goal={goal} />
+
+      <GoalClosureSection key={`closure-${goal.id}`} goal={goal} />
 
       {!goal.project_id && (
         <p className="rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">
@@ -364,35 +357,6 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
         goal={goal}
         linkedIssueIds={linkedIssues.map((issue) => issue.id)}
       />
-
-      <AlertDialog
-        open={completeOpen}
-        onOpenChange={(open) => {
-          if (!updateGoal.isPending) setCompleteOpen(open);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.confirm.complete_title)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.confirm.complete_description)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={updateGoal.isPending}>
-              {t(($) => $.form.cancel)}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={updateGoal.isPending}
-              aria-busy={updateGoal.isPending}
-              onClick={() => handleSetStatus("completed")}
-            >
-              {updateGoal.isPending && <Spinner className="size-3.5" aria-hidden="true" />}
-              {t(($) => $.confirm.complete_action)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <AlertDialog
         open={reopenOpen}

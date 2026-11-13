@@ -148,6 +148,15 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 		return IssueRunTrigger{}, false
 	}
 
+	// A managed issue with strong prerequisites is not released by an issue
+	// write alone. The same check runs again at claim, so a stale event or a
+	// direct status write cannot start a dependent whose prerequisites are
+	// still in review, cancelled, or accepted only by a revoked grant. Errors
+	// fail closed: unknown readiness never promises a run.
+	if state, err := IssueDependenciesReady(ctx, s.Queries, issue); err != nil || !state.Ready {
+		return IssueRunTrigger{}, false
+	}
+
 	switch issue.AssigneeType.String {
 	case "agent":
 		agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)

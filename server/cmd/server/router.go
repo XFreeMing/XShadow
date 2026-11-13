@@ -2156,6 +2156,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/comments", h.ListComments)
 					r.Get("/timeline", h.ListTimeline)
 					r.Get("/workflow-handoff", h.PreviewWorkflowHandoff)
+					// DEV-7 closure contract: the read model the gate uses, the
+					// independent review record, and a human-only scoped grant.
+					r.Get("/closure", h.GetIssueClosure)
+					r.Post("/closure/reviews", h.CreateIssueClosureReview)
+					r.With(handler.RequireHumanActor).Post("/closure/authorizations", h.GrantIssueClosureAuthorization)
 					r.Get("/subscribers", h.ListIssueSubscribers)
 					r.Post("/subscribe", h.SubscribeToIssue)
 					r.Post("/unsubscribe", h.UnsubscribeFromIssue)
@@ -2283,6 +2288,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.GetGoal)
 					r.Put("/", h.UpdateGoal)
 					r.Delete("/", h.DeleteGoal)
+					r.Get("/closure", h.GetGoalClosure)
+					r.Post("/closure/reviews", h.CreateGoalClosureReview)
+					// A human can refuse a goal before any reviewable delivery
+					// exists. This records the reason only; it is not a review.
+					r.With(handler.RequireHumanActor).Post("/closure/rejections", h.CreateGoalClosureRejection)
+					r.With(handler.RequireHumanActor).Post("/closure/authorizations", h.GrantGoalClosureAuthorization)
 					r.Get("/issues", h.ListGoalIssues)
 					r.Put("/issues/{issueId}", h.LinkGoalIssue)
 					r.Delete("/issues/{issueId}", h.UnlinkGoalIssue)
@@ -2291,6 +2302,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// endpoint is called by the planning run's own task token.
 					r.Get("/plan", h.GetGoalPlan)
 					r.Put("/plan", h.PutGoalPlan)
+					// Materialize creates the issues for `binding.type = "new"`
+					// items and persists the item→issue binding. It is the
+					// idempotent execution step for a saved plan (DEV-7).
+					r.Post("/plan/materialize", h.MaterializeGoalPlan)
 					r.Post("/plan/generations", h.CreateGoalPlanGeneration)
 					r.Get("/plan/generations/{generationId}", h.GetGoalPlanGeneration)
 					r.Post("/plan/generations/{generationId}/result", h.SubmitGoalPlanGenerationResult)
