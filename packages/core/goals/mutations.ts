@@ -3,11 +3,15 @@ import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { goalKeys } from "./queries";
 import type {
+  CreateClosureAuthorizationRequest,
+  CreateClosureReviewRequest,
   CreateGoalPlanGenerationRequest,
   CreateGoalRequest,
   Goal,
   GoalPlan,
   GoalPlanGeneration,
+  MaterializeGoalPlanRequest,
+  MaterializeGoalPlanResponse,
   SaveGoalPlanRequest,
   UpdateGoalRequest,
 } from "../types";
@@ -159,6 +163,80 @@ export function useCreateGoalPlanGeneration() {
         goalKeys.planGeneration(wsId, goalId, generation.id),
         generation,
       );
+    },
+  });
+}
+
+/**
+ * Records a human's scoped closure authorization. Only a human may grant it,
+ * and the server echoes the stored grant — a reply without an id did not
+ * record anything, so the caller must not show it as granted.
+ */
+export function useGrantGoalClosureAuthorization() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: async ({
+      goalId,
+      data,
+    }: {
+      goalId: string;
+      data: CreateClosureAuthorizationRequest;
+    }) => {
+      const grant = await api.grantGoalClosureAuthorization(goalId, data);
+      if (!grant.id) throw new Error("The server did not confirm the authorization.");
+      return grant;
+    },
+    onSettled: (_grant, _error, { goalId }) => {
+      void qc.invalidateQueries({ queryKey: goalKeys.closure(wsId, goalId) });
+    },
+  });
+}
+
+/**
+ * Records one review verdict. Used by the goal acceptance panel for the
+ * human's explicit "reject and send back" decision (a needs_changes verdict);
+ * a review is evidence, so the server's stored copy is authoritative.
+ */
+export function useCreateGoalClosureReview() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      goalId,
+      data,
+    }: {
+      goalId: string;
+      data: CreateClosureReviewRequest;
+    }) => api.createGoalClosureReview(goalId, data),
+    onSettled: (_review, _error, { goalId }) => {
+      void qc.invalidateQueries({ queryKey: goalKeys.closure(wsId, goalId) });
+      // A new verdict can change whether the goal may be accepted, and the
+      // goal detail's own status is unchanged by recording evidence.
+      void qc.invalidateQueries({ queryKey: goalKeys.detail(wsId, goalId) });
+    },
+  });
+}
+
+/**
+ * Materializes saved-plan items into tasks. The server is idempotent per plan
+ * item, so a retried click returns the same bindings with `created=false`.
+ * Success invalidates the linked-task list and the closure decision: new
+ * enrolled issues and newly enqueued work change both.
+ */
+export function useMaterializeGoalPlan() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (args: {
+      goalId: string;
+      data: MaterializeGoalPlanRequest;
+    }): Promise<MaterializeGoalPlanResponse> =>
+      api.materializeGoalPlan(args.goalId, args.data),
+    onSuccess: (result, { goalId }) => {
+      if (result.goal_id && result.goal_id !== goalId) return;
+      void qc.invalidateQueries({ queryKey: goalKeys.issues(wsId, goalId) });
+      void qc.invalidateQueries({ queryKey: goalKeys.closure(wsId, goalId) });
     },
   });
 }

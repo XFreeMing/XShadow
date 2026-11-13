@@ -5,6 +5,7 @@ export {
   goalIssuesPagesOptions,
   goalPlanOptions,
   goalPlanGenerationOptions,
+  goalClosureOptions,
   isGoalPlanGenerationPending,
   isGoalPlanGenerationTerminal,
   GOAL_PAGE_SIZE,
@@ -19,4 +20,7 @@ export {
   useUnlinkGoalIssue,
   useSaveGoalPlan,
   useCreateGoalPlanGeneration,
+  useGrantGoalClosureAuthorization,
+  useCreateGoalClosureReview,
+  useMaterializeGoalPlan,
 } from "./mutations";

@@ -31,6 +31,9 @@ export const goalKeys = {
     [...goalKeys.plan(wsId, goalId), "generation"] as const,
   planGeneration: (wsId: string, goalId: string, generationId: string) =>
     [...goalKeys.planGenerationAll(wsId, goalId), generationId] as const,
+  /** The goal's server-owned closure decision, under `goalKeys.all`. */
+  closure: (wsId: string, goalId: string) =>
+    [...goalKeys.all(wsId), "closure", goalId] as const,
 };
 
 /** Generation states that still represent live work on the server. */
@@ -131,5 +134,19 @@ export function goalPlanGenerationOptions(
       const state = query.state.data?.state;
       return state && isGoalPlanGenerationPending(state) ? GOAL_PLAN_GENERATION_POLL_MS : false;
     },
+  });
+}
+
+/**
+ * The goal's closure decision: whether the server considers the goal closable,
+ * why not, what independent evidence exists and what authorization applies.
+ * The client never recomputes this from issue statuses or run outcomes, so a
+ * refetch is the only way the panel's verdict changes.
+ */
+export function goalClosureOptions(wsId: string, goalId: string) {
+  return queryOptions({
+    queryKey: goalKeys.closure(wsId, goalId),
+    queryFn: () => api.getGoalClosure(goalId),
+    enabled: !!wsId && !!goalId,
   });
 }
