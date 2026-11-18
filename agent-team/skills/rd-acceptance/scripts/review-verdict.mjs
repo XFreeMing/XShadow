@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 // Deterministic adjudicator for the in_review acceptance step.
 //
-// It reads only platform-exported data: one issue record and its comments. The
-// acceptance automation engineer posts one machine-readable record per
-// independent acceptance attempt; the quality manager posts one verdict per
-// attempt. This tool deduplicates replays, refuses to count missing evidence or
-// environment errors as real failures, and decides whether the story is done,
-// goes back to the delivery team, or escalates one decision to the configured
-// human.
+// It reads only platform-exported data: one issue record, its comments, and the
+// workspace agent roster. Identities come from each comment's real author, never
+// from a field an agent writes about itself. The acceptance automation engineer
+// posts one machine-readable record per independent acceptance attempt; the
+// quality manager posts one verdict per attempt.
 //
 // Input is JSON, never a live API call, so the same decision is reproducible
 // from the issue's stored history.
@@ -17,28 +15,35 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const RECORD_MARKER = "multica-acceptance";
+export const DECISION_MARKER = "multica-acceptance-decision";
 export const MIN_FAILED_ROUNDS = 3;
 const RESULTS = new Set(["passed", "failed", "not_verified"]);
 const RECORD_KINDS = new Set(["attempt", "verdict", "exhausted"]);
 
 const USAGE = `Usage:
   node review-verdict.mjs --issue <issue.json> --comments <comments.json> \\
-    --standard-version <id> [--owner-user-id <user-id>] [--existing-decisions <json>] \\
+    --agents <agents.json> --standard-version <id> --candidate <sha-or-version> \\
+    --criteria <id,id,...> --owner-user-id <member-id> \\
+    [--criteria-file <json>] [--existing-decisions <json>]... \\
+    [--tester-role 验收自动化工程师] [--quality-role 质量交付经理] \\
+    [--lead-roles 研发经理,项目经理] \\
     [--done-status done] [--back-status in_progress] [--blocked-status blocked] \\
     [--decision-dir <dir>] [--output json|text]
 
 --issue              JSON from \`multica issue get <issue> --output json\`.
---comments           JSON from \`multica issue comment list <issue> --output json\`,
+--comments           JSON from \`multica issue comment list <issue> --full --output json\`,
                      or any array of comment objects.
---standard-version   Frozen acceptance criteria version under test. Records for
-                     other versions are reported but never counted.
---owner-user-id      The human who receives an escalated decision. Required only
-                     when escalating; must not be the issue's agent creator.
---existing-decisions JSON array from \`multica issue list --metadata
-                     acceptance_decision_key=<key>\`; reused instead of creating.
---decision-dir       Write decision title.txt and body.md there, ready for
-                     \`multica issue create --description-file\`.
---output             json (default) or text.
+--agents             JSON from \`multica agent list --output json\`. Roles are
+                     resolved by name; every record's author is checked against
+                     the resolved role, so an agent cannot sign its own work.
+--standard-version   Frozen acceptance criteria version under test.
+--candidate          Current candidate revision. A pass for another revision
+                     never ends the story.
+--criteria           The complete frozen criterion id set, comma separated.
+--owner-user-id      Human member who receives an escalated decision. Required,
+                     so the escalation path never blocks on a second run.
+--existing-decisions JSON issue list/search result; repeat to pass several.
+--decision-dir       Write decision title.txt and body.md there.
 
 Machine records live in comments as HTML comments:
   <!-- multica-acceptance {"kind":"attempt",...} -->
@@ -46,7 +51,7 @@ See references/review-entry.md for the record shapes and the step procedure.
 `;
 
 function parseArgs(argv) {
-  const args = { output: "json" };
+  const args = { output: "json", existingDecisions: [] };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === "-h" || token === "--help") {
@@ -63,7 +68,9 @@ function parseArgs(argv) {
       if (value === undefined || value.startsWith("--")) throw new Error(`missing value for --${name}`);
       i++;
     }
-    args[name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
+    const key = name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (key === "existingDecisions") args.existingDecisions.push(value);
+    else args[key] = value;
   }
   return args;
 }
@@ -80,34 +87,52 @@ function text(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
+function asRows(input, keys) {
+  if (Array.isArray(input)) return input;
+  for (const key of keys) if (Array.isArray(input?.[key])) return input[key];
+  return null;
+}
+
+function timeValue(value) {
+  const parsed = Date.parse(value ?? "");
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 function normalizeComments(input) {
-  const rows = Array.isArray(input)
-    ? input
-    : Array.isArray(input?.comments)
-      ? input.comments
-      : Array.isArray(input?.items)
-        ? input.items
-        : null;
+  const rows = asRows(input, ["comments", "items"]);
   if (!rows) throw new Error("comments input must be an array, {comments: [...]} or {items: [...]}");
   return rows.map((comment, index) => ({
-    index,
     id: text(comment?.id) ? comment.id : `#${index}`,
     content: typeof comment?.content === "string" ? comment.content : "",
     created_at: text(comment?.created_at) ? comment.created_at : null,
     author_id: text(comment?.author_id) ? comment.author_id : null,
     author_type: text(comment?.author_type) ? comment.author_type : null,
+    input_order: index,
   }));
 }
 
+// Platform order, not the order the caller's JSON happened to list comments in.
+function compareRecords(a, b) {
+  const at = timeValue(a.created_at);
+  const bt = timeValue(b.created_at);
+  if (at !== bt) {
+    if (at === null) return -1;
+    if (bt === null) return 1;
+    return at < bt ? -1 : 1;
+  }
+  if (a.comment_id !== b.comment_id) return a.comment_id < b.comment_id ? -1 : 1;
+  return a.order_in_comment - b.order_in_comment;
+}
+
 export function extractRecords(comments) {
-  const attempts = [];
-  const verdicts = [];
-  const exhausted = [];
+  const rows = [];
   const ignored = [];
   const marker = new RegExp(`<!--\\s*${RECORD_MARKER}\\s+([\\s\\S]*?)-->`, "g");
 
   for (const comment of normalizeComments(comments)) {
+    let order = 0;
     for (const match of comment.content.matchAll(marker)) {
+      const position = order++;
       let record;
       try {
         record = JSON.parse(match[1]);
@@ -123,23 +148,48 @@ export function extractRecords(comments) {
         ignored.push({ comment_id: comment.id, reason: "missing standard_version" });
         continue;
       }
-      const row = { ...record, comment_id: comment.id, created_at: comment.created_at, order: comment.index };
-      if (record.kind === "exhausted") {
-        exhausted.push(row);
-        continue;
-      }
-      if (!text(record.attempt_id)) {
+      const row = {
+        ...record,
+        comment_id: comment.id,
+        created_at: comment.created_at,
+        author_id: comment.author_id,
+        author_type: comment.author_type,
+        order_in_comment: position,
+      };
+      if (record.kind !== "exhausted" && !text(record.attempt_id)) {
         ignored.push({ comment_id: comment.id, reason: `missing attempt_id on ${record.kind} record` });
         continue;
       }
-      if (!RESULTS.has(record.outcome)) {
+      if (record.kind !== "exhausted" && !RESULTS.has(record.outcome)) {
         ignored.push({ comment_id: comment.id, reason: `invalid outcome: ${String(record.outcome)}` });
         continue;
       }
-      (record.kind === "attempt" ? attempts : verdicts).push(row);
+      rows.push(row);
     }
   }
-  return { attempts, verdicts, exhausted, ignored };
+  rows.sort(compareRecords);
+  return {
+    attempts: rows.filter((row) => row.kind === "attempt"),
+    verdicts: rows.filter((row) => row.kind === "verdict"),
+    exhausted: rows.filter((row) => row.kind === "exhausted"),
+    ignored,
+  };
+}
+
+export function resolveRoles(agents, { testerRole = "验收自动化工程师", qualityRole = "质量交付经理", leadRoles = ["研发经理", "项目经理"] } = {}) {
+  const rows = asRows(agents, ["agents", "items"]);
+  if (!rows) throw new Error("agents input must be an array, {agents: [...]} or {items: [...]}");
+  const pick = (name) => {
+    const matches = rows.filter((row) => row?.name === name && text(row?.id));
+    if (matches.length === 0) throw new Error(`workspace has no agent named ${name}`);
+    if (matches.length > 1) throw new Error(`workspace has more than one agent named ${name}`);
+    return { id: matches[0].id, name };
+  };
+  const tester = pick(testerRole);
+  const quality = pick(qualityRole);
+  if (tester.id === quality.id) throw new Error("tester and quality manager must be different agents");
+  const leads = leadRoles.map(pick);
+  return { tester, quality, leads, agentIds: new Set(rows.map((row) => row?.id).filter(text)) };
 }
 
 function attemptKey(standardVersion, attemptId) {
@@ -156,7 +206,7 @@ function distinctAttempts(attempts) {
     if (seen.has(key)) replays.push({ attempt_id: attempt.attempt_id, comment_id: attempt.comment_id });
     else seen.set(key, attempt);
   }
-  return { ordered: [...seen.values()].sort((a, b) => a.order - b.order), replays };
+  return { ordered: [...seen.values()], replays };
 }
 
 // A corrected verdict may supersede an earlier one; the latest wins.
@@ -166,52 +216,105 @@ function latestVerdictByAttempt(verdicts) {
   return latest;
 }
 
-function attemptHasRunEvidence(attempt) {
-  if (!Array.isArray(attempt.evidence) || attempt.evidence.length === 0) return false;
-  return attempt.evidence.every((item) => {
-    if (!text(item?.criterion)) return false;
-    if (item.result !== undefined && !RESULTS.has(item.result)) return false;
-    return text(item.command) || text(item.log) || text(item.artifact) || text(item.attachment);
+function evidenceFor(attempt, criterion) {
+  const items = Array.isArray(attempt.evidence) ? attempt.evidence : [];
+  return items.filter((item) => item && (item.criterion === criterion || item.id === criterion));
+}
+
+// Text alone is not a run. Every counted item needs the command, its exit code
+// and a log or artifact to inspect.
+function hasRunEvidence(item) {
+  return text(item.command) && Number.isInteger(item.exit_code) && (text(item.log) || text(item.artifact));
+}
+
+function criterionRunEvidence(attempt, criterion) {
+  return evidenceFor(attempt, criterion).filter(hasRunEvidence);
+}
+
+function evidenceShowsFailure(attempt) {
+  const items = Array.isArray(attempt.evidence) ? attempt.evidence : [];
+  return items.some((item) => item?.result === "failed" || (Number.isInteger(item?.exit_code) && item.exit_code !== 0));
+}
+
+function criteriaCoverage(verdict, criteria) {
+  const rows = Array.isArray(verdict.criteria) ? verdict.criteria : [];
+  const byId = new Map();
+  for (const row of rows) {
+    const id = row?.criterion ?? row?.id;
+    if (text(id)) byId.set(id, row);
+  }
+  const missing = criteria.filter((id) => !byId.has(id));
+  const extra = [...byId.keys()].filter((id) => !criteria.includes(id));
+  const invalid = [...byId.values()].filter((row) => !RESULTS.has(row?.result) || !text(row?.evidence));
+  const malformed = rows.filter((row) => !text(row?.criterion ?? row?.id)).length;
+  return { byId, missing, extra, invalid, malformed, complete: missing.length === 0 && extra.length === 0 && invalid.length === 0 && malformed === 0 };
+}
+
+function planText(plan) {
+  if (typeof plan === "string") return text(plan) ? plan : null;
+  const label = plan?.plan ?? plan?.summary;
+  return text(label) ? label : null;
+}
+
+function isPass(attempt, verdict, criteria) {
+  if (!verdict || attempt.outcome !== "passed" || verdict.outcome !== "passed") return false;
+  if (attempt.environment_error === true || verdict.environment_error === true) return false;
+  if (evidenceShowsFailure(attempt)) return false;
+  const coverage = criteriaCoverage(verdict, criteria);
+  if (!coverage.complete) return false;
+  return criteria.every((id) => {
+    if (coverage.byId.get(id).result !== "passed") return false;
+    const items = criterionRunEvidence(attempt, id);
+    return items.length > 0 && items.every((item) => item.result === "passed" && item.exit_code === 0);
   });
 }
 
-function isPass(attempt, verdict) {
-  if (!verdict || attempt.outcome !== "passed" || verdict.outcome !== "passed") return false;
+// Only a real, actually-failing, independently-verified attempt counts. A
+// missing environment, text-only evidence, an unverified criterion or a
+// verdict that contradicts the evidence never does.
+function isRealFailure(attempt, verdict, criteria) {
+  if (!verdict || attempt.outcome !== "failed" || verdict.outcome !== "failed") return false;
   if (attempt.environment_error === true || verdict.environment_error === true) return false;
-  if (!attemptHasRunEvidence(attempt)) return false;
-  const criteria = verdict.criteria;
-  if (!Array.isArray(criteria) || criteria.length === 0) return false;
-  if (criteria.some((c) => c?.result !== "passed" || !text(c?.evidence))) return false;
+  const coverage = criteriaCoverage(verdict, criteria);
+  if (!coverage.complete) return false;
+  // An unverified criterion means the round is not a complete failure: the
+  // missing check may be what would have passed, so it cannot drive an escalation.
+  if ([...coverage.byId.values()].some((row) => row.result === "not_verified")) return false;
+  const failed = [...coverage.byId.entries()].filter(([, row]) => row.result === "failed");
+  if (failed.length === 0) return false;
+  if (failed.some(([id]) => criterionRunEvidence(attempt, id).length === 0)) return false;
+  if (!failed.some(([id]) => criterionRunEvidence(attempt, id).some((item) => item.result === "failed" || item.exit_code !== 0))) return false;
   return true;
 }
 
-// Only a real, actually-failing, independently-verified attempt counts. A
-// missing environment, missing evidence or a merely unverified run never does.
-function isRealFailure(attempt, verdict) {
-  if (!verdict || attempt.outcome !== "failed" || verdict.outcome !== "failed") return false;
-  if (attempt.environment_error === true || verdict.environment_error === true) return false;
-  if (!attemptHasRunEvidence(attempt)) return false;
-  const criteria = verdict.criteria;
-  if (!Array.isArray(criteria) || criteria.length === 0) return false;
-  if (criteria.some((c) => !RESULTS.has(c?.result) || c.result === "not_verified")) return false;
-  const failed = criteria.filter((c) => c.result === "failed");
-  if (failed.length === 0) return false;
-  return failed.every((c) => text(c.evidence));
+function inconsistentVerdict(attempt, verdict, criteria) {
+  if (!verdict) return null;
+  const coverage = criteriaCoverage(verdict, criteria);
+  if (!coverage.complete) return null;
+  const runEvidenceComplete = criteria.every((id) => criterionRunEvidence(attempt, id).length > 0);
+  if (!runEvidenceComplete) return null;
+  if (verdict.outcome === "passed" && (attempt.outcome === "failed" || evidenceShowsFailure(attempt))) {
+    return "证据显示测试失败，但裁定为通过";
+  }
+  if (verdict.outcome === "failed" && attempt.outcome === "passed" && !evidenceShowsFailure(attempt)) {
+    return "证据没有失败记录，但裁定为失败";
+  }
+  return null;
 }
 
-function currentExhaustion(exhausted, standardVersion) {
-  const rows = exhausted.filter((row) => row.standard_version === standardVersion);
-  const latest = rows.at(-1);
-  if (!latest) return null;
-  const hasPlan = text(latest.executable_plan);
-  return {
-    lead: text(latest.lead) ? latest.lead : null,
-    reason: text(latest.reason) ? latest.reason : null,
-    executable_plan: hasPlan ? latest.executable_plan : null,
-    plans: Array.isArray(latest.plans) ? latest.plans : [],
-    comment_id: latest.comment_id,
-    valid: text(latest.lead) && text(latest.reason) && !hasPlan && Array.isArray(latest.plans) && latest.plans.length > 0,
-  };
+function failureReason(attempt, verdict, criteria) {
+  if (!verdict) return "尚无独立裁定";
+  if (attempt.environment_error === true || verdict.environment_error === true) return "环境错误，不计真实失败";
+  const coverage = criteriaCoverage(verdict, criteria);
+  const missingRun = criteria.filter((id) => criterionRunEvidence(attempt, id).length === 0);
+  if (missingRun.length > 0) return `缺少命令、返回码或日志证据：${missingRun.join("、")}`;
+  if (coverage.missing.length > 0) return `裁定缺少冻结标准：${coverage.missing.join("、")}`;
+  if (coverage.extra.length > 0) return `裁定包含冻结标准之外的标准：${coverage.extra.join("、")}`;
+  if (!coverage.complete) return "裁定未为每条标准写明结果和证据位置";
+  if ([...coverage.byId.values()].some((row) => row.result === "not_verified")) return "存在未验证的标准";
+  if (verdict.outcome === "passed") return "该轮通过";
+  if (verdict.outcome !== "failed") return "不是失败裁定";
+  return "证据没有对应的失败记录";
 }
 
 export function decisionKey(issue, standardVersion) {
@@ -219,46 +322,61 @@ export function decisionKey(issue, standardVersion) {
   return `acc-${digest}`;
 }
 
-function formatCriteria(criteria) {
-  return criteria
-    .filter((c) => c?.result === "failed")
-    .map((c) => `- ${c.criterion ?? c.id ?? "未命名标准"}：${c.evidence}`)
-    .join("\n");
-}
-
-function normalizeDecisions(input) {
-  const rows = Array.isArray(input)
-    ? input
-    : Array.isArray(input?.issues)
-      ? input.issues
-      : Array.isArray(input?.items)
-        ? input.items
-        : [];
+function normalizeDecisions(inputs) {
+  const list = Array.isArray(inputs) ? inputs : [inputs];
+  const rows = list.flatMap((input) => asRows(input, ["issues", "items"]) ?? []);
   return rows
-    .map((row) => ({
-      decision_key: row?.metadata?.acceptance_decision_key ?? row?.decision_key ?? null,
-      identifier: row?.identifier ?? null,
-      created_at: row?.created_at ?? null,
-      status: row?.status ?? null,
-    }))
+    .map((row) => {
+      const description = typeof row?.description === "string" ? row.description : "";
+      const bodyKey = description.match(new RegExp(`<!--\\s*${DECISION_MARKER}\\s+([\\s\\S]*?)-->`))
+        ?? description.match(/decision_key:\s*(acc-[0-9a-f]{16})/);
+      let parsedBody = null;
+      if (bodyKey) {
+        if (bodyKey[1].startsWith("{")) {
+          try {
+            parsedBody = JSON.parse(bodyKey[1]);
+          } catch {
+            parsedBody = null;
+          }
+        } else {
+          parsedBody = { decision_key: bodyKey[1] };
+        }
+      }
+      return {
+        decision_key: row?.metadata?.acceptance_decision_key ?? parsedBody?.decision_key ?? null,
+        identifier: row?.identifier ?? null,
+        created_at: row?.created_at ?? null,
+        status: row?.status ?? null,
+        title: row?.title ?? null,
+      };
+    })
     .filter((row) => text(row.decision_key) && text(row.identifier));
 }
 
-function buildDecision({ issue, standardVersion, rounds, counted, exhaustion, ownerUserId }) {
+function formatCriteria(coverage) {
+  return [...coverage.byId.entries()]
+    .filter(([, row]) => row.result === "failed")
+    .map(([id, row]) => `- ${id}：${row.evidence}`)
+    .join("\n");
+}
+
+function buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId }) {
   const key = decisionKey(issue, standardVersion);
   const backlink = `[${issue.identifier}](mention://issue/${issue.id})`;
   const evidence = counted
     .map((row, index) => {
-      const failed = formatCriteria(row.verdict.criteria);
-      return `### 第 ${index + 1} 轮（尝试 ${row.attempt.attempt_id}，候选 ${row.attempt.candidate_version ?? "未记录"}，证据评论 ${row.attempt.comment_id}）\n${failed}`;
+      const failed = formatCriteria(row.coverage);
+      return `### 第 ${index + 1} 轮（尝试 ${row.attempt.attempt_id}，候选 ${row.attempt.candidate_version}，证据评论 ${row.attempt.comment_id}）\n${failed}`;
     })
     .join("\n\n");
   const plans = exhaustion.plans
     .map((plan, index) => {
-      const label = typeof plan === "string" ? plan : plan.plan ?? plan.summary ?? JSON.stringify(plan);
+      const label = planText(plan);
+      if (!label) return null;
       const result = typeof plan === "object" && plan ? plan.result ?? plan.outcome : null;
       return `- 方案 ${index + 1}：${label}${result ? `（结果：${result}）` : ""}`;
     })
+    .filter(Boolean)
     .join("\n");
   return {
     key,
@@ -267,54 +385,139 @@ function buildDecision({ issue, standardVersion, rounds, counted, exhaustion, ow
     existing_identifier: null,
     duplicates: [],
     assignee_user_id: ownerUserId,
-    title: `决定 ${issue.identifier} 的下一步：验收连续 ${rounds} 轮未通过且团队已无可行方案`,
-    description: `## 需要你决定\n\n原事项：${backlink}\n\n验收标准版本：\`${standardVersion}\`\n\n### 失败标准\n\n${evidence}\n\n### 尝试过的方案\n\n${plans}\n\n### 团队结论\n\n${exhaustion.lead}：${exhaustion.reason}\n\n### 待决定事项\n\n继续投入修复、缩小验收范围，或暂停/取消这个故事。原事项已停在 blocked，选择后由原交付负责人按决定继续。\n\n<!-- ${RECORD_MARKER}-decision ${JSON.stringify({ decision_key: key, standard_version: standardVersion, original_issue: issue.identifier })} -->`,
+    title: `验收决策 ${key}：${issue.identifier} 需要决定下一步`,
+    description: `decision_key: ${key}\n\n## 需要你决定\n\n原事项：${backlink}\n\n当前候选：\`${candidate}\`\n\n验收标准版本：\`${standardVersion}\`\n\n### 失败标准\n\n${evidence}\n\n### 尝试过的方案\n\n${plans}\n\n### 团队结论\n\n${exhaustion.lead}：${exhaustion.reason}\n\n### 待决定事项\n\n继续投入修复、缩小验收范围，或暂停/取消这个故事。原事项已停在 blocked，选择后由原交付负责人按决定继续。\n\n<!-- ${DECISION_MARKER} ${JSON.stringify({ decision_key: key, standard_version: standardVersion, candidate, original_issue: issue.identifier })} -->`,
   };
 }
 
-export function adjudicate({ issue, comments, standardVersion, ownerUserId, existingDecisions, doneStatus = "done", backStatus = "in_progress", blockedStatus = "blocked" }) {
+function normalizeCriteria(input) {
+  const rows = Array.isArray(input) ? input : String(input ?? "").split(",");
+  const criteria = [...new Set(rows.map((row) => String(row).trim()).filter(Boolean))];
+  if (criteria.length === 0) throw new Error("criteria must list at least one frozen criterion id");
+  return criteria;
+}
+
+export function adjudicate({
+  issue,
+  comments,
+  agents,
+  standardVersion,
+  candidate,
+  criteria,
+  ownerUserId,
+  existingDecisions = [],
+  testerRole = "验收自动化工程师",
+  qualityRole = "质量交付经理",
+  leadRoles = ["研发经理", "项目经理"],
+  doneStatus = "done",
+  backStatus = "in_progress",
+  blockedStatus = "blocked",
+}) {
   if (!issue || !text(issue.id) || !text(issue.identifier)) throw new Error("issue input needs id and identifier");
   if (!text(standardVersion)) throw new Error("standardVersion is required");
+  if (!text(candidate)) throw new Error("candidate is required");
+  const criteriaIds = normalizeCriteria(criteria);
+  if (!text(ownerUserId)) throw new Error("ownerUserId is required; pass the human from identity configuration");
+  const roles = resolveRoles(agents, { testerRole, qualityRole, leadRoles });
+  if (roles.agentIds.has(ownerUserId)) throw new Error("decision owner must be a human member, not an agent");
+  if (issue.creator_type !== "member" && issue.creator_id === ownerUserId) {
+    throw new Error("decision owner must be the configured human, not the issue's agent creator");
+  }
 
-  const { attempts, verdicts, exhausted, ignored } = extractRecords(comments);
+  const { attempts: allAttempts, verdicts: allVerdicts, exhausted: allExhausted, ignored } = extractRecords(comments);
+  const rejected = [];
+  const keep = (row, roleId, label) => {
+    if (row.author_type !== "agent" || row.author_id !== roleId) {
+      rejected.push({ comment_id: row.comment_id, kind: row.kind, reason: `${label} must be authored by the platform role, not a self-declared field` });
+      return false;
+    }
+    return true;
+  };
+  const attempts = allAttempts.filter((row) => keep(row, roles.tester.id, "acceptance attempt"));
+  const verdicts = allVerdicts.filter((row) => keep(row, roles.quality.id, "verdict"));
+  const leadIds = new Set(roles.leads.map((lead) => lead.id));
+  const exhausted = allExhausted.filter((row) => {
+    if (row.author_type !== "agent" || !leadIds.has(row.author_id)) {
+      rejected.push({ comment_id: row.comment_id, kind: row.kind, reason: "no-plan declaration must be authored by a team lead platform role" });
+      return false;
+    }
+    return true;
+  });
+
   const { ordered, replays } = distinctAttempts(attempts);
   const verdictByKey = latestVerdictByAttempt(verdicts);
+  const latestVerdictFor = (attempt) => verdictByKey.get(attemptKey(attempt.standard_version, attempt.attempt_id)) ?? null;
 
   const scoped = ordered.filter((attempt) => attempt.standard_version === standardVersion);
   const otherVersions = [...new Set(ordered.map((a) => a.standard_version).filter((v) => v !== standardVersion))];
-  const latest = scoped.at(-1) ?? null;
-  const latestVerdict = latest ? verdictByKey.get(attemptKey(latest.standard_version, latest.attempt_id)) ?? null : null;
+  const current = scoped.filter((attempt) => attempt.candidate_version === candidate);
+  const latest = current.at(-1) ?? null;
+  const latestVerdict = latest ? latestVerdictFor(latest) : null;
 
-  const counted = scoped
-    .map((attempt) => ({ attempt, verdict: verdictByKey.get(attemptKey(attempt.standard_version, attempt.attempt_id)) }))
-    .filter((row) => isRealFailure(row.attempt, row.verdict));
-  const rounds = counted.length;
-  const exhaustion = currentExhaustion(exhausted, standardVersion);
+  const countedAll = scoped
+    .map((attempt) => ({ attempt, verdict: latestVerdictFor(attempt) }))
+    .filter((row) => isRealFailure(row.attempt, row.verdict, criteriaIds))
+    .map((row) => ({ ...row, coverage: criteriaCoverage(row.verdict, criteriaIds) }));
+  const countedCandidates = new Set(countedAll.map((row) => row.attempt.candidate_version));
+  const rounds = countedCandidates.size;
+  const counted = countedAll.filter((row, index, rows) => rows.findIndex((other) => other.attempt.candidate_version === row.attempt.candidate_version) === index);
+  const latestFailure = countedAll.at(-1) ?? null;
+
+  const exhaustionRows = exhausted.filter((row) => row.standard_version === standardVersion);
+  const exhaustionRow = exhaustionRows.at(-1) ?? null;
+  const exhaustion = exhaustionRow
+    ? {
+        lead_agent_id: exhaustionRow.author_id,
+        lead: roles.leads.find((lead) => lead.id === exhaustionRow.author_id)?.name ?? null,
+        reason: text(exhaustionRow.reason) ? exhaustionRow.reason : null,
+        executable_plan: text(exhaustionRow.executable_plan) ? exhaustionRow.executable_plan : null,
+        plans: Array.isArray(exhaustionRow.plans) ? exhaustionRow.plans : [],
+        names_attempt: exhaustionRow.attempt_id ?? null,
+        comment_id: exhaustionRow.comment_id,
+        after_latest_failure: Boolean(latestFailure) && compareRecords(exhaustionRow, latestFailure.attempt) > 0,
+        names_latest_failure: Boolean(latestFailure) && exhaustionRow.attempt_id === latestFailure.attempt.attempt_id,
+        valid: false,
+      }
+    : null;
+  if (exhaustion) {
+    const namedPlans = exhaustion.plans.map(planText).filter(Boolean);
+    exhaustion.valid = Boolean(
+      exhaustion.after_latest_failure &&
+      exhaustion.names_latest_failure &&
+      !exhaustion.executable_plan &&
+      text(exhaustion.reason) &&
+      namedPlans.length === exhaustion.plans.length &&
+      namedPlans.length > 0,
+    );
+  }
 
   const notCounted = scoped
-    .filter((attempt) => !counted.some((row) => row.attempt.attempt_id === attempt.attempt_id))
+    .filter((attempt) => !countedAll.some((row) => row.attempt.attempt_id === attempt.attempt_id))
     .map((attempt) => {
-      const verdict = verdictByKey.get(attemptKey(attempt.standard_version, attempt.attempt_id));
-      let reason = "尚无独立裁定";
-      if (verdict) {
-        if (attempt.environment_error === true || verdict.environment_error === true) reason = "环境错误，不计真实失败";
-        else if (!attemptHasRunEvidence(attempt)) reason = "缺少命令、日志或产物证据";
-        else if (!Array.isArray(verdict.criteria) || verdict.criteria.length === 0) reason = "裁定未逐条记录标准";
-        else if (verdict.criteria.some((c) => c?.result === "not_verified")) reason = "存在未验证的标准";
-        else if (verdict.outcome === "passed") reason = "该轮通过";
-        else if (verdict.outcome !== "failed") reason = "不是失败裁定";
-      }
-      return { attempt_id: attempt.attempt_id, verdict_outcome: verdict?.outcome ?? null, reason };
+      const verdict = latestVerdictFor(attempt);
+      return {
+        attempt_id: attempt.attempt_id,
+        candidate_version: attempt.candidate_version ?? null,
+        verdict_outcome: verdict?.outcome ?? null,
+        reason: failureReason(attempt, verdict, criteriaIds),
+      };
     });
 
   const base = {
     tool: "review-verdict",
-    version: 1,
+    version: 2,
     issue: { id: issue.id, identifier: issue.identifier, title: issue.title ?? "" },
     standard_version: standardVersion,
+    candidate,
+    criteria: criteriaIds,
     decision_key: decisionKey(issue, standardVersion),
+    roles: {
+      tester: roles.tester,
+      quality: roles.quality,
+      leads: roles.leads,
+    },
     rounds: { count: rounds, required: MIN_FAILED_ROUNDS, remaining: Math.max(0, MIN_FAILED_ROUNDS - rounds) },
-    latest_attempt: latest ? { attempt_id: latest.attempt_id, candidate_version: latest.candidate_version ?? null, comment_id: latest.comment_id } : null,
+    latest_attempt: latest ? { attempt_id: latest.attempt_id, candidate_version: latest.candidate_version, comment_id: latest.comment_id } : null,
     latest_verdict: latestVerdict ? { outcome: latestVerdict.outcome, comment_id: latestVerdict.comment_id } : null,
     counted_failures: counted.map((row) => ({
       attempt_id: row.attempt.attempt_id,
@@ -325,19 +528,12 @@ export function adjudicate({ issue, comments, standardVersion, ownerUserId, exis
     not_counted: notCounted,
     replays,
     other_standard_versions: otherVersions,
-    ignored,
-    exhaustion: exhaustion
-      ? {
-          lead: exhaustion.lead,
-          reason: exhaustion.reason,
-          executable_plan: exhaustion.executable_plan,
-          plans: exhaustion.plans,
-          valid: exhaustion.valid,
-        }
-      : null,
+    ignored: [...ignored, ...rejected],
+    exhaustion,
     decision: null,
     status_command: null,
     next_action: null,
+    inconsistent: false,
     outcome: null,
   };
 
@@ -345,7 +541,7 @@ export function adjudicate({ issue, comments, standardVersion, ownerUserId, exis
     return {
       ...base,
       outcome: "run_acceptance",
-      next_action: "尚无本轮验收记录：先按冻结标准执行验收代码，在原事项提交一条证据评论，再交给质量交付经理裁定。不要推进状态。",
+      next_action: `候选 ${candidate} 尚无本轮验收记录：先按冻结标准执行验收代码，在原事项提交一条证据评论，再交给质量交付经理裁定。不要推进状态。`,
     };
   }
 
@@ -353,26 +549,65 @@ export function adjudicate({ issue, comments, standardVersion, ownerUserId, exis
     return {
       ...base,
       outcome: "awaiting_verdict",
-      next_action: "已有验收证据但缺少质量交付经理的独立裁定：在原事项把证据单次交给质量交付经理，不要自行判定通过或推进状态。",
+      next_action: "已有验收证据但缺少质量交付经理的独立裁定：用有效 mention 实际唤醒质量交付经理，不要自行判定通过或推进状态。",
     };
   }
 
-  if (isPass(latest, latestVerdict)) {
+  const inconsistency = inconsistentVerdict(latest, latestVerdict, criteriaIds);
+  if (inconsistency) {
+    return {
+      ...base,
+      outcome: "awaiting_verdict",
+      inconsistent: true,
+      next_action: `${inconsistency}：不推进状态，交质量交付经理按冻结标准重新裁定。`,
+    };
+  }
+
+  if (isPass(latest, latestVerdict, criteriaIds)) {
     return {
       ...base,
       outcome: "done",
       status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${doneStatus}`,
-      next_action: "全部必验标准通过且证据齐全：由步骤负责人把原事项标记为 done。自动 done 只代表故事验收通过，不构成发布、合并或日常升级授权。",
+      next_action: "当前候选的全部冻结标准通过且证据齐全：由步骤负责人把原事项标记为 done。自动 done 只代表故事验收通过，不构成发布、合并或日常升级授权。",
     };
   }
 
-  const escalate = rounds >= MIN_FAILED_ROUNDS && exhaustion?.valid;
-  if (escalate) {
-    if (!text(ownerUserId)) throw new Error("ownerUserId is required to escalate; pass the human from identity configuration");
-    if (text(issue.creator_id) && issue.creator_id === ownerUserId && issue.creator_type !== "member") {
-      throw new Error("decision owner must be the configured human, not the issue's agent creator");
+  if (latestVerdict.outcome === "passed") {
+    const coverage = criteriaCoverage(latestVerdict, criteriaIds);
+    const missingRun = criteriaIds.filter((id) => criterionRunEvidence(latest, id).length === 0);
+    const gaps = [];
+    if (missingRun.length > 0) gaps.push(`缺少命令、返回码或日志：${missingRun.join("、")}`);
+    if (coverage.missing.length > 0) gaps.push(`裁定缺少冻结标准：${coverage.missing.join("、")}`);
+    if (coverage.extra.length > 0) gaps.push(`裁定含冻结标准之外的条目：${coverage.extra.join("、")}`);
+    if (coverage.invalid.length > 0) gaps.push("部分标准没有写明结果或证据位置");
+    return {
+      ...base,
+      outcome: "awaiting_verdict",
+      next_action: `本轮裁定为通过，但证据不足以结项（${gaps.join("；") || "裁定与证据不一致"}）。不推进状态，也不计失败轮次：把缺失的命令、返回码、日志或标准项补进同一次验收，再由质量交付经理重新裁定。`,
+    };
+  }
+
+  if (!isRealFailure(latest, latestVerdict, criteriaIds)) {
+    const env = latest.environment_error === true || latestVerdict.environment_error === true;
+    const coverage = criteriaCoverage(latestVerdict, criteriaIds);
+    const unverified = [...coverage.byId.values()].some((row) => row.result === "not_verified");
+    if (env || unverified || latestVerdict.outcome === "not_verified") {
+      return {
+        ...base,
+        outcome: "rework",
+        status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${backStatus}`,
+        next_action: "本轮不计真实失败（环境错误或存在未验证项）：回到原交付团队补齐运行环境或必验手验项，重新执行同一冻结标准；下一轮验收重新提交证据，不用重放累计轮次。",
+      };
     }
-    const draft = buildDecision({ issue, standardVersion, rounds, counted, exhaustion, ownerUserId });
+    return {
+      ...base,
+      outcome: "awaiting_verdict",
+      next_action: "裁定为失败，但证据或冻结标准不完整，不能累计为真实失败：补齐逐条标准的命令、返回码、日志和结果后，交质量交付经理重新裁定，不推进状态。",
+    };
+  }
+
+  if (rounds >= MIN_FAILED_ROUNDS && exhaustion?.valid) {
+    const draft = buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId });
     const existing = normalizeDecisions(existingDecisions)
       .filter((row) => row.decision_key === draft.key)
       .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || String(a.identifier).localeCompare(String(b.identifier)));
@@ -388,15 +623,18 @@ export function adjudicate({ issue, comments, standardVersion, ownerUserId, exis
       status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${blockedStatus}`,
       next_action: draft.action === "reuse"
         ? `已有同源决策 ${draft.existing_identifier}：不要新建事项，保留该决策并在原事项回链；多余的重复事项用 --duplicate-of 归并。`
-        : "两个升级条件同时满足：同一标准版本至少三轮真实失败，且团队负责人已声明没有可执行方案。只创建一项决策事项，指派给配置中的真实用户，并写入 acceptance_decision_key 元数据用于后续去重。",
+        : "两个升级条件同时满足：同一标准版本至少三个不同候选真实失败，且团队负责人已对最新一轮声明没有可执行方案。只创建一项固定标题的决策事项（标题含 decision_key），创建时正文就带键，指派给配置中的真实用户，并用默认重复保护拒绝第二次创建。",
     };
   }
 
   const reasons = [];
-  if (rounds > 0) reasons.push(`同一标准版本已累计 ${rounds} 轮真实失败`);
+  if (rounds > 0) reasons.push(`同一标准版本已累计 ${rounds} 个候选真实失败`);
   if (rounds >= MIN_FAILED_ROUNDS && exhaustion?.executable_plan) reasons.push("团队仍有可执行方案，继续修复而不是升级");
-  else if (rounds >= MIN_FAILED_ROUNDS && exhaustion && !exhaustion.valid) reasons.push("团队负责人的无方案声明缺少负责人、原因或已尝试方案");
-  else if (rounds >= MIN_FAILED_ROUNDS) reasons.push("尚未满足升级条件：缺少团队负责人明确无可执行方案的记录");
+  else if (rounds >= MIN_FAILED_ROUNDS && exhaustion && !exhaustion.valid) {
+    if (!exhaustion.after_latest_failure) reasons.push("无方案声明早于最新失败，或已被更新的记录取代");
+    else if (!exhaustion.names_latest_failure) reasons.push("无方案声明没有指明最新失败的那一轮");
+    else reasons.push("无方案声明缺少负责人身份、原因或已尝试方案");
+  } else if (rounds >= MIN_FAILED_ROUNDS) reasons.push("尚未满足升级条件：缺少团队负责人针对最新一轮明确无可执行方案的记录");
   const nextAction = latestVerdict.next_action ?? latest.next_action;
   return {
     ...base,
@@ -408,8 +646,8 @@ export function adjudicate({ issue, comments, standardVersion, ownerUserId, exis
 
 export function formatText(result) {
   const lines = [
-    `${result.issue.identifier} | ${result.outcome} | 标准 ${result.standard_version}`,
-    `真实失败轮次：${result.rounds.count}/${result.rounds.required}`,
+    `${result.issue.identifier} | ${result.outcome} | 标准 ${result.standard_version} | 候选 ${result.candidate}`,
+    `真实失败候选数：${result.rounds.count}/${result.rounds.required}`,
   ];
   if (result.latest_attempt) lines.push(`最近尝试：${result.latest_attempt.attempt_id}（裁定 ${result.latest_verdict?.outcome ?? "未出"}）`);
   if (result.status_command) lines.push(`状态：${result.status_command}`);
@@ -424,15 +662,22 @@ export function main(argv = process.argv.slice(2), stdout = process.stdout) {
     stdout.write(USAGE);
     return 0;
   }
-  for (const required of ["issue", "comments", "standardVersion"]) {
+  for (const required of ["issue", "comments", "agents", "standardVersion", "candidate", "criteria", "ownerUserId"]) {
     if (!text(args[required])) throw new Error(`--${required.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is required`);
   }
+  const criteria = text(args.criteriaFile) ? readJson(args.criteriaFile, "criteria") : args.criteria;
   const result = adjudicate({
     issue: readJson(args.issue, "issue"),
     comments: readJson(args.comments, "comments"),
+    agents: readJson(args.agents, "agents"),
     standardVersion: args.standardVersion,
+    candidate: args.candidate,
+    criteria,
     ownerUserId: args.ownerUserId,
-    existingDecisions: args.existingDecisions ? readJson(args.existingDecisions, "existing decisions") : [],
+    existingDecisions: args.existingDecisions.map((path) => readJson(path, "existing decisions")),
+    testerRole: args.testerRole,
+    qualityRole: args.qualityRole,
+    leadRoles: text(args.leadRoles) ? args.leadRoles.split(",").map((row) => row.trim()).filter(Boolean) : undefined,
     doneStatus: args.doneStatus,
     backStatus: args.backStatus,
     blockedStatus: args.blockedStatus,
