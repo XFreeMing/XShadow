@@ -655,6 +655,22 @@ test("the review entry locates the tool under every provider's skill directory",
   assert.match(entry, /issue get/);
 });
 
+test("the review entry registers a project-less wakeup from the Default workflow instructions", () => {
+  const entry = readFileSync(join(ACCEPTANCE_DIR, "references/review-entry.md"), "utf8");
+  assert.match(entry, /workflow get default/, "the registration must read the workspace's Default workflow");
+  assert.match(entry, /in-review-instruction\.md/, "the Default in_review text is written to a file before registration");
+  assert.match(entry, /wc -c/, "the entry must check the instruction byte size before creating the rule");
+  assert.match(entry, /-le 12000/, "the entry must enforce the 12000-byte wakeup instruction limit");
+  assert.match(entry, /--instruction-file \.acceptance\/in-review-instruction\.md/);
+  assert.doesNotMatch(entry, /--instruction-file\s+\S*review-entry\.md/,
+    "the whole review entry cannot be submitted as the wakeup instruction");
+  assert.match(entry, /--instruction "\$\(cat \.acceptance\/in-review-instruction\.md\)"/,
+    "the inline fallback must submit the Default in_review text, which carries the real decision member");
+  assert.doesNotMatch(entry, /--instruction "事项再次进入审核中/,
+    "the old hand-written fallback without the decision member must be gone");
+  assert.match(entry, /真实决策接收用户/);
+});
+
 test("the quality manager's own skill carries the copyable verdict record and the active hand-back", () => {
   const skill = readFileSync(join(ROOT, "agent-team/skills/rd-verify/SKILL.md"), "utf8");
   for (const needle of ['"kind":"verdict"', '"standard_version"', '"attempt_id"', '"criteria"',

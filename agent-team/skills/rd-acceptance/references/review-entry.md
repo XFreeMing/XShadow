@@ -103,23 +103,42 @@ node "$VERDICT_TOOL" \
 
 ### 无项目的事项
 
-项目工作流的步骤处理人本身就是接续，不需要额外唤醒。没有项目的军团事项用平台已有的一次性条件接续：
+项目工作流的步骤处理人本身就是接续，不需要额外唤醒。没有项目的军团事项没有 workflow step brief，用平台已有的一次性条件接续；登记用的指令必须取自本工作区 Default 工作流自己的审核步骤，那段正文携带真实的决策接收用户和处理规则，不要自行改写，也不要写死任何工作区或用户 ID。
+
+先检查是否已有等价规则：`issue wakeup list <issue> --output json` 中若有启用、指向 Default 的 in_review 处理人、条件为状态进入 in_review 的记录，就复用它，不再新建。没有时读取 Default 并登记：
 
 ```bash
-"$MULTICA_CLI_PATH" issue wakeup create <issue> --until-status in_review \
-  --agent-id <验收自动化工程师的 agent id> --mode once \
-  --instruction-file .claude/skills/rd-acceptance/references/review-entry.md
+mkdir -p .acceptance
+"$MULTICA_CLI_PATH" workflow get default --output json > .acceptance/default-workflow.json
+node -e '
+const fs = require("fs");
+const workflow = JSON.parse(fs.readFileSync(".acceptance/default-workflow.json", "utf8"));
+const step = workflow.steps.find((row) => row.status_key === "in_review");
+if (!step || step.handler?.type !== "agent" || !step.handler.id) throw new Error("Default.in_review has no agent handler");
+if (!step.instructions?.trim()) throw new Error("Default.in_review has no instructions");
+fs.writeFileSync(".acceptance/in-review-instruction.md", step.instructions.trim());
+fs.writeFileSync(".acceptance/in-review-agent-id", step.handler.id + "\n");
+console.log("agent", step.handler.id, "bytes", Buffer.byteLength(step.instructions.trim()));
+'
+test "$(wc -c < .acceptance/in-review-instruction.md)" -le 12000 || { echo "instruction exceeds the 12000-byte wakeup limit" >&2; exit 1; }
+"$MULTICA_CLI_PATH" issue wakeup create <issue> \
+  --until-status in_review --mode once \
+  --agent-id "$(cat .acceptance/in-review-agent-id)" \
+  --instruction-file .acceptance/in-review-instruction.md --output json
 ```
 
-负责规划的人在自己的技能环境里通常没有这份文件。此时把同一段入口要求用 `--instruction` 内联传入（说明候选、标准版本、证据格式和失败回流），不要因为路径不可用就跳过接续：
+- 平台按去首尾空白后的字节数校验，超过 12000 就拒绝创建和编辑（`server/internal/service/issue_wakeup.go` 的两条校验路径），登记不会生效。本文件远超这个上限，不能把整份 review-entry.md 当指令提交；Default 的审核步骤正文通常只有约两千字节，写完先校验字节数再提交。
+- Default 的审核步骤缺少 agent 处理人或指令正文时停下来，在原事项记录这项配置缺口，不要自行编造处理人或决策接收人。
+- 部署的 CLI 不支持 `--instruction-file` 时，用同一个文件的内容内联提交，不要退回自写的短文本——自写文本会丢掉 Default 步骤里的真实决策接收用户：
 
 ```bash
-"$MULTICA_CLI_PATH" issue wakeup create <issue> --until-status in_review \
-  --agent-id <验收自动化工程师的 agent id> --mode once \
-  --instruction "事项再次进入审核中时，按 rd-acceptance 的 in_review 流程执行：读取冻结标准与当前候选，实际运行验收，提交一次证据评论，唤醒质量交付经理独立裁定，再按裁定推进状态；三轮真实失败且负责人声明无可执行方案才升级。"
+"$MULTICA_CLI_PATH" issue wakeup create <issue> \
+  --until-status in_review --mode once \
+  --agent-id "$(cat .acceptance/in-review-agent-id)" \
+  --instruction "$(cat .acceptance/in-review-instruction.md)" --output json
 ```
 
-预先注册；每次回修把事项移回 in_progress 后重新武装同一条规则；已有项目工作流接续时不要重复注册。已有事项显式补接，不靠轮询发现。
+预先注册；`once` 规则在事项进入审核中被消费，每次回修把事项移回 in_progress 后要重新检查并重新登记，已有等价规则启用时不要重复注册。已有事项显式补接，不靠轮询发现。
 
 ## 5. 三轮失败且无方案才升级
 
