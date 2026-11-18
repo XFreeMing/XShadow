@@ -348,6 +348,16 @@ test("portable template contains the current roster without machine identities o
   }
 });
 
+test("every agent description fits the server's 255-character limit", () => {
+  for (const agent of template.agents) {
+    const length = [...agent.description].length;
+    assert.ok(length > 0, `${agent.key} has no description`);
+    assert.ok(length <= 255, `${agent.key} description is ${length} characters, over the 255 limit`);
+  }
+  const pm = template.agents.find((a) => a.key === "pm");
+  assert.ok([...pm.instructions].length > [...pm.description].length, "detailed workflow belongs in instructions");
+});
+
 test("project and quality managers match the user's current Codex configuration", () => {
   for (const key of ["pm", "quality"]) {
     const agent = template.agents.find((a) => a.key === key);
