@@ -337,8 +337,8 @@ test("a truncated wakeup read leaves continuation unknown instead of calling the
 });
 
 test("portable template contains the current roster without machine identities or credentials", () => {
-  assert.equal(template.agents.length, 21);
-  assert.equal(template.skills.length, 16);
+  assert.equal(template.agents.length, 23);
+  assert.equal(template.skills.length, 18);
   assert.equal(template.squads.length, 5);
   const serialized = JSON.stringify(template);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
@@ -348,11 +348,53 @@ test("portable template contains the current roster without machine identities o
   }
 });
 
+test("story gate and acceptance automation are private, capacity-limited and independent of the requirements analyst", () => {
+  const judge = template.agents.find((a) => a.key === "story-judge");
+  const automation = template.agents.find((a) => a.key === "acceptance-automation");
+  assert.equal(judge.name, "用户故事评判员");
+  assert.equal(judge.provider, "grok");
+  assert.equal(judge.model, "grok-4.7");
+  assert.equal(judge.thinking_level, "high");
+  assert.equal(judge.max_concurrent_tasks, 1);
+  assert.equal(judge.permission_mode, "private");
+  assert.deepEqual(judge.skills, ["rd-story-gate"]);
+  assert.notEqual(judge.key, "requirements");
+  assert.equal(automation.name, "验收自动化工程师");
+  assert.equal(automation.provider, "claude");
+  assert.equal(automation.model, "deepseek-v4.1-flash");
+  assert.equal(automation.thinking_level, "high");
+  assert.equal(automation.max_concurrent_tasks, 1);
+  assert.equal(automation.permission_mode, "private");
+  assert.ok(automation.skills.includes("rd-acceptance"));
+  assert.ok(template.squads.find((s) => s.key === "product").members.some((m) => m.agent === judge.key));
+  assert.ok(template.squads.find((s) => s.key === "quality").members.some((m) => m.agent === automation.key));
+});
+
+test("story gate and acceptance automation initialize from the real template, read back and rerun as a no-op", async () => {
+  const f = fixture();
+  const ids = await initializeTeam(f.api, template, options);
+  const judge = f.state.agents.find((a) => a.id === ids.agents["story-judge"]);
+  const automation = f.state.agents.find((a) => a.id === ids.agents["acceptance-automation"]);
+  assert.equal(judge.model, "grok-4.7");
+  assert.equal(judge.max_concurrent_tasks, 1);
+  assert.equal(judge.permission_mode, "private");
+  assert.deepEqual(f.state.bindings[judge.id].map((id) => f.state.skills.find((s) => s.id === id).name), ["rd-story-gate"]);
+  assert.equal(automation.model, "deepseek-v4.1-flash");
+  assert.equal(automation.max_concurrent_tasks, 1);
+  assert.equal(automation.permission_mode, "private");
+  assert.ok(f.state.bindings[automation.id].map((id) => f.state.skills.find((s) => s.id === id).name).includes("rd-acceptance"));
+  assert.ok(f.state.members[ids.squads.product].some((m) => m.member_id === judge.id && m.role === "用户故事评判员"));
+  assert.ok(f.state.members[ids.squads.quality].some((m) => m.member_id === automation.id && m.role === "验收自动化工程师"));
+  const before = f.mutations().length;
+  await initializeTeam(f.api, template, options);
+  assert.equal(f.mutations().length, before);
+});
+
 test("new destination gets fresh references, prompts, skills and squad roles; rerun is a no-op", async () => {
   const f = fixture();
   const ids = await initializeTeam(f.api, template, options);
-  assert.equal(f.state.agents.length, 21);
-  assert.equal(f.state.skills.length, 16);
+  assert.equal(f.state.agents.length, 23);
+  assert.equal(f.state.skills.length, 18);
   assert.equal(f.state.squads.length, 5);
   for (const s of f.state.squads) {
     assert.doesNotMatch(s.instructions, /\{\{squad:/);
@@ -407,8 +449,8 @@ test("retry after a partial creation reuses completed objects", async () => {
   await assert.rejects(initializeTeam(api, template, options), /interrupted/);
   assert.equal(f.state.agents.length, 2);
   await initializeTeam(api, template, options);
-  assert.equal(f.state.agents.length, 21);
-  assert.equal(f.state.skills.length, 16);
+  assert.equal(f.state.agents.length, 23);
+  assert.equal(f.state.skills.length, 18);
 });
 
 test("readback detects a server that ignores the requested settings", async () => {
@@ -455,7 +497,7 @@ test("HTTP profile execution uses the selected account/workspace without an agen
   writeFileSync(join(dir, "fixture/config.json"), JSON.stringify(config));
   const args = ["init", "--profile", "fixture", "--profiles-dir", dir, ...f.state.runtimes.flatMap((r) => ["--runtime", `${r.provider}=${r.id}`])];
   await main(args, { MULTICA_TOKEN: "wrong-token", MULTICA_SERVER_URL: "https://wrong.invalid" });
-  assert.equal(f.state.agents.length, 21);
+  assert.equal(f.state.agents.length, 23);
   assert.throws(() => apiClient({ ...config, token: "" }), /Profile needs/);
 });
 
@@ -519,7 +561,7 @@ test("offline context never discovers a profile, connects, starts services or pr
     root: "/missing", client() { throw new Error("must not connect"); }, discoverProfile() { throw new Error("must not discover"); },
   });
   assert.equal(report.live.status, "offline");
-  assert.equal(report.template.agents.length, 21);
+  assert.equal(report.template.agents.length, 23);
   assert.match(formatContext(report), /仅仓库模板；实时状态未核验/);
   assert.doesNotMatch(formatContext(report), /已读取目标工作区实时配置/);
 });
@@ -545,7 +587,7 @@ test("local profile selection is explicit, overrideable and unavailable state st
   assert.doesNotMatch(JSON.stringify(local), /hidden-token/);
   const down = await buildContext(template, { profilesDir: dir }, { ...deps, client() { return async () => { throw new Error("service unavailable"); }; } });
   assert.equal(down.live.status, "unavailable");
-  assert.equal(down.template.agents.length, 21);
+  assert.equal(down.template.agents.length, 23);
   assert.match(formatContext(down), /无法比较/);
   const missing = await buildContext(template, { profile: "missing", profilesDir: dir }, deps);
   assert.equal(missing.live.status, "unavailable");

@@ -4,6 +4,7 @@ description: Independently review or reproduce a change and evaluate its user-vi
 ---
 
 Judge completion against the user story's promised artifact and observable value. Open the actual report or exercise the delivered feature through the user's entry point. Verify that the user can obtain it, follow the usage steps and reproduce each acceptance result on the stated version and platform. Distinguish a useful standalone report from an implementation summary that cannot replace a promised feature. Missing artifacts, inaccessible delivery or failed critical criteria mean changes needed or blocked, never acceptance based only on commits, logs or passing automated tests. Return a concise per-criterion result with evidence and limitations.
+Record every criterion as passed, failed or not verified against the same candidate version. A required criterion without evidence or with a failure prevents an overall pass; name the responsible person, the reflow path and any user-experience decision. A test plan, a review or the author's claim that a check runs never substitutes for the actual run on that version.
 
 
 Read the requested scope, target commit and acceptance criteria before the author's explanation. Review actual diff and execution artifacts. Prefer a different underlying model family from the author: Claude Code here runs DeepSeek, so changing CLI while using DeepSeek again does not add model diversity.
