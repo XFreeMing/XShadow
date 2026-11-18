@@ -348,6 +348,17 @@ test("portable template contains the current roster without machine identities o
   }
 });
 
+test("project and quality managers match the user's current Codex configuration", () => {
+  for (const key of ["pm", "quality"]) {
+    const agent = template.agents.find((a) => a.key === key);
+    assert.equal(agent.provider, "codex");
+    assert.equal(agent.model, "gpt-6.2-sol");
+    assert.equal(agent.thinking_level, "high");
+  }
+  assert.equal(template.runtime_limits.grok, 12);
+  assert.equal(template.runtime_limits.codex, 5);
+});
+
 test("story gate and acceptance automation are private, capacity-limited and independent of the requirements analyst", () => {
   const judge = template.agents.find((a) => a.key === "story-judge");
   const automation = template.agents.find((a) => a.key === "acceptance-automation");
@@ -368,6 +379,8 @@ test("story gate and acceptance automation are private, capacity-limited and ind
   assert.ok(automation.skills.includes("rd-acceptance"));
   assert.ok(template.squads.find((s) => s.key === "product").members.some((m) => m.agent === judge.key));
   assert.ok(template.squads.find((s) => s.key === "quality").members.some((m) => m.agent === automation.key));
+  assert.ok(template.squads.find((s) => s.key === "delivery").members.some((m) => m.agent === judge.key));
+  assert.ok(template.squads.find((s) => s.key === "delivery").members.some((m) => m.agent === automation.key));
 });
 
 test("story gate and acceptance automation initialize from the real template, read back and rerun as a no-op", async () => {
@@ -385,6 +398,20 @@ test("story gate and acceptance automation initialize from the real template, re
   assert.ok(f.state.bindings[automation.id].map((id) => f.state.skills.find((s) => s.id === id).name).includes("rd-acceptance"));
   assert.ok(f.state.members[ids.squads.product].some((m) => m.member_id === judge.id && m.role === "用户故事评判员"));
   assert.ok(f.state.members[ids.squads.quality].some((m) => m.member_id === automation.id && m.role === "验收自动化工程师"));
+  const before = f.mutations().length;
+  await initializeTeam(f.api, template, options);
+  assert.equal(f.mutations().length, before);
+});
+
+test("cross-squad story roles initialize and read back in delivery and their professional squads", async () => {
+  const f = fixture();
+  const ids = await initializeTeam(f.api, template, options);
+  for (const [agent, professional] of [["story-judge", "product"], ["acceptance-automation", "quality"]]) {
+    const role = template.squads.find((s) => s.key === "delivery").members.find((m) => m.agent === agent).role;
+    for (const squad of ["delivery", professional]) {
+      assert.ok(f.state.members[ids.squads[squad]].some((m) => m.member_id === ids.agents[agent] && m.role === role), `${agent} in ${squad}`);
+    }
+  }
   const before = f.mutations().length;
   await initializeTeam(f.api, template, options);
   assert.equal(f.mutations().length, before);
