@@ -46,6 +46,7 @@ var acceptanceSectionNames = map[string]struct{}{
 	"验收": {}, "验收标准": {}, "验收条件": {}, "验收要点": {}, "验收清单": {},
 	"完成标准": {}, "完成定义": {}, "完成条件": {}, "检查标准": {}, "检查清单": {},
 	"可观察验收": {}, "可观察的验收": {}, "范围与可观察验收": {}, "范围与验收": {},
+	"本故事验收条件": {}, "本故事验收标准": {}, "手动验收": {}, "验收结果": {},
 	"acceptance": {}, "acceptance criteria": {}, "acceptance criterion": {},
 	"acceptance test": {}, "acceptance tests": {}, "acceptance checklist": {},
 	"definition of done": {}, "definition of ready": {}, "dod": {}, "criteria": {}, "checklist": {},
@@ -113,15 +114,6 @@ func classifyStorySection(heading string) string {
 		return storySectionOther
 	}
 	if _, ok := acceptanceSectionNames[normalized]; ok {
-		return storySectionAcceptance
-	}
-	if strings.Contains(normalized, "可观察验收") || strings.Contains(normalized, "可观察的验收") {
-		return storySectionAcceptance
-	}
-	if strings.Contains(normalized, "验收") {
-		return storySectionAcceptance
-	}
-	if strings.HasPrefix(normalized, "acceptance") {
 		return storySectionAcceptance
 	}
 	if _, ok := contributionSectionNames[normalized]; ok {
