@@ -196,24 +196,63 @@ function attemptKey(standardVersion, attemptId) {
   return `${standardVersion}\u0000${attemptId}`;
 }
 
-// A replay of the same independent attempt is the same attempt. The earliest
-// record wins so a retried run cannot add a round.
+// One attempt id identifies one independent acceptance of one candidate. A
+// later record for the same candidate is a corrected revision of that round,
+// so the latest revision wins. Reusing the id for another candidate is
+// rejected: the two rounds are not comparable.
 function distinctAttempts(attempts) {
-  const seen = new Map();
-  const replays = [];
+  const groups = new Map();
+  const rejected = [];
   for (const attempt of attempts) {
     const key = attemptKey(attempt.standard_version, attempt.attempt_id);
-    if (seen.has(key)) replays.push({ attempt_id: attempt.attempt_id, comment_id: attempt.comment_id });
-    else seen.set(key, attempt);
+    const group = groups.get(key);
+    if (!group) {
+      groups.set(key, { candidate: attempt.candidate_version ?? null, records: [attempt] });
+      continue;
+    }
+    if ((attempt.candidate_version ?? null) !== group.candidate) {
+      rejected.push({
+        kind: "attempt",
+        attempt_id: attempt.attempt_id,
+        comment_id: attempt.comment_id,
+        reason: `attempt_id reused for another candidate (${group.candidate} vs ${attempt.candidate_version ?? "none"})`,
+      });
+      continue;
+    }
+    group.records.push(attempt);
   }
-  return { ordered: [...seen.values()], replays };
+  const ordered = [];
+  const replays = [];
+  for (const group of groups.values()) {
+    const winner = group.records.at(-1);
+    ordered.push(winner);
+    for (const row of group.records.slice(0, -1)) replays.push({ attempt_id: row.attempt_id, comment_id: row.comment_id });
+  }
+  ordered.sort(compareRecords);
+  return { ordered, replays, rejected };
 }
 
-// A corrected verdict may supersede an earlier one; the latest wins.
-function latestVerdictByAttempt(verdicts) {
+// A verdict can only judge evidence that already existed. An earlier verdict
+// does not apply to a corrected attempt, so the quality manager must
+// re-adjudicate; among valid verdicts the latest wins.
+function latestVerdicts(verdicts, attempts) {
+  const attemptByKey = new Map(attempts.map((attempt) => [attemptKey(attempt.standard_version, attempt.attempt_id), attempt]));
   const latest = new Map();
-  for (const verdict of verdicts) latest.set(attemptKey(verdict.standard_version, verdict.attempt_id), verdict);
-  return latest;
+  const rejected = [];
+  for (const verdict of verdicts) {
+    const key = attemptKey(verdict.standard_version, verdict.attempt_id);
+    const attempt = attemptByKey.get(key);
+    if (!attempt) {
+      rejected.push({ kind: "verdict", attempt_id: verdict.attempt_id, comment_id: verdict.comment_id, reason: "verdict has no surviving attempt" });
+      continue;
+    }
+    if (compareRecords(verdict, attempt) <= 0) {
+      rejected.push({ kind: "verdict", attempt_id: verdict.attempt_id, comment_id: verdict.comment_id, reason: "verdict precedes the attempt it judges" });
+      continue;
+    }
+    latest.set(key, verdict);
+  }
+  return { latest, rejected };
 }
 
 function evidenceFor(attempt, criterion) {
@@ -322,32 +361,71 @@ export function decisionKey(issue, standardVersion) {
   return `acc-${digest}`;
 }
 
+function decisionKeyFromTitle(title) {
+  const match = String(title ?? "").match(/验收决策\s+(acc-[0-9a-f]{16})/);
+  return match ? match[1] : null;
+}
+
+// Metadata and search can return the same issue twice, and a search hit may
+// carry only its fixed title. Merge by UUID/identifier and read the key from
+// metadata, the body or the fixed title so one issue never duplicates itself.
 function normalizeDecisions(inputs) {
   const list = Array.isArray(inputs) ? inputs : [inputs];
   const rows = list.flatMap((input) => asRows(input, ["issues", "items"]) ?? []);
-  return rows
+  const parsed = rows
     .map((row) => {
       const description = typeof row?.description === "string" ? row.description : "";
-      const bodyKey = description.match(new RegExp(`<!--\\s*${DECISION_MARKER}\\s+([\\s\\S]*?)-->`))
-        ?? description.match(/decision_key:\s*(acc-[0-9a-f]{16})/);
-      let parsedBody = null;
-      if (bodyKey) {
-        if (bodyKey[1].startsWith("{")) {
-          try {
-            parsedBody = JSON.parse(bodyKey[1]);
-          } catch {
-            parsedBody = null;
-          }
-        } else {
-          parsedBody = { decision_key: bodyKey[1] };
+      const marker = description.match(new RegExp(`<!--\\s*${DECISION_MARKER}\\s+([\\s\\S]*?)-->`));
+      const keyLine = description.match(/decision_key:\s*(acc-[0-9a-f]{16})/);
+      let bodyKey = null;
+      if (marker) {
+        try {
+          bodyKey = JSON.parse(marker[1])?.decision_key ?? null;
+        } catch {
+          bodyKey = null;
         }
       }
       return {
-        decision_key: row?.metadata?.acceptance_decision_key ?? parsedBody?.decision_key ?? null,
-        identifier: row?.identifier ?? null,
-        created_at: row?.created_at ?? null,
-        status: row?.status ?? null,
-        title: row?.title ?? null,
+        id: text(row?.id) ? row.id : null,
+        identifier: text(row?.identifier) ? row.identifier : null,
+        decision_key: row?.metadata?.acceptance_decision_key ?? bodyKey ?? (keyLine ? keyLine[1] : null) ?? decisionKeyFromTitle(row?.title),
+        created_at: text(row?.created_at) ? row.created_at : null,
+        status: text(row?.status) ? row.status : null,
+        title: text(row?.title) ? row.title : null,
+      };
+    })
+    .filter((row) => text(row.decision_key) && (text(row.identifier) || text(row.id)));
+
+  const groups = [];
+  const byAlias = new Map();
+  for (const row of parsed) {
+    const aliases = [...new Set([row.id && `id:${row.id}`, row.identifier && `number:${row.identifier}`].filter(Boolean))];
+    const found = [...new Set(aliases.map((alias) => byAlias.get(alias)).filter(Boolean))];
+    let group = found[0];
+    if (!group) {
+      group = { rows: [] };
+      groups.push(group);
+    }
+    for (const other of found.slice(1)) {
+      if (other === group) continue;
+      group.rows.push(...other.rows);
+      other.rows = [];
+      for (const [alias, owner] of byAlias) if (owner === other) byAlias.set(alias, group);
+    }
+    group.rows.push(row);
+    for (const alias of aliases) byAlias.set(alias, group);
+  }
+
+  return groups
+    .map((group) => {
+      const dated = group.rows.filter((row) => row.created_at)
+        .sort((a, b) => (timeValue(a.created_at) ?? 0) - (timeValue(b.created_at) ?? 0) || a.created_at.localeCompare(b.created_at));
+      return {
+        decision_key: group.rows.find((row) => text(row.decision_key))?.decision_key ?? null,
+        identifier: group.rows.find((row) => text(row.identifier))?.identifier ?? null,
+        created_at: dated[0]?.created_at ?? null,
+        status: group.rows.find((row) => text(row.status))?.status ?? null,
+        title: group.rows.find((row) => text(row.title))?.title ?? null,
       };
     })
     .filter((row) => text(row.decision_key) && text(row.identifier));
@@ -444,8 +522,8 @@ export function adjudicate({
     return true;
   });
 
-  const { ordered, replays } = distinctAttempts(attempts);
-  const verdictByKey = latestVerdictByAttempt(verdicts);
+  const { ordered, replays, rejected: attemptRejections } = distinctAttempts(attempts);
+  const { latest: verdictByKey, rejected: verdictRejections } = latestVerdicts(verdicts, ordered);
   const latestVerdictFor = (attempt) => verdictByKey.get(attemptKey(attempt.standard_version, attempt.attempt_id)) ?? null;
 
   const scoped = ordered.filter((attempt) => attempt.standard_version === standardVersion);
@@ -461,7 +539,11 @@ export function adjudicate({
   const countedCandidates = new Set(countedAll.map((row) => row.attempt.candidate_version));
   const rounds = countedCandidates.size;
   const counted = countedAll.filter((row, index, rows) => rows.findIndex((other) => other.attempt.candidate_version === row.attempt.candidate_version) === index);
-  const latestFailure = countedAll.at(-1) ?? null;
+  // A no-plan declaration must come after the independent verdict that failed
+  // the current candidate, not merely after the attempt: evidence posted before
+  // adjudication cannot justify giving up.
+  const currentFailures = countedAll.filter((row) => row.attempt.candidate_version === candidate);
+  const currentFailure = currentFailures.at(-1) ?? null;
 
   const exhaustionRows = exhausted.filter((row) => row.standard_version === standardVersion);
   const exhaustionRow = exhaustionRows.at(-1) ?? null;
@@ -474,8 +556,8 @@ export function adjudicate({
         plans: Array.isArray(exhaustionRow.plans) ? exhaustionRow.plans : [],
         names_attempt: exhaustionRow.attempt_id ?? null,
         comment_id: exhaustionRow.comment_id,
-        after_latest_failure: Boolean(latestFailure) && compareRecords(exhaustionRow, latestFailure.attempt) > 0,
-        names_latest_failure: Boolean(latestFailure) && exhaustionRow.attempt_id === latestFailure.attempt.attempt_id,
+        after_latest_failure: Boolean(currentFailure) && compareRecords(exhaustionRow, currentFailure.verdict) > 0,
+        names_latest_failure: Boolean(currentFailure) && exhaustionRow.attempt_id === currentFailure.attempt.attempt_id,
         valid: false,
       }
     : null;
@@ -528,8 +610,9 @@ export function adjudicate({
     not_counted: notCounted,
     replays,
     other_standard_versions: otherVersions,
-    ignored: [...ignored, ...rejected],
+    ignored: [...ignored, ...rejected, ...attemptRejections, ...verdictRejections],
     exhaustion,
+    wake_tester: null,
     decision: null,
     status_command: null,
     next_action: null,
@@ -610,20 +693,34 @@ export function adjudicate({
     const draft = buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId });
     const existing = normalizeDecisions(existingDecisions)
       .filter((row) => row.decision_key === draft.key)
-      .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || String(a.identifier).localeCompare(String(b.identifier)));
+      .sort((a, b) => (timeValue(a.created_at) ?? Number.MAX_SAFE_INTEGER) - (timeValue(b.created_at) ?? Number.MAX_SAFE_INTEGER)
+        || String(a.identifier).localeCompare(String(b.identifier)));
     if (existing.length > 0) {
       draft.action = "reuse";
       draft.existing_identifier = existing[0].identifier ?? null;
+      draft.existing_status = existing[0].status ?? null;
       draft.duplicates = existing.slice(1).map((row) => row.identifier).filter(Boolean);
     }
+    // After rework the issue sits in_progress, so a late no-plan declaration
+    // does not enter the review step by itself. The acceptance engineer must be
+    // woken to recompute this round; otherwise a satisfied escalation is never
+    // evaluated and no decision is created.
+    const inReview = String(issue.status ?? "") === "in_review";
+    const wakeTester = inReview ? null : {
+      required: true,
+      agent_id: roles.tester.id,
+      mention: `[@${roles.tester.name}](mention://agent/${roles.tester.id})`,
+      instruction: "无解声明发生在非审核状态：先实际唤醒验收自动化工程师重算上一轮证据，再由它创建决策；不要因为事项仍在 in_progress 就跳过。",
+    };
     return {
       ...base,
       outcome: draft.action === "reuse" ? "reuse_decision" : "escalate",
       decision: draft,
+      wake_tester: wakeTester,
       status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${blockedStatus}`,
       next_action: draft.action === "reuse"
         ? `已有同源决策 ${draft.existing_identifier}：不要新建事项，保留该决策并在原事项回链；多余的重复事项用 --duplicate-of 归并。`
-        : "两个升级条件同时满足：同一标准版本至少三个不同候选真实失败，且团队负责人已对最新一轮声明没有可执行方案。只创建一项固定标题的决策事项（标题含 decision_key），创建时正文就带键，指派给配置中的真实用户，并用默认重复保护拒绝第二次创建。",
+        : `${wakeTester ? "无解声明写在非审核状态，先实际唤醒验收自动化工程师重算本轮证据；确认无误后" : ""}两个升级条件同时满足：同一标准版本至少三个不同候选真实失败，且团队负责人已对当前候选的失败裁定声明没有可执行方案。只创建一项固定标题的决策事项（标题含 decision_key），创建时正文就带键，指派给配置中的真实用户，并用默认重复保护拒绝第二次创建。`,
     };
   }
 
@@ -631,10 +728,10 @@ export function adjudicate({
   if (rounds > 0) reasons.push(`同一标准版本已累计 ${rounds} 个候选真实失败`);
   if (rounds >= MIN_FAILED_ROUNDS && exhaustion?.executable_plan) reasons.push("团队仍有可执行方案，继续修复而不是升级");
   else if (rounds >= MIN_FAILED_ROUNDS && exhaustion && !exhaustion.valid) {
-    if (!exhaustion.after_latest_failure) reasons.push("无方案声明早于最新失败，或已被更新的记录取代");
-    else if (!exhaustion.names_latest_failure) reasons.push("无方案声明没有指明最新失败的那一轮");
+    if (!exhaustion.after_latest_failure) reasons.push("无方案声明早于当前候选最新失败的独立裁定，或已被更新的记录取代");
+    else if (!exhaustion.names_latest_failure) reasons.push("无方案声明没有指明当前候选最新失败的那一轮");
     else reasons.push("无方案声明缺少负责人身份、原因或已尝试方案");
-  } else if (rounds >= MIN_FAILED_ROUNDS) reasons.push("尚未满足升级条件：缺少团队负责人针对最新一轮明确无可执行方案的记录");
+  } else if (rounds >= MIN_FAILED_ROUNDS) reasons.push("尚未满足升级条件：缺少团队负责人针对当前候选失败裁定明确无可执行方案的记录");
   const nextAction = latestVerdict.next_action ?? latest.next_action;
   return {
     ...base,

@@ -11,6 +11,19 @@ Read the requested scope, target commit and acceptance criteria before the autho
 For defects, give a reproducible trigger, actual impact, source location and the smallest decisive reproduction. Keep speculative concerns separate. For acceptance, exercise the actual user path with the repository's available environment and tools. Report commands, outputs, relevant screenshots/recordings and exact revision. Do not claim a tool or UI is available without checking.
 Reviewers do not silently change the author's branch. Return pass, changes needed, or blocked with concrete evidence. When the issue is at a workflow's in_review step, deliver the verdict as the structured verdict record the step expects and leave the status change to the step handler; never let an in_review state, a comment count or a replayed run stand in for a verdict. Tests are selected by changed behavior and applicable repo instructions, not by a fixed exhaustive ritual. Release approval requires passing evidence for the release's actual scope.
 
+### in_review verdict record
+
+When the in_review step asks for an independent verdict, post it on the original issue under your own platform identity, after the attempt it judges, with the step's standard version, attempt id and the complete frozen criterion set:
+
+```html
+<!-- multica-acceptance {"kind":"verdict","standard_version":"<STANDARD_VERSION>","attempt_id":"<同一次验收的 attempt_id>","outcome":"passed|failed|not_verified","criteria":[{"criterion":"<冻结标准 ID>","result":"passed|failed|not_verified","evidence":"<日志或产物位置>"}],"environment_error":false,"next_action":"<回流时的下一动作>","notes":"<裁定说明>"} -->
+```
+
+- Adjudicate every frozen criterion. A missing, extra, unevidenced or unverified required criterion is not a pass; the executor's own attempt never signs itself.
+- An earlier verdict does not apply to a corrected attempt record in the same round: when evidence is revised, adjudicate the revision again.
+- After posting, actively continue: wake the acceptance automation engineer with a real mention (`[@验收自动化工程师](mention://agent/<agent id>)`) or, when your role permits, apply the status the verdict implies. Never leave the issue waiting in in_review.
+- Automatic done from this step is story acceptance only, not release, merge or daily-upgrade authorization.
+
 用户指定的分工：代码、脚本、工具、配置和测试实现统一交给 Claude Code（deepseek-v4.1-flash / high）。分析、研究、设计、审核、沟通中，普通及中等难度交给 Grok；高难度、重大不确定性、跨模块架构或复杂争议交给 Codex。实现困难时先请 Codex 分析或设计，再由 Claude Code 实现，不能把困难实现直接转给 Codex。
 按具体任务难度分流，不以职位高低或工作量大小单独决定。Grok 研究/设计升级到架构师，复杂审核升级到质量交付经理，复杂协调升级到研发经理或幕僚长。简单工作直接找相应执行者，避免逐层走全部经理。混合任务分别明确方案、实现和独立审核的负责人；实现者可以自测，但不能代替独立审核。智能体构建师负责角色设计与能力规划，创建或修改平台配置、脚本、工具和仓库文件均交给CLI / MCP 集成工程师实施。
 项目经理负责日常任务计划、分配、依赖、进度与交接，产品/研发/质量经理分别负责需求决策、复杂技术拆解和独立验收。幕僚长负责跨项目优先级、资源冲突与重大决策。项目经理维护项目事项、负责人、状态、日期和事件唤醒属于授权范围内的项目管理操作，可直接执行；代码、脚本及智能体/运行时配置实现仍由 Claude Code 负责。需要自动接收项目交付结果时，将交付主事项分配给“项目推进”小队，不能只依赖项目负责人字段。

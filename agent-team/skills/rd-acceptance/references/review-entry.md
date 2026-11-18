@@ -34,7 +34,8 @@
 ```
 
 - 同一候选版本的同一次验收只发一次；重跑或事件重复时沿用同一个 `attempt_id`，不要用重放制造新的轮次。
-- 每次换候选版本使用新的 `attempt_id`。
+- 同一轮需要补正证据（补日志、补返回码、纠正结果）时，仍用同一个 `attempt_id` 新发一条修订：判定以这一轮最新一条有效修订为准，补正不会增加轮数。补正后必须由质量交付经理对修订后的记录重新裁定，之前的裁定不再适用于这次验收。
+- 每次换候选版本使用新的 `attempt_id`；同一个 `attempt_id` 不得跨候选复用，工具会拒绝这类记录。
 - 记录里的 `executor` 或 `lead` 之类自报身份字段没有作用：身份只认这条评论在平台上的真实 `author_id` / `author_type`。
 
 然后以质量交付经理为实际接收者，用有效 mention 唤醒它独立裁定；这一步要真正产生它的运行，而不是只留一句“请审核”。它需要在原事项回复一条裁定记录：
@@ -57,9 +58,16 @@ mkdir -p .acceptance
 "$MULTICA_CLI_PATH" issue comment list <issue> --full --output json > .acceptance/comments.json
 "$MULTICA_CLI_PATH" agent list --output json > .acceptance/agents.json
 
-# 工具随 rd-acceptance 技能下发；路径不同时用 find 定位
-VERDICT_TOOL=.claude/skills/rd-acceptance/scripts/review-verdict.mjs
-[ -f "$VERDICT_TOOL" ] || VERDICT_TOOL=$(find .claude/skills -name review-verdict.mjs -print -quit)
+# 工具随 rd-acceptance 技能下发；不同 provider 把技能放在不同目录（Claude 为 .claude/skills，
+# Codex 为 $CODEX_HOME/skills 或任务内的 codex-home/skills，Grok 为 .grok/skills，其他为 .agent_context/skills）
+VERDICT_TOOL=
+for SKILLS_DIR in .claude/skills "${CODEX_HOME:+$CODEX_HOME/skills}" codex-home/skills .grok/skills .agent_context/skills; do
+  [ -n "$SKILLS_DIR" ] && [ -f "$SKILLS_DIR/rd-acceptance/scripts/review-verdict.mjs" ] || continue
+  VERDICT_TOOL="$SKILLS_DIR/rd-acceptance/scripts/review-verdict.mjs"
+  break
+done
+[ -n "$VERDICT_TOOL" ] || VERDICT_TOOL=$(find . -path '*/rd-acceptance/scripts/review-verdict.mjs' -print -quit)
+[ -n "$VERDICT_TOOL" ] || { echo "找不到 review-verdict.mjs：本步骤无法判定，请报告技能未下发的缺口" >&2; exit 1; }
 
 node "$VERDICT_TOOL" \
   --issue .acceptance/issue.json \
@@ -84,7 +92,7 @@ node "$VERDICT_TOOL" \
 | `awaiting_verdict` | 证据已提交但缺独立裁定，或裁定与证据/冻结标准不一致：补交证据或用有效 mention 唤醒质量交付经理重新裁定，不推进状态，也不累计失败轮次。 |
 | `done` | 仅当当前候选的全部冻结标准通过、每条都有命令/返回码/日志且裁定独立一致时出现。运行 `status_command` 标记 done。 |
 | `rework` | 运行 `status_command` 回到 in_progress，并在原事项实际唤醒原交付负责人或交付小队修复（有效 mention，或按平台支持指派给该小队启动运行）；只改状态不算已接续。写明本轮失败标准与下一动作。下一候选版本用新的 `attempt_id`，事项再次进入审核中时自动重跑。 |
-| `escalate` | 两个升级条件同时满足，按第 5 步只创建一项决策。 |
+| `escalate` | 两个升级条件同时满足，按第 5 步只创建一项决策。工具给出 `wake_tester`（事项不在审核中）时，先确认验收自动化工程师是被实际唤醒后重算的证据，再创建；不要因事项停在 in_progress 就跳过。 |
 | `reuse_decision` | 已有同源决策：不新建事项，保留并回链该决策。 |
 
 工具给出的 `status_command` 已包含事项标识和目标状态，直接执行，不手动改写状态名。不要在失败回流时来回拨状态，也不要为了结束本步骤把未通过的故事标记 done。
@@ -118,16 +126,27 @@ node "$VERDICT_TOOL" \
 升级必须同时满足两个条件，缺一不升级：
 
 1. 同一 `STANDARD_VERSION` 下至少三个不同候选各有一轮不同、真实失败的独立验收——工具按标准版本与候选去重，同一候选换 `attempt_id` 不累计；重放、单纯评论或运行次数、缺证据、未验证和环境错误都不计；
-2. 团队负责人（研发经理或项目经理）针对**最新一轮**失败明确声明已无可执行方案，并在原事项用自己的平台身份留下记录：
+2. 团队负责人（研发经理或项目经理）针对**当前候选最后一轮失败**明确声明已无可执行方案，并在原事项用自己的平台身份留下记录：
 
 ```html
-<!-- multica-acceptance {"kind":"exhausted","standard_version":"<STANDARD_VERSION>","attempt_id":"<最新失败那轮的 attempt_id>","reason":"<为什么没有可执行方案>","executable_plan":null,"plans":[{"plan":"<尝试过的方案>","result":"<结果>"}]} -->
+<!-- multica-acceptance {"kind":"exhausted","standard_version":"<STANDARD_VERSION>","attempt_id":"<当前候选最新失败那轮的 attempt_id>","reason":"<为什么没有可执行方案>","executable_plan":null,"plans":[{"plan":"<尝试过的方案>","result":"<结果>"}]} -->
 ```
 
-- 记录必须晚于最新失败，并写明该轮的 `attempt_id`；过去的无方案声明、没有指明最新一轮的记录都不触发升级。
+- 记录必须晚于该轮质量交付经理的**独立失败裁定**，并写明该轮（当前候选）的 `attempt_id`。只晚于证据评论、但早于裁定的声明无效；过去的无方案声明、没有指明当前候选最新一轮失败的记录都不触发升级。
 - `executable_plan` 非空表示团队仍有方案，继续回流修复；若之后有更新的记录重新给出方案，以最新记录为准，不升级。
 - `plans` 为空、`reason` 为空或作者不是负责人角色时，工具判为无效，不升级。
 - 三次失败但还有可执行方案时继续回流修复，不升级，也不创建决策事项。
+
+### 回流后的无解声明必须真正接续
+
+三次失败回流后，事项通常停在 `in_progress`，不会再自动进入审核中。负责人发表无解声明时，必须在原事项用有效 mention 实际唤醒验收自动化工程师重算本轮证据（即本步骤的第 4 步判定），不能只在评论里写“无解”就结束：否则条件虽然满足，也没有人创建决策事项。验收自动化工程师被唤醒后先重跑判定工具，确认声明晚于本轮独立失败裁定并指向当前候选；满足条件才创建决策。负责人给出可执行方案时不要唤醒升级，继续把事项交回交付团队修复。
+
+```bash
+# ./no-plan-wake.md 的正文（agent id 取真实的验收自动化工程师）
+# 已按当前候选第 N 轮失败声明无可执行方案，请重算该轮证据并推进后续处理：
+# [@验收自动化工程师](mention://agent/<验收自动化工程师 agent id>)
+"$MULTICA_CLI_PATH" issue comment add <issue> --content-file ./no-plan-wake.md --output table
+```
 
 升级时先查已有同源决策，再决定是否新建。标题和正文都带同一个 `decision_key`，创建与补写元数据之间重试也不会重复建单：
 
@@ -144,7 +163,9 @@ node "$VERDICT_TOOL" \
   --decision-dir .acceptance/decision --output json
 ```
 
-- 工具同时按 `metadata.acceptance_decision_key` 和正文里的 `decision_key` 查找，能发现创建成功但元数据尚未补写的同源事项。
+- 工具同时按 `metadata.acceptance_decision_key`、正文里的 `decision_key` 和固定标题「验收决策 `<KEY>`」查找，能发现创建成功但元数据尚未补写的同源事项。
+- `issue search` 可能只返回标题而没有完整正文；这仍足以识别同源决策。若命中项缺少编号、时间或状态，按完整固定标题再搜一次，或对命中项执行 `issue get <id> --output json` 补全，并把补全结果一并传给 `--existing-decisions`。标题固定为「验收决策 `<KEY>` …」，不要改写或用别的标题搜索。
+- 元数据和搜索返回同一事项时，工具按 UUID/编号合并成一项：它不会被列进 `decision.duplicates`，也不会被当成另一项而重复创建。已关闭（cancelled/done）的同源决策同样复用，只在原事项回链，不再新建。
 - `outcome` 为 `escalate` 时才创建，且只创建一项：
 
 ```bash

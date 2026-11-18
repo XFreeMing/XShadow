@@ -345,6 +345,87 @@ test("a stale no-plan statement, or one naming an older round, cannot escalate",
   assert.match(updatedPlan.next_action, /仍有可执行方案/);
 });
 
+test("a corrected revision of the same round replaces the earlier one instead of the earliest winning", () => {
+  const comments = [
+    comment(attemptBody("a1"), { at: "2026-11-18T10:00:00Z" }),
+    comment(verdictBody("a1"), { at: "2026-11-18T10:01:00Z" }),
+    comment(passedAttempt("a1"), { at: "2026-11-18T10:02:00Z" }),
+    comment(passedVerdict("a1"), { at: "2026-11-18T10:03:00Z" }),
+  ];
+  const result = run(comments);
+  assert.equal(result.outcome, "done");
+  assert.equal(result.rounds.count, 0);
+  assert.equal(result.replays.length, 1);
+});
+
+test("supplementary evidence for one attempt stays one round and needs re-adjudication", () => {
+  const comments = [
+    comment(attemptBody("a1", { evidence: [{ criterion: "C1", command: "pnpm test", exit_code: 1, result: "failed", log: "logs/a1.log" }] }), { at: "2026-11-18T10:00:00Z" }),
+    comment(attemptBody("a1", { evidence: [{ criterion: "C1", command: "pnpm test", exit_code: 1, result: "failed", log: "logs/a1.log", artifact: "reports/a1.xml" }] }), { at: "2026-11-18T10:01:00Z" }),
+    comment(verdictBody("a1"), { at: "2026-11-18T10:02:00Z" }),
+  ];
+  const result = run(comments);
+  assert.equal(result.outcome, "rework");
+  assert.equal(result.rounds.count, 1);
+  assert.equal(result.replays.length, 1);
+});
+
+test("a verdict posted before its attempt cannot judge it", () => {
+  const result = run([
+    comment(passedVerdict("a1"), { at: "2026-11-18T10:00:00Z" }),
+    comment(passedAttempt("a1"), { at: "2026-11-18T10:01:00Z" }),
+  ]);
+  assert.equal(result.outcome, "awaiting_verdict");
+  assert.ok(result.ignored.some((row) => /precedes the attempt/.test(row.reason)));
+});
+
+test("an attempt id reused for another candidate is rejected, not merged into that round", () => {
+  const result = run([
+    comment(attemptBody("a1", { candidate_version: "sha-a1" }), { at: "2026-11-18T10:00:00Z" }),
+    comment(verdictBody("a1"), { at: "2026-11-18T10:01:00Z" }),
+    comment(attemptBody("a1", { candidate_version: "sha-a2" }), { at: "2026-11-18T10:02:00Z" }),
+  ], { candidate: "sha-a2" });
+  assert.equal(result.outcome, "run_acceptance");
+  assert.equal(result.rounds.count, 1);
+  assert.ok(result.ignored.some((row) => /another candidate/.test(row.reason)));
+});
+
+test("a no-plan statement before that round's independent verdict cannot escalate", () => {
+  const comments = [
+    comment(attemptBody("a1"), { at: "2026-11-18T10:00:00Z" }), comment(verdictBody("a1"), { at: "2026-11-18T10:01:00Z" }),
+    comment(attemptBody("a2"), { at: "2026-11-18T10:02:00Z" }), comment(verdictBody("a2"), { at: "2026-11-18T10:03:00Z" }),
+    comment(attemptBody("a3"), { at: "2026-11-18T10:04:00Z" }),
+    comment(exhaustedBody("a3"), { at: "2026-11-18T10:05:00Z" }),
+    comment(verdictBody("a3"), { at: "2026-11-18T10:06:00Z" }),
+  ];
+  const result = run(comments, { candidate: "sha-a3" });
+  assert.equal(result.outcome, "rework");
+  assert.equal(result.exhaustion.after_latest_failure, false);
+  assert.equal(result.rounds.count, 3);
+});
+
+test("a no-plan statement must name the current candidate's latest failure", () => {
+  const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a2"), { at: "2026-11-18T12:00:00Z" })];
+  const result = run(comments, { candidate: "sha-a3" });
+  assert.equal(result.outcome, "rework");
+  assert.equal(result.exhaustion.after_latest_failure, true);
+  assert.equal(result.exhaustion.names_latest_failure, false);
+});
+
+test("a late no-plan declaration outside review wakes the tester to recompute", () => {
+  const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
+  const late = run(comments, { candidate: "sha-a3", issue: { ...issue, status: "in_progress" } });
+  assert.equal(late.outcome, "escalate");
+  assert.equal(late.wake_tester.required, true);
+  assert.equal(late.wake_tester.agent_id, "agent-tester");
+  assert.match(late.wake_tester.mention, /mention:\/\/agent\/agent-tester/);
+  assert.match(late.next_action, /唤醒验收自动化工程师/);
+
+  const inReview = run(comments, { candidate: "sha-a3", issue: { ...issue, status: "in_review" } });
+  assert.equal(inReview.outcome, "escalate");
+  assert.equal(inReview.wake_tester, null);
+});
+
 test("three real failures without a plan escalate exactly one fixed-key decision", () => {
   const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
   const first = run(comments, { candidate: "sha-a3" });
@@ -386,6 +467,38 @@ test("three real failures without a plan escalate exactly one fixed-key decision
   const third = run(comments, { candidate: "sha-a3", existingDecisions: [bodyOnly] });
   assert.equal(third.outcome, "reuse_decision");
   assert.equal(third.decision.existing_identifier, "DEV-88");
+});
+
+test("metadata and search returning the same decision never duplicate it", () => {
+  const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
+  const key = run(comments, { candidate: "sha-a3" }).decision.key;
+  const metadata = {
+    issues: [{
+      id: "decision-uuid", identifier: "DEV-90", created_at: "2026-11-18T09:00:00Z", status: "in_progress",
+      metadata: { acceptance_decision_key: key },
+    }],
+  };
+  const search = {
+    issues: [{ id: "decision-uuid", identifier: "DEV-90", title: `验收决策 ${key} 三轮失败`, status: "in_progress" }],
+  };
+  const result = run(comments, { candidate: "sha-a3", existingDecisions: [metadata, search] });
+  assert.equal(result.outcome, "reuse_decision");
+  assert.equal(result.decision.existing_identifier, "DEV-90");
+  assert.equal(result.decision.existing_status, "in_progress");
+  assert.deepEqual(result.decision.duplicates, []);
+});
+
+test("a title-only search hit of an already closed decision is reused without creating another", () => {
+  const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
+  const key = run(comments, { candidate: "sha-a3" }).decision.key;
+  const searchOnly = {
+    issues: [{ id: "closed-decision-uuid", identifier: "DEV-77", title: `验收决策 ${key}`, status: "cancelled" }],
+  };
+  const result = run(comments, { candidate: "sha-a3", existingDecisions: [searchOnly] });
+  assert.equal(result.outcome, "reuse_decision");
+  assert.equal(result.decision.existing_identifier, "DEV-77");
+  assert.equal(result.decision.existing_status, "cancelled");
+  assert.deepEqual(result.decision.duplicates, []);
 });
 
 test("the decision owner must be a configured human, never an agent", () => {
@@ -528,4 +641,44 @@ test("quality, acceptance automation and the project manager carry the in-review
   assert.match(pm.instructions, /三轮/);
   assert.match(pm.instructions, /blocked/);
   assert.match(pm.instructions, /批量完成/);
+});
+
+test("the review entry locates the tool under every provider's skill directory", () => {
+  const entry = readFileSync(join(ACCEPTANCE_DIR, "references/review-entry.md"), "utf8");
+  for (const needle of [".claude/skills", "CODEX_HOME/skills", "codex-home/skills", ".grok/skills", ".agent_context/skills"]) {
+    assert.ok(entry.includes(needle), `review entry does not look in ${needle}`);
+  }
+  assert.match(entry, /最新一条有效修订/);
+  assert.match(entry, /独立失败裁定/);
+  assert.match(entry, /实际唤醒验收自动化工程师/);
+  assert.match(entry, /固定标题/);
+  assert.match(entry, /issue get/);
+});
+
+test("the quality manager's own skill carries the copyable verdict record and the active hand-back", () => {
+  const skill = readFileSync(join(ROOT, "agent-team/skills/rd-verify/SKILL.md"), "utf8");
+  for (const needle of ['"kind":"verdict"', '"standard_version"', '"attempt_id"', '"criteria"',
+    '"environment_error"', "mention://agent/", "Never leave the issue waiting"]) {
+    assert.ok(skill.includes(needle), `rd-verify is missing ${needle}`);
+  }
+  assert.match(skill, /adjudicate the revision again/i);
+  assert.doesNotMatch(skill, /见 rd-acceptance|follow rd-acceptance/);
+});
+
+test("the lead's coordination skill carries the no-plan record and the late wake", () => {
+  const skill = readFileSync(join(ROOT, "agent-team/skills/rd-coordinate/SKILL.md"), "utf8");
+  for (const needle of ['"kind":"exhausted"', '"attempt_id"', '"executable_plan"', "in_progress",
+    "valid mention", "acceptance automation engineer"]) {
+    assert.ok(skill.includes(needle), `rd-coordinate is missing ${needle}`);
+  }
+  assert.match(skill, /predates that round's verdict/);
+  assert.match(skill, /keep the team fixing/);
+});
+
+test("the template sends the quality manager to its own verdict format and the lead to the late wake", () => {
+  const by = Object.fromEntries(template.agents.map((agent) => [agent.key, agent]));
+  assert.match(by.quality.instructions, /rd-verify/);
+  assert.match(by.quality.instructions, /verdict 记录格式/);
+  assert.match(by["acceptance-automation"].instructions, /实际唤醒你重算/);
+  assert.match(by.pm.instructions, /实际唤醒验收自动化工程师/);
 });
