@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -681,4 +681,44 @@ test("the template sends the quality manager to its own verdict format and the l
   assert.match(by.quality.instructions, /verdict 记录格式/);
   assert.match(by["acceptance-automation"].instructions, /实际唤醒你重算/);
   assert.match(by.pm.instructions, /实际唤醒验收自动化工程师/);
+});
+
+test("common rules never hold an accepted story in review for optional confirmation", () => {
+  const common = readFileSync(join(ROOT, "agent-team/common.md"), "utf8");
+  assert.doesNotMatch(common, /等待用户体验决定时保留 in_review/);
+  assert.match(common, /明确必验的手验项/);
+  assert.match(common, /可选体验或发布确认不把已通过的故事卡在 in_review/);
+  assert.match(common, /仓库已有的合并授权/);
+  assert.match(common, /是否更新日常客户端由用户选择/);
+});
+
+test("the planner skill arms a project-less in_review wakeup from the Default workflow's own instructions", () => {
+  const skill = readFileSync(join(ROOT, "agent-team/skills/rd-project-management/SKILL.md"), "utf8");
+  for (const needle of ["project_id", "issue wakeup list", "--until-status in_review", "--mode once", "--agent-id",
+    "--instruction-file", "workflow get default", "issue_field", "12000", "Never infer the decision member",
+    "rule is consumed", "re-arm", "has no agent handler"]) {
+    assert.ok(skill.includes(needle), `planner skill is missing ${needle}`);
+  }
+  // The full review entry cannot travel through the wakeup instruction limit,
+  // which is why the planner passes the workflow's own in_review text instead.
+  const entryBytes = statSync(join(ACCEPTANCE_DIR, "references/review-entry.md")).size;
+  assert.ok(entryBytes > 12000, `review-entry.md is ${entryBytes} bytes; update the planner guidance if it now fits`);
+});
+
+test("the CLI runs through a symlinked skill directory and a symlinked file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "review-verdict-link-"));
+  try {
+    symlinkSync(ACCEPTANCE_DIR, join(dir, "rd-acceptance"), "dir");
+    const viaDir = execFileSync(process.execPath, [
+      join(dir, "rd-acceptance/scripts/review-verdict.mjs"), "--help",
+    ], { encoding: "utf8" });
+    assert.match(viaDir, /Usage:/);
+    assert.match(viaDir, /--owner-user-id/);
+
+    symlinkSync(TOOL, join(dir, "review-verdict.mjs"));
+    const viaFile = execFileSync(process.execPath, [join(dir, "review-verdict.mjs"), "--help"], { encoding: "utf8" });
+    assert.match(viaFile, /Usage:/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

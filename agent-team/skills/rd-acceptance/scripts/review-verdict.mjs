@@ -11,8 +11,8 @@
 // from the issue's stored history.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const RECORD_MARKER = "multica-acceptance";
 export const DECISION_MARKER = "multica-acceptance-decision";
@@ -788,7 +788,20 @@ export function main(argv = process.argv.slice(2), stdout = process.stdout) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// The workbench and development checkout expose the skill through symlinked
+// directories, so argv[1] and import.meta.url may name the same file by
+// different paths. Compare resolved paths; a real module import still stays
+// silent because argv[1] is then the test runner.
+function isEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isEntryPoint()) {
   try {
     process.exitCode = main();
   } catch (error) {
