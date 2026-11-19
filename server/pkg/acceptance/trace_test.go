@@ -79,3 +79,100 @@ func TestCandidateReplacementAndRollbackRequireMatchingCaseEvidence(t *testing.T
 		t.Fatal(trace)
 	}
 }
+
+func TestRetiredCaseKeepsHistoryAndLeavesRequiredSet(t *testing.T) {
+	trace := Trace{}
+	apply := func(op Change) {
+		t.Helper()
+		op.BaseRevision = &trace.Revision
+		op.CriterionID = "C1"
+		if err := trace.Apply(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := strings.Repeat("c", 40)
+	apply(Change{Action: "criterion", Text: "检索命中"})
+	apply(Change{Action: "implementation", Repository: "org/repo", Branch: "dev", Commit: commit})
+	apply(Change{Action: "case", CaseID: "C1-T1", Text: "原文一"})
+	apply(Change{Action: "case", CaseID: "C1-T2", Text: "原文二"})
+	apply(Change{Action: "case", CaseID: "C1-T3", Text: "原文三"})
+	apply(Change{Action: "run", CaseID: "C1-T2", Candidate: commit, Result: "fail", Evidence: "run-1"})
+
+	apply(Change{Action: "case_retire", CaseID: "C1-T2", Reason: "被 C1-T1 更正替代", SupersededBy: "C1-T1"})
+	apply(Change{Action: "case_retire", CaseID: "C1-T3", Reason: "不再执行"})
+
+	impact := trace.Criteria[0].Impact()
+	if len(impact.Unrun) != 1 || impact.Unrun[0] != "C1-T1" {
+		t.Fatalf("retired case still required: %+v", impact)
+	}
+	if len(impact.Retest) != 0 || len(impact.Failed) != 0 {
+		t.Fatalf("retired case leaked into gates: %+v", impact)
+	}
+	if len(impact.Retired) != 2 || impact.Retired[0] != "C1-T2" || impact.Retired[1] != "C1-T3" {
+		t.Fatalf("retired cases not reported: %+v", impact)
+	}
+	retired := trace.Criteria[0].Cases[1]
+	if retired.Specification != "原文二" || len(retired.Runs) != 1 || retired.Runs[0].Evidence != "run-1" {
+		t.Fatalf("retirement dropped history: %+v", retired)
+	}
+	if retired.Retired == nil || retired.Retired.SupersededBy != "C1-T1" || retired.Retired.Reason == "" || retired.Retired.Revision != trace.Revision-1 {
+		t.Fatalf("retirement metadata incorrect: %+v", retired.Retired)
+	}
+	for _, c := range trace.Criteria[0].Cases {
+		for _, run := range c.Runs {
+			if run.Result == "pass" {
+				t.Fatalf("retirement fabricated a pass on %s", c.ID)
+			}
+		}
+	}
+
+	revision := trace.Revision
+	if err := trace.Apply(Change{BaseRevision: &revision, Action: "case_retire", CriterionID: "C1", CaseID: "C1-T2", Reason: "again"}); err == nil {
+		t.Fatal("duplicate retirement accepted")
+	}
+	revision = trace.Revision
+	if err := trace.Apply(Change{BaseRevision: &revision, Action: "case_retire", CriterionID: "C1", CaseID: "C1-T9", Reason: "unknown"}); err == nil {
+		t.Fatal("unknown case accepted")
+	}
+	revision = trace.Revision
+	if err := trace.Apply(Change{BaseRevision: &revision, Action: "case_retire", CriterionID: "C1", CaseID: "C1-T1", Reason: ""}); err == nil {
+		t.Fatal("retirement without reason accepted")
+	}
+	applyOther := func(op Change) {
+		t.Helper()
+		op.BaseRevision = &trace.Revision
+		op.CriterionID = "C2"
+		if err := trace.Apply(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applyOther(Change{Action: "criterion", Text: "另一个标准"})
+	applyOther(Change{Action: "case", CaseID: "C2-T1", Text: "其他用例"})
+	revision = trace.Revision
+	if err := trace.Apply(Change{BaseRevision: &revision, Action: "case_retire", CriterionID: "C1", CaseID: "C1-T1", Reason: "替换", SupersededBy: "C2-T1"}); err == nil {
+		t.Fatal("cross-criterion superseded_by accepted")
+	}
+	revision = trace.Revision
+	if err := trace.Apply(Change{BaseRevision: &revision, Action: "case_retire", CriterionID: "C1", CaseID: "C1-T1", Reason: "替换", SupersededBy: "C1-T9"}); err == nil {
+		t.Fatal("unknown superseded_by accepted")
+	}
+	revision = trace.Revision
+	if err := trace.Apply(Change{BaseRevision: &revision, Action: "case_retire", CriterionID: "C1", CaseID: "C1-T1", Reason: "自己", SupersededBy: "C1-T1"}); err == nil {
+		t.Fatal("self superseded_by accepted")
+	}
+}
+
+func TestLegacyLedgerDecodesWithoutRetirement(t *testing.T) {
+	legacy := []byte(`{"revision":43,"criteria":[{"id":"C1","versions":["原文标准"],"cases":[{"id":"C1-T1","specification":"原文一","runs":[{"version":1,"result":"pass","candidate":"` + strings.Repeat("a", 40) + `","evidence":"log"}]}],"implementations":[{"version":1,"repository":"org/repo","branch":"dev","commit":"` + strings.Repeat("a", 40) + `"}]}]}`)
+	trace, err := Decode(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trace.Revision != 43 || len(trace.Criteria) != 1 || trace.Criteria[0].Cases[0].Retired != nil {
+		t.Fatalf("legacy ledger changed shape: %+v", trace)
+	}
+	impact := trace.Criteria[0].Impact()
+	if len(impact.Retired) != 0 || len(impact.Unrun) != 0 || len(impact.Failed) != 0 {
+		t.Fatalf("legacy impact incorrect: %+v", impact)
+	}
+}

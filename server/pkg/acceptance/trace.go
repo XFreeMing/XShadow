@@ -23,6 +23,7 @@ type Criterion struct {
 }
 
 // Impact reports direct dependencies. Old run evidence remains on its original version.
+// Retired cases keep their text and runs but are no longer required by any gate.
 type Impact struct {
 	CriterionID           string   `json:"criterion_id"`
 	Version               int      `json:"version"`
@@ -30,11 +31,12 @@ type Impact struct {
 	Unrun                 []string `json:"unrun_cases"`
 	Retest                []string `json:"retest_cases"`
 	Failed                []string `json:"failed_cases"`
+	Retired               []string `json:"retired_cases"`
 	CurrentImplementation bool     `json:"has_current_implementation"`
 }
 
 func (c Criterion) Impact() Impact {
-	result := Impact{CriterionID: c.ID, Version: len(c.Versions), Uncovered: len(c.Cases) == 0, Unrun: []string{}, Retest: []string{}, Failed: []string{}}
+	result := Impact{CriterionID: c.ID, Version: len(c.Versions), Uncovered: len(c.Cases) == 0, Unrun: []string{}, Retest: []string{}, Failed: []string{}, Retired: []string{}}
 	var candidate string
 	for _, link := range c.Implementations {
 		if link.Version == result.Version {
@@ -43,6 +45,10 @@ func (c Criterion) Impact() Impact {
 	}
 	result.CurrentImplementation = candidate != ""
 	for _, tc := range c.Cases {
+		if tc.Retired != nil {
+			result.Retired = append(result.Retired, tc.ID)
+			continue
+		}
 		if len(tc.Runs) == 0 {
 			result.Unrun = append(result.Unrun, tc.ID)
 			continue
@@ -58,9 +64,18 @@ func (c Criterion) Impact() Impact {
 }
 
 type TestCase struct {
-	ID            string `json:"id"`
-	Specification string `json:"specification"`
-	Runs          []Run  `json:"runs"`
+	ID            string      `json:"id"`
+	Specification string      `json:"specification"`
+	Runs          []Run       `json:"runs"`
+	Retired       *Retirement `json:"retired,omitempty"`
+}
+
+// Retirement marks a replaced case. The original specification and runs stay
+// on the case; the milestone only records when and why it stopped being required.
+type Retirement struct {
+	Revision     int    `json:"revision"`
+	Reason       string `json:"reason"`
+	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
 type Run struct {
@@ -89,6 +104,8 @@ type Change struct {
 	Result       string `json:"result"`
 	Candidate    string `json:"candidate"`
 	Evidence     string `json:"evidence"`
+	Reason       string `json:"reason"`
+	SupersededBy string `json:"superseded_by"`
 }
 
 var (
@@ -184,6 +201,44 @@ func (t *Trace) Apply(op Change) error {
 			return errors.New("candidate commit SHA and evidence are required")
 		}
 		test.Runs = append(test.Runs, Run{len(criterion.Versions), op.Result, op.Candidate, op.Evidence})
+	case "case_retire":
+		if test == nil {
+			return errors.New("case not found")
+		}
+		if test.Retired != nil {
+			return errors.New("case is already retired")
+		}
+		reason := strings.TrimSpace(op.Reason)
+		if reason == "" {
+			return errors.New("retirement reason is required")
+		}
+		supersededBy := strings.TrimSpace(op.SupersededBy)
+		if supersededBy != "" {
+			if supersededBy == test.ID {
+				return errors.New("superseded_by must name another case")
+			}
+			if !key.MatchString(supersededBy) {
+				return errors.New("invalid superseded_by")
+			}
+			superseding := false
+			for _, other := range criterion.Cases {
+				if other.ID == supersededBy {
+					superseding = true
+					break
+				}
+			}
+			if !superseding {
+				for _, other := range t.Criteria {
+					for _, otherCase := range other.Cases {
+						if other.ID != criterion.ID && otherCase.ID == supersededBy {
+							return errors.New("superseded_by belongs to another criterion")
+						}
+					}
+				}
+				return errors.New("superseded_by case not found")
+			}
+		}
+		test.Retired = &Retirement{Revision: t.Revision + 1, Reason: reason, SupersededBy: supersededBy}
 	default:
 		return fmt.Errorf("unknown acceptance action %q", op.Action)
 	}

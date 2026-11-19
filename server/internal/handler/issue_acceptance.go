@@ -137,7 +137,7 @@ func agileReworkStep(run workmethod.Run, action string, criterion acceptance.Cri
 	case "case":
 		targetGate = "coverage"
 	case "implementation":
-	case "run":
+	case "run", "case_retire":
 		impact := criterion.Impact()
 		if impact.CurrentImplementation && !impact.Uncovered && len(impact.Retest)+len(impact.Failed)+len(impact.Unrun) == 0 {
 			return 0, false
