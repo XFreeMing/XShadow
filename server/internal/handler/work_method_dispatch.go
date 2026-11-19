@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -113,9 +114,9 @@ func (h *Handler) writeIssueMethodView(w http.ResponseWriter, r *http.Request, i
 	}{run, err == nil && h.canActOnMethod(r, issue, run, actor)})
 }
 
-func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request, issue db.Issue, run workmethod.Run, write func(*db.Queries, pgtype.Text, pgtype.UUID, workmethod.Run) (db.Issue, error)) (db.Issue, bool) {
+func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request, issue db.Issue, run *workmethod.Run, trace []byte) (db.Issue, bool) {
 	run.CurrentActor = nil
-	actor, err := h.methodRecipient(r.Context(), issue, run)
+	actor, err := h.methodRecipient(r.Context(), issue, *run)
 	if err != nil {
 		writeError(w, 409, err.Error())
 		return db.Issue{}, false
@@ -184,7 +185,38 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(ctx)
 	q := h.Queries.WithTx(tx)
-	updated, err := write(q, kind, id, run)
+	var boardStatus pgtype.Text
+	status := methodBoardStatus(*run)
+	if status != "" && status != issue.Status {
+		category, err := issuestatus.CategoryWithError(ctx, q, issue.WorkspaceID, issue.Status)
+		if err != nil {
+			writeError(w, 500, "failed to read issue status")
+			return db.Issue{}, false
+		}
+		if category == issuestatus.CategoryClosed || (category == issuestatus.CategoryDone && trace == nil) || issue.Status == issuestatus.Blocked {
+			writeError(w, 409, "请先恢复事项再推进敏捷方法")
+			return db.Issue{}, false
+		}
+		def, _, err := issueworkflow.ForProject(ctx, q, issue.WorkspaceID, issue.ProjectID)
+		if err == nil && !issue.ProjectID.Valid {
+			def, err = issueworkflow.OutsideProject(ctx, q, issue.WorkspaceID)
+		}
+		if err != nil {
+			writeError(w, 500, "failed to read project workflow")
+			return db.Issue{}, false
+		}
+		if err := issueworkflow.CheckStatus(def, status); err != nil {
+			writeIssueWorkflowError(w, err)
+			return db.Issue{}, false
+		}
+		boardStatus = pgtype.Text{String: status, Valid: true}
+	}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		writeError(w, 500, "failed to encode method run")
+		return db.Issue{}, false
+	}
+	updated, err := q.SaveIssueWorkMethodRun(ctx, db.SaveIssueWorkMethodRunParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, IssueRevision: issue.Revision, Run: raw, Trace: trace, BoardStatus: boardStatus, AssigneeType: kind, AssigneeID: id})
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 409, "issue changed; refresh before advancing the method")
 		return db.Issue{}, false

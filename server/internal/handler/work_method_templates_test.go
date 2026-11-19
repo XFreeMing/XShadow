@@ -45,17 +45,17 @@ func TestWorkMethodTemplateOverridesAreVersionedAndWorkspaceLocal(t *testing.T) 
 	m.Steps[0].Owner = &workmethod.Actor{Kind: "member", ID: testUserID}
 	m.Steps[0].Reviewer = &workmethod.Actor{Kind: "creator"}
 	var saved workmethod.Template
-	put(m, 1).Want(200).JSON(&saved)
-	if saved.ID != original.ID || saved.Revision != 2 {
+	put(m, original.Revision).Want(200).JSON(&saved)
+	if saved.ID != original.ID || saved.Revision != original.Revision+1 {
 		t.Fatal(saved)
 	}
-	put(m, 1).Want(409)
+	put(m, original.Revision).Want(409)
 	got := list(ws)
 	if len(got) != 3 || got[0].Name != m.Name || got[0].Steps[0].Owner.ID != testUserID {
 		t.Fatal(got)
 	}
 	other := list(testWorkspaceID)
-	if other[0].Name != original.Name || other[0].Revision != 1 {
+	if other[0].Name != original.Name || other[0].Revision != original.Revision {
 		t.Fatal("override escaped workspace")
 	}
 	m.Name = "Survey handbook"
@@ -71,17 +71,17 @@ func TestWorkMethodTemplateOverridesAreVersionedAndWorkspaceLocal(t *testing.T) 
 	spurious := dbfx.User(t, "Foreign method reviewer", "method-"+slug+"@example.invalid")
 	dbfx.Member(t, testWorkspaceID, spurious, "member")
 	m.Steps[0].Reviewer = &workmethod.Actor{Kind: "member", ID: spurious}
-	put(m, 2).Want(400)
+	put(m, saved.Revision).Want(400)
 	m.Steps[0].Reviewer = &workmethod.Actor{Kind: "creator"}
 	m.Name = "Concurrent edit"
-	// Two editors both saw version two. Only one write can replace it.
+	// Two editors saw the same version. Only one write can replace it.
 	codes := make(chan int, 2)
 	for range 2 {
-		go func() { codes <- put(m, 2).Code }()
+		go func() { codes <- put(m, saved.Revision).Code }()
 	}
 	gotCodes := []int{<-codes, <-codes}
 	slices.Sort(gotCodes)
-	if !slices.Equal(gotCodes, []int{200, 409}) || list(ws)[0].Revision != 3 {
+	if !slices.Equal(gotCodes, []int{200, 409}) || list(ws)[0].Revision != saved.Revision+1 {
 		t.Fatal(gotCodes)
 	}
 }

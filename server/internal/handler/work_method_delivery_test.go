@@ -50,6 +50,16 @@ func TestAgileApprovalReopensWhenAcceptedCriterionChanges(t *testing.T) {
 	if run.Method == nil || run.Method.ID != "agile" {
 		t.Fatalf("wanted agile: %+v", run)
 	}
+	// Existing issues keep the four pre-gate steps they started with.
+	for i := range run.Method.Steps {
+		run.Method.Steps[i].Gate = ""
+	}
+	run.State = "working"
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbfx.Exec(t, "UPDATE issue SET work_method_run=$1 WHERE id=$2", raw, id)
 	path := "/api/issues/" + id
 	method := func(action, evidence string, want int) {
 		t.Helper()
@@ -107,6 +117,9 @@ func TestAgileApprovalReopensWhenAcceptedCriterionChanges(t *testing.T) {
 func TestReopeningRoutedAgileReviewDispatchesOnce(t *testing.T) {
 	agent := seededReadyAgentID(t)
 	m := workmethod.Builtins()[0]
+	for i := range m.Steps {
+		m.Steps[i].Gate = ""
+	}
 	last := len(m.Steps) - 1
 	m.Steps[last].Owner = &workmethod.Actor{Kind: "creator"}
 	m.Steps[last].Reviewer = &workmethod.Actor{Kind: "agent", ID: agent}
@@ -127,5 +140,95 @@ func TestReopeningRoutedAgileReviewDispatchesOnce(t *testing.T) {
 	review := readDeliveryMethod(t, id)
 	if review.State != "review" || review.Revision != 10 || taskCountFor(t, id, agent) != 1 {
 		t.Fatalf("changed criteria should reopen the final review and queue its reviewer once: %+v", review)
+	}
+}
+
+func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
+	seedTestCatalog(t)
+	agent := seededReadyAgentID(t)
+	m := workmethod.Builtins()[0]
+	for i := range m.Steps {
+		m.Steps[i].Owner = &workmethod.Actor{Kind: "member", ID: testUserID}
+		m.Steps[i].Reviewer = &workmethod.Actor{Kind: "agent", ID: agent}
+	}
+	run := workmethod.Run{Method: &m, State: "working", Revision: 1}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := dbfx.Issue(t, "实现敏捷交付闭环", testutil.Cols{"status": "todo", "work_method_run": raw})
+	path := "/api/issues/" + id
+	trace := acceptance.Trace{}
+	accept := func(action string, fields map[string]any) {
+		t.Helper()
+		fields["action"], fields["criterion_id"], fields["base_revision"] = action, "AC1", trace.Revision
+		req := withURLParam(newRequest("POST", path+"/acceptance", fields), "id", id)
+		testutil.Call(t, testHandler.ChangeIssueAcceptance, req).Want(200).JSON(&trace)
+		run = readDeliveryMethod(t, id)
+	}
+	move := func(action string, want int) {
+		t.Helper()
+		body := map[string]any{"action": action, "base_revision": run.Revision, "evidence": "核对原始证据"}
+		req := goalRequest("POST", path+"/work-method", testUserID, body, map[string]string{"id": id})
+		if action == "approve" {
+			body["checked_items"] = []int{0, 1}
+			req = goalRequest("POST", path+"/work-method", testUserID, body, map[string]string{"id": id})
+			task := methodStageTask(t, id, run.Revision)
+			req.Header.Set("X-Agent-ID", agent)
+			req.Header.Set("X-Task-ID", uuidToString(task.ID))
+		}
+		rsp := testutil.Call(t, testHandler.ChangeIssueWorkMethod, req).Want(want)
+		if want == 200 {
+			rsp.JSON(&run)
+		}
+	}
+	board := func(want string) {
+		t.Helper()
+		if got, _, _ := issueStatusAndAssignee(t, id); got != want {
+			t.Fatalf("step %d/%s status %s want %s", run.Step, run.State, got, want)
+		}
+	}
+	updateIssueForTest(t, id, map[string]any{"status": "in_review"}).Want(http.StatusConflict)
+	move("advance", 409)
+	accept("criterion", map[string]any{"text": "候选提交可复验"})
+	move("advance", 200)
+	board("in_review")
+	move("approve", 200)
+	board("todo")
+	move("advance", 409)
+	for _, key := range []string{"T1", "T2"} {
+		accept("case", map[string]any{"case_id": key, "text": "运行 " + key})
+	}
+	move("advance", 200)
+	move("approve", 200)
+	board("in_progress")
+	sha := strings.Repeat("b", 40)
+	accept("implementation", map[string]any{"repository": "xshadow", "branch": "dev", "commit": sha})
+	result := map[string]any{"case_id": "T1", "candidate": sha, "result": "pass", "evidence": "CI/T1"}
+	accept("run", result)
+	result["case_id"], result["candidate"] = "T2", strings.Repeat("a", 40)
+	accept("run", result)
+	move("advance", 409)
+	result["candidate"] = sha
+	accept("run", result)
+	move("advance", 200)
+	move("approve", 200)
+	move("advance", 200)
+	board("in_review")
+	move("approve", 200)
+	board("done")
+	count := taskCountFor(t, id, agent)
+	if count != 4 {
+		t.Fatalf("wanted one reviewer task per step, got %d", count)
+	}
+	accept("criterion", map[string]any{"text": "增加边界输入"})
+	board("todo")
+	if run.Step != 1 || run.State != "working" || run.History[len(run.History)-1].Action != "rework" || len(trace.Criteria[0].Impact().Retest) != 2 {
+		t.Fatal(run, trace)
+	}
+	revision := run.Revision
+	accept("criterion", map[string]any{"text": "增加边界输入"})
+	if run.Revision != revision || taskCountFor(t, id, agent) != count {
+		t.Fatal("duplicate scope event advanced or dispatched")
 	}
 }

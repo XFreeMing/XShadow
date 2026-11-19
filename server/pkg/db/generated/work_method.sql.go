@@ -66,18 +66,26 @@ func (q *Queries) LockWorkMethodTemplates(ctx context.Context, id pgtype.UUID) (
 }
 
 const saveIssueWorkMethodRun = `-- name: SaveIssueWorkMethodRun :one
-UPDATE issue SET work_method_run = $1::jsonb,
-    assignee_type = COALESCE($2::text, assignee_type),
-    assignee_id = COALESCE($3::uuid, assignee_id),
+UPDATE issue AS i SET work_method_run = $1::jsonb,
+    acceptance_criteria = COALESCE($2::jsonb, i.acceptance_criteria),
+    status = COALESCE($3::text, i.status),
+    position = CASE WHEN $3::text IS NOT NULL AND $3::text <> i.status THEN (
+        SELECT COALESCE(MIN(target.position), 0) - 1 FROM issue AS target
+        WHERE target.workspace_id = i.workspace_id AND target.status = $3::text
+    ) ELSE i.position END,
+    assignee_type = COALESCE($4::text, assignee_type),
+    assignee_id = COALESCE($5::uuid, assignee_id),
     revision = revision + 1, updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-WHERE id = $4 AND workspace_id = $5
-  AND revision = $6
+WHERE i.id = $6 AND i.workspace_id = $7
+  AND i.revision = $8
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run
 `
 
 type SaveIssueWorkMethodRunParams struct {
 	Run           []byte      `json:"run"`
+	Trace         []byte      `json:"trace"`
+	BoardStatus   pgtype.Text `json:"board_status"`
 	AssigneeType  pgtype.Text `json:"assignee_type"`
 	AssigneeID    pgtype.UUID `json:"assignee_id"`
 	ID            pgtype.UUID `json:"id"`
@@ -88,6 +96,8 @@ type SaveIssueWorkMethodRunParams struct {
 func (q *Queries) SaveIssueWorkMethodRun(ctx context.Context, arg SaveIssueWorkMethodRunParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, saveIssueWorkMethodRun,
 		arg.Run,
+		arg.Trace,
+		arg.BoardStatus,
 		arg.AssigneeType,
 		arg.AssigneeID,
 		arg.ID,

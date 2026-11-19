@@ -3,21 +3,7 @@ package workmethod
 // Builtins returns independently editable values. A running issue keeps its own snapshot.
 func Builtins() []Template {
 	return []Template{
-		{Revision: 1, ID: "agile", Name: "敏捷研发", Kind: "development", Keywords: []string{"研发", "开发", "实现", "修复", "交付功能", "交付软件", "开发功能", "发布版本", "缺陷修复", "软件迭代", "软件增量", "implement", "develop", "fix bug", "fix the bug", "ship a feature", "software delivery", "agile"},
-			Steps: []Step{
-				{Name: "定义增量", Output: "明确用户场景、迭代目标，并列出可观察的验收标准。",
-					Inputs: "需求原文、用户反馈和当前行为", Instructions: "找出本次受益者和一个可独立演示的变化，把成功与失败场景写成可观察的标准。",
-					Checks: []string{"每条标准指明触发条件与预期行为", "本轮范围和延期项已列明"}},
-				{Name: "规划迭代", Output: "确定本次交付范围、用例、依赖及负责人。",
-					Inputs: "增量目标、验收标准与交付约束", Instructions: "为每条标准分解开发与验证工作，确认依赖、优先级及执行顺序。",
-					Checks: []string{"每条标准关联至少一个验证场景", "依赖和负责人可追溯"}},
-				{Name: "实现并验证", Output: "关联实现所在仓库、分支、提交和验收用例；登记执行证据。",
-					Inputs: "迭代计划、目标分支和验收用例", Instructions: "分批实现改动，在候选提交上执行关联用例，保留失败记录与修复后的结果。",
-					Checks: []string{"实现定位到仓库、分支和提交", "执行证据标明用例、版本与结果"}},
-				{Name: "演示与回顾", Output: "在交付入口复验每条标准，记录反馈和下一轮改进。",
-					Inputs: "候选版本、用例结果与验收标准", Instructions: "从实际使用入口演示关键场景，收集反馈，将改进建议分派到后续迭代。",
-					Checks: []string{"反馈注明对应标准及处理结论", "待跟进事项有负责人"}},
-			}, Review: "核对冻结的标准、候选提交、用例结果和演示反馈，明确接收本次增量或说明未达标项。", ReworkStep: 2},
+		agileTemplate(),
 		{Revision: 2, ID: "seven-step", Name: "七步问题解决法（Bulletproof Problem Solving）", Kind: "research", Keywords: []string{"调研", "研究", "调查", "可行性分析", "决策建议", "研究报告", "竞争分析", "竞品分析", "比较方案", "分析原因", "问题诊断", "research", "investigate", "feasibility study", "compare options", "root cause", "mckinsey", "七步问题解决法", "七步法", "麦肯锡", "bulletproof problem solving"},
 			Steps: []Step{
 				{
@@ -128,6 +114,9 @@ func Catalog(stored []Template) []Template {
 			m.Revision = 1
 		}
 		if i, ok := byID[m.ID]; ok {
+			if m.ID == "agile" {
+				m = upgradeAgile(m)
+			}
 			methods[i] = m
 		} else {
 			byID[m.ID] = len(methods)

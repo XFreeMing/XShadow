@@ -49,3 +49,33 @@ func TestCriterionChangePreservesEvidenceAndScopesImpact(t *testing.T) {
 		t.Fatal("case reused across criteria")
 	}
 }
+
+func TestCandidateReplacementAndRollbackRequireMatchingCaseEvidence(t *testing.T) {
+	trace := Trace{}
+	apply := func(op Change) {
+		t.Helper()
+		op.BaseRevision = &trace.Revision
+		op.CriterionID = "AC1"
+		if err := trace.Apply(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(Change{Action: "criterion", Text: "可复验"})
+	apply(Change{Action: "case", CaseID: "T1", Text: "验证交付"})
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	link := Change{Action: "implementation", Repository: "org/project", Branch: "dev", Commit: a}
+	apply(link)
+	apply(Change{Action: "run", CaseID: "T1", Candidate: a, Result: "pass", Evidence: "CI/1"})
+	link.Commit = b
+	apply(link)
+	if len(trace.Criteria[0].Impact().Retest) != 1 {
+		t.Fatal("new candidate inherited passing evidence")
+	}
+	link.Commit = a
+	apply(link)
+	revision := trace.Revision
+	apply(link)
+	if len(trace.Criteria[0].Impact().Retest) != 0 || trace.Revision != revision || len(trace.Criteria[0].Implementations) != 3 {
+		t.Fatal(trace)
+	}
+}

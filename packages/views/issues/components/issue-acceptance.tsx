@@ -168,6 +168,7 @@ export function IssueAcceptance({
         )}
         {visible.map((c) => {
           const version = c.versions.length;
+          const candidate = c.implementations.filter((link) => link.version === version).at(-1)?.commit;
           return (
             <section key={c.id} className="grid gap-2 break-words">
               <h4 className="text-label font-medium">
@@ -182,7 +183,7 @@ export function IssueAcceptance({
                 const latest = tc.runs.at(-1);
                 const status = !latest
                   ? t(($) => $.acceptance.untested)
-                  : latest.version !== version
+                  : latest.version !== version || (candidate && latest.candidate !== candidate)
                     ? t(($) => $.acceptance.retest)
                     : latest.result === "pass"
                       ? t(($) => $.acceptance.pass)

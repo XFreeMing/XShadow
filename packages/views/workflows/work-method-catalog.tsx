@@ -8,6 +8,7 @@ import {
   WorkMethodKindSchema,
   type NewWorkMethod,
   type WorkMethodKind,
+  type WorkMethodStep,
   type WorkMethod,
   type WorkMethodHandler,
 } from "@multica/core/types/work-method";
@@ -125,7 +126,7 @@ function MethodEditor({
 }) {
   const { t } = useT("issues");
   const qc = useQueryClient();
-  type DraftStep = {
+  type DraftStep = Pick<WorkMethodStep, "acceptance_gate"> & {
     id: number;
     name: string;
     output: string;
@@ -148,6 +149,7 @@ function MethodEditor({
     original
       ? original.steps.map((step, i) => ({
           id: i,
+          acceptance_gate: step.acceptance_gate,
           name: step.name,
           output: step.output,
           inputs: step.inputs ?? "",
@@ -204,6 +206,7 @@ function MethodEditor({
         ),
       ],
       steps: steps.map((step) => ({
+        ...(kind === "development" && step.acceptance_gate ? { acceptance_gate: step.acceptance_gate } : {}),
         name: step.name.trim(),
         output: step.output.trim(),
         ...(step.inputs.trim() ? { inputs: step.inputs.trim() } : {}),

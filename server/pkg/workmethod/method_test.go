@@ -265,3 +265,18 @@ func TestStartAndStepReviewEvidence(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+func TestAgileUpgradePreservesRoleOverridesAndFrozenProcedures(t *testing.T) {
+	old := legacyAgile()
+	old.Revision = 7
+	old.Steps[0].Owner = &Actor{Kind: "creator"}
+	old.Steps[0].Reviewer = &Actor{Kind: "project_lead"}
+	upgraded := Catalog([]Template{old})[0]
+	if upgraded.Revision != 8 || upgraded.Steps[0].Gate != "criteria" || upgraded.Steps[0].Reviewer.Kind != "project_lead" || old.Steps[0].Gate != "" {
+		t.Fatal(upgraded)
+	}
+	old.Steps[0].Checks = []string{"custom check"}
+	if custom := Catalog([]Template{old})[0]; custom.Revision != 7 || custom.Steps[0].Gate != "" {
+		t.Fatal(custom)
+	}
+}

@@ -29,6 +29,7 @@ type Actor struct {
 }
 
 type Step struct {
+	Gate         string   `json:"acceptance_gate,omitempty"`
 	Name         string   `json:"name"`
 	Output       string   `json:"output"`
 	Instructions string   `json:"instructions,omitempty"`
@@ -113,6 +114,15 @@ func Validate(m Template) error {
 		return errors.New("方法须包含 1 到 32 个交付步骤")
 	}
 	for i, step := range m.Steps {
+		switch step.Gate {
+		case "":
+		case "criteria", "coverage", "candidate", "delivery":
+			if m.Kind != "development" {
+				return errors.New("研发验收门槛仅适用于研发方法")
+			}
+		default:
+			return errors.New("未知验收门槛")
+		}
 		if !validText(step.Name, 100) || !validText(step.Output, 2000) {
 			return fmt.Errorf("第 %d 步须填写名称和交付要求", i+1)
 		}

@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -171,5 +174,42 @@ func TestConcurrentMethodStartAndAgentHandoffShareOneTaskPerRevision(t *testing.
 	}
 	if brief := claimBriefForTest(t, id, task); !strings.Contains(brief, "End this run") || strings.Contains(brief, "--change-file") {
 		t.Fatal(brief)
+	}
+}
+
+func TestAgileDurableHandoffAfterLostNotification(t *testing.T) {
+	ctx := context.Background()
+	rt := dbfx.Runtime(t, "Agile restart")
+	agent := dbfx.Agent(t, "Agile restart owner", rt)
+	id := dbfx.Issue(t, "恢复敏捷步骤")
+	issue, err := testHandler.Queries.GetIssue(ctx, util.MustParseUUID(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	task, err := testHandler.TaskService.CreateWorkMethodHandoff(ctx, db.New(tx), issue, util.MustParseUUID(agent), pgtype.UUID{}, 6, "Recover revision 6", util.MustParseUUID(testUserID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate losing the process between commit and the post-commit wakeup.
+	fresh := service.NewTaskService(db.New(testPool), testPool, nil, events.New())
+	for i := 0; i < 2; i++ {
+		got, err := fresh.ClaimTasksForRuntimes(ctx, []pgtype.UUID{util.MustParseUUID(rt)}, 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && (len(got) != 1 || got[0].ID != task.ID || methodBoundRevision(&got[0]) != 6) {
+			t.Fatal(got)
+		}
+		if i == 1 && len(got) != 0 {
+			t.Fatal("redelivered claimed task", got)
+		}
 	}
 }

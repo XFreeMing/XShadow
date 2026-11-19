@@ -159,6 +159,28 @@ func methodOwnsHandoff(run workmethod.Run) bool {
 	return false
 }
 
+// Only a frozen evidence-gated method owns the board. Recommendations and
+// older snapshots keep the project's existing status behavior.
+func methodBoardStatus(run workmethod.Run) string {
+	gate := run.EvidenceGate()
+	if gate == "" || run.State == "ready" {
+		return ""
+	}
+	switch run.State {
+	case "closed":
+		return issuestatus.Done
+	case "review":
+		return issuestatus.InReview
+	case "working":
+		if gate == "criteria" || gate == "coverage" {
+			return issuestatus.Todo
+		}
+		return issuestatus.InProgress
+	}
+	return ""
+}
+
+var errMethodOwnsStatus = errors.New("当前看板状态由敏捷工作方法同步，请在事项的工作方法中提交或评审")
 var errMethodStageMoved = errors.New("work method stage moved; end this run")
 
 var errMethodReviewOpen = errors.New("complete the work method review before marking the issue done")
@@ -167,12 +189,18 @@ func (h *Handler) checkMethodCompletion(ctx context.Context, issue db.Issue, sta
 	if len(issue.WorkMethodRun) == 0 {
 		return nil
 	}
-	category, err := issuestatus.CategoryWithError(ctx, h.issueStatusCatalog(), issue.WorkspaceID, status)
-	if err != nil || category != issuestatus.CategoryDone {
-		return err
-	}
 	var run workmethod.Run
 	if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil {
+		return err
+	}
+	if expected := methodBoardStatus(run); expected != "" && run.State != "closed" && expected != status {
+		switch status {
+		case issuestatus.Backlog, issuestatus.Todo, issuestatus.InProgress, issuestatus.InReview:
+			return errMethodOwnsStatus
+		}
+	}
+	category, err := issuestatus.CategoryWithError(ctx, h.issueStatusCatalog(), issue.WorkspaceID, status)
+	if err != nil || category != issuestatus.CategoryDone {
 		return err
 	}
 	if run.State != "closed" {
@@ -207,6 +235,10 @@ func workflowHandoffPayload(issue db.Issue, hand *workflowHandoff, note string, 
 // writeIssueWorkflowError answers a workflow rejection. It reports false when
 // err is not one, so the caller can fall through to its generic 500.
 func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, errMethodOwnsStatus) {
+		writeJSON(w, 409, map[string]any{"error": err.Error(), "code": "work_method_owns_status"})
+		return true
+	}
 	if errors.Is(err, errMethodStageMoved) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "work_method_stage_moved"})
 		return true
@@ -513,6 +545,9 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string
 	}
 	step := run.Method.Steps[run.Step]
 	fmt.Fprintf(&b, "Step %d of %d: %q. Required output: %q.\n", run.Step+1, len(run.Method.Steps), step.Name, step.Output)
+	if step.Gate != "" {
+		fmt.Fprintf(&b, "The method synchronizes the board and dispatches the next actor. Read the versioned criteria, cases, candidate and impact with \"$MULTICA_CLI_PATH\" issue acceptance %s. Record actual structured evidence with --change-file; run issue acceptance --help for the JSON. Submit or review through issue method.\n", issueRef)
+	}
 	if step.Inputs != "" {
 		fmt.Fprintf(&b, "Inputs: %s\n", step.Inputs)
 	}

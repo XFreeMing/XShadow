@@ -103,7 +103,7 @@ func (h *Handler) GetIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
 	h.writeIssueMethodView(w, r, issue, run)
 }
 
-func developmentReview(raw []byte) error {
+func developmentReview(raw []byte, gate string) error {
 	trace, err := acceptance.Decode(raw)
 	if err != nil {
 		return err
@@ -112,9 +112,18 @@ func developmentReview(raw []byte) error {
 		return errors.New("请先登记研发验收标准与用例")
 	}
 	for _, criterion := range trace.Criteria {
+		if gate == "criteria" {
+			continue
+		}
+		if len(criterion.Cases) == 0 {
+			return errors.New(criterion.ID + " 缺少关联测试用例")
+		}
+		if gate == "coverage" {
+			continue
+		}
 		i := criterion.Impact()
 		if i.Uncovered || len(i.Retest)+len(i.Unrun)+len(i.Failed) > 0 || !i.CurrentImplementation {
-			return errors.New(criterion.ID + " 的当前版本需有通过的用例和对应的实现提交")
+			return errors.New(criterion.ID + " 的每条用例均须在当前标准版本的候选提交上通过，请核对实现分支、提交和实测证据")
 		}
 	}
 	return nil
@@ -172,10 +181,16 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1 {
-		if err := developmentReview(issue.AcceptanceCriteria); err != nil {
-			writeError(w, 409, err.Error())
-			return
+	if change.Action == "advance" || change.Action == "approve" {
+		gate := run.EvidenceGate()
+		if change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1 {
+			gate = "delivery"
+		}
+		if gate != "" {
+			if err := developmentReview(issue.AcceptanceCriteria, gate); err != nil {
+				writeError(w, 409, err.Error())
+				return
+			}
 		}
 	}
 	ws := uuidToString(issue.WorkspaceID)
@@ -188,19 +203,13 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, err.Error())
 		return
 	}
-	updated, ok := h.persistMethodTransition(w, r, issue, run, func(q *db.Queries, kind pgtype.Text, id pgtype.UUID, frozen workmethod.Run) (db.Issue, error) {
-		raw, err := json.Marshal(frozen)
-		if err != nil {
-			return db.Issue{}, err
-		}
-		run = frozen
-		return q.SaveIssueWorkMethodRun(r.Context(), db.SaveIssueWorkMethodRunParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, IssueRevision: issue.Revision, Run: raw, AssigneeType: kind, AssigneeID: id})
-	})
+	updated, ok := h.persistMethodTransition(w, r, issue, &run, nil)
 	if !ok {
 		return
 	}
 	resp := issueToResponse(updated, h.getIssuePrefix(r.Context(), issue.WorkspaceID))
 	h.publish(protocol.EventIssueUpdated, ws, actorType, actorID, map[string]any{"issue": resp,
+		"status_changed": issue.Status != updated.Status, "prev_status": issue.Status,
 		"assignee_changed":   issue.AssigneeType != updated.AssigneeType || issue.AssigneeID != updated.AssigneeID,
 		"prev_assignee_type": textToPtr(issue.AssigneeType), "prev_assignee_id": uuidToPtr(issue.AssigneeID)})
 	h.writeIssueMethodView(w, r, updated, run)

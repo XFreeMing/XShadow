@@ -35,22 +35,23 @@ type Impact struct {
 
 func (c Criterion) Impact() Impact {
 	result := Impact{CriterionID: c.ID, Version: len(c.Versions), Uncovered: len(c.Cases) == 0, Unrun: []string{}, Retest: []string{}, Failed: []string{}}
+	var candidate string
+	for _, link := range c.Implementations {
+		if link.Version == result.Version {
+			candidate = link.Commit
+		}
+	}
+	result.CurrentImplementation = candidate != ""
 	for _, tc := range c.Cases {
 		if len(tc.Runs) == 0 {
 			result.Unrun = append(result.Unrun, tc.ID)
 			continue
 		}
 		latest := tc.Runs[len(tc.Runs)-1]
-		if latest.Version != result.Version {
+		if latest.Version != result.Version || (candidate != "" && latest.Candidate != candidate) {
 			result.Retest = append(result.Retest, tc.ID)
 		} else if latest.Result == "fail" {
 			result.Failed = append(result.Failed, tc.ID)
-		}
-	}
-	for _, link := range c.Implementations {
-		if link.Version == result.Version {
-			result.CurrentImplementation = true
-			break
 		}
 	}
 	return result
@@ -168,10 +169,8 @@ func (t *Trace) Apply(op Change) error {
 			return errors.New("repository, branch and full lowercase commit SHA are required")
 		}
 		link := Implementation{len(criterion.Versions), op.Repository, op.Branch, op.Commit}
-		for _, existing := range criterion.Implementations {
-			if existing == link {
-				return nil
-			}
+		if n := len(criterion.Implementations); n > 0 && criterion.Implementations[n-1] == link {
+			return nil
 		}
 		criterion.Implementations = append(criterion.Implementations, link)
 	case "run":
