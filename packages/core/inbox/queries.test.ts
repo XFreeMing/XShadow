@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { InboxItem, InboxWorkspaceUnread } from "../types";
 import { EMPTY_INBOX_FILTERS, type InboxFilters } from "./filter-store";
 import {
+  activeMemberMentions,
   archivedInboxFacetsOptions,
   archivedInboxPagesOptions,
   deduplicateArchivedInboxItems,
@@ -273,5 +274,23 @@ describe("unreadCountForWorkspace", () => {
 
   it("returns zero for an empty summary", () => {
     expect(unreadCountForWorkspace([], "ws-1")).toBe(0);
+  });
+});
+
+describe("activeMemberMentions", () => {
+  it("keeps read mentions on an agent-owned blocker, using the latest mention anchor", () => {
+    const mention = item({ type: "mentioned", recipient_id: "me", issue_status: "blocked", read: true,
+      issue_assignee_type: "agent", details: { comment_id: "original" } });
+    const rows = [
+      mention, { ...mention, id: "latest", created_at: "2026-06-16T00:00:00Z", details: { comment_id: "latest" } },
+      { ...mention, issue_id: "other-member", recipient_id: "other" },
+      { ...mention, issue_id: "other-workspace", workspace_id: "other" },
+      { ...mention, issue_id: "archived", archived: true },
+      { ...mention, issue_id: "closed", issue_status: "resolved" },
+      item({ type: "new_comment", recipient_id: "me", issue_id: "unmentioned" }),
+    ];
+    expect(activeMemberMentions(rows, "me", mention.workspace_id, {
+      categoryOf: (status) => status === "resolved" ? "done" : "started",
+    })).toEqual([{ id: mention.issue_id, title: mention.title, commentId: "latest" }]);
   });
 });

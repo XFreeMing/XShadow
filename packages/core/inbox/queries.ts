@@ -1,3 +1,4 @@
+import type { IssueStatusCatalog } from "../issue-statuses/queries";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { ArchivedInboxPage } from "../types/inbox";
 import { EMPTY_INBOX_FILTERS, archivedInboxQuery, type ArchivedInboxFilters } from "./filters";
@@ -217,6 +218,28 @@ export function useInboxUnreadCount(
  */
 export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
   return groupInboxItemsByIssue(items.filter((i) => !i.archived));
+}
+
+/** Active issue mentions stay visible after the notification has been read. */
+export function activeMemberMentions(
+  items: InboxItem[],
+  userId: string,
+  workspaceId: string,
+  catalog: Pick<IssueStatusCatalog, "categoryOf">,
+) {
+  const mentions = items.filter((item) => {
+    if (
+      item.workspace_id !== workspaceId ||
+      item.recipient_type !== "member" ||
+      item.recipient_id !== userId ||
+      item.type !== "mentioned"
+    ) return false;
+    const category = item.issue_status && catalog.categoryOf(item.issue_status);
+    return category !== "done" && category !== "closed";
+  });
+  return deduplicateInboxItems(mentions).flatMap((item) =>
+    item.issue_id ? [{ id: item.issue_id, title: item.title, commentId: item.details?.comment_id }] : [],
+  );
 }
 
 /**
