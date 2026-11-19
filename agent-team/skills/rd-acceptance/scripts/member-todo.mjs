@@ -82,7 +82,11 @@ const VISIBLE_FORBIDDEN = [
 ];
 
 // A user can supply real material, but not the team's own verification output.
-const INTERNAL_EVIDENCE = /日志|脚本|复跑|测试报告|回执|命令行|运行测试|执行命令|构建产物/;
+const INTERNAL_EVIDENCE = /日志|脚本|复跑|测试报告|回执|命令行|运行测试|执行命令|构建产物|验收回执|验收结果|验收记录|复验|测试用例|测试结果|测试日志|跑(?:一遍|一下)?测试|自测/;
+
+// An actionable entry point or submission exists now. "I will send it later"
+// is missing information, not an instruction the person can act on.
+const PLACEHOLDER_ENTRY = /(?:等|待|尚待|还需)(?:我|你)?(?:确认|补充|提供|确定)|待定|未定|还没定|稍后(?:再)?(?:发|给|通知|告知|提供)|晚点(?:再)?(?:发|给|通知|告知)|之后(?:再)?(?:发|给|补|通知|告诉|说明)|回头(?:再)?(?:发|给|补|通知|说)|以后(?:再)?(?:说|发|给)|还没(?:有|确定|准备好)|尚未(?:确定|提供|准备好)|另行(?:通知|提供|告知)|暂(?:无|未|不提供)|暂时(?:没有|无|未)/;
 
 function isText(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -165,6 +169,9 @@ function optionErrors(options, kind) {
     }
     if (!isText(option.label)) errors.push(`第 ${index + 1} 个选项缺少名称 label`);
     if (!isText(option.consequence ?? option.effect)) errors.push(`选项「${option.label ?? index + 1}」缺少选择后的后果 consequence`);
+    if (needsChoice && !isText(option.example)) {
+      errors.push(`选项「${option.label ?? index + 1}」缺少回复示例 example；每项都要有一句用户能直接照着回复的话`);
+    }
     if (option.default !== undefined || option.recommended !== undefined) {
       errors.push(`选项「${option.label ?? index + 1}」预设了默认选择；请把差异写清楚，让用户自己选`);
     }
@@ -180,6 +187,9 @@ function optionErrors(options, kind) {
       if (!isText(option[field])) continue;
       for (const violation of visibleViolations(option[field])) {
         errors.push(`选项${label}里有${violation}，请移到正文末尾技术附录`);
+      }
+      if (INTERNAL_EVIDENCE.test(option[field])) {
+        errors.push(`选项${label}里有内部证据用语（如日志、脚本、回执）；团队能做的验证留在团队内部，不要要求用户提供`);
       }
     }
   });
@@ -211,6 +221,25 @@ export function validateTodoInput(input) {
     for (const field of ["done", "next"]) {
       if (isText(input[field]) && !input[field].includes(needed[field])) {
         errors.push(`${field} 与 completion_signal=${input.completion_signal} 不一致，实际接续方式会落空`);
+      }
+    }
+    if (input.completion_signal === "done" && isText(input.done)) {
+      // Saying "reply only, no need to mark it done" while registering a
+      // done-wait leaves the original issue waiting forever.
+      const negated = /(?:不(?:必|需要|用|需)|无需)[^。；;\n]{0,16}标记|只(?:回复|填写|回答)[^。；;\n]{0,16}(?:即可|就行|就可以|不用|不必|不需要|无需)/.test(input.done);
+      const markedBySomeoneElse = /我(?:会|来|帮你|替你)[^。；;\n]{0,8}标记|由(?:项目)?经理[^。；;\n]{0,8}标记/.test(input.done);
+      if (negated || markedBySomeoneElse) {
+        errors.push("done 与 completion_signal=done 矛盾：必须请用户在本事项标记完成；只回复不会满足原事项的等待条件");
+      } else if (!/标记(?:为)?完成|标为完成|勾选完成|设为完成/.test(input.done)) {
+        errors.push("done 必须写明把本事项标记为完成；原事项按 --until-issue-state done 等待它");
+      }
+    }
+    if (input.completion_signal === "done" && isText(input.next)) {
+      if (!/完成/.test(input.next)) {
+        errors.push("next 与 completion_signal=done 不一致：原事项只在本事项完成后继续");
+      }
+      if (/只回复|仅回复/.test(input.next) || (/回复后|回复之后/.test(input.next) && !/完成/.test(input.next))) {
+        errors.push("next 不能承诺只回复就让原事项继续；等待条件是本事项完成");
       }
     }
     if (input.completion_signal !== "done" && isText(input.next) && !/收到你的回复|唤醒/.test(input.next)) {
@@ -249,8 +278,16 @@ export function validateTodoInput(input) {
   if (INTERNAL_EVIDENCE.test(userFacing)) {
     errors.push("不要要求用户生成日志、脚本或内部证据；团队能做的验证留在团队内部");
   }
+  for (const [field, label] of [["where", "入口或回复位置"], ["action", "需要做的那一件事"], ["submit", "最小提交物"]]) {
+    if (isText(input[field]) && PLACEHOLDER_ENTRY.test(input[field])) {
+      errors.push(`${label}（${field}）仍是待确认或稍后提供之类的占位信息；请先补齐真实内容，再生成待办`);
+    }
+  }
   if (isText(input.title)) {
     for (const label of visibleViolations(input.title)) errors.push(`标题里有${label}，请移到正文末尾技术附录`);
+    if (INTERNAL_EVIDENCE.test(input.title)) {
+      errors.push("标题里有内部证据用语（如日志、脚本、回执）；请把团队验证信息移到正文末尾技术附录");
+    }
   }
   for (const label of visibleViolations(userFacing)) {
     errors.push(`首屏内容里有${label}，请移到正文末尾技术附录`);

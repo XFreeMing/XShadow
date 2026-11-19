@@ -503,6 +503,15 @@ test("an escalation without a specific member-facing brief goes back to the team
     ["generic subject", { ...valid, subject: "这项功能" }],
     ["engineering words in the impact", { ...valid, problem: "读者点 PDF 引用打不开，候选 sha a1b2c3d4e5f6 仍未通过。" }],
     ["only one option", { ...valid, options: [valid.options[0]] }],
+    ["a missing reply example", {
+      ...valid,
+      options: [{ label: valid.options[0].label, consequence: valid.options[0].consequence }, valid.options[1]],
+    }],
+    ["internal verification as the reply example", {
+      ...valid,
+      options: [{ ...valid.options[0], example: "先运行测试并附上日志，再回复先发" }, valid.options[1]],
+    }],
+    ["an engineering word in the subject", { ...valid, subject: "PDF 引用跳转（验收回执）" }],
     ["a preset default", { ...valid, options: [{ ...valid.options[0], recommended: true }, valid.options[1]] }],
   ];
   for (const [label, brief] of cases) {

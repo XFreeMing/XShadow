@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,18 @@ function outsideRepo() {
 
 function runTool(tool, args, cwd) {
   return execFileSync(process.execPath, [tool, ...args], { cwd, encoding: "utf8", stdio: "pipe" });
+}
+
+function runToolResult(tool, args, cwd) {
+  try {
+    return { status: 0, stdout: runTool(tool, args, cwd), stderr: "" };
+  } catch (error) {
+    return {
+      status: error.status,
+      stdout: String(error.stdout ?? ""),
+      stderr: String(error.stderr ?? ""),
+    };
+  }
 }
 
 test("the generator produces all four kinds and validates its own output", () => {
@@ -95,6 +107,69 @@ test("an invalid check exits 2 and names the concrete gap", () => {
     assert.match(String(failed?.stdout), /至少两个真实可选项/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the five acceptance counterexamples fail both paths without writing a todo", () => {
+  const choiceInput = sampleTodoInputs()[2];
+  const materialInput = sampleTodoInputs()[0];
+  const cases = [
+    {
+      name: "C2 missing reply example",
+      input: {
+        ...choiceInput,
+        options: choiceInput.options.map((option, index) => {
+          if (index > 0) return option;
+          const { example: _example, ...rest } = option;
+          return rest;
+        }),
+      },
+      gap: /缺少回复示例 example/,
+    },
+    {
+      name: "C3 engineering word in the title",
+      input: { ...choiceInput, title: `${choiceInput.title}（验收回执）` },
+      gap: /标题里有内部证据用语/,
+    },
+    {
+      name: "C4 reply-only completion against a done wait",
+      input: { ...materialInput, done: "只回复你的选择，不需要把本事项标记为完成。" },
+      gap: /done 与 completion_signal=done 矛盾/,
+    },
+    {
+      name: "C6 internal verification in an option example",
+      input: {
+        ...choiceInput,
+        options: choiceInput.options.map((option, index) => (
+          index === 0 ? { ...option, example: "先运行测试并附上日志，再回复金额" } : option
+        )),
+      },
+      gap: /选项示例里有内部证据用语/,
+    },
+    {
+      name: "C7 placeholder entry",
+      input: { ...materialInput, where: "入口待确认，稍后发给你。" },
+      gap: /入口或回复位置（where）.*占位信息/,
+    },
+  ];
+  for (const { name, input, gap } of cases) {
+    const dir = outsideRepo();
+    try {
+      const inputPath = join(dir, "input.json");
+      writeFileSync(inputPath, JSON.stringify(input));
+      const check = runToolResult(PM_TOOL, ["--check", "--input", inputPath], dir);
+      assert.equal(check.status, 2, `${name}: --check should exit 2 (${check.stdout}${check.stderr})`);
+      assert.match(`${check.stdout}${check.stderr}`, gap, name);
+
+      const outDir = join(dir, "out");
+      const generate = runToolResult(PM_TOOL, ["--input", inputPath, "--out-dir", outDir], dir);
+      assert.equal(generate.status, 2, `${name}: generation should exit 2 (${generate.stdout}${generate.stderr})`);
+      assert.match(`${generate.stdout}${generate.stderr}`, gap, name);
+      assert.equal(existsSync(outDir), false, `${name}: generation must not write todo files`);
+      assert.equal(existsSync(join(dir, ".member-todo")), false, `${name}: no default output directory either`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 

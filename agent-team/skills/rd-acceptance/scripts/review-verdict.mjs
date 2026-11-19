@@ -446,7 +446,7 @@ function formatCriteria(coverage) {
 // what each option actually delivers. The lead supplies that as
 // `decision_brief`; the tool never invents a generic "this feature" fallback.
 const GENERIC_SUBJECTS = new Set(["这项功能", "这个功能", "功能", "该功能", "此功能", "这个故事", "这个任务", "该事项"]);
-const INTERNAL_EVIDENCE = /日志|脚本|复跑|测试报告|回执|命令行|运行测试|执行命令|构建产物/;
+const INTERNAL_EVIDENCE = /日志|脚本|复跑|测试报告|回执|命令行|运行测试|执行命令|构建产物|验收回执|验收结果|验收记录|复验|测试用例|测试结果|测试日志|跑(?:一遍|一下)?测试|自测/;
 
 function normalizeDecisionBrief(brief) {
   if (!brief || typeof brief !== "object" || Array.isArray(brief)) return null;
@@ -459,7 +459,7 @@ function normalizeDecisionBrief(brief) {
   if (!subject || GENERIC_SUBJECTS.has(subject) || rows.length < 2) return null;
   if (!problem || INTERNAL_EVIDENCE.test(problem)) return null;
   for (const value of [subject, problem, why, action, title]) {
-    if (value && visibleViolations(value).length > 0) return null;
+    if (value && (INTERNAL_EVIDENCE.test(value) || visibleViolations(value).length > 0)) return null;
   }
   const options = [];
   for (const row of rows) {
@@ -468,10 +468,13 @@ function normalizeDecisionBrief(brief) {
     if (!label || !consequence || row?.default !== undefined || row?.recommended !== undefined) return null;
     if (INTERNAL_EVIDENCE.test(label) || INTERNAL_EVIDENCE.test(consequence)) return null;
     const example = text(row?.example) ? row.example.trim() : null;
+    // Without a reply example the person has to invent the wording; with an
+    // internal-verification example the team hands its own work to the person.
+    if (!example || INTERNAL_EVIDENCE.test(example)) return null;
     for (const value of [label, consequence, example]) {
       if (value && visibleViolations(value).length > 0) return null;
     }
-    options.push({ label, consequence, ...(example ? { example } : {}) });
+    options.push({ label, consequence, example });
   }
   return {
     subject, problem, options,
