@@ -82,6 +82,8 @@ make agent sync ARGS="--profile my-team"
 
 ## 模板维护
 
+敏捷研发的步骤负责人、独立验收人，以及小队内派工和退回规则见[敏捷研发的任务与分工](agile-delivery.md)。在目标工作区的「设置 → 工作流 → 工作方法 → 敏捷研发」按表选择角色，第 3 步的执行人选择小队「研发实施」。
+
 - `team.json`：角色、模型、小队关系、聊天入口和并发。
 - `common.md`：军团共同职责与调度规则。
 - `skills/<name>/SKILL.md`：技能入口；同目录可添加 UTF-8 的 `scripts/`、`references/` 等文件，初始化时一并同步。
