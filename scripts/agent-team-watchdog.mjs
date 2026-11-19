@@ -246,25 +246,27 @@ function alive(pid) {
 }
 
 export function renderInstruction(issue, cycleKey, { source = SOURCE } = {}) {
+  const id = issue.identifier;
   return [
     "这是军团接续守护自动触发的项目经理接单，不是新的用户需求。",
-    `触发事实：${issue.identifier} 处于 ${issue.status}，没有任何可推进的运行，也没有已登记的接续规则，且当前负责人不是正在办理的人类成员。`,
+    `触发事实：${id} 处于 ${issue.status}，没有任何可推进的运行，也没有已登记的接续规则，且当前负责人不是正在办理的人类成员。`,
     `缺口键：${cycleKey}`,
     `来源：${source}（同一无人推进周期只派发一次；本次运行自身的评论与 no_action 不算交接，不要为它再次派发）。`,
     "",
     "请先核实现场，再完成一次真实交接：",
-    "- multica issue get <本事项>、multica issue comment list <本事项> --roots-only --summary",
-    "- multica issue runs <本事项> --active、multica issue wakeup list <本事项>",
+    `- multica issue get ${id}、multica issue comment list ${id} --roots-only --summary`,
+    `- multica issue runs ${id} --active、multica issue wakeup list ${id} --output json`,
     "",
     "按 rd-project-management 判断并执行：",
     "1. 团队能处理：把下一步实际派给有权限的执行方（指派或有效 mention），保留原负责人和状态；随后为这次运行登记事件唤醒，运行结束的真实终态会唤醒你恢复本事项：",
-    "   multica issue wakeup create <本事项> --event task.completed,task.failed,task.cancelled --task-id <本次 run> --mode once --expires-in 72h --agent-id <你的 id> --instruction-file <文件>",
-    "2. 只有指定人能提供输入：创建一条可见待办并直接指派给有证据的真实接收人；正文写清来源与本缺口键；创建后核对 assignee 确实是该人，再在本事项登记恢复条件（二选一）：",
-    "   multica issue wakeup create <本事项> --until-issue <待办> --until-issue-state done --mode once --expires-in 72h --agent-id <你的 id> --instruction-file <文件>",
-    "   multica issue wakeup create <本事项> --event comment.created --filter-actor-type member --filter-actor-id <接收人 user id> --mode once --agent-id <你的 id> --instruction-file <文件>",
-    "   条件满足后你会被唤醒恢复本事项。",
-    "3. 已经解决或确认无需动作：直接恢复推进，或留下 no_action 的具体依据；不要伪造完成，也不要为同一缺口重复创建待办。",
-    "登记后用 multica issue wakeup list <本事项> --output json 核对规则 enabled、agent_id 与条件；不要重复创建同等规则。",
+    `   multica issue wakeup create ${id} --event task.completed,task.failed,task.cancelled --task-id <本次 run> --mode once --agent-id <你的 id> --instruction-file <文件>`,
+    "   默认不设到期，运行多久都在终态唤回；只有这次派发确有约定的实际期限时，才加 --expires-in <期限> --on-timeout wake，并在指令里要求到期核实现状，不能把到期当成已解决。",
+    `2. 只有指定人能提供输入：先在 multica issue list --assignee <接收人> --output json 中查重，若已有未关闭、正文指向 ${id} 且是同一输入请求的待办，直接复用该待办及其仍然有效的恢复条件；缺口键变化不再新建第二条。没有才创建一条可见待办并直接指派给有证据的真实接收人；正文写清来源 ${id} 与本缺口键；创建后核对 assignee 确实是该人，再在 ${id} 登记恢复条件（二选一）：`,
+    `   multica issue wakeup create ${id} --until-issue <待办> --until-issue-state done --mode once --agent-id <你的 id> --instruction-file <文件>`,
+    `   multica issue wakeup create ${id} --event comment.created --filter-actor-type member --filter-actor-id <接收人 user id> --mode once --agent-id <你的 id> --instruction-file <文件>`,
+    "   这两种等待默认都不设到期：用户晚几天才完成待办或才回复，仍会唤回本事项。只有与该接收人约定了实际期限时，才加 --expires-in <期限> --on-timeout wake，并要求到期核实现状。",
+    "3. 已经解决或确认无需动作：直接恢复推进，或留下 no_action 的具体依据；不要伪造完成，也不要为同一输入请求重复创建待办。",
+    `登记后用 multica issue wakeup list ${id} --output json 核对规则的 agent_id、条件与状态；已触发的规则以规则 id 及其运行为证据，不要重复创建同等规则。`,
     "",
     `同一缺口键 ${cycleKey} 只处理一次。没有有效依据时，留下可检查的异常说明，不要反复自唤醒。`,
   ].join("\n");

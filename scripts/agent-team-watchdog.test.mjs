@@ -14,6 +14,7 @@ import {
 } from "./agent-team-watchdog.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./agent-team-watchdog.mjs", import.meta.url));
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const WS = "11111111-2222-3333-4444-555555555555";
 const PM = { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", name: "项目经理", status: "active" };
 const BASE = Date.parse("2026-11-19T00:10:00Z");
@@ -482,8 +483,38 @@ test("the dispatch instruction carries the real handoff and human-input callback
   assert.match(instruction, /no_action/);
   assert.match(instruction, /同一缺口键/);
   assert.match(instruction, /--task-id/);
+  // Every command names the original issue, not a placeholder, so the manager
+  // cannot register the wait on the wrong issue.
+  assert.match(instruction, /issue wakeup create DEV-59 /);
+  assert.match(instruction, /issue wakeup list DEV-59 /);
+  assert.doesNotMatch(instruction, /<本事项>/);
+  // No write-in deadline: a late completion or reply must still resume the issue.
+  assert.doesNotMatch(instruction, /72h/);
+  assert.match(instruction, /默认不设到期/);
+  assert.match(instruction, /晚几天/);
+  // An expiry is allowed only as a conditional, and must wake the manager.
+  assert.match(instruction, /--expires-in <期限> --on-timeout wake/);
+  // Reuse an unresolved human request even when the guard cycle key changed.
+  assert.match(instruction, /issue list --assignee <接收人>/);
+  assert.match(instruction, /复用/);
+  assert.match(instruction, /不再新建第二条/);
   // The marker round-trips through the rule instruction parser.
   assert.equal(ruleCycleKey(instruction, "10000000-0000-0000-0000-000000000001"), "10000000-0000-0000-0000-000000000001#3");
+
+  const other = renderInstruction(gapIssue("10000000-0000-0000-0000-000000000009", "DEV-77"), "10000000-0000-0000-0000-000000000009#1");
+  assert.match(other, /issue wakeup create DEV-77 /);
+  assert.doesNotMatch(other, /DEV-59/);
+});
+
+test("the planner skill documents unwritten deadlines and todo reuse", () => {
+  const skill = readFileSync(join(ROOT, "agent-team/skills/rd-project-management/SKILL.md"), "utf8");
+  assert.doesNotMatch(skill, /72h/);
+  assert.match(skill, /without an expiry by default/);
+  assert.match(skill, /--expires-in <deadline> --on-timeout wake/);
+  assert.match(skill, /late completion or a late member reply still wakes/);
+  assert.match(skill, /issue list --assignee <person>/);
+  assert.match(skill, /even when the guard's gap key changed/);
+  assert.match(skill, /never create a second equivalent todo/);
 });
 
 test("arguments, agent resolution and gap classification are strict", () => {
