@@ -234,14 +234,23 @@ test("a completion signal that the platform will not deliver is rejected", () =>
 
 test("a done-wait generates its trigger from the signal and rejects reply-triggered wording", () => {
   const decisionInput = sampleTodoInputs()[3];
-  const legal = {
-    ...decisionInput,
-    next: "回复后，请把本事项标记为完成，原事项会自动继续处理。",
-  };
-  const legalControl = {
-    ...decisionInput,
-    next: "请在本事项标记为完成，原事项会在完成后继续处理。",
-  };
+  const legalCases = [
+    {
+      name: "reply then mark",
+      next: "回复后，请把本事项标记为完成，原事项会自动继续处理。",
+      after: /之后：回复后，请把本事项标记为完成/,
+    },
+    {
+      name: "mark then continue",
+      next: "请在本事项标记为完成，原事项会在完成后继续处理。",
+      after: /之后：请在本事项标记为完成，原事项会在完成后继续处理/,
+    },
+    {
+      name: "purpose then reply and mark",
+      next: "为了让原事项继续处理，请回复并把本事项标记为完成。",
+      after: /之后：为了让原事项继续处理，请回复并把本事项标记为完成/,
+    },
+  ];
   const contradictory = [
     "你一回复，原事项就会自动继续处理。请在本事项标记为完成后等通知。",
     "本事项标记为完成只是可选操作，你一回复，原事项就会自动继续处理。",
@@ -249,31 +258,30 @@ test("a done-wait generates its trigger from the signal and rejects reply-trigge
     "标记完成只是走个形式，回复后原事项就会继续。",
     "你回复后可直接等结果，标记完成可以空着。",
     "请回复；标记完成与后续处理无关。",
+    "请把本事项标记为完成。你一回复，原事项就会自动继续处理。",
+    "标记完成只是个过场，回复后原事项就会恢复。",
+    "你回复后等着结果就行，标记完成可以留空。",
+    "请回复，标记完成和后续处理没关系。",
+    "标记完成可有可无，你一回复，原事项就会接回。",
+    "回复后原事项会自动继续，完成标记不用管。",
+    "你一回复，原事项就会继续；完成标记不影响后续。",
+    "请回复；标记完成对后续没有影响。",
   ];
   const dir = outsideRepo();
   try {
-    const legalPath = join(dir, "legal.json");
-    writeFileSync(legalPath, JSON.stringify(legal));
-    const legalCheck = runToolResult(PM_TOOL, ["--check", "--input", legalPath], dir);
-    assert.equal(legalCheck.status, 0, `legal --check: ${legalCheck.stdout}${legalCheck.stderr}`);
+    for (const [index, legalCase] of legalCases.entries()) {
+      const inputPath = join(dir, `legal-${index}.json`);
+      writeFileSync(inputPath, JSON.stringify({ ...decisionInput, next: legalCase.next }));
+      const check = runToolResult(PM_TOOL, ["--check", "--input", inputPath], dir);
+      assert.equal(check.status, 0, `${legalCase.name} --check: ${check.stdout}${check.stderr}`);
 
-    const legalOut = join(dir, "legal-out");
-    const legalGenerate = runToolResult(PM_TOOL, ["--input", legalPath, "--out-dir", legalOut], dir);
-    assert.equal(legalGenerate.status, 0, `legal generation: ${legalGenerate.stdout}${legalGenerate.stderr}`);
-    const body = readFileSync(join(legalOut, "body.md"), "utf8");
-    assert.match(body, /怎样算完成：.*标记为完成/);
-    assert.match(body, /之后：回复后，请把本事项标记为完成/);
-
-    const controlPath = join(dir, "legal-control.json");
-    writeFileSync(controlPath, JSON.stringify(legalControl));
-    const controlCheck = runToolResult(PM_TOOL, ["--check", "--input", controlPath], dir);
-    assert.equal(controlCheck.status, 0, `legal control --check: ${controlCheck.stdout}${controlCheck.stderr}`);
-
-    const controlOut = join(dir, "legal-control-out");
-    const controlGenerate = runToolResult(PM_TOOL, ["--input", controlPath, "--out-dir", controlOut], dir);
-    assert.equal(controlGenerate.status, 0, `legal control generation: ${controlGenerate.stdout}${controlGenerate.stderr}`);
-    const controlBody = readFileSync(join(controlOut, "body.md"), "utf8");
-    assert.match(controlBody, /之后：请在本事项标记为完成，原事项会在完成后继续处理/);
+      const outDir = join(dir, `legal-out-${index}`);
+      const generate = runToolResult(PM_TOOL, ["--input", inputPath, "--out-dir", outDir], dir);
+      assert.equal(generate.status, 0, `${legalCase.name} generation: ${generate.stdout}${generate.stderr}`);
+      const body = readFileSync(join(outDir, "body.md"), "utf8");
+      assert.match(body, /怎样算完成：.*标记为完成/);
+      assert.match(body, legalCase.after);
+    }
 
     for (const [index, next] of contradictory.entries()) {
       const inputPath = join(dir, `bad-${index}.json`);

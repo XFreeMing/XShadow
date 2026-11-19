@@ -146,6 +146,7 @@ const MARK_COMPLETE = /标记(?:为)?完成|标为完成|勾选完成|设为完�
 // deferred. They are checked as meanings rather than as one fixed phrase, so
 // colloquial variants of the same promise are rejected together.
 const MARK_DISMISSED = /(?:只是|仅是|仅|纯属|算是|就是|不过是|无非是|当作|当作是|等于)[^。；;\n]{0,8}(?:形式|流程|过场|样子|摆设|手续)|走(?:个|一下|一遍)?(?:形式|流程|过场)|(?:形式|流程|过场)(?:而已|罢了)|空着|留空|不填|不用填|无需填|不必填|不勾|不用勾|无需勾|(?:与|和|跟)[^。；;\n]{0,12}(?:后续|继续|处理|恢复|接续|原事项)[^。；;\n]{0,8}(?:无关|没(?:有)?关系|不相干)|不影响|没有?影响|无影响|无关紧要|不重要|无所谓|随你|由你(?:决定|选择)|可选|选做|可做可不做|可有可无|不是必须|并非必须|非必需|不必须|不是硬性|并非硬性|不强制|不用管|不必管|无需管|(?:之后|再|稍后|随后|最后)[^。；;\n]{0,8}(?:可|可以|再|才)?[^。；;\n]{0,4}标记/;
+const MARK_NEGATED = /(?:不(?:必|需要|用|需)|无需|不是必须|并非必须)[^。；;\n]{0,16}标记|标记[^。；;\n]{0,8}(?:不是必须|并非必须|非必需|可选)/;
 
 // The signal owns the trigger. For a done-wait the original issue resumes only
 // after this todo is marked complete; a reply is never enough.
@@ -171,22 +172,28 @@ function markDismissed(text) {
 // later notification, not just the verb "continue".
 const REPLY_OUTCOME = /继续|恢复|接回|处理|结果|通知|后续|下一步|即可|就行|就可以|等(?:着|待)?/;
 
-// A done-wait resumes only after this todo is actually marked complete. If the
-// text pairs a reply with any later outcome, the mandatory mark must come
-// before that outcome and must still be a real condition. This reads the entire
-// `next`, so a semicolon may not hide a reply-triggered continuation in another
-// clause.
+// A done-wait resumes only after this todo is actually marked complete. A
+// reply is only a trigger when an outcome follows it with no mandatory mark in
+// between. Judge each reply-to-outcome segment locally: an outcome that comes
+// before the reply (a purpose clause) is not caused by the reply, and a later
+// sentence cannot excuse an earlier reply-only promise.
 function replyContinuationClash(text) {
-  const value = String(text);
-  if (!/回复|答复/.test(value)) return false;
-  const outcomeAt = value.search(REPLY_OUTCOME);
-  if (outcomeAt === -1) return false;
-  const markAt = value.search(MARK_COMPLETE);
-  if (markAt === -1 || markAt > outcomeAt) return true;
-  // "Marking is optional", "you can mark it later", or "no need to mark it"
-  // never makes a reply the trigger.
-  const negatedMark = /(?:不(?:必|需要|用|需)|无需|不是必须|并非必须)[^。；;\n]{0,16}标记|标记[^。；;\n]{0,8}(?:不是必须|并非必须|非必需|可选)/.test(value);
-  return negatedMark || markDismissed(value);
+  const outcomes = new RegExp(REPLY_OUTCOME.source, "g");
+  return String(text)
+    .split(/[。；;\n]/)
+    .filter((clause) => clause.trim())
+    .some((clause) => {
+      const replies = [...clause.matchAll(/回复|答复/g)].map((match) => match.index);
+      if (!replies.length) return false;
+      for (const outcome of clause.matchAll(outcomes)) {
+        const replyAt = replies.filter((index) => index < outcome.index).at(-1);
+        if (replyAt === undefined) continue;
+        const segment = clause.slice(replyAt, outcome.index);
+        if (!MARK_COMPLETE.test(segment)) return true;
+        if (MARK_NEGATED.test(segment) || markDismissed(segment)) return true;
+      }
+      return false;
+    });
 }
 
 // Options travel with the machine marker so a client can render real choices
