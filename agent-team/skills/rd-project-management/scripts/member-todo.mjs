@@ -86,7 +86,7 @@ const INTERNAL_EVIDENCE = /日志|脚本|复跑|测试报告|回执|命令行|�
 
 // An actionable entry point or submission exists now. "I will send it later"
 // is missing information, not an instruction the person can act on.
-const PLACEHOLDER_ENTRY = /(?:等|待|尚待|还需)(?:我|你)?(?:确认|补充|提供|确定)|待定|未定|还没定|稍后(?:再)?(?:发|给|通知|告知|提供)|晚点(?:再)?(?:发|给|通知|告知)|之后(?:再)?(?:发|给|补|通知|告诉|说明)|回头(?:再)?(?:发|给|补|通知|说)|以后(?:再)?(?:说|发|给)|还没(?:有|确定|准备好)|尚未(?:确定|提供|准备好)|另行(?:通知|提供|告知)|暂(?:无|未|不提供)|暂时(?:没有|无|未)/;
+const PLACEHOLDER_ENTRY = /(?:等|待|尚待|还需)(?:我|你)?(?:确认|补充|提供|确定)|待定|未定|还没定|(?:稍后|晚点|之后|回头|以后)(?:再)?(?:发|给|通知|告知|提供|补|公布|发布|说明|告诉|说)|还没(?:有|确定|准备好)|尚未(?:确定|提供|准备好)|另行(?:通知|提供|告知)|暂(?:无|未|不提供)|暂时(?:没有|无|未)/;
 
 function isText(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -235,10 +235,16 @@ export function validateTodoInput(input) {
       }
     }
     if (input.completion_signal === "done" && isText(input.next)) {
-      if (!/完成/.test(input.next)) {
-        errors.push("next 与 completion_signal=done 不一致：原事项只在本事项完成后继续");
+      // The original issue is registered with --until-issue-state done, so the
+      // only truthful trigger is this todo being marked complete. A reply,
+      // even one followed by a vague "after it's done" notice, never fires it.
+      if (!/(?:本事项|这个待办|该待办|待办)[^。；;\n]{0,12}(?:完成|标记完成)|(?:标记|勾选)[^。；;\n]{0,8}完成/.test(input.next)) {
+        errors.push("next 必须把继续条件写成本事项完成；只有本事项完成，原事项才会继续");
       }
-      if (/只回复|仅回复/.test(input.next) || (/回复后|回复之后/.test(input.next) && !/完成/.test(input.next))) {
+      if (/回复(?:后|之后|完)[^。；;\n]{0,30}(?:自动|继续|恢复|接回|处理)/.test(input.next)) {
+        errors.push("next 与 completion_signal=done 矛盾：回复不会触发原事项继续，等待条件是本事项完成");
+      }
+      if (/只回复|仅回复/.test(input.next)) {
         errors.push("next 不能承诺只回复就让原事项继续；等待条件是本事项完成");
       }
     }
@@ -274,6 +280,22 @@ export function validateTodoInput(input) {
   }
   errors.push(...optionErrors(input.options, kind));
 
+  // done and next are rendered on the first screen just like the request and
+  // options, so the same engineering-content rules apply to them.
+  for (const field of ["done", "next"]) {
+    if (!isText(input[field])) continue;
+    for (const violation of visibleViolations(input[field])) {
+      errors.push(`${field} 里有${violation}，请移到正文末尾技术附录`);
+    }
+    if (INTERNAL_EVIDENCE.test(input[field])) {
+      const action = field === "done" ? "团队能做的验证不能成为成员的完成动作" : "请把团队验证信息移到正文末尾技术附录";
+      errors.push(`${field} 里有内部证据用语（如日志、脚本、回执）；${action}`);
+    }
+    if (PLACEHOLDER_ENTRY.test(input[field])) {
+      errors.push(`${field} 里有待确认或稍后公布之类的占位信息；请先补齐真实内容，再生成待办`);
+    }
+  }
+
   const userFacing = [input.problem, input.why_you, input.action, input.where, input.submit].filter(isText).join("\n");
   if (INTERNAL_EVIDENCE.test(userFacing)) {
     errors.push("不要要求用户生成日志、脚本或内部证据；团队能做的验证留在团队内部");
@@ -287,6 +309,9 @@ export function validateTodoInput(input) {
     for (const label of visibleViolations(input.title)) errors.push(`标题里有${label}，请移到正文末尾技术附录`);
     if (INTERNAL_EVIDENCE.test(input.title)) {
       errors.push("标题里有内部证据用语（如日志、脚本、回执）；请把团队验证信息移到正文末尾技术附录");
+    }
+    if (PLACEHOLDER_ENTRY.test(input.title)) {
+      errors.push("标题里有待确认或稍后公布之类的占位信息；请先补齐真实内容，再生成待办");
     }
   }
   for (const label of visibleViolations(userFacing)) {

@@ -110,9 +110,10 @@ test("an invalid check exits 2 and names the concrete gap", () => {
   }
 });
 
-test("the five acceptance counterexamples fail both paths without writing a todo", () => {
+test("the acceptance counterexamples fail both paths without writing a todo", () => {
   const choiceInput = sampleTodoInputs()[2];
   const materialInput = sampleTodoInputs()[0];
+  const decisionInput = sampleTodoInputs()[3];
   const cases = [
     {
       name: "C2 missing reply example",
@@ -149,6 +150,26 @@ test("the five acceptance counterexamples fail both paths without writing a todo
     {
       name: "C7 placeholder entry",
       input: { ...materialInput, where: "入口待确认，稍后发给你。" },
+      gap: /入口或回复位置（where）.*占位信息/,
+    },
+    {
+      name: "C6 internal verification as the completion action",
+      input: { ...materialInput, done: "请运行测试并附上日志，然后把本事项标记为完成。" },
+      gap: /done 里有内部证据用语/,
+    },
+    {
+      name: "C3 engineering receipt in the continuation text",
+      input: { ...decisionInput, next: "本事项完成后，原事项会自动继续处理，并把验收回执发给你。" },
+      gap: /next 里有内部证据用语/,
+    },
+    {
+      name: "C4 reply-triggered continuation against a done wait",
+      input: { ...decisionInput, next: "回复后，原事项会自动继续处理。工作完成后会通知你。" },
+      gap: /next 与 completion_signal=done 矛盾/,
+    },
+    {
+      name: "C7 deferred entry with 稍后公布",
+      input: { ...materialInput, where: "具体入口稍后公布。" },
       gap: /入口或回复位置（where）.*占位信息/,
     },
   ];
