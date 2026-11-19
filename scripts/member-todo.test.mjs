@@ -277,6 +277,14 @@ test("a done-wait generates its trigger from the signal and rejects reply-trigge
     },
   ];
   const contradictory = [
+    // Reply in trigger position with a synonym for "continue": the reply would
+    // be the condition for the original issue advancing, so these must fail
+    // even though none of the advancement verbs is in REPLY_OUTCOME.
+    "回复后原事项会接着推进。",
+    "你一回复，原事项就往下走。",
+    "回复后我们这边会接着做。",
+    "回复后原事项会自动往下进行。",
+    "你一回复，事情就往下走了。",
     "你一回复，原事项就会自动继续处理。请在本事项标记为完成后等通知。",
     "本事项标记为完成只是可选操作，你一回复，原事项就会自动继续处理。",
     "原事项收到你的回复就会自动继续处理，之后可把本事项标记为完成。",

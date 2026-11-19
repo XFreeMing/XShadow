@@ -173,17 +173,28 @@ function markDismissed(text) {
 // "原事项会继续处理" are a promise that the reply alone resumes the issue.
 const REPLY_OUTCOME = /继续|恢复|接回|后续|下一步|接下来|即可|就行|就可以|(?:等|看|收|拿|查)(?:着|到)?(?:结果|通知)|(?:原事项|该事项|它|项目)[^。；;\n]{0,12}(?:会|就|将|便|随后|之后)[^。；;\n]{0,8}处理/;
 
-// A done-wait resumes only after this todo is actually marked complete. A
-// reply is only a trigger when an outcome follows it with no mandatory mark in
-// between. Judge each reply-to-outcome segment locally: an outcome that comes
-// before the reply (a purpose clause) is not caused by the reply, and a later
-// sentence cannot excuse an earlier reply-only promise.
+// A reply in trigger position -- "回复后", "你一回复", "回复就" -- makes the
+// reply the condition for whatever follows. Under a done-wait the same clause
+// must also require marking this todo complete; otherwise the reply alone is
+// promised to move the original issue, whatever synonym the creator picks for
+// "continue". This is a grammar rule, not a vocabulary of advancement verbs, so
+// "会接着推进" and "就往下走" are caught without widening or narrowing a list.
+const REPLY_TRIGGER = /(?<![统唯同])一(?:经)?(?:回复|答复)|(?:回复|答复)(?:后|之后|以后)|(?:回复|答复)(?:就|便|即)/;
+
+// A done-wait resumes only after this todo is actually marked complete. Judge
+// each clause locally: an outcome that comes before the reply (a purpose
+// clause) is not caused by the reply, and a later sentence cannot excuse an
+// earlier reply-only promise.
 function replyContinuationClash(text) {
   const outcomes = new RegExp(REPLY_OUTCOME.source, "g");
   return String(text)
     .split(/[。；;\n]/)
     .filter((clause) => clause.trim())
     .some((clause) => {
+      if (REPLY_TRIGGER.test(clause)
+        && !(MARK_COMPLETE.test(clause) && !MARK_NEGATED.test(clause) && !markDismissed(clause))) {
+        return true;
+      }
       const replies = [...clause.matchAll(/回复|答复/g)].map((match) => match.index);
       if (!replies.length) return false;
       for (const outcome of clause.matchAll(outcomes)) {
