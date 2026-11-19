@@ -242,7 +242,7 @@ func TestStartAndStepReviewEvidence(t *testing.T) {
 	c.MethodID = "agile"
 	rejected(t, &r, c)
 	apply(t, &r, change(&r, "advance", "采访计划"), methods)
-	for _, invalid := range [][]int{nil, {0}, {0, 0}, {-1, 1}, {0, 2}} {
+	for _, invalid := range [][]int{nil, {0}, {0, 0}, {-1, 1}, {0, len(step.Checks)}} {
 		c = change(&r, "approve", "同意")
 		c.CheckedItems = invalid
 		rejected(t, &r, c)
@@ -257,9 +257,11 @@ func TestStartAndStepReviewEvidence(t *testing.T) {
 	}
 	apply(t, &r, change(&r, "advance", "修订版"), methods)
 	c = change(&r, "approve", "逐项核对")
-	c.CheckedItems = []int{1, 0}
+	for i := len(step.Checks) - 1; i >= 0; i-- {
+		c.CheckedItems = append(c.CheckedItems, i)
+	}
 	apply(t, &r, c, methods)
-	if r.State != "working" || r.Step != 1 || len(r.History[len(r.History)-1].CheckedItems) != 2 {
+	if r.State != "working" || r.Step != 1 || len(r.History[len(r.History)-1].CheckedItems) != len(step.Checks) {
 		t.Fatal(r)
 	}
 }
