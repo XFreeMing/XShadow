@@ -76,3 +76,9 @@ make agent sync ARGS="--profile my-team"
 新会话无需继承旧会话的隐式记忆。它需要打开此仓库、读取 `AGENTS.md`，并能访问选定的 profile。任意未关联仓库的聊天不会自动获得这些内容；可给该会话仓库路径和本文件作为入口。
 
 平台内部的“智能体构建师”通过已分配的 `rd-build-agent` 技能，先查询工作区中的角色、小队、技能和运行时再设计调整；它不依赖本机仓库路径。仓库会话与平台会话都应先读实时状态，再落地变更。
+
+## 待规划事项的自动接手
+
+日常复用幕僚长现有的成员答复卡补查。遇到新故事或规划依据改变时，由幕僚长启动项目经理的 run_only 自动任务。项目经理逐条在原事项写入 backlog_plan 和下一步。核对现场用 multica autopilot list、autopilot runs <id> 和 issue metadata get <事项> --key backlog_plan。
+
+复用到其他工作区时，以[项目经理指令](backlog-planning/planner.md)建立项目经理的运行型自动任务，把它的实际 ID 替换进[幕僚长交接段](backlog-planning/chief-intake.md)，追加到现有入口。保留入口原职责和触发器。
