@@ -1,3 +1,7 @@
+import {
+  WorkMethodSchema, WorkMethodListSchema, WorkMethodRunSchema,
+  type WorkMethod, type NewWorkMethod, type WorkMethodRun, type WorkMethodAction,
+} from "../types/work-method";
 import { AcceptanceTraceSchema, type AcceptanceChange, type AcceptanceTrace } from "../types/acceptance";
 import type { ZodType } from "zod";
 import { AgentRuntimeSchema, EMPTY_RUNTIME } from "../runtimes/schema";
@@ -1552,6 +1556,46 @@ export class ApiClient {
     await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups/${encodeURIComponent(wakeupId)}/disable`, { method: "POST" });
   }
 
+  async listWorkMethods(): Promise<WorkMethod[]> {
+    const endpoint = "/api/work-methods";
+    const raw = await this.fetch<unknown>(endpoint);
+    const response = parseWithFallback<{ methods: WorkMethod[] } | null>(raw, WorkMethodListSchema, null, { endpoint });
+    if (!response) throw new Error("Malformed work method catalog");
+    return response.methods;
+  }
+
+  async createWorkMethod(data: NewWorkMethod): Promise<WorkMethod> {
+    const endpoint = "/api/work-methods";
+    const raw = await this.fetch<unknown>(endpoint, { method: "POST", body: JSON.stringify(data) });
+    const response = parseWithFallback<WorkMethod | null>(raw, WorkMethodSchema, null, { endpoint });
+    if (!response) throw new Error("Malformed work method");
+    return response;
+  }
+
+  async getIssueWorkMethod(issueId: string): Promise<WorkMethodRun> {
+    const endpoint = `/api/issues/${encodeURIComponent(issueId)}/work-method`;
+    const raw = await this.fetch<unknown>(endpoint);
+    const response = parseWithFallback<WorkMethodRun | null>(raw, WorkMethodRunSchema, null, { endpoint });
+    if (!response) throw new Error("Malformed work method run");
+    return response;
+  }
+
+  async getGoalWorkMethod(goalId: string): Promise<WorkMethodRun> {
+    const endpoint = `/api/goals/${encodeURIComponent(goalId)}/work-method`;
+    const raw = await this.fetch<unknown>(endpoint);
+    const response = parseWithFallback<WorkMethodRun | null>(raw, WorkMethodRunSchema, null, { endpoint });
+    if (!response) throw new Error("Malformed goal work method recommendation");
+    return response;
+  }
+
+  async changeIssueWorkMethod(issueId: string, action: WorkMethodAction): Promise<WorkMethodRun> {
+    const endpoint = `/api/issues/${encodeURIComponent(issueId)}/work-method`;
+    const raw = await this.fetch<unknown>(endpoint, { method: "POST", body: JSON.stringify(action) });
+    const response = parseWithFallback<WorkMethodRun | null>(raw, WorkMethodRunSchema, null, { endpoint });
+    if (!response) throw new Error("Malformed work method run");
+    return response;
+  }
+
   async changeIssueAcceptance(id: string, change: AcceptanceChange): Promise<AcceptanceTrace> {
     const endpoint = `/api/issues/${encodeURIComponent(id)}/acceptance`;
     const raw = await this.fetch<unknown>(endpoint, { method: "POST", body: JSON.stringify(change) });
@@ -1862,7 +1906,9 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({
         ...(params.issueIds?.length ? { issue_ids: params.issueIds } : {}),
-        ...(params.isCreate ? { is_create: true } : {}),
+        ...(params.isCreate ? {
+          is_create: true, project_id: params.projectId, title: params.title, description: params.description,
+        } : {}),
         ...(params.assigneeType ? { assignee_type: params.assigneeType } : {}),
         ...(params.assigneeId ? { assignee_id: params.assigneeId } : {}),
         ...(params.status ? { status: params.status } : {}),

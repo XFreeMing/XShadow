@@ -2,10 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -13,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 // Project workflows on the issue write paths (MUL-7420).
@@ -52,7 +56,19 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	}
 	// Keeping the current status is never a rejected write, even when the
 	// workflow no longer lists it.
+	projectMoving := params.ProjectID != prev.ProjectID
+	if def != nil && projectMoving && !statusExplicit && !def.IsDefault && !def.Has(prev.Status) {
+		target := issueworkflow.MoveTarget(*def, prev.Status, func(key string) string {
+			return issuestatus.Category(ctx, h.Queries, prev.WorkspaceID, key)
+		})
+		params.Status = pgtype.Text{String: target, Valid: true}
+	}
 	statusChanging := params.Status.Valid && params.Status.String != prev.Status
+	if statusChanging && len(prev.WorkMethodRun) > 0 {
+		if err := h.checkMethodCompletion(ctx, prev, params.Status.String); err != nil {
+			return nil, err
+		}
+	}
 	if def == nil {
 		if !statusChanging {
 			return nil, nil
@@ -62,13 +78,6 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 			return nil, err
 		}
 		return nil, issueworkflow.CheckStatusOutsideProject(outside, params.Status.String)
-	}
-	projectMoving := params.ProjectID != prev.ProjectID
-	if projectMoving && !statusExplicit && !def.IsDefault && !def.Has(prev.Status) {
-		target := issueworkflow.MoveTarget(*def, prev.Status, func(key string) string {
-			return issuestatus.Category(ctx, h.Queries, prev.WorkspaceID, key)
-		})
-		params.Status = pgtype.Text{String: target, Valid: true}
 	}
 	// A move into a Default project keeps the issue's status, as it is never
 	// mapped; a named workflow must list the status the issue lands on.
@@ -106,6 +115,13 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	if !ok || !step.HandsOff() {
 		return nil, nil
 	}
+	method, err := h.resolveIssueWorkMethod(ctx, prev)
+	if err != nil {
+		return nil, err
+	}
+	if methodOwnsHandoff(method) {
+		return nil, nil
+	}
 	assigneeType, assigneeID, ok := issueworkflow.ResolveHandler(step, project, prev.CreatorType, prev.CreatorID)
 	if !ok {
 		return nil, nil
@@ -113,6 +129,31 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	params.AssigneeType = pgtype.Text{String: assigneeType, Valid: true}
 	params.AssigneeID = assigneeID
 	return &workflowHandoff{def: *def, step: step, project: project}, nil
+}
+
+// A research or outcome method carries its own deliverables and review.
+func methodOwnsHandoff(run workmethod.Run) bool {
+	return run.Method != nil && (run.Method.Kind == "research" || run.Method.Kind == "outcome")
+}
+
+var errMethodReviewOpen = errors.New("complete the work method review before marking the issue done")
+
+func (h *Handler) checkMethodCompletion(ctx context.Context, issue db.Issue, status string) error {
+	if len(issue.WorkMethodRun) == 0 {
+		return nil
+	}
+	category, err := issuestatus.CategoryWithError(ctx, h.issueStatusCatalog(), issue.WorkspaceID, status)
+	if err != nil || category != issuestatus.CategoryDone {
+		return err
+	}
+	var run workmethod.Run
+	if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil {
+		return err
+	}
+	if run.State != "closed" {
+		return errMethodReviewOpen
+	}
+	return nil
 }
 
 // workflowStepMoved shares the step guard with the claim brief so a run is
@@ -141,6 +182,10 @@ func workflowHandoffPayload(issue db.Issue, hand *workflowHandoff, note string, 
 // writeIssueWorkflowError answers a workflow rejection. It reports false when
 // err is not one, so the caller can fall through to its generic 500.
 func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, errMethodReviewOpen) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "work_method_review_open"})
+		return true
+	}
 	var notIn *issueworkflow.NotInWorkflowError
 	if errors.As(err, &notIn) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -253,7 +298,11 @@ func (h *Handler) workflowHandoffBrief(ctx context.Context, issue db.Issue, hand
 	}
 	in := h.workflowBriefInput(ctx, issue, hand.def, hand.project)
 	in.StatusKey = hand.step.StatusKey
-	return issueworkflow.Brief(in)
+	brief := issueworkflow.Brief(in)
+	if method, err := h.resolveIssueWorkMethod(ctx, issue); err == nil && method.Method != nil {
+		brief += "\n" + methodClaimBrief(method, in.IssueIdentifier, true)
+	}
+	return brief
 }
 
 // workflowBriefInput describes an issue at its current status under its
@@ -356,18 +405,31 @@ func (h *Handler) assigneeActiveRuns(ctx context.Context, issue db.Issue) []db.L
 // legacyRuntimeRules is true for a daemon that does not advertise
 // protocol.DaemonCapabilityWorkflowStatusRulesV1; see BriefInput.
 func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task *db.AgentTaskQueue, legacyRuntimeRules bool) *TaskProjectWorkflowData {
+	method, methodErr := h.resolveIssueWorkMethod(ctx, issue)
+	if methodErr != nil {
+		slog.Warn("task claim: failed to read work method", "issue_id", uuidToString(issue.ID), "error", methodErr)
+	}
 	def, project, err := issueworkflow.ForProject(ctx, h.Queries, issue.WorkspaceID, issue.ProjectID)
 	if err != nil {
 		slog.Warn("task claim: failed to load project workflow for brief injection",
 			"issue_id", uuidToString(issue.ID), "error", err)
 		return nil
 	}
-	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) {
-		return nil
+	stepMoved := workflowStepMoved(def, issue.Status, task)
+	ownsStep := taskRunsForAssignee(issue, task) && !stepMoved
+	methodBrief := ""
+	if method.Method != nil {
+		issueRef := h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
+		methodBrief = methodClaimBrief(method, issueRef, ownsStep)
+	}
+	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) || (methodOwnsHandoff(method) && !stepMoved) {
+		if methodBrief == "" {
+			return nil
+		}
+		return &TaskProjectWorkflowData{Brief: methodBrief, stepMoved: stepMoved}
 	}
 	in := h.workflowBriefInput(ctx, issue, *def, project)
 	in.LegacyRuntimeRules = legacyRuntimeRules
-	stepMoved := workflowStepMoved(def, issue.Status, task)
 	if stepMoved {
 		in.BoundStep = task.WorkflowStep.String
 		in.MovedBy = h.lastIssueStatusMover(ctx, issue)
@@ -377,7 +439,47 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 			in.AssigneeName = h.actorDisplayName(ctx, issue.WorkspaceID, issue.AssigneeType.String, issue.AssigneeID)
 		}
 	}
-	return &TaskProjectWorkflowData{Brief: issueworkflow.Brief(in), stepMoved: stepMoved}
+	brief := issueworkflow.Brief(in)
+	if methodBrief != "" {
+		brief += "\n" + methodBrief
+	}
+	return &TaskProjectWorkflowData{Brief: brief, stepMoved: stepMoved}
+}
+
+// The method instance is read again before a write: another contributor may
+// have advanced the step since this run was claimed.
+func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string {
+	if run.Method == nil {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Work method for %s: %q (%s), state %s.\n", issueRef, run.Method.Name, run.Method.ID, run.State)
+	fmt.Fprintf(&b, "Read the current revision, outputs and review evidence: multica issue method %s\n", issueRef)
+	if n := len(run.History); n > 0 {
+		last := run.History[n-1]
+		fmt.Fprintf(&b, "Latest recorded action %q; evidence: %q.\n", last.Action, last.Evidence)
+	}
+	if run.State == "closed" {
+		b.WriteString("The method review has been approved.")
+		return b.String()
+	}
+	if run.State == "ready" {
+		fmt.Fprintf(&b, "Selection basis: %q.\n", run.Reason)
+	}
+	action := "advance"
+	if run.State == "review" {
+		fmt.Fprintf(&b, "Review the recorded outputs against %q.\n", run.Method.Review)
+		action = "approve or rework"
+	} else if run.Step >= 0 && run.Step < len(run.Method.Steps) {
+		step := run.Method.Steps[run.Step]
+		fmt.Fprintf(&b, "Step %d of %d: %q. Required output: %q.\n", run.Step+1, len(run.Method.Steps), step.Name, step.Output)
+	}
+	if ownsStep {
+		fmt.Fprintf(&b, "Record the result with multica issue method %s --change-file <json-file>. Supply base_revision from the read, action (%s) and evidence with the actual deliverable or decision. Complete the method review before moving the issue to a completed status.", issueRef, action)
+	} else {
+		b.WriteString("Provide findings to the current assignee. That assignee advances the method.")
+	}
+	return b.String()
 }
 
 // taskRunsForAssignee reports whether a run works on the issue as its

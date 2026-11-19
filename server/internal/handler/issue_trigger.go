@@ -116,7 +116,9 @@ type IssueTriggerPreviewRequest struct {
 	// IssueIDs are existing issues to evaluate (single assign, single status,
 	// or a batch). Empty with IsCreate=true evaluates a candidate new issue.
 	IssueIDs []string `json:"issue_ids"`
-	// IsCreate previews a not-yet-persisted issue from AssigneeType/ID/Status.
+	// A create preview uses the draft deliverable to resolve its work method.
+	Title        string  `json:"title,omitempty"`
+	Description  string  `json:"description,omitempty"`
 	IsCreate     bool    `json:"is_create"`
 	AssigneeType *string `json:"assignee_type"`
 	AssigneeID   *string `json:"assignee_id"`
@@ -138,8 +140,9 @@ type IssueTriggerPreviewItem struct {
 // the UI can show directly ("将启动 N 个"). Issues that will NOT start a run are
 // simply absent, so total_count == len(triggers).
 type IssueTriggerPreviewResponse struct {
-	Triggers   []IssueTriggerPreviewItem `json:"triggers"`
-	TotalCount int                       `json:"total_count"`
+	ProjectHandoffSuppressed bool                      `json:"project_handoff_suppressed,omitempty"`
+	Triggers                 []IssueTriggerPreviewItem `json:"triggers"`
+	TotalCount               int                       `json:"total_count"`
 }
 
 // PreviewIssueTrigger dry-runs WillEnqueueRun for a prospective issue write and
@@ -227,9 +230,15 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 			if projectUUID, err := util.ParseUUID(*req.ProjectID); err == nil && hidden.CanSeeProject(projectUUID) {
 				if def, project, err := issueworkflow.ForProject(r.Context(), h.Queries, wsUUID, projectUUID); err == nil && def != nil {
 					if step, ok := def.Step(candidate.Status); ok && step.HandsOff() && !hasNewAssignee {
-						if t, id, ok := issueworkflow.ResolveHandler(step, project, actorType, parseUUID(actorID)); ok {
-							candidate.AssigneeType = pgtype.Text{String: t, Valid: true}
-							candidate.AssigneeID = id
+						handoff, err := h.createHandoffAssignee(r.Context(), project, step, req.Title, req.Description, actorType, parseUUID(actorID))
+						if err != nil {
+							writeError(w, http.StatusInternalServerError, "failed to resolve issue work method")
+							return
+						}
+						resp.ProjectHandoffSuppressed = handoff.methodOwns
+						if handoff.assigneeID.Valid {
+							candidate.AssigneeType = pgtype.Text{String: handoff.assigneeType, Valid: true}
+							candidate.AssigneeID = handoff.assigneeID
 						}
 					}
 				}

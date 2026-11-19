@@ -340,7 +340,7 @@ func (q *Queries) LinkGoalIssue(ctx context.Context, arg LinkGoalIssueParams) (p
 }
 
 const listGoalIssues = `-- name: ListGoalIssues :many
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id FROM issue AS i
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id, i.work_method_run FROM issue AS i
 WHERE i.workspace_id = $1
   AND EXISTS (
     SELECT 1 FROM goal_issue AS gi
@@ -417,6 +417,7 @@ func (q *Queries) ListGoalIssues(ctx context.Context, arg ListGoalIssuesParams) 
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
 			&i.RequesterUserID,
+			&i.WorkMethodRun,
 		); err != nil {
 			return nil, err
 		}

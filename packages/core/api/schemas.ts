@@ -1542,6 +1542,7 @@ const IssueTriggerPreviewItemSchema = z.object({
 }).loose();
 
 export const IssueTriggerPreviewSchema = z.object({
+  project_handoff_suppressed: z.boolean().optional().catch(undefined),
   triggers: z.array(IssueTriggerPreviewItemSchema).default([]),
   total_count: z.number().default(0),
 }).loose();

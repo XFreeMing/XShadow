@@ -824,8 +824,9 @@ WHERE t.id = sqlc.arg(origin_id)::uuid
 
 -- name: UpdateIssueAcceptanceTrace :one
 UPDATE issue SET acceptance_criteria = sqlc.arg('trace')::jsonb,
+    work_method_run = COALESCE(sqlc.narg('review_run')::jsonb, work_method_run),
     revision = revision + 1, updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
 WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
-  AND acceptance_criteria = sqlc.arg('previous')::jsonb
+  AND revision = sqlc.arg('issue_revision')
 RETURNING *;

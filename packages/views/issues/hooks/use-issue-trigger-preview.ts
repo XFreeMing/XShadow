@@ -7,6 +7,9 @@ import { issueKeys } from "@multica/core/issues/queries";
 import type { IssueAssigneeType, IssueStatus, IssueTriggerPreviewItem } from "@multica/core/types";
 
 export interface UseIssueTriggerPreviewParams {
+  projectId?: string;
+  title?: string;
+  description?: string;
   /** Existing issues to evaluate (single assign/status or batch). */
   issueIds?: string[];
   /** Preview a not-yet-persisted issue from assignee/status (create modal). */
@@ -19,6 +22,7 @@ export interface UseIssueTriggerPreviewParams {
 }
 
 export interface UseIssueTriggerPreviewResult {
+  projectHandoffSuppressed: boolean;
   triggers: IssueTriggerPreviewItem[];
   totalCount: number;
   isLoading: boolean;
@@ -30,6 +34,7 @@ function previewSignature(params: UseIssueTriggerPreviewParams): string {
   return JSON.stringify({
     ids: [...(params.issueIds ?? [])].sort(),
     create: params.isCreate ?? false,
+    ...(params.isCreate ? { projectId: params.projectId, title: params.title, description: params.description } : {}),
     at: params.assigneeType ?? null,
     aid: params.assigneeId ?? null,
     status: params.status ?? null,
@@ -71,6 +76,9 @@ export function useIssueTriggerPreview(
         assigneeType: params.assigneeType,
         assigneeId: params.assigneeId,
         status: params.status,
+        title: params.title,
+        description: params.description,
+        projectId: params.projectId,
       }),
     enabled,
     retry: false,
@@ -82,6 +90,7 @@ export function useIssueTriggerPreview(
 
   const triggers = previewQuery.data?.triggers ?? EMPTY;
   return {
+    projectHandoffSuppressed: previewQuery.data?.project_handoff_suppressed === true,
     triggers,
     totalCount: previewQuery.data?.total_count ?? 0,
     // Only the first load (no prior data) is "loading"; a background/placeholder

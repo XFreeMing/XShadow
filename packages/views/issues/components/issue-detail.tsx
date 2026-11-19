@@ -101,6 +101,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { IssueActionsDropdown, useIssueActions, useArchivedInboxItemId, IssueActionsContextMenu, IssueContextMenuProvider } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
+import { IssueWorkMethod } from "./issue-work-method";
 import { IssueAcceptance } from "./issue-acceptance";
 import { SubIssuesAgentWorkingChip } from "./sub-issues-agent-working-chip";
 import { IssueProjectPicker } from "../../projects/components/issue-project-picker";
@@ -3868,9 +3869,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             descriptionBlock
           )}
 
-          {issue.acceptance_trace && (
-            <IssueAcceptance key={issue.id} issueId={issue.id} trace={issue.acceptance_trace} refresh={refetchIssue} />
-          )}
+          <IssueWorkMethod key={issue.id} wsId={wsId} issueId={issue.id} issueRevision={issue.revision}>
+            {issue.acceptance_trace && (
+              <IssueAcceptance issueId={issue.id} trace={issue.acceptance_trace} refresh={refetchIssue} />
+            )}
+          </IssueWorkMethod>
 
           </div>
 

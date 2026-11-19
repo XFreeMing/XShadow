@@ -19,6 +19,7 @@ import {
   useUnlinkGoalIssue,
   useUpdateGoal,
 } from "@multica/core/goals";
+import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { projectListOptions } from "@multica/core/projects/queries";
@@ -68,6 +69,25 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </section>
   );
+}
+
+function GoalMethodRecommendation({ wsId, goalId, updatedAt }: { wsId: string; goalId: string; updatedAt: string }) {
+  const { t } = useT("issues");
+  const query = useQuery({
+    queryKey: ["work-methods", wsId, "goal", goalId, updatedAt],
+    queryFn: () => api.getGoalWorkMethod(goalId),
+    staleTime: 0,
+    retry: false,
+  });
+  if (query.error instanceof ApiError && query.error.status === 404) return null;
+  if (query.isError) return <Section title={t(($) => $.method.recommended)}>
+    <p role="alert" className="text-label text-destructive">{t(($) => $.method.load_error)} <Button size="xs" variant="link" onClick={() => void query.refetch()}>{t(($) => $.method.retry)}</Button></p>
+  </Section>;
+  if (!query.data) return null;
+  return <Section title={t(($) => $.method.recommended)}>
+    <p className="text-body font-medium">{query.data.method?.name ?? t(($) => $.method.no_match)}</p>
+    {query.data.reason && <p className="text-label text-muted-foreground">{query.data.reason}</p>}
+  </Section>;
 }
 
 export function GoalDetailPage({ goalId }: { goalId: string }) {
@@ -268,6 +288,8 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
           {goal.acceptance_criteria || t(($) => $.detail.no_criteria)}
         </p>
       </Section>
+
+      <GoalMethodRecommendation wsId={wsId} goalId={goal.id} updatedAt={goal.updated_at} />
 
       <GoalPlanSection key={goal.id} goal={goal} />
 

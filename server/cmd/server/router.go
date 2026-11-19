@@ -2192,6 +2192,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/labels", h.AttachLabel)
 					r.Delete("/labels/{labelId}", h.DetachLabel)
 					r.Post("/acceptance", h.ChangeIssueAcceptance)
+					r.Get("/work-method", h.GetIssueWorkMethod)
+					r.Post("/work-method", h.ChangeIssueWorkMethod)
 					r.Get("/metadata", h.ListIssueMetadata)
 					r.Put("/metadata/{key}", h.SetIssueMetadataKey)
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
@@ -2263,6 +2265,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// member; edits and deletes are gated inside the handlers to the
 			// workflow's owner and workspace owners/admins (MUL-8120), and
 			// switching a project's workflow to admins and the project's lead.
+			r.Get("/api/work-methods", h.ListWorkMethods)
+			r.With(handler.RequireHumanActor).Post("/api/work-methods", h.CreateWorkMethod)
 			r.Route("/api/issue-workflows", func(r chi.Router) {
 				r.Get("/", h.ListIssueWorkflows)
 				r.Post("/", h.CreateIssueWorkflow)
@@ -2283,6 +2287,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.With(handler.RequireHumanActor).Post("/conversation", h.OpenGoalConversation)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetGoal)
+					r.Get("/work-method", h.GetGoalWorkMethod)
 					r.Put("/", h.UpdateGoal)
 					r.Delete("/", h.DeleteGoal)
 					r.Get("/issues", h.ListGoalIssues)

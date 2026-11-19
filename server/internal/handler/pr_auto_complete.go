@@ -52,10 +52,11 @@ const (
 	prAutoCompleteTerminal          = "terminal"           // already done / cancelled
 	prAutoCompleteTriage            = "triage"             // not accepted yet
 	prAutoCompleteNotInWorkflow     = "not_in_workflow"    // project workflow does not list the target
-	prAutoCompleteAtTarget          = "at_target"          // already in the target status
-	prAutoCompleteWaiting           = "waiting"            // some PRs still open / draft
-	prAutoCompleteNotMerged         = "not_merged"         // some PRs closed without merging
-	prAutoCompleteAllMerged         = "all_merged"         // every linked PR merged
+	prAutoCompleteMethodReviewOpen  = "work_method_review_open"
+	prAutoCompleteAtTarget          = "at_target"  // already in the target status
+	prAutoCompleteWaiting           = "waiting"    // some PRs still open / draft
+	prAutoCompleteNotMerged         = "not_merged" // some PRs closed without merging
+	prAutoCompleteAllMerged         = "all_merged" // every linked PR merged
 )
 
 // Workspace settings keys. pr_auto_complete_enabled is the switch desktop
@@ -221,6 +222,13 @@ func (h *Handler) decidePRAutoComplete(ctx context.Context, ws db.Workspace, iss
 	case issue.Status == d.Target:
 		d.State = prAutoCompleteAtTarget
 		return d, nil
+	}
+	if err := h.checkMethodCompletion(ctx, issue, d.Target); err != nil {
+		if errors.Is(err, errMethodReviewOpen) {
+			d.State = prAutoCompleteMethodReviewOpen
+			return d, nil
+		}
+		return prAutoCompleteDecision{}, err
 	}
 	var open, closed []db.ListIssueLinkedPullRequestStatesRow
 	for _, pr := range prs {

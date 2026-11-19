@@ -59,6 +59,7 @@ import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 import { StatusIcon, StatusPicker, PriorityIcon, PriorityPicker, StagePicker, AssigneePicker, StartDatePicker, DueDatePicker, LabelPicker } from "../issues/components";
 import { maxSiblingStage } from "../issues/components/pickers/stage-picker";
 import { ProjectPicker } from "../projects/components/project-picker";
+import { useDebouncedValue } from "../common/use-debounced-value";
 import { useIssueTriggerPreview } from "../issues/hooks/use-issue-trigger-preview";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
@@ -120,10 +121,14 @@ import { CopyParentFields } from "./copy-parent-fields";
 // editor absorbs the delta), and it expands only once the predicate resolves,
 // animating straight to the correct copy.
 function CreateRunHint({
+  title, description, projectId,
   assigneeType,
   assigneeId,
   status,
 }: {
+  title: string;
+  description: string;
+  projectId?: string;
   assigneeType?: IssueAssigneeType;
   assigneeId?: string;
   status: IssueStatus;
@@ -132,7 +137,7 @@ function CreateRunHint({
   const { getActorName } = useActorName();
   const isAgentLike = assigneeType === "agent" || assigneeType === "squad";
   const preview = useIssueTriggerPreview({
-    isCreate: true,
+    isCreate: true, title, description, projectId,
     assigneeType: assigneeType ?? null,
     assigneeId: assigneeId ?? null,
     status,
@@ -203,7 +208,9 @@ function CreateRunHint({
  * Names who a new issue will be handed to when its project's workflow starts
  * it on a step with a handler and no assignee was picked. (MUL-7420)
  */
-function WorkflowHandoffHint({ projectId, status }: { projectId?: string; status: IssueStatus }) {
+function WorkflowHandoffHint({ projectId, status, title, description }: {
+  projectId?: string; status: IssueStatus; title: string; description: string;
+}) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const workflow = useProjectWorkflow(wsId, projectId);
@@ -212,7 +219,8 @@ function WorkflowHandoffHint({ projectId, status }: { projectId?: string; status
   const handlerLabel = useStepHandlerLabel(project);
   const step = workflowStep(workflow, status);
   const label = handlerLabel(step);
-  if (!label) return null;
+  const preview = useIssueTriggerPreview({ isCreate: true, projectId, status, title, description, enabled: !!label });
+  if (!label || preview.isLoading || preview.projectHandoffSuppressed) return null;
   const actor = stepHandlerActor(step, project);
   return (
     <div aria-live="polite" className="flex items-center gap-1.5 px-4 pb-1 pt-0.5 text-micro text-muted-foreground">
@@ -405,6 +413,8 @@ export function ManualCreatePanel({
 
   // Sync field changes to the draft store — manual-only fields to the manual
   // slot, project / priority / due date to the shared slot.
+  const previewTitle = useDebouncedValue(title, 300);
+  const previewDescription = useDebouncedValue(draft.manual.description ?? "", 300);
   const updateTitle = (v: string) => { setTitle(v); setManual({ title: v }); };
   const updateStatus = (v: IssueStatus) => { setStatus(v); setManual({ status: v }); };
   const updatePriority = (v: IssuePriority) => { setPriority(v); setShared({ priority: v }); };
@@ -1071,9 +1081,9 @@ export function ManualCreatePanel({
             {/* Pre-trigger preview — a passive caption above the toolbar; reveals
                 when an agent assignee will pick the issue up. */}
             {assigneeId ? (
-              <CreateRunHint assigneeType={assigneeType} assigneeId={assigneeId} status={status} />
+              <CreateRunHint title={previewTitle} description={previewDescription} projectId={projectId ?? parentIssue?.project_id ?? undefined} assigneeType={assigneeType} assigneeId={assigneeId} status={status} />
             ) : (
-              <WorkflowHandoffHint projectId={projectId} status={status} />
+              <WorkflowHandoffHint projectId={projectId ?? parentIssue?.project_id ?? undefined} title={previewTitle} description={previewDescription} status={status} />
             )}
 
             {/* Property toolbar — each field renders per the Settings → Preferences → Issue creation

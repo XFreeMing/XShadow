@@ -3513,9 +3513,14 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		if req.AssigneeType == nil && req.AssigneeID == nil {
 			if step, ok := createWorkflow.Step(status); ok && step.HandsOff() {
 				handoffCreatorType, handoffCreatorID := h.resolveActor(r, creatorID, workspaceID)
-				if t, id, ok := issueworkflow.ResolveHandler(step, createWorkflowProject, handoffCreatorType, parseUUID(handoffCreatorID)); ok {
-					assigneeType = pgtype.Text{String: t, Valid: true}
-					assigneeID = id
+				handoff, err := h.createHandoffAssignee(r.Context(), createWorkflowProject, step, req.Title, ptrToTextOrEmpty(req.Description), handoffCreatorType, parseUUID(handoffCreatorID))
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to resolve issue work method")
+					return
+				}
+				if handoff.assigneeID.Valid {
+					assigneeType = pgtype.Text{String: handoff.assigneeType, Valid: true}
+					assigneeID = handoff.assigneeID
 					if status, msg := h.validateAssigneePair(r.Context(), r, workspaceID, assigneeType, assigneeID); status != 0 {
 						writeError(w, status, msg)
 						return

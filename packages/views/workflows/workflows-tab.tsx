@@ -49,6 +49,7 @@ import { SettingsTab } from "../settings/components/settings-layout";
 import { useT } from "../i18n";
 import { useStepHandlerLabel } from "./step-handler";
 import { WORKFLOW_TEMPLATES, type WorkflowTemplateId } from "./templates";
+import { WorkMethodCatalog } from "./work-method-catalog";
 import { WorkflowEditorPage } from "./workflow-editor-page";
 
 const WORKFLOW_PARAM = "workflow";
@@ -188,6 +189,8 @@ export function WorkflowsTab() {
             />
           ))}
       </div>
+
+      <WorkMethodCatalog wsId={wsId} canCreate={canCreate} />
 
       <IssueStatusesTab
         embedded={{ title: t(($) => $.workflows.settings.statuses_title) }}

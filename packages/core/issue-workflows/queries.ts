@@ -186,3 +186,22 @@ export function projectMoveMayHandOff(workflow: IssueWorkflow | null | undefined
 export function handoffStepCount(workflow: IssueWorkflow): number {
   return workflow.steps.filter((s) => s.handler.type !== "none").length;
 }
+
+
+export function workMethodCatalogOptions(wsId: string) {
+  return queryOptions({
+    queryKey: ["work-methods", wsId, "catalog"] as const,
+    queryFn: () => api.listWorkMethods(),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+export function issueWorkMethodOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: ["work-methods", wsId, "run", issueId] as const,
+    queryFn: () => api.getIssueWorkMethod(issueId),
+    staleTime: 0,
+    retry: false,
+  });
+}
