@@ -139,13 +139,13 @@ export const COMPLETION_SIGNALS = Object.freeze({
   },
 });
 
-const MARK_COMPLETE = /标记(?:为)?完成|标为完成|勾选完成|设为完成/;
+const MARK_COMPLETE = /标记(?:[^。；;\n]{0,6})?完成|标为完成|勾选完成|设为完成/;
 
 // Categories of wording that make marking complete non-committal: a mere
 // formality, an empty field, something unrelated to what follows, optional or
 // deferred. They are checked as meanings rather than as one fixed phrase, so
 // colloquial variants of the same promise are rejected together.
-const MARK_DISMISSED = /(?:只是|仅是|仅|纯属|算是|就是|不过是|无非是|当作|当作是|等于)[^。；;\n]{0,8}(?:形式|流程|过场|样子|摆设|手续)|走(?:个|一下|一遍)?(?:形式|流程|过场)|(?:形式|流程|过场)(?:而已|罢了)|空着|留空|不填|不用填|无需填|不必填|不勾|不用勾|无需勾|(?:与|和|跟)[^。；;\n]{0,12}(?:后续|继续|处理|恢复|接续|原事项)[^。；;\n]{0,8}(?:无关|没(?:有)?关系|不相干)|不影响|没有?影响|无影响|无关紧要|不重要|无所谓|随你|由你(?:决定|选择)|可选|选做|可做可不做|可有可无|不是必须|并非必须|非必需|不必须|不是硬性|并非硬性|不强制|不用管|不必管|无需管|(?:之后|再|稍后|随后|最后)[^。；;\n]{0,8}(?:可|可以|再|才)?[^。；;\n]{0,4}标记/;
+const MARK_DISMISSED = /(?:只是|仅是|仅|纯属|算是|就是|不过是|无非是|当作|当作是|等于)[^。；;\n]{0,8}(?:形式|流程|过场|样子|摆设|手续)|走(?:个|一下|一遍)?(?:形式|流程|过场)|(?:形式|流程|过场)(?:而已|罢了)|空着|留空|不填|不用填|无需填|不必填|不勾|不用勾|无需勾|(?:与|和|跟)[^。；;\n]{0,12}(?:后续|继续|处理|恢复|接续|原事项)[^。；;\n]{0,8}(?:无关|没(?:有)?关系|不相干)|不影响|没有?影响|无影响|无关紧要|不重要|无所谓|随你|由你(?:决定|选择)|可选|选做|可做可不做|可有可无|不是必须|并非必须|非必需|不必须|不是硬性|并非硬性|不强制|不用管|不必管|无需管|(?:之后|稍后|随后|最后|以后|回头|晚点)[^。；;\n]{0,8}(?:可|可以|再|才)?[^。；;\n]{0,4}标记/;
 const MARK_NEGATED = /(?:不(?:必|需要|用|需)|无需|不是必须|并非必须)[^。；;\n]{0,16}标记|标记[^。；;\n]{0,8}(?:不是必须|并非必须|非必需|可选)/;
 
 // The signal owns the trigger. For a done-wait the original issue resumes only
@@ -167,10 +167,11 @@ function markDismissed(text) {
     .some((clause) => MARK_COMPLETE.test(clause) && MARK_DISMISSED.test(clause));
 }
 
-// A reply is never the resume trigger. Every outcome that could read as "the
-// original issue continues now" counts, including waiting for a result or a
-// later notification, not just the verb "continue".
-const REPLY_OUTCOME = /继续|恢复|接回|处理|结果|通知|后续|下一步|即可|就行|就可以|等(?:着|待)?/;
+// A reply is never the resume trigger. Outcome wording must describe the
+// original issue moving on, not the business content the person is replying
+// with: "回复结果" and "回复处理结果" are the submit matter, while "等结果" or
+// "原事项会继续处理" are a promise that the reply alone resumes the issue.
+const REPLY_OUTCOME = /继续|恢复|接回|后续|下一步|接下来|即可|就行|就可以|(?:等|看|收|拿|查)(?:着|到)?(?:结果|通知)|(?:原事项|该事项|它|项目)[^。；;\n]{0,12}(?:会|就|将|便|随后|之后)[^。；;\n]{0,8}处理/;
 
 // A done-wait resumes only after this todo is actually marked complete. A
 // reply is only a trigger when an outcome follows it with no mandatory mark in

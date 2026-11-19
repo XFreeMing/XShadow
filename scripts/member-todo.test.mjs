@@ -238,17 +238,42 @@ test("a done-wait generates its trigger from the signal and rejects reply-trigge
     {
       name: "reply then mark",
       next: "回复后，请把本事项标记为完成，原事项会自动继续处理。",
-      after: /之后：回复后，请把本事项标记为完成/,
     },
     {
       name: "mark then continue",
       next: "请在本事项标记为完成，原事项会在完成后继续处理。",
-      after: /之后：请在本事项标记为完成，原事项会在完成后继续处理/,
     },
     {
       name: "purpose then reply and mark",
       next: "为了让原事项继续处理，请回复并把本事项标记为完成。",
-      after: /之后：为了让原事项继续处理，请回复并把本事项标记为完成/,
+    },
+    {
+      name: "reply the result, then mark",
+      next: "请回复结果，并把本事项标记为完成。",
+    },
+    {
+      name: "reply the processing result, then mark",
+      next: "请回复处理结果，并把本事项标记为完成。",
+    },
+    {
+      name: "reply the processing status, then mark",
+      next: "请回复处理情况，并把本事项标记为完成。",
+    },
+    {
+      name: "mark after replying the processing result",
+      next: "回复处理结果后，请把本事项标记为完成。",
+    },
+    {
+      name: "business handling followed by marking",
+      next: "我会按你回复的结果处理；请在本事项标记为完成。",
+    },
+    {
+      name: "reply the result then mark and continue",
+      next: "请回复处理结果，并把本事项标记为完成；完成后原事项会自动继续。",
+    },
+    {
+      name: "reply then mark then continue",
+      next: "先回复处理结果，再标记本事项完成，之后原事项会继续。",
     },
   ];
   const contradictory = [
@@ -279,8 +304,9 @@ test("a done-wait generates its trigger from the signal and rejects reply-trigge
       const generate = runToolResult(PM_TOOL, ["--input", inputPath, "--out-dir", outDir], dir);
       assert.equal(generate.status, 0, `${legalCase.name} generation: ${generate.stdout}${generate.stderr}`);
       const body = readFileSync(join(outDir, "body.md"), "utf8");
-      assert.match(body, /怎样算完成：.*标记为完成/);
-      assert.match(body, legalCase.after);
+      assert.match(body, /怎样算完成：.*标记/);
+      // The signal owns the trigger; the legal business wording stays verbatim after it.
+      assert.ok(body.includes(legalCase.next), `${legalCase.name}: the legal next text is missing from the body`);
     }
 
     for (const [index, next] of contradictory.entries()) {
