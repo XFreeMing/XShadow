@@ -12,7 +12,8 @@ import type {
   WorkMethodRun,
 } from "@multica/core/types/work-method";
 import { Button } from "@multica/ui/components/ui/button";
-import { useT } from "../../i18n";
+import { useLocale, useT } from "../../i18n";
+import { useActorName } from "@multica/core/workspace/hooks";
 
 export function IssueWorkMethod({
   wsId,
@@ -69,6 +70,12 @@ function MethodCard({
   run: WorkMethodRun;
 }) {
   const { t } = useT("issues");
+  const { getActorName } = useActorName();
+  const locale = useLocale();
+  function actorName(actor: string) {
+    const [type, id] = actor.split("/");
+    return type && id ? getActorName(type, id) : actor;
+  }
   const qc = useQueryClient();
   const [choosing, setChoosing] = useState(false);
   const [selected, setSelected] = useState("");
@@ -358,8 +365,8 @@ function MethodCard({
                         </p>
                       )}
                       <p className="break-words text-caption text-muted-foreground">
-                        {entry.actor} ·{" "}
-                        <time dateTime={entry.at}>{entry.at}</time>
+                        <span title={entry.actor}>{actorName(entry.actor)}</span> ·{" "}
+                        <time dateTime={entry.at}>{Number.isFinite(Date.parse(entry.at)) ? new Date(entry.at).toLocaleString(locale) : entry.at}</time>
                       </p>
                     </li>
                   ))}

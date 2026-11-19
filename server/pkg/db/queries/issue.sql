@@ -185,10 +185,10 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    stage, properties, last_activity_at, id
+    stage, properties, last_activity_at, id, work_method_run
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg('work_method_run')::jsonb
 ) RETURNING *;
 
 -- name: GetIssueByNumber :one
@@ -298,6 +298,7 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
         due_date = changed.next_due_date,
         parent_issue_id = changed.next_parent_issue_id,
         project_id = changed.next_project_id,
+        work_method_run = CASE WHEN sqlc.arg('replace_work_method')::boolean THEN sqlc.narg('ready_method')::jsonb ELSE i.work_method_run END,
         stage = changed.next_stage,
         duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
         revision = i.revision + changed.did_change::integer,
@@ -434,10 +435,10 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    origin_type, origin_id, stage, properties, last_activity_at, id, requester_user_id
+    origin_type, origin_id, stage, properties, last_activity_at, id, requester_user_id, work_method_run
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('origin_type'), sqlc.narg('origin_id'), sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg('requester_user_id')
+    sqlc.narg('origin_type'), sqlc.narg('origin_id'), sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg('requester_user_id'), sqlc.narg('work_method_run')::jsonb
 ) RETURNING *;
 
 -- name: LockIssueDuplicateKey :exec

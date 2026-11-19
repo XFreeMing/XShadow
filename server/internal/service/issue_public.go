@@ -47,9 +47,20 @@ func (s *IssueService) UpdateContent(ctx context.Context, issue db.Issue, patch 
 		params.Description = pgtype.Text{String: *patch.Description, Valid: true}
 	}
 
-	updated, err := s.Queries.UpdateIssue(ctx, params)
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.Issue{}, err
+	}
+	defer tx.Rollback(ctx)
+	updated, err := UpdateIssueWithWorkMethod(ctx, s.Queries.WithTx(tx), issue.WorkspaceID, params)
 	if patch.ExpectedRevision != nil && errors.Is(err, pgx.ErrNoRows) {
 		return db.Issue{}, ErrIssueRevisionConflict
 	}
-	return db.Issue(updated), err
+	if err != nil {
+		return db.Issue{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Issue{}, err
+	}
+	return db.Issue(updated), nil
 }

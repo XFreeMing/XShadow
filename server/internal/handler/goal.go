@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -465,7 +466,7 @@ func (h *Handler) createGoal(w http.ResponseWriter, r *http.Request, inputID pgt
 	slices.Sort(issueIDs)
 	for _, id := range issueIDs {
 		issueID := parseUUID(id)
-		issue, err := qtx.LockIssueForGoalLink(ctx, db.LockIssueForGoalLinkParams{
+		issue, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
 			ID: issueID, WorkspaceID: wsUUID,
 		})
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && issue.ProjectID != issueProjects[id]) {
@@ -490,6 +491,10 @@ func (h *Handler) createGoal(w http.ResponseWriter, r *http.Request, inputID pgt
 			} else {
 				h.writeGoalWriteError(w, r, err, "link issue")
 			}
+			return
+		}
+		if _, err = service.RefreshReadyWorkMethod(ctx, qtx, issue, service.WorkMethodGoalText(goal.Title, goal.Intent, goal.AcceptanceCriteria)); err != nil {
+			h.writeGoalWriteError(w, r, err, "link issue method")
 			return
 		}
 	}
@@ -687,6 +692,12 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 		h.writeGoalWriteError(w, r, err, "update")
 		return
 	}
+	if goal.Title != locked.Title || goal.Intent != locked.Intent || goal.AcceptanceCriteria != locked.AcceptanceCriteria {
+		if err := service.RefreshGoalWorkMethods(r.Context(), tx, qtx, goal, service.WorkMethodGoalText(goal.Title, goal.Intent, goal.AcceptanceCriteria)); err != nil {
+			h.writeGoalWriteError(w, r, err, "update linked methods")
+			return
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit goal update")
 		return
@@ -725,7 +736,11 @@ func (h *Handler) DeleteGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete goal")
 		return
 	}
-	// Links go first; the tasks themselves are never touched.
+	// Re-evaluate provisional choices before their source link disappears.
+	if err := service.RefreshGoalWorkMethods(r.Context(), tx, qtx, goal, ""); err != nil {
+		h.writeGoalWriteError(w, r, err, "delete goal method links")
+		return
+	}
 	if err := qtx.DeleteGoalIssuesByGoal(r.Context(), db.DeleteGoalIssuesByGoalParams{
 		WorkspaceID: goal.WorkspaceID,
 		GoalID:      goal.ID,
@@ -855,7 +870,7 @@ func (h *Handler) LinkGoalIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to link issue")
 		return
 	}
-	lockedIssue, err := qtx.LockIssueForGoalLink(r.Context(), db.LockIssueForGoalLinkParams{
+	lockedIssue, err := qtx.LockIssueForDescriptionUpdate(r.Context(), db.LockIssueForDescriptionUpdateParams{
 		ID:          issue.ID,
 		WorkspaceID: goal.WorkspaceID,
 	})
@@ -905,6 +920,17 @@ func (h *Handler) LinkGoalIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if inserted {
+		current, err := qtx.GetGoalInWorkspace(r.Context(), db.GetGoalInWorkspaceParams{ID: goal.ID, WorkspaceID: goal.WorkspaceID})
+		if err != nil {
+			h.writeGoalWriteError(w, r, err, "read linked goal")
+			return
+		}
+		if _, err := service.RefreshReadyWorkMethod(r.Context(), qtx, lockedIssue, service.WorkMethodGoalText(current.Title, current.Intent, current.AcceptanceCriteria)); err != nil {
+			h.writeGoalWriteError(w, r, err, "link issue method")
+			return
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit issue link")
 		return
@@ -927,13 +953,49 @@ func (h *Handler) UnlinkGoalIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	removed, err := h.Queries.UnlinkGoalIssue(r.Context(), db.UnlinkGoalIssueParams{
+	ctx := r.Context()
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		h.writeGoalWriteError(w, r, err, "unlink issue")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+	// Take locks in the same order as link and goal deletion.
+	if _, err := qtx.LockGoalForLink(ctx, db.LockGoalForLinkParams{ID: goal.ID, WorkspaceID: goal.WorkspaceID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		h.writeGoalWriteError(w, r, err, "unlink issue")
+		return
+	}
+	current, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{ID: issue.ID, WorkspaceID: goal.WorkspaceID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		h.writeGoalWriteError(w, r, err, "unlink issue")
+		return
+	}
+	removed, err := qtx.UnlinkGoalIssue(r.Context(), db.UnlinkGoalIssueParams{
 		WorkspaceID: goal.WorkspaceID,
 		GoalID:      goal.ID,
 		IssueID:     issue.ID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unlink issue")
+		return
+	}
+	if removed > 0 && len(current.WorkMethodRun) > 0 {
+		if _, err := service.RefreshReadyWorkMethod(ctx, qtx, current, ""); err != nil {
+			h.writeGoalWriteError(w, r, err, "unlink issue method")
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.writeGoalWriteError(w, r, err, "unlink issue")
 		return
 	}
 	if removed > 0 {

@@ -84,12 +84,18 @@ DELETE FROM goal_issue WHERE workspace_id = $1 AND issue_id = $2;
 -- Project deletion clears the links of every goal in that project. Callers
 -- lock the goals first (LockGoalsByProjectForDelete) so a concurrent link
 -- cannot slip in between this statement and DeleteGoalsByProject.
+WITH removed AS (
 DELETE FROM goal_issue
 WHERE goal_issue.workspace_id = sqlc.arg('workspace_id')
   AND goal_id IN (
-    SELECT id FROM goal
-    WHERE goal.workspace_id = sqlc.arg('workspace_id') AND project_id = sqlc.arg('project_id')
-  );
+    SELECT goal.id FROM goal
+    WHERE goal.workspace_id = sqlc.arg('workspace_id') AND goal.project_id = sqlc.arg('project_id')
+  ) RETURNING workspace_id, issue_id
+)
+UPDATE issue i SET work_method_run=NULL, revision=revision+1, updated_at=now()
+FROM removed
+WHERE i.workspace_id=removed.workspace_id AND i.id=removed.issue_id
+  AND i.work_method_run->>'state'='ready' AND i.work_method_run->>'source'='goal';
 
 -- name: LockGoalsByProjectForDelete :many
 SELECT id FROM goal

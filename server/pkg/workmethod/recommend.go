@@ -103,8 +103,8 @@ func Recommend(methods []Template, taskTitle, taskBody, goalText string) Run {
 	ready := Run{State: "ready", History: []Event{}, Reason: "尚无明确的目标或交付物匹配，可手动选择工作方法。"}
 	// Avoid converting background examples, test logs and implementation notes
 	// embedded in a task description into a different work method.
-	sources := []struct{ label, text string }{
-		{"事项标题", taskTitle}, {"事项交付物", taskOutcome(taskBody)}, {"关联目标", goalText},
+	sources := []struct{ key, label, text string }{
+		{"title", "事项标题", taskTitle}, {"deliverable", "事项交付物", taskOutcome(taskBody)}, {"goal", "关联目标", goalText},
 	}
 	for _, source := range sources {
 		text := strings.TrimSpace(source.text)
@@ -115,6 +115,7 @@ func Recommend(methods []Template, taskTitle, taskBody, goalText string) Run {
 		case 1:
 			res := matches[0]
 			ready.Method = snapshot(res.method)
+			ready.Source = source.key
 			ready.Reason = fmt.Sprintf("%s匹配“%s”，选用「%s」。", source.label, res.word, res.method.Name)
 		default:
 			names := make([]string, 0, len(matches))

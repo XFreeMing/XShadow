@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -21,15 +22,7 @@ import (
 )
 
 func (h *Handler) workMethodCatalog(ctx context.Context, workspaceID pgtype.UUID) ([]workmethod.Template, error) {
-	raw, err := h.Queries.ListWorkMethodTemplates(ctx, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	var custom []workmethod.Template
-	if err := json.Unmarshal(raw, &custom); err != nil {
-		return nil, err
-	}
-	return append(workmethod.Builtins(), custom...), nil
+	return service.WorkMethodCatalog(ctx, h.Queries, workspaceID)
 }
 
 func (h *Handler) ListWorkMethods(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +100,7 @@ func (h *Handler) GetGoalWorkMethod(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to read work methods")
 		return
 	}
-	writeJSON(w, 200, workmethod.Recommend(methods, "", "", strings.Join([]string{g.Title, g.Intent, g.AcceptanceCriteria}, "\n")))
+	writeJSON(w, 200, workmethod.Recommend(methods, "", "", service.WorkMethodGoalText(g.Title, g.Intent, g.AcceptanceCriteria)))
 }
 
 func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods []workmethod.Template) (workmethod.Run, error) {
@@ -120,7 +113,7 @@ func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods [
 	var goalText string
 	switch {
 	case err == nil:
-		goalText = strings.Join([]string{goal.Title, goal.Intent, goal.AcceptanceCriteria}, "\n")
+		goalText = service.WorkMethodGoalText(goal.Title, goal.Intent, goal.AcceptanceCriteria)
 	case !errors.Is(err, pgx.ErrNoRows):
 		return workmethod.Run{}, err
 	}

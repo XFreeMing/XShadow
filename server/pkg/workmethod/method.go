@@ -26,6 +26,7 @@ type Step struct {
 }
 
 type Run struct {
+	Source   string    `json:"source,omitempty"`
 	Revision int       `json:"revision"`
 	State    string    `json:"state"`
 	Method   *Template `json:"method"`
@@ -145,6 +146,7 @@ func (r *Run) Apply(c Change, methods []Template, actor, at string) error {
 			return err
 		}
 		r.Method = snapshot(m)
+		r.Source = "manual"
 		r.State, r.Step, r.Reason = "working", 0, "手动选择「"+m.Name+"」"
 		event.Evidence = r.Reason
 	case "advance":

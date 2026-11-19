@@ -257,10 +257,6 @@ func assertIssueStatusStillActive(ctx context.Context, qtx *db.Queries, workspac
 // lock (see assertIssueStatusStillActive). Request writes also carry trusted
 // wakeup actor identity in transaction-local settings, including built-in targets.
 func (h *Handler) runWithIssueStatusGuard(ctx context.Context, workspaceID pgtype.UUID, statusKey string, fn func(q *db.Queries) error) error {
-	_, hasActor := ctx.Value(wakeupActorKey{}).(wakeupActor)
-	if !hasActor && (statusKey == "" || issuestatus.IsBuiltIn(statusKey)) {
-		return fn(h.Queries)
-	}
 	tx, err := h.beginWakeupWrite(ctx)
 	if err != nil {
 		return err
@@ -288,7 +284,7 @@ func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pg
 			}
 		}
 		var innerErr error
-		issue, cancelledWakeups, innerErr = updateIssueStoppingWakeups(ctx, q, params)
+		issue, cancelledWakeups, innerErr = updateIssueStoppingWakeups(ctx, q, workspaceID, params)
 		return innerErr
 	})
 	if err != nil {
@@ -302,8 +298,8 @@ func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pg
 // into a done/closed status, ends its wakeups with the same queries. Callers
 // run it inside the status write's transaction and broadcast the returned runs
 // after commit.
-func updateIssueStoppingWakeups(ctx context.Context, q *db.Queries, params db.UpdateIssueParams) (db.Issue, []db.AgentTaskQueue, error) {
-	issue, err := q.UpdateIssue(ctx, params)
+func updateIssueStoppingWakeups(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, params db.UpdateIssueParams) (db.Issue, []db.AgentTaskQueue, error) {
+	issue, err := service.UpdateIssueWithWorkMethod(ctx, q, workspaceID, params)
 	if err != nil || !params.Status.Valid {
 		return db.Issue(issue), nil, err
 	}
@@ -3972,7 +3968,7 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 	}
 	refreshUntouchedNullableIssueParams(&params, current, rawFields, workflowAssignee)
 
-	issue, cancelledWakeups, err := updateIssueStoppingWakeups(ctx, qtx, params)
+	issue, cancelledWakeups, err := updateIssueStoppingWakeups(ctx, qtx, current.WorkspaceID, params)
 	if err != nil {
 		return db.Issue{}, current, false, fmt.Errorf("update locked issue: %w", err)
 	}

@@ -325,6 +325,7 @@ vi.mock("../../projects/components/project-picker", () => ({
 const mockApiObj = vi.hoisted(() => ({
   getBaseUrl: () => "",
   getIssue: vi.fn(),
+  getIssueWorkMethod: vi.fn().mockResolvedValue({ revision: 0, state: "ready", method: null, step: 0, reason: "", history: [] }),
   listTimeline: vi.fn().mockResolvedValue([]),
   listComments: vi.fn().mockResolvedValue([]),
   createComment: vi.fn(),
@@ -363,7 +364,8 @@ const mockApiObj = vi.hoisted(() => ({
   listPins: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("@multica/core/api", () => ({
+vi.mock("@multica/core/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/api")>()),
   api: mockApiObj,
   getApi: () => mockApiObj,
   setApiInstance: vi.fn(),

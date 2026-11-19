@@ -415,6 +415,10 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		return IssueCreateResult{}, fmt.Errorf("next top position: %w", err)
 	}
 
+	readyMethod, err := readyWorkMethodJSON(ctx, qtx, p.WorkspaceID, p.Status, p.Title, p.Description.String, "")
+	if err != nil {
+		return IssueCreateResult{}, fmt.Errorf("initialize work method: %w", err)
+	}
 	var issue db.Issue
 	var assignedTask db.AgentTaskQueue
 	if p.OriginType.Valid {
@@ -448,6 +452,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 			OriginID:        p.OriginID,
 			RequesterUserID: requester,
 			Stage:           p.Stage,
+			WorkMethodRun:   readyMethod,
 			Properties:      properties,
 		})
 	} else {
@@ -469,6 +474,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 			Number:        issueNumber,
 			ProjectID:     projectID,
 			Stage:         p.Stage,
+			WorkMethodRun: readyMethod,
 			Properties:    properties,
 		})
 	}

@@ -310,10 +310,10 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    stage, properties, last_activity_at, id
+    stage, properties, last_activity_at, id, work_method_run
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, COALESCE($17::jsonb, '{}'::jsonb), now(), COALESCE($18::uuid, gen_random_uuid())
+    $16, COALESCE($17::jsonb, '{}'::jsonb), now(), COALESCE($18::uuid, gen_random_uuid()), $19::jsonb
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run
 `
 
@@ -336,6 +336,7 @@ type CreateIssueParams struct {
 	Stage         pgtype.Int4 `json:"stage"`
 	Properties    []byte      `json:"properties"`
 	ID            pgtype.UUID `json:"id"`
+	WorkMethodRun []byte      `json:"work_method_run"`
 }
 
 func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue, error) {
@@ -358,6 +359,7 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		arg.Stage,
 		arg.Properties,
 		arg.ID,
+		arg.WorkMethodRun,
 	)
 	var i Issue
 	err := row.Scan(
@@ -402,10 +404,10 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    origin_type, origin_id, stage, properties, last_activity_at, id, requester_user_id
+    origin_type, origin_id, stage, properties, last_activity_at, id, requester_user_id, work_method_run
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, $18, COALESCE($19::jsonb, '{}'::jsonb), now(), COALESCE($20::uuid, gen_random_uuid()), $21
+    $16, $17, $18, COALESCE($19::jsonb, '{}'::jsonb), now(), COALESCE($20::uuid, gen_random_uuid()), $21, $22::jsonb
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run
 `
 
@@ -431,6 +433,7 @@ type CreateIssueWithOriginParams struct {
 	Properties      []byte      `json:"properties"`
 	ID              pgtype.UUID `json:"id"`
 	RequesterUserID pgtype.UUID `json:"requester_user_id"`
+	WorkMethodRun   []byte      `json:"work_method_run"`
 }
 
 func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWithOriginParams) (Issue, error) {
@@ -456,6 +459,7 @@ func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWith
 		arg.Properties,
 		arg.ID,
 		arg.RequesterUserID,
+		arg.WorkMethodRun,
 	)
 	var i Issue
 	err := row.Scan(
@@ -2295,6 +2299,7 @@ WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', 
         due_date = changed.next_due_date,
         parent_issue_id = changed.next_parent_issue_id,
         project_id = changed.next_project_id,
+        work_method_run = CASE WHEN $17::boolean THEN $18::jsonb ELSE i.work_method_run END,
         stage = changed.next_stage,
         duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
         revision = i.revision + changed.did_change::integer,
@@ -2351,6 +2356,8 @@ type UpdateIssueParams struct {
 	Stage              pgtype.Int4   `json:"stage"`
 	DuplicateOfIssueID pgtype.UUID   `json:"duplicate_of_issue_id"`
 	ExpectedRevision   pgtype.Int8   `json:"expected_revision"`
+	ReplaceWorkMethod  bool          `json:"replace_work_method"`
+	ReadyMethod        []byte        `json:"ready_method"`
 }
 
 type UpdateIssueRow struct {
@@ -2406,6 +2413,8 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Updat
 		arg.Stage,
 		arg.DuplicateOfIssueID,
 		arg.ExpectedRevision,
+		arg.ReplaceWorkMethod,
+		arg.ReadyMethod,
 	)
 	var i UpdateIssueRow
 	err := row.Scan(

@@ -194,12 +194,18 @@ func (q *Queries) DeleteGoalIssuesByIssue(ctx context.Context, arg DeleteGoalIss
 }
 
 const deleteGoalIssuesByProject = `-- name: DeleteGoalIssuesByProject :exec
+WITH removed AS (
 DELETE FROM goal_issue
 WHERE goal_issue.workspace_id = $1
   AND goal_id IN (
-    SELECT id FROM goal
-    WHERE goal.workspace_id = $1 AND project_id = $2
-  )
+    SELECT goal.id FROM goal
+    WHERE goal.workspace_id = $1 AND goal.project_id = $2
+  ) RETURNING workspace_id, issue_id
+)
+UPDATE issue i SET work_method_run=NULL, revision=revision+1, updated_at=now()
+FROM removed
+WHERE i.workspace_id=removed.workspace_id AND i.id=removed.issue_id
+  AND i.work_method_run->>'state'='ready' AND i.work_method_run->>'source'='goal'
 `
 
 type DeleteGoalIssuesByProjectParams struct {
