@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { adjudicate, decisionKey, extractRecords, MIN_FAILED_ROUNDS } from "../agent-team/skills/rd-acceptance/scripts/review-verdict.mjs";
+import { adjudicate, decisionKey, decisionKeyFromTitle, extractRecords, MIN_FAILED_ROUNDS } from "../agent-team/skills/rd-acceptance/scripts/review-verdict.mjs";
+import { validateMemberTodo, visibleViolations } from "../agent-team/skills/rd-acceptance/scripts/member-todo.mjs";
 import { skillFiles } from "./agent-team-template.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -103,6 +104,15 @@ function exhaustedBody(attemptId = "a3", overrides = {}) {
       { plan: "升级上游依赖", result: "仍失败" },
       { plan: "隔离不可用服务", result: "仍失败" },
     ],
+    decision_brief: {
+      subject: "PDF 引用跳转",
+      problem: "读者能看到正文，但点 PDF 里的引用打不开原文，无法核对来源。",
+      why_you: "本期先发还是等引用修好再发，只有你能定这个发布取舍。",
+      options: [
+        { label: "本期先发，标注引用暂不可跳转", consequence: "读者先看到正文；引用暂时点不开，发布说明会写明限制。", example: "回复“先发”" },
+        { label: "等引用能跳转后再发", consequence: "发布时间推迟，直到 PDF 引用可以打开原文。", example: "回复“等修好”" },
+      ],
+    },
     ...overrides,
   };
 }
@@ -426,7 +436,7 @@ test("a late no-plan declaration outside review wakes the tester to recompute", 
   assert.equal(inReview.wake_tester, null);
 });
 
-test("three real failures without a plan escalate exactly one fixed-key decision", () => {
+test("three real failures without a plan escalate exactly one readable decision", () => {
   const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
   const first = run(comments, { candidate: "sha-a3" });
   assert.equal(first.outcome, "escalate");
@@ -435,11 +445,28 @@ test("three real failures without a plan escalate exactly one fixed-key decision
   assert.equal(first.decision.assignee_user_id, "user-1");
   assert.equal(first.decision.metadata_key, "acceptance_decision_key");
   assert.equal(first.decision.key, decisionKey(issue, "standard-v1"));
-  assert.match(first.decision.title, new RegExp(first.decision.key));
-  assert.ok(first.decision.description.startsWith(`decision_key: ${first.decision.key}`));
-  assert.ok(first.decision.description.includes(`"decision_key":"${first.decision.key}"`));
+  // The visible title names the concrete capability and the decision, never the key.
+  assert.equal(first.decision.title, "「PDF 引用跳转」需要你做一个取舍（DEV-7）");
+  assert.doesNotMatch(first.decision.title, /acc-[0-9a-f]{16}|标准|候选|缺口键|SHA|这项功能/i);
+  // The key still travels for search and for the create-then-metadata retry.
+  assert.match(first.decision.description, new RegExp(`^decision_key: ${first.decision.key}$`, "m"));
+  assert.match(first.decision.description, new RegExp(`"decision_key":"${first.decision.key}"`));
+  assert.equal(first.decision.todo_key, first.decision.key);
+  assert.equal(first.decision.metadata.acceptance_decision_key, first.decision.key);
   assert.match(first.status_command, /issue status DEV-7 blocked/);
-  for (const needle of ["失败标准", "第 1 轮", "第 2 轮", "第 3 轮", "尝试过的方案", "待决定事项", "[DEV-7](mention://issue/issue-uuid)"]) {
+  const screen = first.decision.first_screen;
+  for (const needle of ["读者能看到正文，但点 PDF 里的引用打不开原文", "本期先发", "等引用能跳转后再发",
+    "发布说明会写明限制", "怎样算完成", "标记为完成", "只回复不会自动接续", "之后：", "原事项会自动继续"]) {
+    assert.ok(screen.includes(needle), `decision first screen is missing ${needle}`);
+  }
+  assert.doesNotMatch(screen, /acc-[0-9a-f]{16}|标准版本|候选|attempt|缺口键|SHA|失败标准|这项功能|需要你决定下一步/i);
+  // The completion promise is backed by a real resume rule waking the lead.
+  assert.equal(first.decision.resume.signal, "done");
+  assert.equal(first.decision.resume.agent_id, "agent-dev");
+  assert.match(first.decision.resume.command_template, /issue wakeup create DEV-7 --until-issue <新决策事项> --until-issue-state done/);
+  assert.match(first.decision.resume.command_template, /--agent-id agent-dev/);
+  for (const needle of ["失败标准", "第 1 轮", "第 2 轮", "第 3 轮", "尝试过的方案",
+    "[DEV-7](mention://issue/issue-uuid)", "standard-v1", "sha-a3"]) {
     assert.ok(first.decision.description.includes(needle), `decision body is missing ${needle}`);
   }
 
@@ -469,6 +496,43 @@ test("three real failures without a plan escalate exactly one fixed-key decision
   assert.equal(third.decision.existing_identifier, "DEV-88");
 });
 
+test("an escalation without a specific member-facing brief goes back to the team", () => {
+  const valid = exhaustedBody().decision_brief;
+  const cases = [
+    ["missing", Symbol("missing")],
+    ["generic subject", { ...valid, subject: "这项功能" }],
+    ["engineering words in the impact", { ...valid, problem: "读者点 PDF 引用打不开，候选 sha a1b2c3d4e5f6 仍未通过。" }],
+    ["only one option", { ...valid, options: [valid.options[0]] }],
+    ["a preset default", { ...valid, options: [{ ...valid.options[0], recommended: true }, valid.options[1]] }],
+  ];
+  for (const [label, brief] of cases) {
+    const body = exhaustedBody("a3", brief === undefined || typeof brief === "symbol" ? {} : { decision_brief: brief });
+    if (typeof brief === "symbol") delete body.decision_brief;
+    const result = run([...commentsOf(...threeRounds()), comment(body)], { candidate: "sha-a3" });
+    assert.equal(result.outcome, "rework", label);
+    assert.equal(result.decision, null, label);
+    assert.match(result.next_action, /decision_brief/, label);
+    assert.match(result.next_action, /不要创建决策事项/, label);
+    assert.match(result.status_command, /issue status DEV-7 in_progress/, label);
+  }
+});
+
+test("a legacy same-key decision is reused even without the new brief", () => {
+  const body = exhaustedBody("a3");
+  delete body.decision_brief;
+  const key = decisionKey(issue, "standard-v1");
+  const existing = {
+    issues: [{
+      id: "legacy-uuid", identifier: "DEV-70", status: "blocked",
+      metadata: { acceptance_decision_key: key },
+    }],
+  };
+  const result = run([...commentsOf(...threeRounds()), comment(body)], { candidate: "sha-a3", existingDecisions: [existing] });
+  assert.equal(result.outcome, "reuse_decision");
+  assert.equal(result.decision.existing_identifier, "DEV-70");
+  assert.equal(result.decision.resume.signal, "done");
+});
+
 test("metadata and search returning the same decision never duplicate it", () => {
   const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
   const key = run(comments, { candidate: "sha-a3" }).decision.key;
@@ -486,6 +550,77 @@ test("metadata and search returning the same decision never duplicate it", () =>
   assert.equal(result.decision.existing_identifier, "DEV-90");
   assert.equal(result.decision.existing_status, "in_progress");
   assert.deepEqual(result.decision.duplicates, []);
+});
+
+test("the migrated title stays readable while the old fixed title remains searchable", () => {
+  const key = "acc-0123456789abcdef";
+  // Historical decisions still resolve their key from the old title.
+  assert.equal(decisionKeyFromTitle(`验收决策 ${key}：DEV-7 需要决定下一步`), key);
+  assert.equal(decisionKeyFromTitle(`验收决策 ${key}`), key);
+  // The new readable title carries no key and never invents one from prose.
+  assert.equal(decisionKeyFromTitle("「交付一个可体验功能」三次没通过验收，需要你决定下一步（DEV-7）"), null);
+  assert.equal(decisionKeyFromTitle("「C9 回执补验」三次没通过验收，需要你决定下一步（DEV-7）"), null);
+});
+
+test("a readable decision title is not an identity, while its body marker still is", () => {
+  const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
+  const draft = run(comments, { candidate: "sha-a3" }).decision;
+  assert.deepEqual(visibleViolations(draft.title), []);
+  assert.deepEqual(visibleViolations(draft.first_screen), []);
+  assert.deepEqual(validateMemberTodo({
+    kind: "decision", todo_key: draft.todo_key, title: draft.title, description: draft.description,
+  }), []);
+
+  // A different decision with the same readable title must never be merged in.
+  const otherKey = "acc-ffffffffffffffff";
+  const sameTitleOtherKey = {
+    issues: [{
+      id: "other-uuid", identifier: "DEV-95", title: draft.title, status: "in_progress",
+      metadata: { acceptance_decision_key: otherKey },
+      description: `<!-- multica-acceptance-decision ${JSON.stringify({ decision_key: otherKey })} -->`,
+    }],
+  };
+  const other = run(comments, { candidate: "sha-a3", existingDecisions: [sameTitleOtherKey] });
+  assert.equal(other.outcome, "escalate");
+  assert.equal(other.decision.action, "create");
+
+  // A row that only shares the new readable title carries no key, so it is not
+  // mistaken for this decision; the body marker of a real match still reuses it.
+  const titleOnly = {
+    issues: [{ id: "title-only", identifier: "DEV-96", title: draft.title, status: "in_progress" }],
+  };
+  assert.equal(run(comments, { candidate: "sha-a3", existingDecisions: [titleOnly] }).decision.action, "create");
+  const bodyMarker = {
+    issues: [{
+      id: "body-only", identifier: "DEV-97", status: "in_progress",
+      description: `需要决定\n<!-- multica-acceptance-decision ${JSON.stringify({ decision_key: draft.key })} -->`,
+    }],
+  };
+  const reused = run(comments, { candidate: "sha-a3", existingDecisions: [bodyMarker] });
+  assert.equal(reused.outcome, "reuse_decision");
+  assert.equal(reused.decision.existing_identifier, "DEV-97");
+});
+
+test("different sources and standard versions keep distinct decision identities", () => {
+  const baseIssue = { ...issue, title: "同样的故事标题" };
+  const a = decisionKey(baseIssue, "standard-v1");
+  const b = decisionKey(baseIssue, "standard-v2");
+  const c = decisionKey({ ...baseIssue, id: "issue-uuid-2", identifier: "DEV-8" }, "standard-v1");
+  assert.notEqual(a, b);
+  assert.notEqual(a, c);
+  // A decision for another standard version is not reused for this one.
+  const comments = [...commentsOf(...threeRounds()), comment(exhaustedBody("a3"))];
+  const otherStandard = {
+    issues: [{
+      id: "other-standard", identifier: "DEV-98", status: "blocked",
+      metadata: { acceptance_decision_key: b },
+      description: `<!-- multica-acceptance-decision ${JSON.stringify({ decision_key: b })} -->`,
+    }],
+  };
+  const result = run(comments, { candidate: "sha-a3", existingDecisions: [otherStandard] });
+  assert.equal(result.outcome, "escalate");
+  assert.equal(result.decision.key, a);
+  assert.equal(result.decision.action, "create");
 });
 
 test("a title-only search hit of an already closed decision is reused without creating another", () => {
@@ -584,10 +719,19 @@ test("the CLI writes a ready-to-file decision body containing its key", () => {
     assert.equal(result.outcome, "escalate");
     const title = readFileSync(join(dir, "decision/title.txt"), "utf8");
     const body = readFileSync(join(dir, "decision/body.md"), "utf8");
-    assert.match(title, new RegExp(result.decision.key));
-    assert.match(body, new RegExp(`^decision_key: ${result.decision.key}`));
+    // The key stays out of the title but remains searchable in the appendix
+    // and the invisible marker, so the create-then-metadata retry still works.
+    assert.doesNotMatch(title, new RegExp(result.decision.key));
+    assert.match(title, /「PDF 引用跳转」需要你做一个取舍/);
+    assert.match(body, /本期先发/);
+    assert.match(body, new RegExp(`^decision_key: ${result.decision.key}$`, "m"));
     assert.match(body, /\[DEV-7\]\(mention:\/\/issue\/issue-uuid\)/);
     assert.match(body, /第 3 轮/);
+    assert.match(body, /multica-acceptance-decision/);
+    const titles = readFileSync(join(dir, "decision/titles.txt"), "utf8").trim().split("\n");
+    assert.equal(titles[0], result.decision.title);
+    assert.equal(titles[1], `${result.decision.title}（第 2 项）`);
+    assert.deepEqual(titles, result.decision.title_candidates);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -652,6 +796,16 @@ test("the review entry locates the tool under every provider's skill directory",
   assert.match(entry, /独立失败裁定/);
   assert.match(entry, /实际唤醒验收自动化工程师/);
   assert.match(entry, /固定标题/);
+  assert.match(entry, /decision_brief/);
+  assert.match(entry, /例如「PDF 引用跳转」/);
+  assert.match(entry, /until-issue-state done/);
+  assert.match(entry, /不再承担身份/);
+  assert.match(entry, /titles\.txt/);
+  assert.match(entry, /Active duplicate issue exists/);
+  assert.match(entry, /（第 2 项）/);
+  assert.match(entry, /create-result\.txt/);
+  assert.match(entry, /同一键的并发重试/);
+  assert.match(entry, /不得声称已派发/);
   assert.match(entry, /issue get/);
 });
 

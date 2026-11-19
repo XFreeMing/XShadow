@@ -1,0 +1,161 @@
+// Regressions for the shared member-todo generator and its distributed copies.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { skillFiles } from "./agent-team-template.mjs";
+import {
+  buildMemberTodo, duplicateIdentifier, hasDecisionKey, sampleTodoInputs, sampleTodos,
+  titleCandidates, validateTodoInput, validateMemberTodo,
+} from "../agent-team/skills/rd-acceptance/scripts/member-todo.mjs";
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const ACCEPTANCE_TOOL = join(ROOT, "agent-team/skills/rd-acceptance/scripts/member-todo.mjs");
+const PM_TOOL = join(ROOT, "agent-team/skills/rd-project-management/scripts/member-todo.mjs");
+
+function outsideRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "member-todo-"));
+  return dir;
+}
+
+function runTool(tool, args, cwd) {
+  return execFileSync(process.execPath, [tool, ...args], { cwd, encoding: "utf8", stdio: "pipe" });
+}
+
+test("the generator produces all four kinds and validates its own output", () => {
+  const samples = sampleTodos();
+  assert.deepEqual(samples.map(({ todo }) => todo.kind), ["material", "authorization", "choice", "decision"]);
+  for (const { input, todo } of samples) {
+    assert.deepEqual(validateTodoInput(input), []);
+    assert.deepEqual(validateMemberTodo(todo), []);
+    assert.ok(todo.first_screen.includes("**你需要做一件事：**"));
+    assert.ok(todo.description.includes("## 技术附录（团队内部，无需阅读）"));
+    assert.ok(todo.description.includes("multica-member-todo"));
+  }
+  const decision = samples[3].todo;
+  assert.equal(decision.title, "「PDF 引用跳转」需要你做一个取舍（DEV-58）");
+  assert.match(decision.first_screen, /点里面的引用打不开原文/);
+  assert.match(decision.first_screen, /本期先发/);
+  assert.match(decision.first_screen, /等引用能跳转后再发/);
+  assert.match(decision.first_screen, /只回复不会自动接续/);
+  assert.doesNotMatch(decision.first_screen, /acc-[0-9a-f]{16}|标准版本|候选|C1|DEV-58/);
+});
+
+test("the shipped skill file runs --sample and --check outside the repository", () => {
+  const dir = outsideRepo();
+  try {
+    for (const tool of [ACCEPTANCE_TOOL, PM_TOOL]) {
+      const sample = JSON.parse(runTool(tool, ["--sample"], dir));
+      assert.equal(sample.samples.length, 4);
+      const inputPath = join(dir, "input.json");
+      writeFileSync(inputPath, JSON.stringify(sample.samples[0].input));
+      assert.deepEqual(JSON.parse(runTool(tool, ["--check", "--input", inputPath], dir)), { ok: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the installed copies stay identical so one precheck serves both skills", () => {
+  assert.equal(readFileSync(ACCEPTANCE_TOOL, "utf8"), readFileSync(PM_TOOL, "utf8"));
+});
+
+test("both skill bundles ship the runnable generator and the member format guide", () => {
+  const acceptance = skillFiles(join(ROOT, "agent-team/skills/rd-acceptance")).map((file) => file.path);
+  const pm = skillFiles(join(ROOT, "agent-team/skills/rd-project-management")).map((file) => file.path);
+  assert.ok(acceptance.includes("scripts/member-todo.mjs"));
+  assert.ok(pm.includes("scripts/member-todo.mjs"));
+  assert.ok(pm.includes("references/member-todo.md"));
+  const guide = readFileSync(join(ROOT, "agent-team/skills/rd-project-management/references/member-todo.md"), "utf8");
+  for (const needle of ["scripts/member-todo.mjs --check", "成员待办自身", "同键直接复用", "（第 2 项）",
+    "skill list --output json", "skill get \"$SKILL_ID\" --with-content", "只回复不会自动接续"]) {
+    assert.ok(guide.includes(needle), `member format guide is missing ${needle}`);
+  }
+  const common = readFileSync(join(ROOT, "agent-team/common.md"), "utf8");
+  assert.match(common, /已安装 `rd-project-management` 技能里的 `scripts\/member-todo\.mjs`/);
+});
+
+test("an invalid check exits 2 and names the concrete gap", () => {
+  const dir = outsideRepo();
+  try {
+    const input = sampleTodoInputs()[3];
+    input.options = [input.options[0]];
+    const inputPath = join(dir, "bad.json");
+    writeFileSync(inputPath, JSON.stringify(input));
+    let failed = null;
+    try {
+      runTool(PM_TOOL, ["--check", "--input", inputPath], dir);
+    } catch (error) {
+      failed = error;
+    }
+    assert.equal(failed?.status, 2);
+    assert.match(String(failed?.stdout), /至少两个真实可选项/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("title candidates are deterministic and stay within the title limit", () => {
+  const base = "「PDF 引用跳转」需要你做一个取舍（DEV-7）";
+  const first = titleCandidates(base);
+  assert.equal(first[0], base);
+  assert.equal(first[1], `${base}（第 2 项）`);
+  assert.deepEqual(first, titleCandidates(base));
+  for (const title of first) assert.ok([...title].length <= 60, title);
+  const long = titleCandidates("这是一个很长的标题".repeat(10));
+  assert.ok([...long[0]].length <= 60);
+  assert.ok(long[1].endsWith("（第 2 项）"));
+  assert.ok([...long[1]].length <= 60);
+});
+
+test("a duplicate title is the same request only when the body key matches", () => {
+  const key = "acc-0123456789abcdef";
+  const other = "acc-fedcba9876543210";
+  const withAppendix = `正文\n---\n## 技术附录（团队内部，无需阅读）\n\ndecision_key: ${key}`;
+  const withMarker = `正文\n<!-- multica-acceptance-decision {"decision_key":"${key}"} -->`;
+  assert.equal(hasDecisionKey(withAppendix, key), true);
+  assert.equal(hasDecisionKey(withMarker, key), true);
+  assert.equal(hasDecisionKey(withAppendix, other), false);
+  assert.equal(hasDecisionKey("正文\n<!-- multica-member-todo {} -->", key), false);
+  assert.equal(
+    duplicateIdentifier("Active duplicate issue exists: DEV-42 「PDF 引用跳转」需要你做一个取舍（status: todo). Set allow_duplicate=true"),
+    "DEV-42",
+  );
+  assert.equal(duplicateIdentifier("some other error"), null);
+});
+
+test("a completion signal that the platform will not deliver is rejected", () => {
+  const build = (overrides) => validateTodoInput({ ...sampleTodoInputs()[2], ...overrides });
+  assert.ok(build({ next: "收到回复后，原事项会自动继续处理。" }).some((e) => /next/.test(e)));
+  assert.ok(build({ completion_signal: "manager", next: "项目经理会查看回复。" }).some((e) => /next/.test(e)));
+  assert.deepEqual(build({ next: "项目经理会在本待办收到你的回复，并接回原事项继续处理。" }), []);
+  const done = sampleTodoInputs()[0];
+  assert.ok(validateTodoInput({ ...done, done: "在本事项回复文件", next: "本事项完成后，原事项会自动继续处理。" }).some((e) => /done/.test(e)));
+});
+
+test("internal evidence, placeholders and engineering markers stay out of the first screen", () => {
+  const base = sampleTodoInputs()[2];
+  for (const [field, value, needle] of [
+    ["title", "订单列表先显示金额还是状态 acc-0123456789abcdef", "决策键"],
+    ["problem", "请复跑脚本并附上日志，确认金额对得上。", "内部证据"],
+    ["title", "订单列表先显示金额还是状态（待定）", "占位"],
+    ["action", "在 <入口> 里选择。", "占位模板"],
+  ]) {
+    const errors = validateTodoInput({ ...base, [field]: value });
+    assert.ok(errors.some((e) => e.includes(needle)), `${field}: ${errors.join(" | ")}`);
+  }
+  assert.ok(validateTodoInput({ ...base, options: [{ ...base.options[0], default: true }, base.options[1]] })
+    .some((e) => /默认选择/.test(e)));
+});
+
+test("the generated todo never puts the decision key or a revision in the visible part", () => {
+  const todo = buildMemberTodo(sampleTodoInputs()[3]);
+  const visible = todo.description.split("\n---\n")[0];
+  assert.doesNotMatch(visible, /acc-[0-9a-f]{16}|\b[0-9a-f]{7,40}\b|standard-v1|C1|候选/);
+  assert.match(todo.description, /^decision_key: acc-0123456789abcdef$/m);
+  assert.equal(todo.metadata.acceptance_decision_key, "acc-0123456789abcdef");
+  assert.deepEqual(todo.metadata.member_todo_key ? todo.title_candidates[0] : null, todo.title);
+});

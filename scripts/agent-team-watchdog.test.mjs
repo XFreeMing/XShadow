@@ -548,6 +548,20 @@ test("the dispatch instruction carries the real handoff and human-input callback
   assert.match(instruction, /issue list --assignee <接收人>/);
   assert.match(instruction, /复用/);
   assert.match(instruction, /不再新建第二条/);
+  // A member todo must be readable on its first screen, with machine markers
+  // kept in the appendix, and its completion wording must match the real rule.
+  assert.match(instruction, /multica-member-todo/);
+  assert.match(instruction, /技术附录/);
+  assert.match(instruction, /scripts\/member-todo\.mjs --check/);
+  assert.match(instruction, /skill list --output json/);
+  assert.match(instruction, /skill get <UUID> --with-content/);
+  assert.match(instruction, /skill get 不接受名称/);
+  assert.match(instruction, /标记完成/);
+  assert.match(instruction, /在成员待办自身登记 comment\.created/);
+  assert.match(instruction, /issue wakeup create <成员待办> --event comment\.created/);
+  assert.match(instruction, /不能只写“经理会查看”/);
+  assert.match(instruction, /只在确实|只把确实只有本人能提供/);
+  assert.doesNotMatch(instruction, /正文写清来源/);
   // The marker round-trips through the rule instruction parser.
   assert.equal(ruleCycleKey(instruction, "10000000-0000-0000-0000-000000000001"), "10000000-0000-0000-0000-000000000001#3");
 

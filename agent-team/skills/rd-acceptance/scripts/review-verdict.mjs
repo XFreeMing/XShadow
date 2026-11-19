@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildMemberTodo, titleCandidates, visibleViolations } from "./member-todo.mjs";
 
 export const RECORD_MARKER = "multica-acceptance";
 export const DECISION_MARKER = "multica-acceptance-decision";
@@ -361,7 +362,10 @@ export function decisionKey(issue, standardVersion) {
   return `acc-${digest}`;
 }
 
-function decisionKeyFromTitle(title) {
+export function decisionKeyFromTitle(title) {
+  // Historical decisions use 「验收决策 <key> …」. New decisions keep the key
+  // out of the visible title, so their body marker and metadata are the
+  // identity; this legacy pattern stays readable for migration and search.
   const match = String(title ?? "").match(/验收决策\s+(acc-[0-9a-f]{16})/);
   return match ? match[1] : null;
 }
@@ -438,13 +442,62 @@ function formatCriteria(coverage) {
     .join("\n");
 }
 
-function buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId }) {
+// The person receiving the decision must learn which capability is broken and
+// what each option actually delivers. The lead supplies that as
+// `decision_brief`; the tool never invents a generic "this feature" fallback.
+const GENERIC_SUBJECTS = new Set(["这项功能", "这个功能", "功能", "该功能", "此功能", "这个故事", "这个任务", "该事项"]);
+const INTERNAL_EVIDENCE = /日志|脚本|复跑|测试报告|回执|命令行|运行测试|执行命令|构建产物/;
+
+function normalizeDecisionBrief(brief) {
+  if (!brief || typeof brief !== "object" || Array.isArray(brief)) return null;
+  const subject = text(brief.subject) ? brief.subject.trim() : null;
+  const problem = text(brief.problem) ? brief.problem.trim() : null;
+  const why = text(brief.why_you) ? brief.why_you.trim() : null;
+  const action = text(brief.action) ? brief.action.trim() : null;
+  const title = text(brief.title) ? brief.title.trim() : null;
+  const rows = Array.isArray(brief.options) ? brief.options : [];
+  if (!subject || GENERIC_SUBJECTS.has(subject) || rows.length < 2) return null;
+  if (!problem || INTERNAL_EVIDENCE.test(problem)) return null;
+  for (const value of [subject, problem, why, action, title]) {
+    if (value && visibleViolations(value).length > 0) return null;
+  }
+  const options = [];
+  for (const row of rows) {
+    const label = text(row?.label) ? row.label.trim() : null;
+    const consequence = text(row?.consequence ?? row?.effect) ? String(row.consequence ?? row.effect).trim() : null;
+    if (!label || !consequence || row?.default !== undefined || row?.recommended !== undefined) return null;
+    if (INTERNAL_EVIDENCE.test(label) || INTERNAL_EVIDENCE.test(consequence)) return null;
+    const example = text(row?.example) ? row.example.trim() : null;
+    for (const value of [label, consequence, example]) {
+      if (value && visibleViolations(value).length > 0) return null;
+    }
+    options.push({ label, consequence, ...(example ? { example } : {}) });
+  }
+  return {
+    subject, problem, options,
+    ...(why ? { why_you: why } : {}),
+    ...(action ? { action } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
+function decisionResume(issue, exhaustion) {
+  return {
+    signal: "done",
+    agent_id: exhaustion.lead_agent_id,
+    agent_name: exhaustion.lead,
+    instruction: "成员已在决策事项完成选择：读取该事项的最新结论和所选选项，按选择继续、缩小范围或停止原事项，并在原事项记录处理结果。",
+    command_template: `"$MULTICA_CLI_PATH" issue wakeup create ${issue.identifier} --until-issue <新决策事项> --until-issue-state done --mode once --agent-id ${exhaustion.lead_agent_id} --instruction-file .acceptance/decision-resume-instruction.md`,
+  };
+}
+
+function buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId, brief }) {
   const key = decisionKey(issue, standardVersion);
   const backlink = `[${issue.identifier}](mention://issue/${issue.id})`;
   const evidence = counted
     .map((row, index) => {
       const failed = formatCriteria(row.coverage);
-      return `### 第 ${index + 1} 轮（尝试 ${row.attempt.attempt_id}，候选 ${row.attempt.candidate_version}，证据评论 ${row.attempt.comment_id}）\n${failed}`;
+      return `第 ${index + 1} 轮（尝试 ${row.attempt.attempt_id}，候选 ${row.attempt.candidate_version}，证据评论 ${row.attempt.comment_id}）\n${failed}`;
     })
     .join("\n\n");
   const plans = exhaustion.plans
@@ -452,19 +505,51 @@ function buildDecision({ issue, standardVersion, candidate, rounds, counted, exh
       const label = planText(plan);
       if (!label) return null;
       const result = typeof plan === "object" && plan ? plan.result ?? plan.outcome : null;
-      return `- 方案 ${index + 1}：${label}${result ? `（结果：${result}）` : ""}`;
+      return `方案 ${index + 1}：${label}${result ? `（结果：${result}）` : ""}`;
     })
     .filter(Boolean)
     .join("\n");
+  const todo = buildMemberTodo({
+    kind: "decision",
+    title: brief.title ?? `「${brief.subject}」需要你做一个取舍（${issue.identifier}）`,
+    recipient: { id: ownerUserId },
+    source: { identifier: issue.identifier, id: issue.id },
+    request: "acceptance-decision",
+    completion_signal: "done",
+    decision_key: key,
+    problem: brief.problem,
+    why_you: brief.why_you ?? "这一步怎么取舍，只有你能决定。",
+    action: brief.action ?? `选一个接下来怎么处理「${brief.subject}」的做法。`,
+    where: "直接在本事项回复你的选择。",
+    options: brief.options,
+    submit: "回复选项名称或序号。",
+    technical: {
+      原事项: backlink,
+      当前候选: candidate,
+      验收标准版本: standardVersion,
+      累计失败: `${rounds} 个不同候选`,
+      失败标准: evidence,
+      尝试过的方案: plans || "（无）",
+      团队结论: `${exhaustion.lead}：${exhaustion.reason}`,
+    },
+    markers: [
+      `<!-- ${DECISION_MARKER} ${JSON.stringify({ decision_key: key, standard_version: standardVersion, candidate, original_issue: issue.identifier })} -->`,
+    ],
+  });
   return {
     key,
+    todo_key: todo.todo_key,
     metadata_key: "acceptance_decision_key",
+    metadata: todo.metadata,
     action: "create",
     existing_identifier: null,
     duplicates: [],
     assignee_user_id: ownerUserId,
-    title: `验收决策 ${key}：${issue.identifier} 需要决定下一步`,
-    description: `decision_key: ${key}\n\n## 需要你决定\n\n原事项：${backlink}\n\n当前候选：\`${candidate}\`\n\n验收标准版本：\`${standardVersion}\`\n\n### 失败标准\n\n${evidence}\n\n### 尝试过的方案\n\n${plans}\n\n### 团队结论\n\n${exhaustion.lead}：${exhaustion.reason}\n\n### 待决定事项\n\n继续投入修复、缩小验收范围，或暂停/取消这个故事。原事项已停在 blocked，选择后由原交付负责人按决定继续。\n\n<!-- ${DECISION_MARKER} ${JSON.stringify({ decision_key: key, standard_version: standardVersion, candidate, original_issue: issue.identifier })} -->`,
+    title: todo.title,
+    title_candidates: titleCandidates(todo.title),
+    description: todo.description,
+    first_screen: todo.first_screen,
+    resume: decisionResume(issue, exhaustion),
   };
 }
 
@@ -554,10 +639,12 @@ export function adjudicate({
         reason: text(exhaustionRow.reason) ? exhaustionRow.reason : null,
         executable_plan: text(exhaustionRow.executable_plan) ? exhaustionRow.executable_plan : null,
         plans: Array.isArray(exhaustionRow.plans) ? exhaustionRow.plans : [],
+        decision_brief: exhaustionRow.decision_brief ?? null,
         names_attempt: exhaustionRow.attempt_id ?? null,
         comment_id: exhaustionRow.comment_id,
         after_latest_failure: Boolean(currentFailure) && compareRecords(exhaustionRow, currentFailure.verdict) > 0,
         names_latest_failure: Boolean(currentFailure) && exhaustionRow.attempt_id === currentFailure.attempt.attempt_id,
+        brief_valid: false,
         valid: false,
       }
     : null;
@@ -571,6 +658,7 @@ export function adjudicate({
       namedPlans.length === exhaustion.plans.length &&
       namedPlans.length > 0,
     );
+    exhaustion.brief_valid = Boolean(normalizeDecisionBrief(exhaustion.decision_brief));
   }
 
   const notCounted = scoped
@@ -690,17 +778,7 @@ export function adjudicate({
   }
 
   if (rounds >= MIN_FAILED_ROUNDS && exhaustion?.valid) {
-    const draft = buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId });
-    const existing = normalizeDecisions(existingDecisions)
-      .filter((row) => row.decision_key === draft.key)
-      .sort((a, b) => (timeValue(a.created_at) ?? Number.MAX_SAFE_INTEGER) - (timeValue(b.created_at) ?? Number.MAX_SAFE_INTEGER)
-        || String(a.identifier).localeCompare(String(b.identifier)));
-    if (existing.length > 0) {
-      draft.action = "reuse";
-      draft.existing_identifier = existing[0].identifier ?? null;
-      draft.existing_status = existing[0].status ?? null;
-      draft.duplicates = existing.slice(1).map((row) => row.identifier).filter(Boolean);
-    }
+    const key = decisionKey(issue, standardVersion);
     // After rework the issue sits in_progress, so a late no-plan declaration
     // does not enter the review step by itself. The acceptance engineer must be
     // woken to recompute this round; otherwise a satisfied escalation is never
@@ -712,15 +790,57 @@ export function adjudicate({
       mention: `[@${roles.tester.name}](mention://agent/${roles.tester.id})`,
       instruction: "无解声明发生在非审核状态：先实际唤醒验收自动化工程师重算上一轮证据，再由它创建决策；不要因为事项仍在 in_progress 就跳过。",
     };
+    const existing = normalizeDecisions(existingDecisions)
+      .filter((row) => row.decision_key === key)
+      .sort((a, b) => (timeValue(a.created_at) ?? Number.MAX_SAFE_INTEGER) - (timeValue(b.created_at) ?? Number.MAX_SAFE_INTEGER)
+        || String(a.identifier).localeCompare(String(b.identifier)));
+    if (existing.length > 0) {
+      // A decision created before this change stays reusable even though its
+      // lead never supplied a member-facing brief.
+      const reused = existing[0];
+      const draft = {
+        key,
+        todo_key: key,
+        metadata_key: "acceptance_decision_key",
+        metadata: { acceptance_decision_key: key },
+        action: "reuse",
+        existing_identifier: reused.identifier ?? null,
+        existing_status: reused.status ?? null,
+        duplicates: existing.slice(1).map((row) => row.identifier).filter(Boolean),
+        assignee_user_id: ownerUserId,
+        title: reused.title ?? null,
+        description: null,
+        first_screen: null,
+        resume: decisionResume(issue, exhaustion),
+      };
+      return {
+        ...base,
+        outcome: "reuse_decision",
+        decision: draft,
+        wake_tester: wakeTester,
+        status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${blockedStatus}`,
+        next_action: `已有同源决策 ${draft.existing_identifier}：不要新建事项，保留该决策并在原事项回链；多余的重复事项用 --duplicate-of 归并。`,
+      };
+    }
+
+    const brief = normalizeDecisionBrief(exhaustion.decision_brief);
+    if (!brief) {
+      return {
+        ...base,
+        outcome: "rework",
+        status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${backStatus}`,
+        next_action: "升级条件已满足，但团队没有给出用户能看懂的 decision_brief：缺少具体坏掉的能力、用户受到的影响，或两种以上有依据的取舍及其后果。不要创建决策事项，也不要退回“这项功能 / 需要你决定下一步”的通用说法。回到原事项，由负责人在同一 attempt_id 的 exhausted 记录里补 decision_brief（subject、problem、options 及各自 consequence），再实际唤醒验收自动化工程师重算。",
+      };
+    }
+
+    const draft = buildDecision({ issue, standardVersion, candidate, rounds, counted, exhaustion, ownerUserId, brief });
     return {
       ...base,
-      outcome: draft.action === "reuse" ? "reuse_decision" : "escalate",
+      outcome: "escalate",
       decision: draft,
       wake_tester: wakeTester,
       status_command: `"$MULTICA_CLI_PATH" issue status ${issue.identifier} ${blockedStatus}`,
-      next_action: draft.action === "reuse"
-        ? `已有同源决策 ${draft.existing_identifier}：不要新建事项，保留该决策并在原事项回链；多余的重复事项用 --duplicate-of 归并。`
-        : `${wakeTester ? "无解声明写在非审核状态，先实际唤醒验收自动化工程师重算本轮证据；确认无误后" : ""}两个升级条件同时满足：同一标准版本至少三个不同候选真实失败，且团队负责人已对当前候选的失败裁定声明没有可执行方案。只创建一项固定标题的决策事项（标题含 decision_key），创建时正文就带键，指派给配置中的真实用户，并用默认重复保护拒绝第二次创建。`,
+      next_action: `${wakeTester ? "无解声明写在非审核状态，先实际唤醒验收自动化工程师重算本轮证据；确认无误后" : ""}两个升级条件同时满足：同一标准版本至少三个不同候选真实失败，且团队负责人已对当前候选的失败裁定声明没有可执行方案，并给出了用户能看懂的具体影响和取舍。只创建一项决策事项（标题写具体能力和待决定动作，不含 decision_key；键在正文末尾技术附录与不可见标记里），指派给配置中的真实用户；标题被不同键的活跃事项占用时，按 decision.title_candidates 读回命中事项后同键复用、异键加自然序号重试，不用 --allow-duplicate。创建后必须在原事项登记 decision.resume.command_template 对应的 until-issue done 规则并读回，否则不要向用户承诺自动继续。`,
     };
   }
 
@@ -782,6 +902,7 @@ export function main(argv = process.argv.slice(2), stdout = process.stdout) {
   if (text(args.decisionDir) && result.decision) {
     mkdirSync(args.decisionDir, { recursive: true });
     writeFileSync(`${args.decisionDir}/title.txt`, `${result.decision.title}\n`);
+    writeFileSync(`${args.decisionDir}/titles.txt`, `${(result.decision.title_candidates ?? [result.decision.title]).join("\n")}\n`);
     writeFileSync(`${args.decisionDir}/body.md`, `${result.decision.description}\n`);
   }
   stdout.write(args.output === "text" ? formatText(result) : `${JSON.stringify(result, null, 2)}\n`);

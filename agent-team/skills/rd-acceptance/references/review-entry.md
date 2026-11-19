@@ -148,13 +148,14 @@ test "$(wc -c < .acceptance/in-review-instruction.md)" -le 12000 || { echo "inst
 2. 团队负责人（研发经理或项目经理）针对**当前候选最后一轮失败**明确声明已无可执行方案，并在原事项用自己的平台身份留下记录：
 
 ```html
-<!-- multica-acceptance {"kind":"exhausted","standard_version":"<STANDARD_VERSION>","attempt_id":"<当前候选最新失败那轮的 attempt_id>","reason":"<为什么没有可执行方案>","executable_plan":null,"plans":[{"plan":"<尝试过的方案>","result":"<结果>"}]} -->
+<!-- multica-acceptance {"kind":"exhausted","standard_version":"<STANDARD_VERSION>","attempt_id":"<当前候选最新失败那轮的 attempt_id>","reason":"<为什么没有可执行方案>","executable_plan":null,"plans":[{"plan":"<尝试过的方案>","result":"<结果>"}],"decision_brief":{"subject":"<坏掉的那项能力，用成员日常说法>","problem":"<成员实际感受到的影响>","why_you":"<为什么只有他能定>","options":[{"label":"<做法>","consequence":"<交付什么、放弃什么>","example":"<他会怎么回复>"}]}} -->
 ```
 
 - 记录必须晚于该轮质量交付经理的**独立失败裁定**，并写明该轮（当前候选）的 `attempt_id`。只晚于证据评论、但早于裁定的声明无效；过去的无方案声明、没有指明当前候选最新一轮失败的记录都不触发升级。
 - `executable_plan` 非空表示团队仍有方案，继续回流修复；若之后有更新的记录重新给出方案，以最新记录为准，不升级。
 - `plans` 为空、`reason` 为空或作者不是负责人角色时，工具判为无效，不升级。
 - 三次失败但还有可执行方案时继续回流修复，不升级，也不创建决策事项。
+- `decision_brief` 面向接收决策的人，不是工程摘要：`subject` 写具体能力或场景（不能是“这项功能”一类泛称），`problem` 写他实际会遇到什么、哪项能力坏了或缺了什么，`options` 至少两项、都是团队有依据的真实做法，各写清交付什么和放弃什么，并给一句他会用的回复示例。不放标准号、缺口键、SHA、轮次、环境或内部证据，不预设默认或推荐项。信息不足时先让负责人补齐，再在同一个 `attempt_id` 下重发记录并唤醒验收自动化工程师重算；工具会对缺失或不可读的 brief 返回 `rework`，此时不要创建决策事项。
 
 ### 回流后的无解声明必须真正接续
 
@@ -167,7 +168,7 @@ test "$(wc -c < .acceptance/in-review-instruction.md)" -le 12000 || { echo "inst
 "$MULTICA_CLI_PATH" issue comment add <issue> --content-file ./no-plan-wake.md --output table
 ```
 
-升级时先查已有同源决策，再决定是否新建。标题和正文都带同一个 `decision_key`，创建与补写元数据之间重试也不会重复建单：
+升级时先查已有同源决策，再决定是否新建。去重键仍然是 `decision_key`，只是它放在元数据、正文技术附录和不可见标记里；标题是成员能看懂的能力名与取舍，不再承担身份：
 
 ```bash
 KEY=$(node -p 'JSON.parse(require("fs").readFileSync(".acceptance/verdict.json","utf8")).decision_key')
@@ -182,8 +183,8 @@ node "$VERDICT_TOOL" \
   --decision-dir .acceptance/decision --output json
 ```
 
-- 工具同时按 `metadata.acceptance_decision_key`、正文里的 `decision_key` 和固定标题「验收决策 `<KEY>`」查找，能发现创建成功但元数据尚未补写的同源事项。
-- `issue search` 可能只返回标题而没有完整正文；这仍足以识别同源决策。若命中项缺少编号、时间或状态，按完整固定标题再搜一次，或对命中项执行 `issue get <id> --output json` 补全，并把补全结果一并传给 `--existing-decisions`。标题固定为「验收决策 `<KEY>` …」，不要改写或用别的标题搜索。
+- 工具同时按 `metadata.acceptance_decision_key`、正文技术附录里的 `decision_key`、不可见标记和历史固定标题「验收决策 `<KEY>`」查找，能发现创建成功但元数据尚未补写的同源事项，也兼容迁移前按固定标题创建的旧决策。
+- `issue search "$KEY"` 会命中正文包含该键的事项；搜索结果可能只返回标题而没有完整正文。若命中项缺少编号、时间、状态或无法判断是否同源，执行 `issue get <id> --output json` 读取正文标记，再把补全结果一并传给 `--existing-decisions`。不要靠标题判断同源，也不要用改写后的可读标题去搜。
 - 元数据和搜索返回同一事项时，工具按 UUID/编号合并成一项：它不会被列进 `decision.duplicates`，也不会被当成另一项而重复创建。已关闭（cancelled/done）的同源决策同样复用，只在原事项回链，不再新建。
 - `outcome` 为 `escalate` 时才创建，且只创建一项：
 
@@ -195,8 +196,36 @@ node "$VERDICT_TOOL" \
   --output json
 ```
 
-- 标题由工具固定生成并包含 `decision_key`；正文在创建时就带键、失败标准、三轮证据、尝试过的方案、待决定事项和原事项回链。不要改写标题或删掉键。
-- 不加 `--allow-duplicate`。平台的默认重复保护会拒绝同一活跃重复标题；创建失败时按标题或键重新搜索并复用已有事项，不要用 `--allow-duplicate` 重试。
+- 标题由工具从 `decision_brief` 生成，写的是具体能力和要做的取舍，例如「PDF 引用跳转」需要你做一个取舍（DEV-7）；正文首屏写清问题、为什么找他、真实选项及各自后果，技术附录才带键、失败标准、三轮证据和原事项回链。不要改写标题、删掉键或把工程信息挪回首屏。
+- 创建成功后按工具给出的 `decision.resume` 登记真实接续：正文告诉成员“选好后把本事项标记为完成（只回复不会自动接续）”，就必须在原事项登记 `--until-issue <新决策事项> --until-issue-state done --agent-id <负责人>` 的唤醒规则并读回确认；换成依赖评论的规则时，正文的完成方式也要同步改成回复。不能承诺平台没有订阅的接续。
+- 不加 `--allow-duplicate`。平台的默认重复保护按工作区/项目/父项和规范化标题加锁，忽略正文里的键：同一标题已被另一个键的活跃事项占用时，原样重试会一直 409。按下面的序列创建，同一键的并发重试也走同一序列：
+
+```bash
+# .acceptance/decision/titles.txt 由工具生成：基础标题、基础标题（第 2 项）、（第 3 项）……
+: > .acceptance/create-result.txt
+while IFS= read -r TITLE; do
+  if OUT=$("$MULTICA_CLI_PATH" issue create --title "$TITLE" --description-file .acceptance/decision/body.md \
+      --assignee-id "$DECISION_OWNER_USER_ID" --output json 2>.acceptance/create.err); then
+    printf '%s\n' "$OUT" > .acceptance/decision-created.json
+    printf 'created %s\n' "$TITLE" > .acceptance/create-result.txt
+    break
+  fi
+  grep -q 'Active duplicate issue exists' .acceptance/create.err || { cat .acceptance/create.err >&2; exit 1; }
+  HIT=$(sed -n 's/^Active duplicate issue exists: \([A-Za-z][A-Za-z0-9_-]*-[0-9][0-9]*\).*/\1/p' .acceptance/create.err | head -1)
+  [ -n "$HIT" ] || { echo '重复响应缺少编号，按 decision_key 搜索并读回正文' >&2; exit 1; }
+  "$MULTICA_CLI_PATH" issue get "$HIT" --output json > .acceptance/duplicate-hit.json || exit 1
+  if node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const body=String(j.description||"");const key=process.argv[2];const m=body.match(/<!--\s*multica-acceptance-decision\s+([\s\S]*?)-->/);let same=false;try{same=Boolean(m&&JSON.parse(m[1]).decision_key===key)}catch{};process.exit(same||new RegExp("^decision_key:\\s*"+key+"$","m").test(body)?0:1)' .acceptance/duplicate-hit.json "$KEY"; then
+    printf 'reuse %s\n' "$HIT" > .acceptance/create-result.txt
+    break
+  fi
+done < .acceptance/decision/titles.txt
+[ -s .acceptance/create-result.txt ] || { echo '同标题候选已用尽，决策未创建，不得声称已派发' >&2; exit 1; }
+```
+
+- `create-result.txt` 的 `created` 表示新建，`reuse` 表示读回的是同键事项：同键不再新建，补写元数据并回链即可；异键不合并、不关闭对方，换下一个带自然序号的标题重试。序号只是可见标题的区分，身份仍是 `decision_key`。
+- 同来源、同标准版本的重试始终从基础标题开始走同一序列，因此并发或超时重试会落在同一个候选上，而不是无限 409。
+- 创建或复用都没有确认前，不要在原事项回链新决策，也不要声称已派发；按工具给的 `status_command` 完成后才算交接。
+- 普通成员待办遇到同样冲突时用同一规则：生成器的 `title_candidates` 给出同样的序列，读回命中待办的标记或元数据，同键复用、异键加序号，不关闭平台保护。
 - 创建成功后补写去重元数据（值强制为字符串）：`"$MULTICA_CLI_PATH" issue metadata set <新事项> --key acceptance_decision_key --value "$KEY" --type string`。
 - 查到同源事项时复用最早的，不重复创建；多余的同源事项用 `"$MULTICA_CLI_PATH" issue status <重复事项> cancelled --duplicate-of <最早事项>` 归并。
 - 原事项按工具给的 `status_command` 停在 blocked，并在评论里回链决策事项。
