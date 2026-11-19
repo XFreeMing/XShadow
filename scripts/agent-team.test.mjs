@@ -358,8 +358,8 @@ test("every agent description fits the server's 255-character limit", () => {
   assert.ok([...pm.instructions].length > [...pm.description].length, "detailed workflow belongs in instructions");
 });
 
-test("project and quality managers match the user's current Codex configuration", () => {
-  for (const key of ["pm", "quality"]) {
+test("research, requirements and management roles use their configured Codex model", () => {
+  for (const key of ["pm", "quality", "product", "research", "requirements", "story-judge"]) {
     const agent = template.agents.find((a) => a.key === key);
     assert.equal(agent.provider, "codex");
     assert.equal(agent.model, "gpt-6.2-sol");
@@ -373,9 +373,6 @@ test("story gate and acceptance automation are private, capacity-limited and ind
   const judge = template.agents.find((a) => a.key === "story-judge");
   const automation = template.agents.find((a) => a.key === "acceptance-automation");
   assert.equal(judge.name, "用户故事评判员");
-  assert.equal(judge.provider, "grok");
-  assert.equal(judge.model, "grok-4.7");
-  assert.equal(judge.thinking_level, "high");
   assert.equal(judge.max_concurrent_tasks, 1);
   assert.equal(judge.permission_mode, "private");
   assert.deepEqual(judge.skills, ["rd-story-gate"]);
@@ -398,7 +395,7 @@ test("story gate and acceptance automation initialize from the real template, re
   const ids = await initializeTeam(f.api, template, options);
   const judge = f.state.agents.find((a) => a.id === ids.agents["story-judge"]);
   const automation = f.state.agents.find((a) => a.id === ids.agents["acceptance-automation"]);
-  assert.equal(judge.model, "grok-4.7");
+  assert.equal(judge.model, "gpt-6.2-sol");
   assert.equal(judge.max_concurrent_tasks, 1);
   assert.equal(judge.permission_mode, "private");
   assert.deepEqual(f.state.bindings[judge.id].map((id) => f.state.skills.find((s) => s.id === id).name), ["rd-story-gate"]);
