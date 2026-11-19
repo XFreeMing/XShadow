@@ -3,6 +3,7 @@ package workmethod
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -157,7 +158,9 @@ func TestMixedStepReviewResubmission(t *testing.T) {
 		t.Helper()
 		c := change(&r, action, "artifact or decision")
 		if action == "approve" && r.Method.Steps[r.Step].Reviewer != nil {
-			c.CheckedItems = []int{0, 1}
+			for i := range r.Method.Steps[r.Step].Checks {
+				c.CheckedItems = append(c.CheckedItems, i)
+			}
 		}
 		apply(t, &r, c, methods)
 		if r.Step != step || r.State != state {
@@ -272,11 +275,35 @@ func TestAgileUpgradePreservesRoleOverridesAndFrozenProcedures(t *testing.T) {
 	old.Steps[0].Owner = &Actor{Kind: "creator"}
 	old.Steps[0].Reviewer = &Actor{Kind: "project_lead"}
 	upgraded := Catalog([]Template{old})[0]
-	if upgraded.Revision != 8 || upgraded.Steps[0].Gate != "criteria" || upgraded.Steps[0].Reviewer.Kind != "project_lead" || old.Steps[0].Gate != "" {
+	if upgraded.Revision != 9 || upgraded.Steps[0].Gate != "criteria" || upgraded.Steps[0].Reviewer.Kind != "project_lead" || old.Steps[0].Gate != "" {
 		t.Fatal(upgraded)
 	}
 	old.Steps[0].Checks = []string{"custom check"}
 	if custom := Catalog([]Template{old})[0]; custom.Revision != 7 || custom.Steps[0].Gate != "" {
 		t.Fatal(custom)
+	}
+}
+
+func TestAgileUpgradeFromEvidenceGates(t *testing.T) {
+	previous := evidenceGatedAgile()
+	previous.Revision = 3
+	previous.Steps[1].Owner = &Actor{Kind: "creator"}
+	previous.Steps[1].Reviewer = &Actor{Kind: "project_lead"}
+	previous.Review = "workspace review"
+	upgraded := Catalog([]Template{previous})[0]
+	if upgraded.Revision != 4 || upgraded.Review != previous.Review || !reflect.DeepEqual(upgraded.Steps[1].Owner, previous.Steps[1].Owner) || !reflect.DeepEqual(upgraded.Steps[1].Reviewer, previous.Steps[1].Reviewer) {
+		t.Fatal(upgraded)
+	}
+	for i, step := range upgraded.Steps {
+		if step.Gate != previous.Steps[i].Gate || step.Instructions == previous.Steps[i].Instructions || !reflect.DeepEqual(step.Checks, Builtins()[0].Steps[i].Checks) {
+			t.Fatalf("step %d: %+v", i, step)
+		}
+	}
+	if again := Catalog([]Template{upgraded})[0]; !reflect.DeepEqual(again, upgraded) {
+		t.Fatal("upgraded a current definition twice")
+	}
+	previous.Steps[1].Output = "custom procedure"
+	if custom := Catalog([]Template{previous})[0]; !reflect.DeepEqual(custom, previous) {
+		t.Fatal("overwrote a locally edited procedure")
 	}
 }

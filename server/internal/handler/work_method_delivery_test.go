@@ -173,7 +173,11 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 		body := map[string]any{"action": action, "base_revision": run.Revision, "evidence": "核对原始证据"}
 		req := goalRequest("POST", path+"/work-method", testUserID, body, map[string]string{"id": id})
 		if action == "approve" {
-			body["checked_items"] = []int{0, 1}
+			checked := make([]int, len(run.Method.Steps[run.Step].Checks))
+			for i := range checked {
+				checked[i] = i
+			}
+			body["checked_items"] = checked
 			req = goalRequest("POST", path+"/work-method", testUserID, body, map[string]string{"id": id})
 			task := methodStageTask(t, id, run.Revision)
 			req.Header.Set("X-Agent-ID", agent)
@@ -214,6 +218,21 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	result["candidate"] = sha
 	accept("run", result)
 	move("advance", 200)
+	reviewerTask := methodStageTask(t, id, run.Revision)
+	brief := claimBriefForTest(t, id, reviewerTask)
+	step := run.Method.Steps[run.Step]
+	for _, instruction := range append([]string{step.Instructions, step.Output}, step.Checks...) {
+		if !strings.Contains(brief, instruction) {
+			t.Fatalf("candidate review brief missing %q", instruction)
+		}
+	}
+	req := goalRequest("POST", path+"/work-method", testUserID, map[string]any{
+		"action": "approve", "base_revision": run.Revision, "evidence": "缺少首项验证",
+		"checked_items": []int{1, 2},
+	}, map[string]string{"id": id})
+	req.Header.Set("X-Agent-ID", agent)
+	req.Header.Set("X-Task-ID", uuidToString(reviewerTask.ID))
+	testutil.Call(t, testHandler.ChangeIssueWorkMethod, req).Want(http.StatusBadRequest)
 	move("approve", 200)
 	move("advance", 200)
 	board("in_review")

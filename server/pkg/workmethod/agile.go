@@ -22,7 +22,7 @@ func legacyAgile() Template {
 		}, Review: "核对冻结的标准、候选提交、用例结果和演示反馈，明确接收本次增量或说明未达标项。", ReworkStep: 2}
 }
 
-func agileTemplate() Template {
+func evidenceGatedAgile() Template {
 	m := legacyAgile()
 	m.Revision++
 	m.Steps = []Step{
@@ -35,27 +35,66 @@ func agileTemplate() Template {
 	return m
 }
 
+func agileTemplate() Template {
+	m := legacyAgile()
+	m.Revision = 3
+	m.Steps = []Step{
+		{
+			Gate: "criteria", Name: "定义增量与验收标准",
+			Inputs:       "用户故事、真实业务场景、现有规则与交付入口",
+			Instructions: "请用业务方的词讲清谁在什么条件下做什么、谁确认结果。区分履约权责和待求解的领域规则，优先复用已有模型。同一术语在不同角色下含义不同时，标出各自适用的上下文。涉及跨角色履约时，用请求与确认凭证串起成功和拒绝路径。简单改动写清受影响的一条规则即可。",
+			Output:       "逐条登记带稳定编号和版本的验收标准，写明业务术语、规则边界和可观察的结果。修改标准时沿用编号。",
+			Checks:       []string{"按标准编号可找到受益角色、触发条件和可观察结果", "用正例和反例解释规则边界，同名异义或跨角色交接处已说明归属"},
+		},
+		{
+			Gate: "coverage", Name: "设计测试用例",
+			Inputs:       "当前版本的验收标准、业务规则与已有测试",
+			Instructions: "每条标准关联可复现的用例，写明前置状态、操作和从哪个入口观察结果。挑一个看似合理却违反规则的实现，选能识别它的输入和断言；有行为分界时选两侧最接近的例子。标出哪些是新增行为，哪些是已有行为的回归。修改旧代码而缺少测试时，先用表征测试记录需要保留的实际表现，再单列本次要改变的行为。",
+			Output:       "按标准编号和版本排列的用例、预期结果、可识别的错误以及需要保留的行为基线。",
+			Checks:       []string{"每条标准关联至少一条有前置条件、操作和独立预期的用例", "能指出哪条断言会识别具体错误，适用的边界两侧均有样例", "区分新增与既有行为，涉及遗留代码时写明保留和改变的范围"},
+		},
+		{
+			Gate: "candidate", Name: "实现并验证候选提交",
+			Inputs:       "已验收用例、行为基线、开发仓库与测试入口",
+			Instructions: "一次选一条新增行为。先运行测试并核对预期值、实际值和失败断言；若编译或环境失败，先排除阻碍再观察。用最小改动使它通过，跑相关回归，在绿灯下重构并复跑。已有行为的用例首次通过时说明它保护的规则。按用例保留基线、命令与红绿输出；涉及外部依赖时分别验证核心规则、真实适配器和交付配置。为每条标准登记仓库、分支、完整提交 SHA，并在当前候选上登记全部关联用例的实测结果。",
+			Output:       "按用例可复核的失败断言或已有行为基线、修复及重构后的运行证据，以及候选分支和提交。",
+			Checks:       []string{"新增行为有实现前的目标断言失败证据，已有行为有基线和保留理由", "最小实现及后续重构均有对应的回归结果，外部依赖的验证范围明确", "每条标准的当前版本已关联仓库、分支和完整提交，全部关联用例在该候选上有通过证据"},
+		},
+		{
+			Gate: "delivery", Name: "演示与独立终验",
+			Inputs:       "交付入口、业务场景、候选提交与用例证据",
+			Instructions: "验收人从实际入口复演一条关键规则及其边界反例，用与标准一致的业务术语核对结果。按标准编号追到用例、真实执行记录和当前提交。涉及跨系统交接时，核查请求与确认能相互追溯；用到替身时，抽查真实依赖的装配证据并标明未验证范围。指出缺口对应的标准、用例和负责步骤，退回补正，或逐项批准后完成。",
+			Output:       "可体验入口、正反例实测结果、可回查的候选提交、独立结论及遗留事项负责人。",
+			Checks:       []string{"用业务术语从交付入口复验关键规则和反例，可反查用例与本次提交", "验收结论写明已验证范围和遗留问题，需补正的记录有标准编号及负责步骤"},
+		},
+	}
+	m.Review = "按当前标准版本和候选提交逐项核验。业务词义或权责不清退回定义标准，断言无法识别错误退回用例设计，红绿证据或真实依赖验证缺失退回候选实现。记录独立结论后完成。"
+	return m
+}
+
 func upgradeAgile(m Template) Template {
-	legacy := legacyAgile()
-	if m.Kind != legacy.Kind || len(m.Steps) != len(legacy.Steps) {
+	current := agileTemplate()
+	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile()} {
+		if m.Kind != previous.Kind || len(m.Steps) != len(previous.Steps) {
+			continue
+		}
+		for i, s := range m.Steps {
+			previous.Steps[i].Owner, previous.Steps[i].Reviewer = s.Owner, s.Reviewer
+		}
+		if !reflect.DeepEqual(m.Steps, previous.Steps) {
+			continue
+		}
+		for i, s := range m.Steps {
+			current.Steps[i].Owner, current.Steps[i].Reviewer = s.Owner, s.Reviewer
+		}
+		m.Steps = current.Steps
+		if m.Review == previous.Review {
+			m.Review = current.Review
+		}
+		// Workspace revisions include local edits such as role assignments.
+		m.Revision += current.Revision - previous.Revision
 		return m
 	}
-	for i, s := range m.Steps {
-		s.Owner, s.Reviewer = nil, nil
-		if !reflect.DeepEqual(s, legacy.Steps[i]) {
-			return m
-		}
-	}
-	updated := agileTemplate()
-	for i := range updated.Steps {
-		updated.Steps[i].Owner = m.Steps[i].Owner
-		updated.Steps[i].Reviewer = m.Steps[i].Reviewer
-	}
-	m.Steps = updated.Steps
-	if m.Review == legacy.Review {
-		m.Review = updated.Review
-	}
-	m.Revision++
 	return m
 }
 
