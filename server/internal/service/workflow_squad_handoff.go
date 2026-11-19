@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,4 +46,28 @@ func (s *TaskService) createWorkflowSquadHandoffTask(ctx context.Context, issue 
 		return err
 	})
 	return task, err
+}
+
+// CreateWorkMethodHandoff writes the next stage's task alongside the issue
+// revision that selected it. The due row survives a currently occupied slot.
+func (s *TaskService) CreateWorkMethodHandoff(ctx context.Context, q *db.Queries, issue db.Issue, agentID, squadID pgtype.UUID, methodRevision int, note string, actorUserID pgtype.UUID, parent *db.AgentTaskQueue) (db.AgentTaskQueue, error) {
+	scoped := &TaskService{Queries: q, Composio: s.Composio, FeatureFlags: s.FeatureFlags}
+	attr := attribution.ClassifyDirect(attribution.DirectFacts{IssueID: issue.ID, ActorUserID: actorUserID})
+	if parent != nil {
+		attr = attribution.DelegatedIssueRun(issue.ID, parent.ID, parent.OriginatorUserID, parent.AccountableUserID)
+	}
+	params, err := scoped.prepareMentionTask(ctx, issue, agentID, pgtype.UUID{}, nil, squadID.Valid, squadID, false, note, attr, pgtype.UUID{}, OriginDerived, false)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	params.FireAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	params.WorkMethodRevision = pgtype.Int8{Int64: int64(methodRevision), Valid: true}
+	return q.CreateAgentTask(ctx, params)
+}
+
+// PublishWorkMethodHandoff wakes the runtime after the method transition commits.
+func (s *TaskService) PublishWorkMethodHandoff(ctx context.Context, task db.AgentTaskQueue) error {
+	s.BroadcastTaskQueued(ctx, task)
+	s.notifyTaskAvailable(task)
+	return s.PromoteDueDeferredTasksForRuntime(ctx, task.RuntimeID)
 }

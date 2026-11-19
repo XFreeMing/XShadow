@@ -36,7 +36,7 @@ func TestResearchClaimAndProjectHandoffUseIssueMethod(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := testHandler.getIssuePrefix(context.Background(), issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
-	for _, text := range []string{"seven-step", "界定问题", "multica issue method " + ref + " --change-file", "Required output"} {
+	for _, text := range []string{"seven-step", "界定问题", `"$MULTICA_CLI_PATH" issue method ` + ref + " --change-file", "Required output"} {
 		if !strings.Contains(claim, text) {
 			t.Fatalf("missing %q from claim: %s", text, claim)
 		}

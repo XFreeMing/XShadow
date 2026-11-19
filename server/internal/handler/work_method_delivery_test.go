@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -100,5 +101,31 @@ func TestAgileApprovalReopensWhenAcceptedCriterionChanges(t *testing.T) {
 	method("approve", "v2 用例和提交已复核", http.StatusOK)
 	if read := readDeliveryMethod(t, id); read.State != "closed" || read.History[len(read.History)-1].Evidence != "v2 用例和提交已复核" {
 		t.Fatalf("v2 final review: %+v", read)
+	}
+}
+
+func TestReopeningRoutedAgileReviewDispatchesOnce(t *testing.T) {
+	agent := seededReadyAgentID(t)
+	m := workmethod.Builtins()[0]
+	last := len(m.Steps) - 1
+	m.Steps[last].Owner = &workmethod.Actor{Kind: "creator"}
+	m.Steps[last].Reviewer = &workmethod.Actor{Kind: "agent", ID: agent}
+	run := workmethod.Run{Method: &m, State: "closed", Step: last, Revision: 9}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := dbfx.Issue(t, "已批准版本追加验收范围", testutil.Cols{"status": "in_progress", "work_method_run": raw})
+	body := map[string]any{"action": "criterion", "criterion_id": "C2", "text": "新增的交付条件", "base_revision": 0}
+	post := func(want int) {
+		t.Helper()
+		req := withURLParam(newRequest(http.MethodPost, "/api/issues/"+id+"/acceptance", body), "id", id)
+		testutil.Call(t, testHandler.ChangeIssueAcceptance, req).Want(want)
+	}
+	post(http.StatusOK)
+	post(http.StatusConflict)
+	review := readDeliveryMethod(t, id)
+	if review.State != "review" || review.Revision != 10 || taskCountFor(t, id, agent) != 1 {
+		t.Fatalf("changed criteria should reopen the final review and queue its reviewer once: %+v", review)
 	}
 }

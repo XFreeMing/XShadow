@@ -316,27 +316,33 @@ func ClassifyDirect(f DirectFacts) Result {
 	}
 	switch f.OriginType {
 	case "quick_create", "agent_create":
-		r := Result{
-			DelegatedFromTaskID: f.OriginTaskID,
-			EvidenceKind:        EvidenceIssueAssignment,
-			EvidenceRefID:       f.IssueID,
-		}
-		if f.OriginOriginator.Valid {
-			r.UserID = f.OriginOriginator
-			r.Source = SourceDelegation
-		} else if f.OriginAccountable.Valid {
-			// Autopilot-rooted origin task: no authorizing human, but accountable
-			// to the trigger principal / rule publisher. Copy accountable down so the
-			// chain root stays stable; originator stays NULL (MUL-4302 §3.2).
-			r.AccountableUserID = f.OriginAccountable
-			r.Source = SourceDelegation
-		} else {
-			r.Source = SourceUnattributed
-		}
-		return finalizeAttribution(r)
+		return DelegatedIssueRun(f.IssueID, f.OriginTaskID, f.OriginOriginator, f.OriginAccountable)
 	default:
 		return finalizeAttribution(Result{Source: SourceUnattributed, EvidenceKind: EvidenceIssueAssignment, EvidenceRefID: f.IssueID})
 	}
+}
+
+// DelegatedIssueRun propagates the authority and accountability of the source
+// run when an agent hands work to the next agent on an issue.
+func DelegatedIssueRun(issueID, parentID, originator, accountable pgtype.UUID) Result {
+	r := Result{
+		DelegatedFromTaskID: parentID,
+		EvidenceKind:        EvidenceIssueAssignment,
+		EvidenceRefID:       issueID,
+	}
+	if originator.Valid {
+		r.UserID = originator
+		r.Source = SourceDelegation
+	} else if accountable.Valid {
+		// Autopilot-rooted origin task: no authorizing human, but accountable
+		// to the trigger principal / rule publisher. Copy accountable down so the
+		// chain root stays stable; originator stays NULL (MUL-4302 §3.2).
+		r.AccountableUserID = accountable
+		r.Source = SourceDelegation
+	} else {
+		r.Source = SourceUnattributed
+	}
+	return finalizeAttribution(r)
 }
 
 // DirectHumanRun builds attribution for a run a member triggered directly through

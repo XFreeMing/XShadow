@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -42,54 +40,6 @@ func (h *Handler) ListWorkMethods(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"methods": methods})
 }
 
-func (h *Handler) CreateWorkMethod(w http.ResponseWriter, r *http.Request) {
-	ws := h.resolveWorkspaceID(r)
-	id, ok := parseUUIDOrBadRequest(w, ws, "workspace id")
-	if !ok {
-		return
-	}
-	if _, ok := h.requireWorkspaceMember(w, r, ws, "workspace not found"); !ok {
-		return
-	}
-	var m workmethod.Template
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&m); err != nil {
-		writeError(w, 400, "invalid work method definition")
-		return
-	}
-	m.ID = uuid.NewString()
-	m.Name = strings.TrimSpace(m.Name)
-	if m.Keywords == nil {
-		m.Keywords = []string{}
-	}
-	if err := workmethod.Validate(m); err != nil {
-		writeError(w, 400, err.Error())
-		return
-	}
-	for _, builtin := range workmethod.Builtins() {
-		if strings.EqualFold(builtin.Name, m.Name) {
-			writeError(w, 409, "method name already exists")
-			return
-		}
-	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		writeError(w, 500, "failed to encode work method")
-		return
-	}
-	count, err := h.Queries.AddWorkMethodTemplate(r.Context(), db.AddWorkMethodTemplateParams{WorkspaceID: id, Name: m.Name, Definition: raw})
-	if err != nil {
-		writeError(w, 500, "failed to create work method")
-		return
-	}
-	if count == 0 {
-		writeError(w, 409, "method name already exists")
-		return
-	}
-	writeJSON(w, 201, m)
-}
-
 func (h *Handler) GetGoalWorkMethod(w http.ResponseWriter, r *http.Request) {
 	g, ok := h.loadVisibleGoal(w, r, chi.URLParam(r, "id"))
 	if !ok {
@@ -106,8 +56,24 @@ func (h *Handler) GetGoalWorkMethod(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods []workmethod.Template) (workmethod.Run, error) {
 	if len(issue.WorkMethodRun) > 0 {
 		var run workmethod.Run
-		err := json.Unmarshal(issue.WorkMethodRun, &run)
-		return run, err
+		if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil {
+			return run, err
+		}
+		if run.State != "ready" {
+			if run.Method != nil && run.Method.Revision == 0 {
+				run.Method.Revision = 1
+			}
+			return run, nil
+		}
+	}
+	// Ready is a recommendation. Only an explicit selection or first action
+	// freezes the template and the roles shown in the issue.
+	if methods == nil {
+		var err error
+		methods, err = h.workMethodCatalog(ctx, issue.WorkspaceID)
+		if err != nil {
+			return workmethod.Run{}, err
+		}
 	}
 	goal, err := h.Queries.GetIssueMethodGoal(ctx, db.GetIssueMethodGoalParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID})
 	var goalText string
@@ -121,14 +87,7 @@ func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods [
 }
 
 func (h *Handler) resolveIssueWorkMethod(ctx context.Context, issue db.Issue) (workmethod.Run, error) {
-	if len(issue.WorkMethodRun) > 0 {
-		return h.issueWorkMethod(ctx, issue, nil)
-	}
-	methods, err := h.workMethodCatalog(ctx, issue.WorkspaceID)
-	if err != nil {
-		return workmethod.Run{}, err
-	}
-	return h.issueWorkMethod(ctx, issue, methods)
+	return h.issueWorkMethod(ctx, issue, nil)
 }
 
 func (h *Handler) GetIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +100,7 @@ func (h *Handler) GetIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to read issue work method")
 		return
 	}
-	writeJSON(w, 200, run)
+	h.writeIssueMethodView(w, r, issue, run)
 }
 
 func developmentReview(raw []byte) error {
@@ -198,7 +157,22 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	if change.Action == "advance" && run.State == "ready" {
 		change.MethodID = ""
 	}
-	if change.Action == "approve" && run.Method != nil && run.Method.Kind == "development" {
+	if change.BaseRevision != nil && *change.BaseRevision != run.Revision {
+		writeError(w, 409, workmethod.ErrConflict.Error())
+		return
+	}
+	if !(run.State == "ready" && (change.Action == "select" || change.Action == "start")) {
+		recipient, err := h.methodRecipient(r.Context(), issue, run)
+		if err != nil {
+			writeError(w, 409, err.Error())
+			return
+		}
+		if run.State != "closed" && !h.canActOnMethod(r, issue, run, recipient) {
+			writeError(w, 403, "只有本步骤的当前负责人可以执行此操作")
+			return
+		}
+	}
+	if change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1 {
 		if err := developmentReview(issue.AcceptanceCriteria); err != nil {
 			writeError(w, 409, err.Error())
 			return
@@ -214,23 +188,20 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, err.Error())
 		return
 	}
-	raw, err := json.Marshal(run)
-	if err != nil {
-		writeError(w, 500, "failed to encode method run")
-		return
-	}
-	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {
-		return q.SaveIssueWorkMethodRun(r.Context(), db.SaveIssueWorkMethodRunParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, IssueRevision: issue.Revision, Run: raw})
+	updated, ok := h.persistMethodTransition(w, r, issue, run, func(q *db.Queries, kind pgtype.Text, id pgtype.UUID, frozen workmethod.Run) (db.Issue, error) {
+		raw, err := json.Marshal(frozen)
+		if err != nil {
+			return db.Issue{}, err
+		}
+		run = frozen
+		return q.SaveIssueWorkMethodRun(r.Context(), db.SaveIssueWorkMethodRunParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, IssueRevision: issue.Revision, Run: raw, AssigneeType: kind, AssigneeID: id})
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, 409, "issue changed; refresh before advancing the method")
-		return
-	}
-	if err != nil {
-		writeError(w, 500, "failed to update method run")
+	if !ok {
 		return
 	}
 	resp := issueToResponse(updated, h.getIssuePrefix(r.Context(), issue.WorkspaceID))
-	h.publish(protocol.EventIssueUpdated, ws, actorType, actorID, map[string]any{"issue": resp})
-	writeJSON(w, 200, run)
+	h.publish(protocol.EventIssueUpdated, ws, actorType, actorID, map[string]any{"issue": resp,
+		"assignee_changed":   issue.AssigneeType != updated.AssigneeType || issue.AssigneeID != updated.AssigneeID,
+		"prev_assignee_type": textToPtr(issue.AssigneeType), "prev_assignee_id": uuidToPtr(issue.AssigneeID)})
+	h.writeIssueMethodView(w, r, updated, run)
 }

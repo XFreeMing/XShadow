@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -57,9 +58,9 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 	}
 	ws := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, ws)
-	var reviewRun []byte
+	var run workmethod.Run
+	reopenReview := false
 	if len(issue.WorkMethodRun) > 0 {
-		var run workmethod.Run
 		if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil {
 			writeError(w, 500, "failed to read method run")
 			return
@@ -72,26 +73,48 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 			run.State = "review"
 			run.Revision++
 			run.History = append(run.History, workmethod.Event{Action: "review_reopened", Step: run.Step, Evidence: change.CriterionID + " 的验收记录已更新", Actor: actorType + "/" + actorID, At: time.Now().UTC().Format(time.RFC3339Nano)})
-			reviewRun, err = json.Marshal(run)
-			if err != nil {
-				writeError(w, 500, "failed to record renewed review")
-				return
-			}
+			reopenReview = true
 		}
 	}
-	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {
-		return q.UpdateIssueAcceptanceTrace(r.Context(), db.UpdateIssueAcceptanceTraceParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, Trace: raw, IssueRevision: issue.Revision, ReviewRun: reviewRun})
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, 409, acceptance.ErrConflict.Error())
-		return
+	save := func(q *db.Queries, assigneeType pgtype.Text, assigneeID pgtype.UUID, frozen workmethod.Run) (db.Issue, error) {
+		var reviewRun []byte
+		if reopenReview {
+			var err error
+			reviewRun, err = json.Marshal(frozen)
+			if err != nil {
+				return db.Issue{}, err
+			}
+		}
+		return q.UpdateIssueAcceptanceTrace(r.Context(), db.UpdateIssueAcceptanceTraceParams{
+			ID: issue.ID, WorkspaceID: issue.WorkspaceID, Trace: raw, IssueRevision: issue.Revision,
+			ReviewRun: reviewRun, ReviewerType: assigneeType, ReviewerID: assigneeID,
+		})
 	}
-	if err != nil {
-		writeError(w, 500, "failed to save acceptance change")
-		return
+	var updated db.Issue
+	if reopenReview {
+		updated, ok = h.persistMethodTransition(w, r, issue, run, save)
+		if !ok {
+			return
+		}
+	} else {
+		updated, err = wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {
+			return save(q, pgtype.Text{}, pgtype.UUID{}, run)
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, 409, acceptance.ErrConflict.Error())
+			return
+		}
+		if err != nil {
+			writeError(w, 500, "failed to save acceptance change")
+			return
+		}
 	}
 	resp := issueToResponse(updated, h.getIssuePrefix(r.Context(), issue.WorkspaceID))
 	resp.AcceptanceTrace = &trace
-	h.publish(protocol.EventIssueUpdated, ws, actorType, actorID, map[string]any{"issue": resp})
+	h.publish(protocol.EventIssueUpdated, ws, actorType, actorID, map[string]any{
+		"issue":              resp,
+		"assignee_changed":   issue.AssigneeType != updated.AssigneeType || issue.AssigneeID != updated.AssigneeID,
+		"prev_assignee_type": textToPtr(issue.AssigneeType), "prev_assignee_id": uuidToPtr(issue.AssigneeID),
+	})
 	writeJSON(w, http.StatusOK, trace)
 }

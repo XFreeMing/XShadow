@@ -42,6 +42,7 @@ import { CollectionPageState } from "../../layout/collection-page";
 import { OBJECT_PAGE_BODY, ObjectPage } from "../../layout/object-page";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { useT } from "../../i18n";
+import { WorkMethodSteps } from "../../workflows/work-method-step";
 import { GoalStatusBadge } from "./goal-status-badge";
 import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
@@ -87,6 +88,7 @@ function GoalMethodRecommendation({ wsId, goalId, updatedAt }: { wsId: string; g
   return <Section title={t(($) => $.method.recommended)}>
     <p className="text-body font-medium">{query.data.method?.name ?? t(($) => $.method.no_match)}</p>
     {query.data.reason && <p className="text-label text-muted-foreground">{query.data.reason}</p>}
+    {query.data.method && <details className="mt-2 text-label"><summary className="cursor-pointer">{t(($)=>$.method.steps)}</summary><WorkMethodSteps steps={query.data.method.steps}/></details>}
   </Section>;
 }
 

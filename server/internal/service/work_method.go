@@ -23,7 +23,7 @@ func WorkMethodCatalog(ctx context.Context, q *db.Queries, ws pgtype.UUID) ([]wo
 	if err := json.Unmarshal(raw, &custom); err != nil {
 		return nil, err
 	}
-	return append(workmethod.Builtins(), custom...), nil
+	return workmethod.Catalog(custom), nil
 }
 
 func WorkMethodGoalText(title, intent, criteria string) string {

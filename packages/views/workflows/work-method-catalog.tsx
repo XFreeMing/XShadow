@@ -8,10 +8,13 @@ import {
   WorkMethodKindSchema,
   type NewWorkMethod,
   type WorkMethodKind,
+  type WorkMethod,
+  type WorkMethodHandler,
 } from "@multica/core/types/work-method";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { useT } from "../i18n";
+import { WorkMethodSteps, WorkMethodHandlerPicker } from "./work-method-step";
 
 const selectClass =
   "w-full rounded-md border border-input bg-background px-2 py-1.5 text-label";
@@ -29,7 +32,7 @@ export function WorkMethodCatalog({
     ...workMethodCatalogOptions(wsId),
     enabled: !!wsId,
   });
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<WorkMethod | "new" | null>(null);
   if (query.error instanceof ApiError && query.error.status === 404)
     return null;
   return (
@@ -39,13 +42,13 @@ export function WorkMethodCatalog({
           {t(($) => $.method.catalog)}
         </h2>
         {canCreate && !editing && (
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+          <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
             {t(($) => $.method.create)}
           </Button>
         )}
       </header>
-      {editing && (
-        <MethodEditor wsId={wsId} onClose={() => setEditing(false)} />
+      {editing === "new" && (
+        <MethodEditor wsId={wsId} onClose={() => setEditing(null)} />
       )}
       {query.isError && (
         <p role="alert" className="text-label text-destructive">
@@ -64,13 +67,28 @@ export function WorkMethodCatalog({
                 · {t(($) => $.method[method.kind])}
               </span>
             </summary>
-            <ol className="mt-3 list-decimal space-y-1 pl-5">
-              {method.steps.map((step, i) => (
-                <li key={i}>
-                  <strong>{step.name}</strong> · {step.output}
-                </li>
-              ))}
-            </ol>
+            <WorkMethodSteps steps={method.steps} />
+            {canCreate && !editing && (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                className="mt-3"
+                onClick={() => setEditing(method)}
+              >
+                {t(($) => $.method.edit)}
+              </Button>
+            )}
+            {editing && editing !== "new" && editing.id === method.id && (
+              <div className="my-3">
+                <MethodEditor
+                  key={method.id}
+                  wsId={wsId}
+                  original={editing}
+                  onClose={() => setEditing(null)}
+                />
+              </div>
+            )}
             <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               {method.keywords.length > 0 && (
                 <>
@@ -98,21 +116,70 @@ export function WorkMethodCatalog({
 
 function MethodEditor({
   wsId,
+  original,
   onClose,
 }: {
   wsId: string;
+  original?: WorkMethod;
   onClose: () => void;
 }) {
   const { t } = useT("issues");
   const qc = useQueryClient();
-  const [steps, setSteps] = useState([{ id: 0, name: "", output: "" }]);
-  const [rework, setRework] = useState(0);
-  const [kind, setKind] = useState<WorkMethodKind>("development");
-  const [name, setName] = useState("");
-  const [keywords, setKeywords] = useState("");
-  const [review, setReview] = useState("");
+  type DraftStep = {
+    id: number;
+    name: string;
+    output: string;
+    inputs: string;
+    instructions: string;
+    checks: string;
+    owner: WorkMethodHandler | null;
+    reviewer: WorkMethodHandler | null;
+  };
+  const emptyStep = {
+    name: "",
+    output: "",
+    inputs: "",
+    instructions: "",
+    checks: "",
+    owner: null,
+    reviewer: null,
+  };
+  const [steps, setSteps] = useState<DraftStep[]>(() =>
+    original
+      ? original.steps.map((step, i) => ({
+          id: i,
+          name: step.name,
+          output: step.output,
+          inputs: step.inputs ?? "",
+          instructions: step.instructions ?? "",
+          checks: step.checks?.join("\n") ?? "",
+          owner: step.owner ?? null,
+          reviewer: step.reviewer ?? null,
+        }))
+      : [{ id: 0, ...emptyStep }],
+  );
+  const [rework, setRework] = useState(original?.rework_step ?? 0);
+  const [kind, setKind] = useState<WorkMethodKind>(
+    original?.kind ?? "development",
+  );
+  const [name, setName] = useState(original?.name ?? "");
+  const [keywords, setKeywords] = useState(original?.keywords.join(", ") ?? "");
+  const [review, setReview] = useState(original?.review ?? "");
+  const changeStep = (id: number, patch: Partial<Omit<DraftStep, "id">>) =>
+    setSteps((current) =>
+      current.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+    );
   const mutation = useMutation({
-    mutationFn: (draft: NewWorkMethod) => api.createWorkMethod(draft),
+    mutationFn: (draft: NewWorkMethod) =>
+      original
+        ? api.updateWorkMethod(original.id, original.revision, draft)
+        : api.createWorkMethod(draft),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409)
+        void qc.invalidateQueries({
+          queryKey: workMethodCatalogOptions(wsId).queryKey,
+        });
+    },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["work-methods", wsId] });
       onClose();
@@ -139,6 +206,21 @@ function MethodEditor({
       steps: steps.map((step) => ({
         name: step.name.trim(),
         output: step.output.trim(),
+        ...(step.inputs.trim() ? { inputs: step.inputs.trim() } : {}),
+        ...(step.instructions.trim()
+          ? { instructions: step.instructions.trim() }
+          : {}),
+        ...(step.checks.trim()
+          ? {
+              checks: step.checks
+                .split("\n")
+                .map((s) => s.trim())
+                .filter(Boolean),
+            }
+          : {}),
+        ...(step.owner && step.reviewer
+          ? { owner: step.owner, reviewer: step.reviewer }
+          : {}),
       })),
       review: review.trim(),
       rework_step: steps.findIndex((step) => step.id === rework),
@@ -215,6 +297,42 @@ function MethodEditor({
                 </label>
               ))}
             </div>
+            {(["inputs", "instructions", "checks"] as const).map((field) => (
+              <label key={field} className={labelClass}>
+                {t(($) => $.method[field])}
+                <textarea
+                  className={selectClass}
+                  value={step[field]}
+                  placeholder={
+                    field === "checks"
+                      ? t(($) => $.method.check_hint)
+                      : undefined
+                  }
+                  onChange={(e) =>
+                    changeStep(step.id, { [field]: e.target.value })
+                  }
+                />
+              </label>
+            ))}
+            <div className="grid gap-2 sm:grid-cols-2">
+              <WorkMethodHandlerPicker
+                wsId={wsId}
+                label={t(($) => $.method.owner)}
+                handler={step.owner}
+                onChange={(owner) => changeStep(step.id, { owner })}
+              />
+              <WorkMethodHandlerPicker
+                wsId={wsId}
+                label={t(($) => $.method.reviewer)}
+                handler={step.reviewer}
+                onChange={(reviewer) => changeStep(step.id, { reviewer })}
+              />
+            </div>
+            {Boolean(step.owner) !== Boolean(step.reviewer) && (
+              <p className="text-caption text-muted-foreground">
+                {t(($) => $.method.pair_hint)}
+              </p>
+            )}
             {steps.length > 1 && (
               <div>
                 <Button
@@ -234,13 +352,13 @@ function MethodEditor({
             type="button"
             size="xs"
             variant="outline"
+            disabled={steps.length >= 32}
             onClick={() =>
               setSteps([
                 ...steps,
                 {
                   id: Math.max(...steps.map((s) => s.id)) + 1,
-                  name: "",
-                  output: "",
+                  ...emptyStep,
                 },
               ])
             }
@@ -284,7 +402,12 @@ function MethodEditor({
             mutation.isPending ||
             !name.trim() ||
             !review.trim() ||
-            steps.some((s) => !s.name.trim() || !s.output.trim())
+            steps.some(
+              (s) =>
+                !s.name.trim() ||
+                !s.output.trim() ||
+                Boolean(s.owner) !== Boolean(s.reviewer),
+            )
           }
         >
           {t(($) => $.acceptance.save)}

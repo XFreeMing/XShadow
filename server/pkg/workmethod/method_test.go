@@ -121,7 +121,7 @@ func TestSelectionOverridesBeforeWorkAndFreezesTemplate(t *testing.T) {
 }
 
 func TestCustomMethodPublishValidation(t *testing.T) {
-	m := Template{ID: "ba5901a4-2ed7-4248-af1e-f93db90378b0", Name: "访谈手册", Kind: "research", Keywords: []string{}, Steps: []Step{{"访谈", "登记原始访谈记录"}}, Review: "确认依据与结论一致"}
+	m := Template{ID: "ba5901a4-2ed7-4248-af1e-f93db90378b0", Name: "访谈手册", Kind: "research", Keywords: []string{}, Steps: []Step{{Name: "访谈", Output: "登记原始访谈记录"}}, Review: "确认依据与结论一致"}
 	if err := Validate(m); err != nil {
 		t.Fatal(err)
 	}
@@ -137,5 +137,129 @@ func TestCustomMethodPublishValidation(t *testing.T) {
 		if err := Validate(bad); err == nil {
 			t.Fatal(bad)
 		}
+	}
+}
+
+func TestMixedStepReviewResubmission(t *testing.T) {
+	m := Builtins()[0]
+	owner := &Actor{Kind: "creator"}
+	reviewer := &Actor{Kind: "project_lead"}
+	m.Steps[1].Owner, m.Steps[1].Reviewer = owner, reviewer
+	m.Steps[2].Owner, m.Steps[2].Reviewer = owner, reviewer
+	methods := []Template{m}
+	r := Recommend(methods, "开发产品面板", "", "")
+	owner.Kind = "invalid"
+	m.Steps[1].Checks[0] = "changed"
+	if r.Method.Steps[1].Owner.Kind != "creator" || r.Method.Steps[1].Checks[0] == "changed" {
+		t.Fatal("mutable run snapshot")
+	}
+	transition := func(action string, step int, state string) {
+		t.Helper()
+		c := change(&r, action, "artifact or decision")
+		if action == "approve" && r.Method.Steps[r.Step].Reviewer != nil {
+			c.CheckedItems = []int{0, 1}
+		}
+		apply(t, &r, c, methods)
+		if r.Step != step || r.State != state {
+			t.Fatalf("%s reached %d/%s, want %d/%s", action, r.Step, r.State, step, state)
+		}
+	}
+	transition("advance", 1, "working")
+	transition("advance", 1, "review")
+	c := change(&r, "rework", "premature jump")
+	ii := 2
+	c.TargetStep = &ii
+	rejected(t, &r, c)
+	transition("rework", 1, "working")
+	transition("advance", 1, "review")
+	transition("approve", 2, "working")
+	transition("advance", 2, "review")
+	c = change(&r, "rework", "repeat initial deliverable")
+	ii = 0
+	c.TargetStep = &ii
+	apply(t, &r, c, methods)
+	last := r.History[len(r.History)-1]
+	if r.Step != 0 || last.Step != 0 || last.FromStep == nil || *last.FromStep != 2 {
+		t.Fatal(r)
+	}
+	transition("advance", 1, "working")
+	transition("advance", 1, "review")
+	transition("approve", 2, "working")
+	transition("advance", 2, "review")
+	transition("approve", 3, "working")
+	transition("advance", 3, "review")
+	transition("approve", 3, "closed")
+}
+
+func TestStepContracts(t *testing.T) {
+	for _, m := range Builtins() {
+		for _, s := range m.Steps {
+			if s.Instructions == "" || s.Inputs == "" || len(s.Checks) == 0 {
+				t.Fatalf("missing guidance in %s/%s", m.ID, s.Name)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		owner, reviewer *Actor
+		valid           bool
+	}{
+		{nil, nil, true}, {&Actor{Kind: "creator"}, nil, false},
+		{nil, &Actor{Kind: "creator"}, false}, {&Actor{Kind: "creator", ID: "fake"}, &Actor{Kind: "creator"}, false},
+		{&Actor{Kind: "squad", ID: "wrong"}, &Actor{Kind: "creator"}, false},
+		{&Actor{Kind: "project_lead"}, &Actor{Kind: "invalid"}, false},
+		{&Actor{Kind: "member", ID: "74a3bae4-e7c5-4e07-8d0f-845605e77df7"}, &Actor{Kind: "creator"}, true},
+	} {
+		m := Builtins()[0]
+		m.Steps[0].Owner, m.Steps[0].Reviewer = tc.owner, tc.reviewer
+		if err := Validate(m); (err == nil) != tc.valid {
+			t.Fatalf("%+v %+v: %v", tc.owner, tc.reviewer, err)
+		}
+	}
+	legacy := Template{ID: "legacy"}
+	c := Catalog([]Template{legacy})
+	if c[3].ID != "legacy" || c[3].Revision != 1 {
+		t.Fatal(c)
+	}
+}
+
+func TestStartAndStepReviewEvidence(t *testing.T) {
+	methods := Builtins()
+	step := &methods[1].Steps[0]
+	step.Owner, step.Reviewer = &Actor{Kind: "creator"}, &Actor{Kind: "project_lead"}
+	r := Recommend(methods, "调研用户行为", "", "")
+	initial := r
+	c := change(&r, "start", "")
+	c.MethodID = "agile"
+	if err := r.Apply(c, methods, "member/test", "now"); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	c.MethodID = "seven-step"
+	apply(t, &r, c, methods)
+	if r.State != "working" || r.Reason != initial.Reason || r.Source != "title" || r.Step != 0 {
+		t.Fatal(r)
+	}
+	c = change(&r, "select", "")
+	c.MethodID = "agile"
+	rejected(t, &r, c)
+	apply(t, &r, change(&r, "advance", "采访计划"), methods)
+	for _, invalid := range [][]int{nil, {0}, {0, 0}, {-1, 1}, {0, 2}} {
+		c = change(&r, "approve", "同意")
+		c.CheckedItems = invalid
+		rejected(t, &r, c)
+	}
+	c = change(&r, "rework", "需要补充成功条件")
+	c.CheckedItems = []int{1}
+	apply(t, &r, c, methods)
+	c.CheckedItems[0] = 0
+	last := r.History[len(r.History)-1]
+	if len(last.CheckedItems) != 1 || last.CheckedItems[0] != 1 {
+		t.Fatal(last)
+	}
+	apply(t, &r, change(&r, "advance", "修订版"), methods)
+	c = change(&r, "approve", "逐项核对")
+	c.CheckedItems = []int{1, 0}
+	apply(t, &r, c, methods)
+	if r.State != "working" || r.Step != 1 || len(r.History[len(r.History)-1].CheckedItems) != 2 {
+		t.Fatal(r)
 	}
 }

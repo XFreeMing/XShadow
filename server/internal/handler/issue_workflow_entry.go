@@ -65,6 +65,15 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	}
 	statusChanging := params.Status.Valid && params.Status.String != prev.Status
 	if statusChanging && len(prev.WorkMethodRun) > 0 {
+		if bound := methodBoundRevision(run); bound > 0 {
+			var method workmethod.Run
+			if err := json.Unmarshal(prev.WorkMethodRun, &method); err != nil {
+				return nil, err
+			}
+			if bound != method.Revision {
+				return nil, errMethodStageMoved
+			}
+		}
 		if err := h.checkMethodCompletion(ctx, prev, params.Status.String); err != nil {
 			return nil, err
 		}
@@ -90,7 +99,7 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	// made for a step the issue has left, and applying it would undo that move.
 	// Default without handoffs keeps the pre-workflow behavior, so workspaces
 	// that never adopt workflows see no change.
-	if workflowStepMoved(def, prev.Status, run) &&
+	if methodBoundRevision(run) == 0 && workflowStepMoved(def, prev.Status, run) &&
 		statusExplicit && params.Status.Valid && params.Status.String != prev.Status {
 		return nil, h.stepMovedError(ctx, prev, run.WorkflowStep.String)
 	}
@@ -131,10 +140,26 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	return &workflowHandoff{def: *def, step: step, project: project}, nil
 }
 
-// A research or outcome method carries its own deliverables and review.
+// A method with its own dispatch, and research or outcome work, own the handoff.
 func methodOwnsHandoff(run workmethod.Run) bool {
-	return run.Method != nil && (run.Method.Kind == "research" || run.Method.Kind == "outcome")
+	if run.Method == nil {
+		return false
+	}
+	if run.Method.Kind == "research" || run.Method.Kind == "outcome" {
+		return true
+	}
+	if run.State == "closed" {
+		return false
+	}
+	for _, step := range run.Method.Steps {
+		if step.Owner != nil || step.Reviewer != nil {
+			return true
+		}
+	}
+	return false
 }
+
+var errMethodStageMoved = errors.New("work method stage moved; end this run")
 
 var errMethodReviewOpen = errors.New("complete the work method review before marking the issue done")
 
@@ -182,6 +207,10 @@ func workflowHandoffPayload(issue db.Issue, hand *workflowHandoff, note string, 
 // writeIssueWorkflowError answers a workflow rejection. It reports false when
 // err is not one, so the caller can fall through to its generic 500.
 func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, errMethodStageMoved) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "work_method_stage_moved"})
+		return true
+	}
 	if errors.Is(err, errMethodReviewOpen) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "work_method_review_open"})
 		return true
@@ -415,14 +444,27 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 			"issue_id", uuidToString(issue.ID), "error", err)
 		return nil
 	}
-	stepMoved := workflowStepMoved(def, issue.Status, task)
+	methodOwned := methodOwnsHandoff(method)
+	stepMoved := !methodOwned && workflowStepMoved(def, issue.Status, task)
+	bound := methodBoundRevision(task)
+	if bound > 0 && bound != method.Revision {
+		return &TaskProjectWorkflowData{Brief: "This work-method handoff has already moved. End this run. The current stage has a separate owner.", stepMoved: true}
+	}
 	ownsStep := taskRunsForAssignee(issue, task) && !stepMoved
 	methodBrief := ""
 	if method.Method != nil {
 		issueRef := h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
+		recipient, err := h.methodRecipient(ctx, issue, method)
+		if err != nil {
+			ownsStep = false
+		}
+		if recipient != nil {
+			method.CurrentActor = recipient
+			ownsStep = task != nil && (recipient.Kind == "agent" && uuidToString(task.AgentID) == recipient.ID || recipient.Kind == "squad" && task.IsLeaderTask && uuidToString(task.SquadID) == recipient.ID)
+		}
 		methodBrief = methodClaimBrief(method, issueRef, ownsStep)
 	}
-	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) || (methodOwnsHandoff(method) && !stepMoved) {
+	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) || methodOwned {
 		if methodBrief == "" {
 			return nil
 		}
@@ -454,7 +496,7 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Work method for %s: %q (%s), state %s.\n", issueRef, run.Method.Name, run.Method.ID, run.State)
-	fmt.Fprintf(&b, "Read the current revision, outputs and review evidence: multica issue method %s\n", issueRef)
+	fmt.Fprintf(&b, "Read the latest revision, delivered evidence and checklist: \"$MULTICA_CLI_PATH\" issue method %s\n", issueRef)
 	if n := len(run.History); n > 0 {
 		last := run.History[n-1]
 		fmt.Fprintf(&b, "Latest recorded action %q; evidence: %q.\n", last.Action, last.Evidence)
@@ -466,19 +508,45 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string
 	if run.State == "ready" {
 		fmt.Fprintf(&b, "Selection basis: %q.\n", run.Reason)
 	}
+	if run.Step < 0 || run.Step >= len(run.Method.Steps) {
+		return b.String()
+	}
+	step := run.Method.Steps[run.Step]
+	fmt.Fprintf(&b, "Step %d of %d: %q. Required output: %q.\n", run.Step+1, len(run.Method.Steps), step.Name, step.Output)
+	if step.Inputs != "" {
+		fmt.Fprintf(&b, "Inputs: %s\n", step.Inputs)
+	}
+	if step.Instructions != "" {
+		fmt.Fprintf(&b, "Instructions: %s\n", step.Instructions)
+	}
+	for i, check := range step.Checks {
+		fmt.Fprintf(&b, "Check [%d]: %s\n", i, check)
+	}
+	if actor := run.CurrentActor; actor != nil {
+		fmt.Fprintf(&b, "Current recipient: %s/%s.\n", actor.Kind, actor.ID)
+	}
+	if !ownsStep {
+		b.WriteString("Provide findings to the current assignee. That assignee advances the method.")
+		return b.String()
+	}
 	action := "advance"
 	if run.State == "review" {
-		fmt.Fprintf(&b, "Review the recorded outputs against %q.\n", run.Method.Review)
-		action = "approve or rework"
-	} else if run.Step >= 0 && run.Step < len(run.Method.Steps) {
-		step := run.Method.Steps[run.Step]
-		fmt.Fprintf(&b, "Step %d of %d: %q. Required output: %q.\n", run.Step+1, len(run.Method.Steps), step.Name, step.Output)
+		action = "approve"
+		if run.Step == len(run.Method.Steps)-1 {
+			fmt.Fprintf(&b, "Final review criteria: %s\n", run.Method.Review)
+		}
+		b.WriteString("Review the submitted work and each check against original evidence. Approve only after all checks pass. Otherwise record action rework with the target_step (zero-based) and concrete deficiencies.\n")
 	}
-	if ownsStep {
-		fmt.Fprintf(&b, "Record the result with multica issue method %s --change-file <json-file>. Supply base_revision from the read, action (%s) and evidence with the actual deliverable or decision. Complete the method review before moving the issue to a completed status.", issueRef, action)
-	} else {
-		b.WriteString("Provide findings to the current assignee. That assignee advances the method.")
+	payload := map[string]any{"base_revision": run.Revision, "action": action, "evidence": "<actual deliverable or review findings and source>"}
+	if action == "approve" && step.Reviewer != nil && len(step.Checks) > 0 {
+		checked := make([]int, len(step.Checks))
+		for i := range checked {
+			checked[i] = i
+		}
+		payload["checked_items"] = checked
 	}
+	example, _ := json.Marshal(payload)
+	fmt.Fprintf(&b, "Record the result with \"$MULTICA_CLI_PATH\" issue method %s --change-file <json-file>. Use the latest revision and replace the evidence in this example: %s. After successful handoff, end this run. Complete the method review before moving the issue to a completed status.", issueRef, example)
 	return b.String()
 }
 

@@ -1572,6 +1572,16 @@ export class ApiClient {
     return response;
   }
 
+  async updateWorkMethod(id: string, baseRevision: number, data: NewWorkMethod): Promise<WorkMethod> {
+    const endpoint = `/api/work-methods/${encodeURIComponent(id)}`;
+    const raw = await this.fetch<unknown>(endpoint, {
+      method: "PUT", body: JSON.stringify({ ...data, base_revision: baseRevision }),
+    });
+    const response = parseWithFallback<WorkMethod | null>(raw, WorkMethodSchema, null, { endpoint });
+    if (!response) throw new Error("Malformed work method");
+    return response;
+  }
+
   async getIssueWorkMethod(issueId: string): Promise<WorkMethodRun> {
     const endpoint = `/api/issues/${encodeURIComponent(issueId)}/work-method`;
     const raw = await this.fetch<unknown>(endpoint);

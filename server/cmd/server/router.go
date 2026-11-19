@@ -2267,6 +2267,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// switching a project's workflow to admins and the project's lead.
 			r.Get("/api/work-methods", h.ListWorkMethods)
 			r.With(handler.RequireHumanActor).Post("/api/work-methods", h.CreateWorkMethod)
+			r.With(handler.RequireHumanActor).Put("/api/work-methods/{id}", h.UpdateWorkMethod)
 			r.Route("/api/issue-workflows", func(r chi.Router) {
 				r.Get("/", h.ListIssueWorkflows)
 				r.Post("/", h.CreateIssueWorkflow)

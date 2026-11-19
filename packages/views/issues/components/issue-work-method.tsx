@@ -11,6 +11,12 @@ import type {
   WorkMethodAction,
   WorkMethodRun,
 } from "@multica/core/types/work-method";
+import {
+  WorkMethodSteps,
+  WorkMethodStepDetail,
+  useMethodHandlerName,
+  type MethodRoleContext,
+} from "../../workflows/work-method-step";
 import { Button } from "@multica/ui/components/ui/button";
 import { useLocale, useT } from "../../i18n";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -19,11 +25,13 @@ export function IssueWorkMethod({
   wsId,
   issueId,
   issueRevision,
+  roles,
   children,
 }: {
   wsId: string;
   issueId: string;
   issueRevision?: number;
+  roles?: MethodRoleContext;
   children: ReactNode;
 }) {
   const { t } = useT("issues");
@@ -52,7 +60,14 @@ export function IssueWorkMethod({
           </Button>
         </div>
       )}
-      {run.data && <MethodCard wsId={wsId} issueId={issueId} run={run.data} />}
+      {run.data && (
+        <MethodCard
+          wsId={wsId}
+          issueId={issueId}
+          run={run.data}
+          roles={roles}
+        />
+      )}
       {run.data &&
         (!run.data.method || run.data.method.kind === "development") &&
         children}
@@ -64,25 +79,33 @@ function MethodCard({
   wsId,
   issueId,
   run,
+  roles,
 }: {
   wsId: string;
   issueId: string;
   run: WorkMethodRun;
+  roles?: MethodRoleContext;
 }) {
   const { t } = useT("issues");
   const { getActorName } = useActorName();
   const locale = useLocale();
+  const handlerName = useMethodHandlerName(roles);
   function actorName(actor: string) {
     const [type, id] = actor.split("/");
     return type && id ? getActorName(type, id) : actor;
   }
   const qc = useQueryClient();
+  const [checkReview, setCheckReview] = useState<{
+    revision: number;
+    checked: number[];
+  } | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [selected, setSelected] = useState("");
   const [draft, setDraft] = useState<{
     value: string;
     revision: number;
     methodId: string;
+    methodRevision: number;
   } | null>(null);
   const [returnStep, setReturnStep] = useState<number | null>(null);
   const catalog = useQuery({
@@ -98,6 +121,7 @@ function MethodCard({
         old && old.revision > next.revision ? old : next,
       );
       setDraft(null);
+      setCheckReview(null);
       setChoosing(false);
       setSelected("");
       setReturnStep(null);
@@ -110,35 +134,70 @@ function MethodCard({
   const step = method?.steps[run.step];
   const stale =
     draft !== null &&
-    (draft.revision !== run.revision || draft.methodId !== method?.id);
+    (draft.revision !== run.revision ||
+      draft.methodId !== method?.id ||
+      draft.methodRevision !== method?.revision);
   const evidence = draft?.value.trim() ?? "";
   const disabled = stale || mutation.isPending || !evidence;
   const reviewed = run.state === "review";
+  const lastStep = !!method && run.step === method.steps.length - 1;
+  const startsHandoff = run.state === "ready" && !!step?.owner;
+  const canAct = run.can_act !== false && !startsHandoff;
+  const checked =
+    checkReview?.revision === run.revision ? checkReview.checked : [];
+  const checks = step?.checks ?? [];
+  const reviewComplete =
+    !step?.reviewer || checks.every((_, i) => checked.includes(i));
+  const latest = [...run.history].reverse();
+  const delivery = latest.find((event) => event.action === "advance");
+  const returned = latest.find(
+    (event) => event.action === "rework" && event.step === run.step,
+  );
+  const returnTo =
+    returnStep === null || returnStep > run.step
+      ? lastStep
+        ? method?.rework_step
+        : run.step
+      : returnStep;
   function act(action: "advance" | "approve" | "rework") {
-    if (disabled || !method) return;
+    if (
+      disabled ||
+      !method ||
+      !canAct ||
+      (action === "approve" && !reviewComplete)
+    )
+      return;
     const base = { base_revision: run.revision, evidence };
+    const verdict = checks.length
+      ? { checked_items: [...checked].sort((a, b) => a - b) }
+      : {};
     if (action === "advance")
       mutation.mutate({
         ...base,
         action,
-        ...(run.state === "ready" ? { method_id: method.id } : {}),
+        ...(run.state === "ready"
+          ? { method_id: method.id, method_revision: method.revision }
+          : {}),
       });
     else if (action === "rework")
       mutation.mutate({
         ...base,
         action,
-        target_step: returnStep ?? method.rework_step,
+        target_step: returnTo,
+        ...verdict,
       });
-    else mutation.mutate({ ...base, action });
+    else mutation.mutate({ ...base, action, ...verdict });
   }
   const actionText = (action: string) => {
     switch (action) {
+      case "start":
+        return t(($) => $.method.start);
       case "select":
         return t(($) => $.method.select);
       case "advance":
         return t(($) => $.method.advance);
       case "approve":
-        return t(($) => $.method.approve);
+        return t(($) => $.method.step_pass);
       case "rework":
         return t(($) => $.method.rework);
       default:
@@ -212,6 +271,8 @@ function MethodCard({
                   action: "select",
                   base_revision: run.revision,
                   method_id: selected,
+                  method_revision: catalog.data?.find((m) => m.id === selected)
+                    ?.revision,
                 })
               }
             >
@@ -238,111 +299,194 @@ function MethodCard({
         )}
         {method && (
           <>
-            {run.state !== "closed" && (
+            {run.state !== "closed" && step && (
               <>
-                <div className="rounded-md bg-muted/30 p-3">
+                <div className="grid gap-2 rounded-md bg-muted/30 p-3">
                   <h4 className="font-medium">
-                    {reviewed ? t(($) => $.method.review) : step?.name}
+                    {run.step + 1} · {step.name}
                   </h4>
-                  <p className="whitespace-pre-wrap break-words text-muted-foreground">
-                    {reviewed ? method.review : step?.output}
-                  </p>
-                </div>
-                <label className="grid gap-1.5">
-                  {reviewed
-                    ? t(($) => $.method.review_evidence)
-                    : t(($) => $.method.evidence)}
-                  <textarea
-                    className="min-h-16 rounded-md border border-input bg-background p-2"
-                    value={draft?.value ?? ""}
-                    onChange={(e) =>
-                      setDraft({
-                        revision: draft?.revision ?? run.revision,
-                        methodId: draft?.methodId ?? method.id,
-                        value: e.target.value,
-                      })
-                    }
+                  <WorkMethodStepDetail
+                    step={step}
+                    roles={roles}
+                    showChecks={!reviewed || !canAct}
                   />
-                </label>
-                {stale && (
-                  <div role="alert">
-                    {t(($) => $.method.stale)}{" "}
+                  {reviewed && lastStep && (
+                    <p className="whitespace-pre-wrap">
+                      {t(($) => $.method.review)} · {method.review}
+                    </p>
+                  )}
+                </div>
+                {run.current_actor && (
+                  <p>
+                    {t(($) => $.method.current_actor)} ·{" "}
+                    {handlerName(run.current_actor)}
+                  </p>
+                )}
+                {startsHandoff && step.owner && (
+                  <div>
                     <Button
-                      variant="link"
-                      size="xs"
-                      onClick={() => setDraft(null)}
+                      size="sm"
+                      disabled={mutation.isPending}
+                      onClick={() =>
+                        mutation.mutate({
+                          action: "start",
+                          method_id: method.id,
+                          method_revision: method.revision,
+                          base_revision: run.revision,
+                        })
+                      }
                     >
-                      {t(($) => $.method.restart)}
+                      {t(($) => $.method.start_handoff, {
+                        name: handlerName(step.owner),
+                      })}
                     </Button>
                   </div>
                 )}
-                {reviewed && (
-                  <label className="grid gap-1.5">
-                    {t(($) => $.method.rework_step)}
-                    <select
-                      className="rounded-md border border-input bg-background p-1.5"
-                      value={returnStep ?? method.rework_step}
-                      onChange={(e) => setReturnStep(Number(e.target.value))}
-                    >
-                      {method.steps.map((s, i) => (
-                        <option key={i} value={i}>
-                          {i + 1} · {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                {delivery && (
+                  <div className="min-w-0 border-l-2 border-border pl-3">
+                    <p className="text-caption font-medium text-muted-foreground">
+                      {t(($) => $.method.latest_delivery)} ·{" "}
+                      {method.steps[delivery.step]?.name} ·{" "}
+                      {actorName(delivery.actor)}
+                    </p>
+                    <p className="break-words whitespace-pre-wrap">
+                      {delivery.evidence}
+                    </p>
+                  </div>
                 )}
-                <div className="flex flex-wrap gap-2">
-                  {reviewed ? (
-                    <>
-                      <Button
-                        size="sm"
-                        disabled={disabled}
-                        onClick={() => act("approve")}
-                      >
-                        {t(($) => $.method.approve)}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={disabled}
-                        onClick={() => act("rework")}
-                      >
-                        {t(($) => $.method.rework)}
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      size="sm"
-                      disabled={disabled || !step}
-                      onClick={() => act("advance")}
-                    >
-                      {run.step === method.steps.length - 1
-                        ? t(($) => $.method.submit_review)
-                        : t(($) => $.method.advance)}
-                    </Button>
-                  )}
-                </div>
+                {returned && (
+                  <div className="min-w-0 border-l-2 border-warning pl-3">
+                    <p className="text-caption font-medium">
+                      {t(($) => $.method.return_reason)} ·{" "}
+                      {actorName(returned.actor)}
+                    </p>
+                    <p className="break-words whitespace-pre-wrap">
+                      {returned.evidence}
+                    </p>
+                  </div>
+                )}
+                {canAct && (
+                  <>
+                    {reviewed && checks.length > 0 && (
+                      <fieldset className="rounded-md border border-surface-border p-3">
+                        <legend className="px-1 font-medium">
+                          {t(($) => $.method.checks)}
+                        </legend>
+                        <div className="grid gap-2">
+                          {checks.map((check, i) => (
+                            <label key={i} className="flex items-start gap-2">
+                              <input
+                                type="checkbox"
+                                checked={checked.includes(i)}
+                                onChange={(e) =>
+                                  setCheckReview({
+                                    revision: run.revision,
+                                    checked: e.target.checked
+                                      ? [...checked, i]
+                                      : checked.filter((item) => item !== i),
+                                  })
+                                }
+                              />
+                              {check}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    )}
+                    <label className="grid gap-1.5">
+                      {reviewed
+                        ? t(($) => $.method.review_evidence)
+                        : t(($) => $.method.evidence)}
+                      <textarea
+                        className="min-h-16 rounded-md border border-input bg-background p-2"
+                        value={draft?.value ?? ""}
+                        onChange={(e) =>
+                          setDraft({
+                            revision: draft?.revision ?? run.revision,
+                            methodId: draft?.methodId ?? method.id,
+                            methodRevision:
+                              draft?.methodRevision ?? method.revision,
+                            value: e.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                    {stale && (
+                      <div role="alert">
+                        {t(($) => $.method.stale)}{" "}
+                        <Button
+                          size="xs"
+                          variant="link"
+                          onClick={() => setDraft(null)}
+                        >
+                          {t(($) => $.method.restart)}
+                        </Button>
+                      </div>
+                    )}
+                    {reviewed && (
+                      <label className="grid gap-1.5">
+                        {t(($) => $.method.rework_step)}
+                        <select
+                          className="rounded-md border border-input bg-background p-1.5"
+                          value={returnTo}
+                          onChange={(e) =>
+                            setReturnStep(Number(e.target.value))
+                          }
+                        >
+                          {method.steps.slice(0, run.step + 1).map((s, i) => (
+                            <option key={i} value={i}>
+                              {i + 1} · {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {reviewed ? (
+                        <>
+                          <Button
+                            size="sm"
+                            disabled={disabled || !reviewComplete}
+                            onClick={() => act("approve")}
+                          >
+                            {lastStep
+                              ? t(($) => $.method.approve)
+                              : t(($) => $.method.approve_next)}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={disabled}
+                            onClick={() => act("rework")}
+                          >
+                            {t(($) => $.method.rework)}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="sm"
+                          disabled={disabled}
+                          onClick={() => act("advance")}
+                        >
+                          {lastStep || step.reviewer
+                            ? t(($) => $.method.submit_review)
+                            : t(($) => $.method.advance)}
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                )}
               </>
             )}
             <details className="rounded-md bg-muted/20 px-3 py-2">
               <summary className="cursor-pointer">
                 {t(($) => $.method.steps)}
               </summary>
-              <ol className="mt-2 list-decimal space-y-1 pl-5">
-                {method.steps.map((s, i) => (
-                  <li
-                    key={i}
-                    aria-current={
-                      !reviewed && run.state !== "closed" && i === run.step
-                        ? "step"
-                        : undefined
-                    }
-                  >
-                    <strong>{s.name}</strong> · {s.output}
-                  </li>
-                ))}
-              </ol>
+              <WorkMethodSteps
+                steps={method.steps}
+                current={run.state === "closed" ? undefined : run.step}
+                roles={roles}
+              />
             </details>
             {run.history.length > 0 && (
               <details className="rounded-md bg-muted/20 px-3 py-2">
@@ -357,16 +501,41 @@ function MethodCard({
                     >
                       <p>
                         {actionText(entry.action)} ·{" "}
+                        {entry.from_step !== undefined &&
+                          entry.from_step !== entry.step && (
+                            <>{method.steps[entry.from_step]?.name} → </>
+                          )}
                         {method.steps[entry.step]?.name ?? method.name}
                       </p>
+                      {entry.checked_items && (
+                        <ul className="space-y-1 text-caption">
+                          {method.steps[
+                            entry.from_step ?? entry.step
+                          ]?.checks?.map((text, idx) => (
+                            <li key={idx}>
+                              {entry.checked_items?.includes(idx)
+                                ? t(($) => $.method.confirmed)
+                                : t(($) => $.method.unconfirmed)}{" "}
+                              · {text}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {entry.evidence && (
                         <p className="whitespace-pre-wrap break-words">
                           {entry.evidence}
                         </p>
                       )}
                       <p className="break-words text-caption text-muted-foreground">
-                        <span title={entry.actor}>{actorName(entry.actor)}</span> ·{" "}
-                        <time dateTime={entry.at}>{Number.isFinite(Date.parse(entry.at)) ? new Date(entry.at).toLocaleString(locale) : entry.at}</time>
+                        <span title={entry.actor}>
+                          {actorName(entry.actor)}
+                        </span>{" "}
+                        ·{" "}
+                        <time dateTime={entry.at}>
+                          {Number.isFinite(Date.parse(entry.at))
+                            ? new Date(entry.at).toLocaleString(locale)
+                            : entry.at}
+                        </time>
                       </p>
                     </li>
                   ))}

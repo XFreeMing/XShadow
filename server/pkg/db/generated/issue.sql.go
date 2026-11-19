@@ -2457,16 +2457,20 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Updat
 const updateIssueAcceptanceTrace = `-- name: UpdateIssueAcceptanceTrace :one
 UPDATE issue SET acceptance_criteria = $1::jsonb,
     work_method_run = COALESCE($2::jsonb, work_method_run),
+    assignee_type = COALESCE($3::text, assignee_type),
+    assignee_id = COALESCE($4::uuid, assignee_id),
     revision = revision + 1, updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-WHERE id = $3 AND workspace_id = $4
-  AND revision = $5
+WHERE id = $5 AND workspace_id = $6
+  AND revision = $7
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run
 `
 
 type UpdateIssueAcceptanceTraceParams struct {
 	Trace         []byte      `json:"trace"`
 	ReviewRun     []byte      `json:"review_run"`
+	ReviewerType  pgtype.Text `json:"reviewer_type"`
+	ReviewerID    pgtype.UUID `json:"reviewer_id"`
 	ID            pgtype.UUID `json:"id"`
 	WorkspaceID   pgtype.UUID `json:"workspace_id"`
 	IssueRevision int64       `json:"issue_revision"`
@@ -2476,6 +2480,8 @@ func (q *Queries) UpdateIssueAcceptanceTrace(ctx context.Context, arg UpdateIssu
 	row := q.db.QueryRow(ctx, updateIssueAcceptanceTrace,
 		arg.Trace,
 		arg.ReviewRun,
+		arg.ReviewerType,
+		arg.ReviewerID,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.IssueRevision,

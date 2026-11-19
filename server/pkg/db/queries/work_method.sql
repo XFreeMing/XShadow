@@ -1,11 +1,12 @@
 -- name: ListWorkMethodTemplates :one
 SELECT work_method_templates FROM workspace WHERE id = $1;
 
--- name: AddWorkMethodTemplate :execrows
-UPDATE workspace SET work_method_templates = work_method_templates || jsonb_build_array(sqlc.arg('definition')::jsonb)
-WHERE id = sqlc.arg('workspace_id')::uuid
-  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(work_method_templates) AS method
-                  WHERE lower(method->>'name') = lower(sqlc.arg('name')::text));
+-- name: LockWorkMethodTemplates :one
+SELECT work_method_templates FROM workspace WHERE id = $1 FOR UPDATE;
+
+-- name: SaveWorkMethodTemplates :exec
+UPDATE workspace SET work_method_templates = sqlc.arg('templates')::jsonb
+WHERE id = sqlc.arg('workspace_id')::uuid;
 
 -- name: GetIssueMethodGoal :one
 SELECT g.id, g.title, g.intent, g.acceptance_criteria
@@ -16,6 +17,8 @@ WHERE gi.workspace_id = $1 AND gi.issue_id = $2
 
 -- name: SaveIssueWorkMethodRun :one
 UPDATE issue SET work_method_run = sqlc.arg('run')::jsonb,
+    assignee_type = COALESCE(sqlc.narg('assignee_type')::text, assignee_type),
+    assignee_id = COALESCE(sqlc.narg('assignee_id')::uuid, assignee_id),
     revision = revision + 1, updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
 WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')

@@ -368,6 +368,10 @@ SELECT
         WHEN sqlc.narg(workflow_handoff_revision)::bigint IS NOT NULL
         THEN jsonb_build_object('workflow_handoff_revision', sqlc.narg(workflow_handoff_revision)::bigint)
         ELSE '{}'::jsonb
+    END || CASE
+        WHEN sqlc.narg(work_method_revision)::bigint IS NOT NULL
+        THEN jsonb_build_object('work_method_revision', sqlc.narg(work_method_revision)::bigint)
+        ELSE '{}'::jsonb
     END, '{}'::jsonb),
     sqlc.narg(originator_user_id),
     sqlc.narg(accountable_user_id),

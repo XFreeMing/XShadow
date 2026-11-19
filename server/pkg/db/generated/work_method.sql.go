@@ -11,27 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const addWorkMethodTemplate = `-- name: AddWorkMethodTemplate :execrows
-UPDATE workspace SET work_method_templates = work_method_templates || jsonb_build_array($1::jsonb)
-WHERE id = $2::uuid
-  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(work_method_templates) AS method
-                  WHERE lower(method->>'name') = lower($3::text))
-`
-
-type AddWorkMethodTemplateParams struct {
-	Definition  []byte      `json:"definition"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        string      `json:"name"`
-}
-
-func (q *Queries) AddWorkMethodTemplate(ctx context.Context, arg AddWorkMethodTemplateParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addWorkMethodTemplate, arg.Definition, arg.WorkspaceID, arg.Name)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const getIssueMethodGoal = `-- name: GetIssueMethodGoal :one
 SELECT g.id, g.title, g.intent, g.acceptance_criteria
 FROM goal_issue gi JOIN goal g ON g.id = gi.goal_id AND g.workspace_id = gi.workspace_id
@@ -75,17 +54,32 @@ func (q *Queries) ListWorkMethodTemplates(ctx context.Context, id pgtype.UUID) (
 	return work_method_templates, err
 }
 
+const lockWorkMethodTemplates = `-- name: LockWorkMethodTemplates :one
+SELECT work_method_templates FROM workspace WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockWorkMethodTemplates(ctx context.Context, id pgtype.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lockWorkMethodTemplates, id)
+	var work_method_templates []byte
+	err := row.Scan(&work_method_templates)
+	return work_method_templates, err
+}
+
 const saveIssueWorkMethodRun = `-- name: SaveIssueWorkMethodRun :one
 UPDATE issue SET work_method_run = $1::jsonb,
+    assignee_type = COALESCE($2::text, assignee_type),
+    assignee_id = COALESCE($3::uuid, assignee_id),
     revision = revision + 1, updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-WHERE id = $2 AND workspace_id = $3
-  AND revision = $4
+WHERE id = $4 AND workspace_id = $5
+  AND revision = $6
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run
 `
 
 type SaveIssueWorkMethodRunParams struct {
 	Run           []byte      `json:"run"`
+	AssigneeType  pgtype.Text `json:"assignee_type"`
+	AssigneeID    pgtype.UUID `json:"assignee_id"`
 	ID            pgtype.UUID `json:"id"`
 	WorkspaceID   pgtype.UUID `json:"workspace_id"`
 	IssueRevision int64       `json:"issue_revision"`
@@ -94,6 +88,8 @@ type SaveIssueWorkMethodRunParams struct {
 func (q *Queries) SaveIssueWorkMethodRun(ctx context.Context, arg SaveIssueWorkMethodRunParams) (Issue, error) {
 	row := q.db.QueryRow(ctx, saveIssueWorkMethodRun,
 		arg.Run,
+		arg.AssigneeType,
+		arg.AssigneeID,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.IssueRevision,
@@ -134,4 +130,19 @@ func (q *Queries) SaveIssueWorkMethodRun(ctx context.Context, arg SaveIssueWorkM
 		&i.WorkMethodRun,
 	)
 	return i, err
+}
+
+const saveWorkMethodTemplates = `-- name: SaveWorkMethodTemplates :exec
+UPDATE workspace SET work_method_templates = $1::jsonb
+WHERE id = $2::uuid
+`
+
+type SaveWorkMethodTemplatesParams struct {
+	Templates   []byte      `json:"templates"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SaveWorkMethodTemplates(ctx context.Context, arg SaveWorkMethodTemplatesParams) error {
+	_, err := q.db.Exec(ctx, saveWorkMethodTemplates, arg.Templates, arg.WorkspaceID)
+	return err
 }

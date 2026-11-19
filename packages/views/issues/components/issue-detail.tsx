@@ -3869,7 +3869,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             descriptionBlock
           )}
 
-          <IssueWorkMethod key={issue.id} wsId={wsId} issueId={issue.id} issueRevision={issue.revision}>
+          <IssueWorkMethod key={issue.id} wsId={wsId} issueId={issue.id} issueRevision={issue.revision}
+            roles={{creatorName: getActorName(issue.creator_type,issue.creator_id), projectLeadName: breadcrumbProject?.lead_type && breadcrumbProject.lead_id ? getActorName(breadcrumbProject.lead_type,breadcrumbProject.lead_id) : undefined}}>
             {issue.acceptance_trace && (
               <IssueAcceptance issueId={issue.id} trace={issue.acceptance_trace} refresh={refetchIssue} />
             )}

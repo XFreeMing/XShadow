@@ -101,3 +101,37 @@ it("rejects malformed results from template creation and evidence submission", a
     }),
   ).rejects.toThrow("Malformed");
 });
+
+it("updates the template version opened in the editor and reads back its roles", async () => {
+  const step = {
+    name: "Interview",
+    output: "Notes",
+    inputs: "Question list",
+    instructions: "Interview two users",
+    checks: ["Consent recorded"],
+    owner: { kind: "creator" as const },
+    reviewer: { kind: "project_lead" as const },
+  };
+  const update = {
+    name: "Two interviews",
+    kind: "research" as const,
+    keywords: ["interview"],
+    steps: [step],
+    review: "Audit evidence",
+    rework_step: 0,
+  };
+  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ ...update, id: "seven-step", revision: 3 }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const client = new ApiClient("https://example.test");
+  const result = await client.updateWorkMethod("seven-step", 2, update);
+  expect(fetch.mock.calls[0]?.[0]).toContain("/api/work-methods/seven-step");
+  expect(fetch.mock.calls[0]?.[1]?.method).toBe("PUT");
+  expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+    ...update,
+    base_revision: 2,
+  });
+  expect(result.steps[0]?.reviewer).toEqual(step.reviewer);
+  expect(result.revision).toBe(3);
+});
