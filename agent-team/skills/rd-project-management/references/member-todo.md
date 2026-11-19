@@ -56,7 +56,7 @@ node ./member-todo.mjs --check --input ./todo-input.json
 - `handler`：固定为已配置活跃的接件角色 `幕僚长`，产品约定所有成员答复统一交给它，不能通过正文或 `handler` 改派其他角色；客户端在**当前工作区**按名称解析角色身份，不写机器 UUID。项目经理的完成回调只作为原事项的必要衔接保留。
 - `recipient.name` 或 `recipient.id` 至少一个真实接收人；`source.identifier` 用于回链和查重。
 - `request` 是稳定的输入请求标识，同一请求重发时沿用原文；验收决策用 `decision_key`。
-- `completion_signal` 必须与真实登记的唤醒规则一致：`done`、`comment` 或 `manager`。正文里的“怎样算完成 / 之后”会被校验。默认用 `done`：用户在成员待办里回复并把待办标记完成，原事项用 `--until-issue <待办> --until-issue-state done` 等它完成。新版「我的任务」一次提交会先写下答复评论（提到 `handler` 角色），再按 `completion_signal` 完成待办；旧客户端仍按正文的“评论 + 完成”方式操作，两条路径都必须真实可接续。
+- `completion_signal` 必须与真实登记的唤醒规则一致：`done`、`comment` 或 `manager`。正文里的“怎样算完成 / 之后”会被校验。触发句由 `completion_signal` 固定生成：`done` 是“先在本事项标记完成，原事项随后继续处理”，`comment` / `manager` 是项目经理收到回复后接回。`next` 只写业务后续；没有自带同一触发条件时，生成器会把固定触发句放在前面。声称“回复后原事项就继续”“不用标记完成”等与信号矛盾的接续文案会被拒绝。默认用 `done`：用户在成员待办里回复并把待办标记完成，原事项用 `--until-issue <待办> --until-issue-state done` 等它完成。新版「我的任务」一次提交会先写下答复评论（提到 `handler` 角色），再按 `completion_signal` 完成待办；旧客户端仍按正文的“评论 + 完成”方式操作，两条路径都必须真实可接续。
   - `done`：正文写“在本事项回复你的选择，并把本事项标记为完成（只回复不会自动接续）”；原事项登记 `--until-issue <待办> --until-issue-state done`。
   - `comment`：正文只要求“在本事项回复”，就必须在**成员待办自身**登记 `comment.created` 事件唤醒项目经理（`issue wakeup create <待办> --event comment.created --filter-actor-type member --filter-actor-id <用户 id> --agent-id <项目经理 id>`），由他读取选择后接回原事项。不能把 `comment.created` 登记在原事项却让用户去待办回复——那是两个不同事项，永远不会唤醒。无法登记待办监听时，改成“请回原事项回复”并在原事项登记，或直接改用默认的 `done`。新版客户端答复时会提到 `handler` 角色；这条规则仍要保留，覆盖旧客户端和手工回复。
   - `manager`：同样必须有真实唤醒（待办 `comment.created` 或 `done` 规则唤醒项目经理）；只写“项目经理会查看”但没有规则会失联。

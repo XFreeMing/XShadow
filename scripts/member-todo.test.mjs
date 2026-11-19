@@ -232,6 +232,56 @@ test("a completion signal that the platform will not deliver is rejected", () =>
   assert.ok(validateTodoInput({ ...done, done: "在本事项回复文件", next: "本事项完成后，原事项会自动继续处理。" }).some((e) => /done/.test(e)));
 });
 
+test("a done-wait accepts reply-then-mark but rejects reply-only continuation", () => {
+  const decisionInput = sampleTodoInputs()[3];
+  const legal = {
+    ...decisionInput,
+    next: "回复后，请把本事项标记为完成，原事项会自动继续处理。",
+  };
+  const contradictory = {
+    ...decisionInput,
+    next: "你一回复，原事项就会自动继续处理。请在本事项标记为完成后等通知。",
+  };
+  const dir = outsideRepo();
+  try {
+    const legalPath = join(dir, "legal.json");
+    writeFileSync(legalPath, JSON.stringify(legal));
+    const legalCheck = runToolResult(PM_TOOL, ["--check", "--input", legalPath], dir);
+    assert.equal(legalCheck.status, 0, `legal --check: ${legalCheck.stdout}${legalCheck.stderr}`);
+
+    const legalOut = join(dir, "legal-out");
+    const legalGenerate = runToolResult(PM_TOOL, ["--input", legalPath, "--out-dir", legalOut], dir);
+    assert.equal(legalGenerate.status, 0, `legal generation: ${legalGenerate.stdout}${legalGenerate.stderr}`);
+    const body = readFileSync(join(legalOut, "body.md"), "utf8");
+    assert.match(body, /怎样算完成：.*标记为完成/);
+    assert.match(body, /之后：回复后，请把本事项标记为完成/);
+
+    const badPath = join(dir, "bad.json");
+    writeFileSync(badPath, JSON.stringify(contradictory));
+    const badCheck = runToolResult(PM_TOOL, ["--check", "--input", badPath], dir);
+    assert.equal(badCheck.status, 2, `contradictory --check: ${badCheck.stdout}${badCheck.stderr}`);
+    assert.match(`${badCheck.stdout}${badCheck.stderr}`, /next 与 completion_signal=done 矛盾/);
+
+    const badOut = join(dir, "bad-out");
+    const badGenerate = runToolResult(PM_TOOL, ["--input", badPath, "--out-dir", badOut], dir);
+    assert.equal(badGenerate.status, 2, `contradictory generation: ${badGenerate.stdout}${badGenerate.stderr}`);
+    assert.match(`${badGenerate.stdout}${badGenerate.stderr}`, /next 与 completion_signal=done 矛盾/);
+    assert.equal(existsSync(badOut), false, "contradictory generation must not write todo files");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const comment = sampleTodoInputs()[2];
+  assert.ok(validateTodoInput({ ...comment, next: "请在本事项标记完成后等通知。" })
+    .some((error) => /标记完成，但 completion_signal=comment/.test(error)));
+  assert.ok(validateTodoInput({ ...comment, next: "项目经理收到你的回复后，原事项会自动继续处理。" })
+    .some((error) => /自动继续/.test(error)));
+
+  // A business-only tail gets the signal's fixed trigger sentence prepended.
+  const withTail = buildMemberTodo({ ...decisionInput, next: "工作完成后我会通知你。" });
+  assert.match(withTail.first_screen, /之后：先在本事项标记完成，原事项随后继续处理。工作完成后我会通知你。/);
+});
+
 test("internal evidence, placeholders and engineering markers stay out of the first screen", () => {
   const base = sampleTodoInputs()[2];
   for (const [field, value, needle] of [

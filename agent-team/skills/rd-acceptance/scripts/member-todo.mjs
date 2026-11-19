@@ -122,10 +122,50 @@ export function memberTodoKey({ source, request, decision_key: decisionKey } = {
 // listener on this todo itself, waking the manager who resumes the original
 // issue; a reply on this todo never wakes a wait registered on the original.
 export const COMPLETION_SIGNALS = Object.freeze({
-  done: { done: "在本事项回复你的选择，并把本事项标记为完成（只回复不会自动接续）", next: "本事项完成后，原事项会自动继续处理" },
-  comment: { done: "在本事项回复你的选择", next: "项目经理会在本待办收到你的回复，并接回原事项继续处理" },
-  manager: { done: "在本事项回复你的选择", next: "项目经理会在本待办收到你的回复后继续原事项" },
+  done: {
+    done: "在本事项回复你的选择，并把本事项标记为完成（只回复不会自动接续）",
+    trigger: "先在本事项标记完成，原事项随后继续处理",
+    next: "本事项完成后，原事项会自动继续处理",
+  },
+  comment: {
+    done: "在本事项回复你的选择",
+    trigger: "在本事项回复后，项目经理会收到并接回原事项",
+    next: "项目经理会在本待办收到你的回复，并接回原事项继续处理",
+  },
+  manager: {
+    done: "在本事项回复你的选择",
+    trigger: "在本事项回复后，项目经理会收到并继续原事项",
+    next: "项目经理会在本待办收到你的回复后继续原事项",
+  },
 });
+
+const MARK_COMPLETE = /标记(?:为)?完成|标为完成|勾选完成|设为完成/;
+
+// The signal owns the trigger. For a done-wait the original issue resumes only
+// after this todo is marked complete; a reply is never enough.
+function hasSignalTrigger(text, signal) {
+  if (signal === "done") {
+    return /(?:本事项|这个待办|该待办|待办)[^。；;\n]{0,12}(?:完成|标记完成)|(?:标记|勾选)[^。；;\n]{0,10}完成/.test(text);
+  }
+  return /收到你的回复|唤醒|(?:项目经理|负责人)[^。；;\n]{0,20}(?:收到|接回|继续)/.test(text);
+}
+
+// A clause that says a reply resumes the original issue is wrong for a
+// done-wait unless the same clause first asks the person to mark it complete.
+// Splitting by sentence keeps a later "please mark it complete" from excusing
+// an earlier "you reply and we continue".
+function replyContinuationClash(text) {
+  return String(text)
+    .split(/[。；;\n]/)
+    .filter((clause) => clause.trim())
+    .some((clause) => {
+      if (!/(?:回复|答复)(?:后|之后|完|一)|一(?:回复|答复)/.test(clause)) return false;
+      const continueAt = clause.search(/继续|恢复|接回|处理/);
+      if (continueAt === -1) return false;
+      const markAt = clause.search(MARK_COMPLETE);
+      return markAt === -1 || markAt > continueAt;
+    });
+}
 
 // Options travel with the machine marker so a client can render real choices
 // without guessing the readable Markdown. An explicit key keeps its identity
@@ -214,42 +254,54 @@ export function validateTodoInput(input) {
     if (!isText(input[field])) errors.push(`缺少${label}（${field}）`);
   }
   if (Object.hasOwn(COMPLETION_SIGNALS, input.completion_signal)) {
-    const needed = {
-      done: input.completion_signal === "done" ? "完成" : "回复",
-      next: input.completion_signal === "done" ? "自动继续" : "项目经理",
-    };
-    for (const field of ["done", "next"]) {
-      if (isText(input[field]) && !input[field].includes(needed[field])) {
-        errors.push(`${field} 与 completion_signal=${input.completion_signal} 不一致，实际接续方式会落空`);
-      }
+    const signal = input.completion_signal;
+    if (isText(input.done) && !input.done.includes(signal === "done" ? "完成" : "回复")) {
+      errors.push(`done 与 completion_signal=${signal} 不一致，实际接续方式会落空`);
     }
-    if (input.completion_signal === "done" && isText(input.done)) {
+    if (signal !== "done" && isText(input.next) && !input.next.includes("项目经理")) {
+      errors.push(`next 与 completion_signal=${signal} 不一致，实际接续方式会落空`);
+    }
+    if (signal === "done" && isText(input.done)) {
       // Saying "reply only, no need to mark it done" while registering a
       // done-wait leaves the original issue waiting forever.
       const negated = /(?:不(?:必|需要|用|需)|无需)[^。；;\n]{0,16}标记|只(?:回复|填写|回答)[^。；;\n]{0,16}(?:即可|就行|就可以|不用|不必|不需要|无需)/.test(input.done);
       const markedBySomeoneElse = /我(?:会|来|帮你|替你)[^。；;\n]{0,8}标记|由(?:项目)?经理[^。；;\n]{0,8}标记/.test(input.done);
       if (negated || markedBySomeoneElse) {
         errors.push("done 与 completion_signal=done 矛盾：必须请用户在本事项标记完成；只回复不会满足原事项的等待条件");
-      } else if (!/标记(?:为)?完成|标为完成|勾选完成|设为完成/.test(input.done)) {
+      } else if (!MARK_COMPLETE.test(input.done)) {
         errors.push("done 必须写明把本事项标记为完成；原事项按 --until-issue-state done 等待它");
       }
     }
-    if (input.completion_signal === "done" && isText(input.next)) {
+    if (signal === "done" && isText(input.next)) {
       // The original issue is registered with --until-issue-state done, so the
       // only truthful trigger is this todo being marked complete. A reply,
       // even one followed by a vague "after it's done" notice, never fires it.
-      if (!/(?:本事项|这个待办|该待办|待办)[^。；;\n]{0,12}(?:完成|标记完成)|(?:标记|勾选)[^。；;\n]{0,8}完成/.test(input.next)) {
-        errors.push("next 必须把继续条件写成本事项完成；只有本事项完成，原事项才会继续");
-      }
-      if (/回复(?:后|之后|完)[^。；;\n]{0,30}(?:自动|继续|恢复|接回|处理)/.test(input.next)) {
+      if (replyContinuationClash(input.next)) {
         errors.push("next 与 completion_signal=done 矛盾：回复不会触发原事项继续，等待条件是本事项完成");
+      }
+      const negatedNext = /(?:不(?:必|需要|用|需)|无需)[^。；;\n]{0,16}标记|只(?:回复|填写|回答)[^。；;\n]{0,16}(?:即可|就行|就可以|不用|不必|不需要|无需)/.test(input.next);
+      if (negatedNext) {
+        errors.push("next 与 completion_signal=done 矛盾：不能一边说不用标记完成，一边等待本事项完成");
+      }
+      if (/自动继续|自动恢复/.test(input.next) && !hasSignalTrigger(input.next, "done")) {
+        errors.push("next 承诺原事项自动继续，但没有写明本事项完成这个触发条件");
       }
       if (/只回复|仅回复/.test(input.next)) {
         errors.push("next 不能承诺只回复就让原事项继续；等待条件是本事项完成");
       }
     }
-    if (input.completion_signal !== "done" && isText(input.next) && !/收到你的回复|唤醒/.test(input.next)) {
-      errors.push("next 必须说明项目经理如何收到回复并被唤醒；只写“经理会查看”会失联");
+    if (signal !== "done") {
+      for (const field of ["done", "next"]) {
+        if (isText(input[field]) && MARK_COMPLETE.test(input[field])) {
+          errors.push(`${field} 要求标记完成，但 completion_signal=${signal} 由回复触发；接续方式必须与信号一致`);
+        }
+      }
+      if (isText(input.next) && /自动继续|自动恢复/.test(input.next)) {
+        errors.push(`next 不能承诺原事项自动继续；completion_signal=${signal} 需要项目经理收到回复后接回`);
+      }
+      if (isText(input.next) && !/收到你的回复|唤醒/.test(input.next)) {
+        errors.push("next 必须说明项目经理如何收到回复并被唤醒；只写“经理会查看”会失联");
+      }
     }
   }
   if (isText(input.title)) {
@@ -350,7 +402,12 @@ export function buildMemberTodo(input) {
     ? "把材料回复在本事项，并把本事项标记为完成（只回复不会自动接续）"
     : completion.done;
   const doneText = isText(input.done) ? oneLine(input.done) : defaultDone;
-  const nextText = isText(input.next) ? oneLine(input.next) : completion.next;
+  const rawNext = isText(input.next) ? oneLine(input.next) : completion.next;
+  // The signal owns the trigger sentence. A creator may append business detail;
+  // only text that already states this signal's trigger is kept verbatim.
+  const nextText = hasSignalTrigger(rawNext, input.completion_signal)
+    ? rawNext
+    : `${completion.trigger}。${rawNext.replace(/^[。；;，,\s]+/, "")}`;
   const options = Array.isArray(input.options) ? input.options : [];
   const optionBlock = options.length > 0
     ? ["可选的做法：", ...options.map((option) => {
