@@ -460,7 +460,7 @@ export function MemberTodoCard({ issue, todo, userId, variant = "detail", classN
       ) : null}
 
       {todo.problem ? (
-        <p className={cn("text-body leading-relaxed text-foreground/90", variant === "home" ? "mt-1.5" : "mt-3")}>
+        <p className={cn("text-body leading-relaxed text-foreground", variant === "home" ? "mt-1.5" : "mt-3")}>
           {todo.problem}
         </p>
       ) : null}
@@ -522,7 +522,7 @@ export function MemberTodoCard({ issue, todo, userId, variant = "detail", classN
                       {option.consequence}
                     </span>
                     {option.example && !isRedundantExample(option.example, option.label) ? (
-                      <span className="mt-1 block text-micro text-muted-foreground/80">
+                      <span className="mt-1 block text-micro text-muted-foreground">
                         {t(($) => $.member_answer.option_example, { example: option.example })}
                       </span>
                     ) : null}

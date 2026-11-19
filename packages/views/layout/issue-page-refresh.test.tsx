@@ -29,6 +29,8 @@ vi.mock("../issues/surface/issue-surface", () => ({
 vi.mock("../chat/use-start-chat-with-draft", () => ({
   useStartChatWithDraft: () => null,
 }));
+// The member todo band owns its own queries; this test only covers the surface header.
+vi.mock("../member-todos/member-todos-band", () => ({ MemberTodosBand: () => null }));
 vi.mock("../issue-views/view-header", () => ({
   IssueViewHeader: ({ controller, base }: { controller: { isRefreshing: boolean }; base: { kind: string } }) => (
     <header>

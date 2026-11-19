@@ -886,7 +886,9 @@ export function useCreateComment(issueId: string) {
       steerTaskIds?: string[];
       /** Stable id for a retried visible action; the server replays it. */
       commentId?: string;
-    }) => api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steerTaskIds, commentId),
+    }) => commentId
+      ? api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steerTaskIds, commentId)
+      : api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steerTaskIds),
     onSuccess: (comment) => {
       if (comment.issue_revision) {
         onIssueAuxiliaryRevision(qc, wsId, issueId, comment.issue_revision);
