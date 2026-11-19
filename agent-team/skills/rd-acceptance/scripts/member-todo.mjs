@@ -141,6 +141,12 @@ export const COMPLETION_SIGNALS = Object.freeze({
 
 const MARK_COMPLETE = /标记(?:为)?完成|标为完成|勾选完成|设为完成/;
 
+// Categories of wording that make marking complete non-committal: a mere
+// formality, an empty field, something unrelated to what follows, optional or
+// deferred. They are checked as meanings rather than as one fixed phrase, so
+// colloquial variants of the same promise are rejected together.
+const MARK_DISMISSED = /(?:只是|仅是|仅|纯属|算是|就是|不过是|无非是|当作|当作是|等于)[^。；;\n]{0,8}(?:形式|流程|过场|样子|摆设|手续)|走(?:个|一下|一遍)?(?:形式|流程|过场)|(?:形式|流程|过场)(?:而已|罢了)|空着|留空|不填|不用填|无需填|不必填|不勾|不用勾|无需勾|(?:与|和|跟)[^。；;\n]{0,12}(?:后续|继续|处理|恢复|接续|原事项)[^。；;\n]{0,8}(?:无关|没(?:有)?关系|不相干)|不影响|没有?影响|无影响|无关紧要|不重要|无所谓|随你|由你(?:决定|选择)|可选|选做|可做可不做|可有可无|不是必须|并非必须|非必需|不必须|不是硬性|并非硬性|不强制|不用管|不必管|无需管|(?:之后|再|稍后|随后|最后)[^。；;\n]{0,8}(?:可|可以|再|才)?[^。；;\n]{0,4}标记/;
+
 // The signal owns the trigger. For a done-wait the original issue resumes only
 // after this todo is marked complete; a reply is never enough.
 function hasSignalTrigger(text, signal) {
@@ -150,25 +156,37 @@ function hasSignalTrigger(text, signal) {
   return /收到你的回复|唤醒|(?:项目经理|负责人)[^。；;\n]{0,20}(?:收到|接回|继续)/.test(text);
 }
 
-// A clause that says a reply resumes the original issue is wrong for a
-// done-wait unless the same clause first asks the person to mark it complete.
-// Splitting by sentence keeps a later "please mark it complete" from excusing
-// an earlier "you reply and we continue".
-function replyContinuationClash(text) {
+// A clause that mentions marking complete and dismisses it -- as a formality,
+// an empty field, or unrelated to the follow-up -- cannot be the trigger for a
+// done-wait, whatever synonym it uses.
+function markDismissed(text) {
   return String(text)
     .split(/[。；;\n]/)
     .filter((clause) => clause.trim())
-    .some((clause) => {
-      if (!/回复|答复/.test(clause)) return false;
-      const continueAt = clause.search(/继续|恢复|接回|处理/);
-      if (continueAt === -1) return false;
-      const markAt = clause.search(MARK_COMPLETE);
-      // "Marking is optional", "you can mark it later", or "no need to mark
-      // it" never makes a reply the trigger.
-      const negatedMark = /(?:不(?:必|需要|用|需)|无需|不是必须|并非必须)[^。；;\n]{0,16}标记|标记[^。；;\n]{0,8}(?:不是必须|并非必须|非必需|可选)/.test(clause);
-      const optionalMark = /可选|选做|可做可不做|不是必须|并非必须|非必需|不必须|不是硬性|并非硬性|不强制|不影响|无关紧要|无所谓|随你|由你(?:决定|选择)|只是形式|走形式|(?:之后|再|稍后|随后|最后)[^。；;\n]{0,8}(?:可|可以|再|才)?[^。；;\n]{0,4}标记/.test(clause);
-      return negatedMark || optionalMark || markAt === -1 || markAt > continueAt;
-    });
+    .some((clause) => MARK_COMPLETE.test(clause) && MARK_DISMISSED.test(clause));
+}
+
+// A reply is never the resume trigger. Every outcome that could read as "the
+// original issue continues now" counts, including waiting for a result or a
+// later notification, not just the verb "continue".
+const REPLY_OUTCOME = /继续|恢复|接回|处理|结果|通知|后续|下一步|即可|就行|就可以|等(?:着|待)?/;
+
+// A done-wait resumes only after this todo is actually marked complete. If the
+// text pairs a reply with any later outcome, the mandatory mark must come
+// before that outcome and must still be a real condition. This reads the entire
+// `next`, so a semicolon may not hide a reply-triggered continuation in another
+// clause.
+function replyContinuationClash(text) {
+  const value = String(text);
+  if (!/回复|答复/.test(value)) return false;
+  const outcomeAt = value.search(REPLY_OUTCOME);
+  if (outcomeAt === -1) return false;
+  const markAt = value.search(MARK_COMPLETE);
+  if (markAt === -1 || markAt > outcomeAt) return true;
+  // "Marking is optional", "you can mark it later", or "no need to mark it"
+  // never makes a reply the trigger.
+  const negatedMark = /(?:不(?:必|需要|用|需)|无需|不是必须|并非必须)[^。；;\n]{0,16}标记|标记[^。；;\n]{0,8}(?:不是必须|并非必须|非必需|可选)/.test(value);
+  return negatedMark || markDismissed(value);
 }
 
 // Options travel with the machine marker so a client can render real choices
@@ -282,6 +300,9 @@ export function validateTodoInput(input) {
       // even one followed by a vague "after it's done" notice, never fires it.
       if (replyContinuationClash(input.next)) {
         errors.push("next 与 completion_signal=done 矛盾：回复不会触发原事项继续，等待条件是本事项完成");
+      }
+      if (markDismissed(input.next)) {
+        errors.push("next 与 completion_signal=done 矛盾：标记完成必须是真实接续条件，不能写成形式、空着或与后续无关");
       }
       const negatedNext = /(?:不(?:必|需要|用|需)|无需)[^。；;\n]{0,16}标记|只(?:回复|填写|回答)[^。；;\n]{0,16}(?:即可|就行|就可以|不用|不必|不需要|无需)/.test(input.next);
       if (negatedNext) {
