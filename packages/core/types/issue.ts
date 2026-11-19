@@ -1,3 +1,4 @@
+import type { AcceptanceTrace } from "./acceptance";
 import type { Label } from "./label";
 import type { IssuePropertyValues } from "./property";
 
@@ -184,6 +185,7 @@ export interface IssueDuplicateOf {
 }
 
 export interface Issue {
+  acceptance_trace?: AcceptanceTrace;
   id: string;
   workspace_id: string;
   number: number;

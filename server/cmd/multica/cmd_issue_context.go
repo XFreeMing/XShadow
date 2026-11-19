@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 )
 
 // `multica issue context` reads one task's working context in a single call:
@@ -132,6 +133,7 @@ func (p issueContextProject) empty() bool {
 
 // issueContextIssue is the subset of GET /api/issues/{id} this command reads.
 type issueContextIssue struct {
+	Trace       *acceptance.Trace   `json:"acceptance_trace"`
 	ID          string              `json:"id"`
 	Identifier  string              `json:"identifier"`
 	Number      int64               `json:"number"`
@@ -211,9 +213,11 @@ type issueContextValue struct {
 }
 
 type issueContextAcceptanceItem struct {
-	Text    string `json:"text"`
-	Checked *bool  `json:"checked,omitempty"`
-	Line    int    `json:"line"`
+	CriterionID string `json:"criterion_id,omitempty"`
+	Version     int    `json:"version,omitempty"`
+	Text        string `json:"text"`
+	Checked     *bool  `json:"checked,omitempty"`
+	Line        int    `json:"line,omitempty"`
 }
 
 type issueContextAcceptanceSection struct {
@@ -223,11 +227,12 @@ type issueContextAcceptanceSection struct {
 }
 
 type issueContextAcceptance struct {
-	State    string                          `json:"state"`
-	Items    []issueContextAcceptanceItem    `json:"items"`
-	Sections []issueContextAcceptanceSection `json:"sections"`
-	Source   string                          `json:"source"`
-	Reason   string                          `json:"reason,omitempty"`
+	Structured *acceptance.Trace               `json:"structured,omitempty"`
+	State      string                          `json:"state"`
+	Items      []issueContextAcceptanceItem    `json:"items"`
+	Sections   []issueContextAcceptanceSection `json:"sections"`
+	Source     string                          `json:"source"`
+	Reason     string                          `json:"reason,omitempty"`
 }
 
 type issueContextFeedbackItem struct {
@@ -313,6 +318,21 @@ func runIssueContext(cmd *cobra.Command, args []string) error {
 		description = *issue.Description
 	}
 	story := buildStoryContext(description, issue.Revision)
+	if issue.Trace != nil && len(issue.Trace.Criteria) > 0 {
+		story.Acceptance.Structured = issue.Trace
+		if len(story.Acceptance.Items) == 0 {
+			story.Acceptance.Source = "issue.acceptance_trace"
+		} else {
+			story.Acceptance.Source += " and issue.acceptance_trace"
+		}
+		story.Acceptance.State = "found"
+		story.Acceptance.Reason = ""
+		for _, c := range issue.Trace.Criteria {
+			if n := len(c.Versions); n > 0 {
+				story.Acceptance.Items = append(story.Acceptance.Items, issueContextAcceptanceItem{CriterionID: c.ID, Version: n, Text: c.Versions[n-1]})
+			}
+		}
+	}
 
 	feedback, err := fetchIssueContextFeedback(ctx, client, issue.ID)
 	if err != nil {
@@ -929,6 +949,10 @@ func writeIssueContextText(cmd *cobra.Command, payload issueContextPayload) {
 	}
 	fmt.Fprintln(out)
 	for _, item := range story.Acceptance.Items {
+		if item.CriterionID != "" {
+			fmt.Fprintf(out, "  %s v%d: %s\n", item.CriterionID, item.Version, item.Text)
+			continue
+		}
 		check := " "
 		if item.Checked != nil {
 			if *item.Checked {

@@ -821,3 +821,11 @@ WHERE t.id = sqlc.arg(origin_id)::uuid
   AND t.originator_source = 'direct_human'
   AND (sqlc.arg(origin_type)::text = 'quick_create'
        OR (sqlc.arg(origin_type)::text = 'agent_create' AND t.trigger_evidence_kind = 'chat'));
+
+-- name: UpdateIssueAcceptanceTrace :one
+UPDATE issue SET acceptance_criteria = sqlc.arg('trace')::jsonb,
+    revision = revision + 1, updated_at = now(),
+    last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
+  AND acceptance_criteria = sqlc.arg('previous')::jsonb
+RETURNING *;

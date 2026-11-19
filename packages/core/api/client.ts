@@ -1,3 +1,4 @@
+import { AcceptanceTraceSchema, type AcceptanceChange, type AcceptanceTrace } from "../types/acceptance";
 import type { ZodType } from "zod";
 import { AgentRuntimeSchema, EMPTY_RUNTIME } from "../runtimes/schema";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
@@ -1549,6 +1550,14 @@ export class ApiClient {
 
   async disableIssueWakeup(issueId: string, wakeupId: string): Promise<void> {
     await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups/${encodeURIComponent(wakeupId)}/disable`, { method: "POST" });
+  }
+
+  async changeIssueAcceptance(id: string, change: AcceptanceChange): Promise<AcceptanceTrace> {
+    const endpoint = `/api/issues/${encodeURIComponent(id)}/acceptance`;
+    const raw = await this.fetch<unknown>(endpoint, { method: "POST", body: JSON.stringify(change) });
+    const trace = parseWithFallback<AcceptanceTrace | null>(raw, AcceptanceTraceSchema, null, { endpoint });
+    if (!trace) throw new Error("Malformed acceptance records");
+    return trace;
   }
 
   async getIssue(id: string, options?: { signal?: AbortSignal }): Promise<Issue> {

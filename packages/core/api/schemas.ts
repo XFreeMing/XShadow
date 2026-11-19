@@ -1,3 +1,4 @@
+import { AcceptanceTraceSchema } from "../types/acceptance";
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
 import type {
@@ -1660,6 +1661,7 @@ export const CommentSubIssueTaskResponseSchema = z.object({
 }).loose();
 
 export const IssueSchema = z.object({
+  acceptance_trace: AcceptanceTraceSchema.optional().catch(undefined),
   id: z.string(),
   workspace_id: z.string(),
   number: z.number(),

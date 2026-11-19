@@ -32,6 +32,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/qoderruntime"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -39,13 +40,14 @@ import (
 
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	Number      int32   `json:"number"`
-	Identifier  string  `json:"identifier"`
-	Title       string  `json:"title"`
-	Description *string `json:"description"`
-	Status      string  `json:"status"`
+	AcceptanceTrace *acceptance.Trace `json:"acceptance_trace,omitempty"`
+	ID              string            `json:"id"`
+	WorkspaceID     string            `json:"workspace_id"`
+	Number          int32             `json:"number"`
+	Identifier      string            `json:"identifier"`
+	Title           string            `json:"title"`
+	Description     *string           `json:"description"`
+	Status          string            `json:"status"`
 	// StatusCategory encodes lifecycle using the legacy seven-value wire enum. It is
 	// omitted when an endpoint cannot resolve a custom status, so consumers must
 	// fall back to their catalog rather than treat a blank as "no category".
@@ -2585,6 +2587,9 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+	if trace, err := acceptance.Decode(issue.AcceptanceCriteria); err == nil {
+		resp.AcceptanceTrace = &trace
+	}
 	h.fillStatusCategory(r.Context(), issue.WorkspaceID, hidden, &resp)
 	detailLabels := h.labelsByIssue(r.Context(), issue.WorkspaceID, []pgtype.UUID{issue.ID})[uuidToString(issue.ID)]
 	if detailLabels == nil {
