@@ -100,8 +100,7 @@ function fire(world, rule, { status = "running", completedAt = null, commented =
   return run;
 }
 
-function harness(world) {
-  const dir = mkdtempSync(join(tmpdir(), "watchdog-state-"));
+function harness(world, dir = mkdtempSync(join(tmpdir(), "watchdog-state-"))) {
   const store = new StateStore(join(dir, "state"));
   const state = store.load(WS);
   let clock = BASE;
@@ -194,6 +193,57 @@ test("own run, own comment and a silent terminal end produce one anomaly, not a 
   const adoptedRecord = restarted.state.issues[world.issues[0].id].records.at(-1);
   assert.equal(adoptedRecord.phase, "anomaly");
   assert.equal(endedRun.status, "completed");
+});
+
+test("a crash between registration and readback reclaims the same rule without redispatch", async (t) => {
+  const world = createWorld();
+  const h = harness(world);
+  t.after(h.cleanup);
+  await h.scan();
+  const issueId = world.issues[0].id;
+  const [rule] = world.issueWakeups.get(issueId);
+  assert.equal(world.posts.length, 1);
+  const before = h.state.issues[issueId];
+
+  // Crash window: the platform already holds the rule, but the persisted
+  // record is still the intent written before the POST, without its rule id.
+  before.records = [{
+    cycle_key: cycleKeyFor(issueId, 1), phase: "dispatching", wakeup_id: null,
+    dispatched_at: before.records.at(-1).dispatched_at, attempts: [...before.attempts],
+  }];
+  h.store.save(h.state);
+
+  // Restart on the same state directory: it must reclaim the platform rule,
+  // never register a second one.
+  const restarted = harness(world, h.dir);
+  t.after(restarted.cleanup);
+  await restarted.scan();
+  assert.equal(world.posts.length, 1, "restart must not register another rule");
+  assert.equal(world.issueWakeups.get(issueId).length, 1);
+  const recovered = restarted.state.issues[issueId].records.at(-1);
+  assert.equal(recovered.wakeup_id, rule.id);
+  assert.equal(recovered.phase, "dispatched");
+  assert.ok(recovered.recovered_at, "adoption is recorded on the recovered cycle");
+
+  // The reclaimed rule fires; the manager run is active, then ends with a
+  // comment and no continuation.
+  fire(world, rule, { status: "running" });
+  await restarted.scan();
+  assert.equal(world.posts.length, 1);
+  fire(world, rule, { status: "completed", completedAt: "2026-11-19T00:12:30Z", commented: true });
+  const ended = await restarted.scan();
+  assert.equal(world.posts.length, 1, "a terminal no_action run must not redispatch");
+  assert.equal(world.issueWakeups.get(issueId).length, 1, "no second rule for the same cycle");
+  assert.equal(ended.decisions[0].action, "anomaly");
+  assert.equal(restarted.state.issues[issueId].records.at(-1).phase, "anomaly");
+  assert.match(formatStatus(restarted.state), /需要检查的异常（1）/);
+
+  // A further restart keeps the single anomaly and stays quiet.
+  const third = harness(world, h.dir);
+  t.after(third.cleanup);
+  await third.scan();
+  assert.equal(world.posts.length, 1);
+  assert.equal(third.state.issues[issueId].records.at(-1).phase, "anomaly");
 });
 
 test("outside progress reopens exactly one new cycle", async (t) => {

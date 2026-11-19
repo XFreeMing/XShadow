@@ -609,14 +609,36 @@ export async function scanOnce({
 // own rule and its runs. The guard's activity never counts as progress; only an
 // outside run, a member reply, or a state that is no longer this gap does.
 async function inspectRecord({ api, issue, record, now, maxDispatches, windowMs, entry }) {
+  // A crash between the platform write and the state save leaves a dispatching
+  // record without its rule id. The platform rule is the authority for that
+  // window: adopt the rule carrying this cycle's marker before judging the
+  // issue, otherwise the guard's own pending rule reads as outside progress and
+  // the cycle resolves, which lets the manager's no_action reopen and redispatch.
+  let adopted = false;
+  if (!record.wakeup_id && record.cycle_key) {
+    let rows;
+    try { rows = await readIssueWakeups(api, issue.id); }
+    catch { return { action: "hold", reason: "接续规则状态暂时无法核验，跳过并可恢复" }; }
+    const own = rows
+      .filter((r) => isWatchdogInstruction(r.instruction) && ruleCycleKey(r.instruction, issue.id) === record.cycle_key)
+      .sort((a, b) => Date.parse(b.created_at ?? 0) - Date.parse(a.created_at ?? 0))[0];
+    if (own) {
+      record.wakeup_id = own.id;
+      record.phase = "dispatched";
+      record.recovered_at = iso(now);
+      adopted = true;
+    }
+  }
+  const hold = (reason) => ({ action: "hold", reason, ...(adopted ? { save: true } : {}) });
+
   let runs = [];
   if (record.wakeup_id) {
     try { runs = await readWakeupRuns(api, issue.id, record.wakeup_id); }
-    catch { return { action: "hold", reason: "派发运行记录暂时无法核验，跳过并可恢复" }; }
+    catch { return hold("派发运行记录暂时无法核验，跳过并可恢复"); }
   }
   const ours = new Set(runs.map((r) => r.id));
   const active = runs.find((r) => ACTIVE_RUN_STATUSES.has(r.status));
-  if (active) return { action: "hold", reason: `派发的项目经理运行仍在 ${active.status}` };
+  if (active) return hold(`派发的项目经理运行仍在 ${active.status}`);
 
   // The own rule may be missing from the workspace-wide rule page (pagination
   // truncation); the issue's own list is authoritative for the rule we wrote.
@@ -627,21 +649,21 @@ async function inspectRecord({ api, issue, record, now, maxDispatches, windowMs,
       const row = rows.find((r) => r.id === record.wakeup_id);
       if (row) rule = { id: row.id, state: row.enabled === true && !row.disabled_at ? "usable" : "ended", enabled: row.enabled === true };
     } catch {
-      return { action: "hold", reason: "接续规则状态暂时无法核验，跳过并可恢复" };
+      return hold("接续规则状态暂时无法核验，跳过并可恢复");
     }
   }
   const ruleUsable = rule?.state === "usable" || rule?.state === "overdue";
   const latest = runs[0] ?? null;
 
   if (issue.category === "continuation_unverified") {
-    return { action: "hold", reason: "接续未核验（规则读取被截断），不据此派发" };
+    return hold("接续未核验（规则读取被截断），不据此派发");
   }
 
   if (!isGap(issue)) {
     // An enabled one-shot rule of ours can itself make the diagnosis read
     // "waiting_continuation". That is the guard's own pending dispatch, not
     // outside progress, so the cycle stays open.
-    if (ruleUsable && runs.length === 0) return { action: "hold", reason: "已登记接续规则，等待平台触发" };
+    if (ruleUsable && runs.length === 0) return hold("已登记接续规则，等待平台触发");
     if (issue.category === "active_run") return { action: "resolve", reason: "外部运行正在推进" };
     return { action: "resolve", reason: `状态已离开该缺口：${issue.category}` };
   }
@@ -658,8 +680,8 @@ async function inspectRecord({ api, issue, record, now, maxDispatches, windowMs,
       reason: `派发的项目经理运行已结束（${latest.status}${note}，${when}），仍未登记接续；同一周期不再派发`,
     };
   }
-  if (latest && ACTIVE_RUN_STATUSES.has(latest.status)) return { action: "hold", reason: `派发的运行仍在 ${latest.status}` };
-  if (runs.length === 0 && ruleUsable) return { action: "hold", reason: "接续规则已登记，等待平台触发" };
+  if (latest && ACTIVE_RUN_STATUSES.has(latest.status)) return hold(`派发的运行仍在 ${latest.status}`);
+  if (runs.length === 0 && ruleUsable) return hold("接续规则已登记，等待平台触发");
 
   if (!latest) {
     const spent = attemptsInWindow(entry, now, windowMs).length;
@@ -670,7 +692,7 @@ async function inspectRecord({ api, issue, record, now, maxDispatches, windowMs,
 
   // A run exists but the platform reports no state we can act on yet; wait for
   // the next event instead of stacking another dispatch on it.
-  return { action: "hold", reason: `派发的运行状态未知（${latest.status}）` };
+  return hold(`派发的运行状态未知（${latest.status}）`);
 }
 
 export function formatStatus(state) {
