@@ -66,11 +66,10 @@ export function IssueWorkMethod({
           issueId={issueId}
           run={run.data}
           roles={roles}
+          acceptance={run.data.method?.kind === "development" ? children : null}
         />
       )}
-      {run.data &&
-        (!run.data.method || run.data.method.kind === "development") &&
-        children}
+      {run.data && !run.data.method && children}
     </>
   );
 }
@@ -80,10 +79,12 @@ function MethodCard({
   issueId,
   run,
   roles,
+  acceptance,
 }: {
   wsId: string;
   issueId: string;
   run: WorkMethodRun;
+  acceptance: ReactNode;
   roles?: MethodRoleContext;
 }) {
   const { t } = useT("issues");
@@ -299,6 +300,7 @@ function MethodCard({
         )}
         {method && (
           <>
+            {acceptance}
             {run.state !== "closed" && step && (
               <>
                 <div className="grid gap-2 rounded-md bg-muted/30 p-3">

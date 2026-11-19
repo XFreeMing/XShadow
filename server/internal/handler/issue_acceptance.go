@@ -127,18 +127,15 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, trace)
 }
 
-// A scope edit invalidates the case design. A new case, candidate or failing
-// result invalidates verification. Roll back only work already submitted or
-// passed, so filling out the current step does not dispatch one run per edit.
+// Each changed artifact goes back to its own author for independent review.
+// Edits during the current working step do not dispatch additional tasks.
 func agileReworkStep(run workmethod.Run, action string, criterion acceptance.Criterion) (int, bool) {
 	targetGate := "candidate"
 	switch action {
 	case "criterion":
-		targetGate = "coverage"
+		targetGate = "criteria"
 	case "case":
-		if run.EvidenceGate() == "coverage" && run.State == "review" {
-			return run.Step, true
-		}
+		targetGate = "coverage"
 	case "implementation":
 	case "run":
 		impact := criterion.Impact()
@@ -152,11 +149,6 @@ func agileReworkStep(run workmethod.Run, action string, criterion acceptance.Cri
 		if s.Gate == targetGate && (i < run.Step || (i == run.Step && run.State != "working")) {
 			return i, true
 		}
-	}
-	// A change while the criteria themselves are under review goes back
-	// to the author before that review can release a later stage.
-	if action == "criterion" && run.State == "review" && run.EvidenceGate() == "criteria" {
-		return run.Step, true
 	}
 	return 0, false
 }

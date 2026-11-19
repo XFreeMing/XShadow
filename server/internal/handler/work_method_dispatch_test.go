@@ -2,17 +2,19 @@ package handler
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
 )
 
 func methodStageTask(t *testing.T, issueID string, revision int) db.AgentTaskQueue {
@@ -199,7 +201,10 @@ func TestAgileDurableHandoffAfterLostNotification(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate losing the process between commit and the post-commit wakeup.
-	fresh := service.NewTaskService(db.New(testPool), testPool, nil, events.New())
+	bus := events.New()
+	queuedEvents := 0
+	bus.Subscribe(protocol.EventTaskQueued, func(e events.Event) { queuedEvents++ })
+	fresh := service.NewTaskService(db.New(testPool), testPool, nil, bus)
 	for i := 0; i < 2; i++ {
 		got, err := fresh.ClaimTasksForRuntimes(ctx, []pgtype.UUID{util.MustParseUUID(rt)}, 8)
 		if err != nil {
@@ -211,5 +216,16 @@ func TestAgileDurableHandoffAfterLostNotification(t *testing.T) {
 		if i == 1 && len(got) != 0 {
 			t.Fatal("redelivered claimed task", got)
 		}
+	}
+
+	// A delayed or repeated post-commit notification must not announce a
+	// claimed task as queued again.
+	for range 2 {
+		if err := fresh.PublishWorkMethodHandoff(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if queuedEvents != 1 {
+		t.Fatalf("published %d queued events for one task", queuedEvents)
 	}
 }

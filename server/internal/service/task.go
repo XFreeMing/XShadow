@@ -35,6 +35,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/skillbundle"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 type TaskService struct {
@@ -6459,7 +6460,9 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 				// projects a nonterminal custom key onto a built-in, so this is
 				// a key comparison on purpose. (MUL-6243, MUL-7240)
 				effectiveStatus := issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status)
-				if effectiveStatus == "in_progress" && !processedIssues[issueKey] && !retriedIssues[issueKey] {
+				var method workmethod.Run
+				methodOwnsBoard := len(issue.WorkMethodRun) > 0 && json.Unmarshal(issue.WorkMethodRun, &method) == nil && method.State != "ready" && method.EvidenceGate() != ""
+				if effectiveStatus == "in_progress" && !methodOwnsBoard && !processedIssues[issueKey] && !retriedIssues[issueKey] {
 					processedIssues[issueKey] = true
 					hasActive, checkErr := s.Queries.HasActiveTaskForIssue(ctx, t.IssueID)
 					if checkErr != nil {
@@ -6469,17 +6472,18 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 						)
 					} else if !hasActive {
 						updatedIssue, updateErr := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-							SourceTaskID: t.ID,
-							ID:           t.IssueID,
-							Status:       "todo",
-							WorkspaceID:  issue.WorkspaceID,
+							ExpectedRevision: pgtype.Int8{Int64: issue.Revision, Valid: true},
+							SourceTaskID:     t.ID,
+							ID:               t.IssueID,
+							Status:           "todo",
+							WorkspaceID:      issue.WorkspaceID,
 						})
-						if updateErr != nil {
+						if updateErr != nil && !errors.Is(updateErr, pgx.ErrNoRows) {
 							slog.Warn("handle failed tasks: reset stuck issue failed",
 								"issue_id", issueKey,
 								"error", updateErr,
 							)
-						} else {
+						} else if updateErr == nil {
 							// This direct reset bypasses the HTTP UpdateIssue
 							// handler that normally emits issue:updated, so emit
 							// it here too. Without it the board / status-filter

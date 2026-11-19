@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/acceptance"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
@@ -223,12 +225,85 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	}
 	accept("criterion", map[string]any{"text": "增加边界输入"})
 	board("todo")
-	if run.Step != 1 || run.State != "working" || run.History[len(run.History)-1].Action != "rework" || len(trace.Criteria[0].Impact().Retest) != 2 {
+	if run.Step != 0 || run.State != "working" || run.History[len(run.History)-1].Action != "rework" || len(trace.Criteria[0].Impact().Retest) != 2 {
 		t.Fatal(run, trace)
 	}
 	revision := run.Revision
 	accept("criterion", map[string]any{"text": "增加边界输入"})
 	if run.Revision != revision || taskCountFor(t, id, agent) != count {
 		t.Fatal("duplicate scope event advanced or dispatched")
+	}
+}
+
+func TestAgileChangedEvidenceDispatchesResponsibleOwnerOnce(t *testing.T) {
+	seedTestCatalog(t)
+	agent := seededReadyAgentID(t)
+	sha := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		action string
+		fields map[string]any
+		step   int
+		board  string
+	}{
+		{"criterion", map[string]any{"text": "新范围"}, 0, "todo"},
+		{"case", map[string]any{"case_id": "T2", "text": "复现异常"}, 1, "todo"},
+		{"implementation", map[string]any{"repository": "org/app", "branch": "dev", "commit": strings.Repeat("b", 40)}, 2, "in_progress"},
+		{"run", map[string]any{"case_id": "T1", "result": "fail", "candidate": sha, "evidence": "CI/failed"}, 2, "in_progress"},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			m := workmethod.Builtins()[0]
+			m.Steps[tc.step].Owner = &workmethod.Actor{Kind: "agent", ID: agent}
+			run := workmethod.Run{Method: &m, State: "closed", Step: 3, Revision: 9}
+			trace := acceptance.Trace{Revision: 4, Criteria: []acceptance.Criterion{{
+				ID: "C1", Versions: []string{"原范围"},
+				Cases:           []acceptance.TestCase{{ID: "T1", Specification: "验证候选", Runs: []acceptance.Run{{Version: 1, Result: "pass", Candidate: sha, Evidence: "CI/pass"}}}},
+				Implementations: []acceptance.Implementation{{Version: 1, Repository: "org/app", Branch: "dev", Commit: sha}},
+			}}}
+			methodJSON, err := json.Marshal(run)
+			if err != nil {
+				t.Fatal(err)
+			}
+			traceJSON, err := json.Marshal(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := dbfx.Issue(t, "终验后修改交付证据", testutil.Cols{"status": "done", "work_method_run": methodJSON, "acceptance_criteria": traceJSON})
+			tc.fields["action"], tc.fields["criterion_id"], tc.fields["base_revision"] = tc.action, "C1", trace.Revision
+			for _, want := range []int{http.StatusOK, http.StatusConflict} {
+				req := withURLParam(newRequest(http.MethodPost, "/api/issues/"+id+"/acceptance", tc.fields), "id", id)
+				testutil.Call(t, testHandler.ChangeIssueAcceptance, req).Want(want)
+			}
+			updated := readDeliveryMethod(t, id)
+			status, _, assignee := issueStatusAndAssignee(t, id)
+			if updated.State != "working" || updated.Step != tc.step || updated.Revision != run.Revision+1 || status != tc.board || assignee != agent || taskCountFor(t, id, agent) != 1 {
+				t.Fatalf("changed %s: method=%+v, board=%s, assignee=%s", tc.action, updated, status, assignee)
+			}
+		})
+	}
+}
+
+func TestAgileProviderFailureKeepsCurrentBoardStep(t *testing.T) {
+	seedTestCatalog(t)
+	agent := seededReadyAgentID(t)
+	m := workmethod.Builtins()[0]
+	run := workmethod.Run{State: "working", Step: 2, Revision: 5, Method: &m}
+	data, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := dbfx.Issue(t, "候选步骤等待重试", testutil.Cols{"status": "in_progress", "work_method_run": data})
+	taskID := dbfx.Task(t, agent, testutil.Cols{
+		"issue_id": id, "runtime_id": handlerTestRuntimeID(t), "status": "failed", "max_attempts": 1,
+	})
+	failed, err := testHandler.Queries.GetAgentTask(t.Context(), util.MustParseUUID(taskID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testHandler.TaskService.HandleFailedTasks(t.Context(), []db.AgentTaskQueue{failed})
+	if status, _, _ := issueStatusAndAssignee(t, id); status != "in_progress" {
+		t.Fatal(status)
+	}
+	if current := readDeliveryMethod(t, id); current.Revision != 5 || current.Step != 2 {
+		t.Fatal(current)
 	}
 }

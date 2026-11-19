@@ -2516,7 +2516,7 @@ func (q *Queries) UpdateIssueAcceptanceTrace(ctx context.Context, arg UpdateIssu
 }
 
 const updateIssueStatus = `-- name: UpdateIssueStatus :one
-WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($4::uuid::text, ''), true))
+WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($5::uuid::text, ''), true))
 UPDATE issue AS i SET
     status = $2,
     -- Same rule as UpdateIssue: a mark only survives cancelled -> cancelled.
@@ -2537,14 +2537,16 @@ UPDATE issue AS i SET
     updated_at = now()
 FROM wakeup_source
 WHERE i.id = $1 AND i.workspace_id = $3
+  AND ($4::bigint IS NULL OR i.revision = $4::bigint)
 RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.requester_user_id, i.work_method_run
 `
 
 type UpdateIssueStatusParams struct {
-	ID           pgtype.UUID `json:"id"`
-	Status       string      `json:"status"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	ID               pgtype.UUID `json:"id"`
+	Status           string      `json:"status"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	ExpectedRevision pgtype.Int8 `json:"expected_revision"`
+	SourceTaskID     pgtype.UUID `json:"source_task_id"`
 }
 
 // Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
@@ -2557,6 +2559,7 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		arg.ID,
 		arg.Status,
 		arg.WorkspaceID,
+		arg.ExpectedRevision,
 		arg.SourceTaskID,
 	)
 	var i Issue

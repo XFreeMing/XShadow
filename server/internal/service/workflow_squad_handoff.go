@@ -67,7 +67,7 @@ func (s *TaskService) CreateWorkMethodHandoff(ctx context.Context, q *db.Queries
 
 // PublishWorkMethodHandoff wakes the runtime after the method transition commits.
 func (s *TaskService) PublishWorkMethodHandoff(ctx context.Context, task db.AgentTaskQueue) error {
-	s.BroadcastTaskQueued(ctx, task)
-	s.notifyTaskAvailable(task)
+	// The promoter publishes task:queued and wakes the runtime only after it
+	// wins deferred -> queued. Replaying this notification is a no-op.
 	return s.PromoteDueDeferredTasksForRuntime(ctx, task.RuntimeID)
 }
