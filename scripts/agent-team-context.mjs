@@ -366,7 +366,14 @@ export async function readTaskDiagnosis(api, live, { now = Date.now() } = {}) {
   const rows = issues.map((issue) => {
     const runs = runsByIssue.get(issue.id) ?? [];
     activeRuns.push(...runs);
-    const classifiedRules = (rulesByIssue.get(issue.id) ?? []).map((r) => classifyRule(r, now));
+    // Keep the rule identity alongside its classification: a caller that needs
+    // to tell its own registered continuation from someone else's must match
+    // the id, not just the state label.
+    const classifiedRules = (rulesByIssue.get(issue.id) ?? []).map((r) => ({
+      ...classifyRule(r, now),
+      id: r.id, agent_id: r.agent_id ?? null, kind: r.kind ?? null,
+      mode: r.mode ?? null, fire_count: Number(r.fire_count ?? 0), enabled: r.enabled === true,
+    }));
     const usableRules = classifiedRules.filter((r) => r.state === "usable");
     const unknownRules = classifiedRules.filter((r) => r.state === "unknown");
     const ruleFactsText = ruleFacts(classifiedRules, truncated).text;
@@ -402,9 +409,19 @@ export async function readTaskDiagnosis(api, live, { now = Date.now() } = {}) {
     return {
       identifier: issue.identifier, title: issue.title, id: issue.id,
       status: issue.status, status_category: issue.status_category ?? null,
+      assignee_type: issue.assignee_type ?? null,
+      assignee_id: issue.assignee_id ?? null,
+      last_activity_at: issue.last_activity_at ?? null,
       owner: ownerName(issue, live),
       category: kind, category_label: TASK_CATEGORIES[kind],
       run_counts: Object.fromEntries(ACTIVE_RUN_STATUSES.map((s) => [s, runs.filter((r) => r.status === s).length])),
+      // Every continuation this read could classify, with its identity. The
+      // text summary above stays aggregate; this is the machine-readable fact
+      // a writer needs to confirm a rule it registered itself.
+      continuation_rules: classifiedRules.map((r) => ({
+        id: r.id, state: r.state, detail: r.detail, agent_id: r.agent_id,
+        kind: r.kind, mode: r.mode, fire_count: r.fire_count, enabled: r.enabled,
+      })),
       children,
       facts,
     };
