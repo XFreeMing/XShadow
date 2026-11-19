@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { skillFiles } from "./agent-team-template.mjs";
 import {
-  buildMemberTodo, duplicateIdentifier, hasDecisionKey, sampleTodoInputs, sampleTodos,
-  titleCandidates, validateTodoInput, validateMemberTodo,
+  buildMemberTodo, CHIEF_OF_STAFF_NAME, duplicateIdentifier, hasDecisionKey, sampleTodoInputs,
+  sampleTodos, titleCandidates, validateTodoInput, validateMemberTodo,
 } from "../agent-team/skills/rd-acceptance/scripts/member-todo.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -158,4 +158,45 @@ test("the generated todo never puts the decision key or a revision in the visibl
   assert.match(todo.description, /^decision_key: acc-0123456789abcdef$/m);
   assert.equal(todo.metadata.acceptance_decision_key, "acc-0123456789abcdef");
   assert.deepEqual(todo.metadata.member_todo_key ? todo.title_candidates[0] : null, todo.title);
+});
+test("the receiver is always the configured chief of staff", () => {
+  const base = sampleTodoInputs()[2];
+  assert.ok(validateTodoInput({ ...base, handler: "项目经理" })
+    .some((error) => /接件人统一为幕僚长/.test(error)));
+  assert.ok(validateTodoInput({ ...base, handler: { name: "研发经理" } })
+    .some((error) => /接件人统一为幕僚长/.test(error)));
+  assert.deepEqual(validateTodoInput({ ...base, handler: CHIEF_OF_STAFF_NAME }), []);
+  assert.deepEqual(validateTodoInput(base), []);
+});
+
+test("the marker carries the readable question, fixed receiver and atomic options", () => {
+  const input = sampleTodoInputs()[2];
+  const todo = buildMemberTodo(input);
+  const marker = JSON.parse(todo.description.match(/<!-- multica-member-todo (.*?) -->/)[1]);
+  assert.equal(marker.handler, CHIEF_OF_STAFF_NAME);
+  assert.equal(marker.todo_key, todo.metadata.member_todo_key);
+  assert.equal(marker.problem, input.problem);
+  assert.equal(marker.why_you, input.why_you);
+  assert.equal(marker.action, input.action);
+  assert.ok(marker.options.length >= 2);
+  for (const option of marker.options) {
+    assert.ok(option.key && option.label && option.consequence);
+  }
+  // An arbitrary handler is rejected before any marker is generated.
+  assert.throws(
+    () => buildMemberTodo({ ...input, handler: "项目经理" }),
+    /接件人统一为幕僚长/,
+  );
+});
+
+test("the generator, the team template and the client agree on the receiver", () => {
+  const team = JSON.parse(readFileSync(join(ROOT, "agent-team/team.json"), "utf8"));
+  const chief = team.agents.find((agent) => agent.name === CHIEF_OF_STAFF_NAME);
+  assert.ok(chief, "team.json declares the configured receiver");
+  assert.equal(chief.key, "chief");
+  assert.match(chief.instructions, /multica-member-answer/);
+  const skill = readFileSync(join(ROOT, "agent-team/skills/rd-coordinate/SKILL.md"), "utf8");
+  assert.match(skill, /multica-member-answer/);
+  const client = readFileSync(join(ROOT, "packages/core/issues/member-todo.ts"), "utf8");
+  assert.match(client, /MEMBER_TODO_HANDLER = "幕僚长"/);
 });

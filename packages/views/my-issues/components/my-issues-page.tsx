@@ -8,6 +8,7 @@ import { CollectionPageState } from "../../layout/collection-page";
 import { PageHeader } from "../../layout/page-header";
 import { IssueSurface } from "../../issues/surface/issue-surface";
 import { IssueViewHeader } from "../../issue-views/view-header";
+import { MemberTodosBand } from "../../member-todos/member-todos-band";
 import { useT } from "../../i18n";
 import { useMyIssuesScope } from "../use-my-issues-scope";
 
@@ -22,29 +23,32 @@ export function MyIssuesPage() {
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       {user ? (
-        <IssueSurface
-          scope={{
-            type: "my",
-            userId: user.id,
-            relation: myIssuesRelationFromScope(scope),
-          }}
-          modes={["board", "list", "table", "swimlane"]}
-          batchToolbar="list"
-          renderHeader={({ controller }) => <IssueViewHeader controller={controller} base={MY_BASE} />}
-          renderEmpty={({ controller }) => (
-            <CollectionPageState
-              icon={CircleUser}
-              title={t(($) => $.page.empty_title)}
-              description={t(($) => $.page.empty_description)}
-              actions={
-                <Button size="sm" onClick={() => controller.openCreateIssue()}>
-                  <Plus aria-hidden="true" />
-                  {tIssues(($) => $.views.new_issue)}
-                </Button>
-              }
-            />
-          )}
-        />
+        <>
+          <MemberTodosBand />
+          <IssueSurface
+            scope={{
+              type: "my",
+              userId: user.id,
+              relation: myIssuesRelationFromScope(scope),
+            }}
+            modes={["board", "list", "table", "swimlane"]}
+            batchToolbar="list"
+            renderHeader={({ controller }) => <IssueViewHeader controller={controller} base={MY_BASE} />}
+            renderEmpty={({ controller }) => (
+              <CollectionPageState
+                icon={CircleUser}
+                title={t(($) => $.page.empty_title)}
+                description={t(($) => $.page.empty_description)}
+                actions={
+                  <Button size="sm" onClick={() => controller.openCreateIssue()}>
+                    <Plus aria-hidden="true" />
+                    {tIssues(($) => $.views.new_issue)}
+                  </Button>
+                }
+              />
+            )}
+          />
+        </>
       ) : (
         <PageHeader>
           <ListTodo className="size-4 text-muted-foreground" />

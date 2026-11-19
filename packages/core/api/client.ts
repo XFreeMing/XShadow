@@ -1812,10 +1812,14 @@ export class ApiClient {
     attachmentIds?: string[],
     suppressAgentIds?: string[],
     steerTaskIds?: string[],
+    commentId?: string,
   ): Promise<Comment> {
     return this.fetch(`/api/issues/${issueId}/comments`, {
       method: "POST",
       body: JSON.stringify({
+        // A caller that retries the same visible action reuses its id; the
+        // server replays the existing comment instead of creating a new one.
+        ...(commentId ? { id: commentId } : {}),
         content,
         type: type ?? "comment",
         ...(parentId ? { parent_id: parentId } : {}),

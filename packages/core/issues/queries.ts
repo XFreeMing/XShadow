@@ -687,6 +687,41 @@ export function issueCommentThreadOptions(issueId: string, commentId: string) {
   });
 }
 
+/**
+ * Comments for one issue, used where a member answer's persisted state matters
+ * but the full activity timeline is not needed. The key shares the timeline
+ * prefix, so `comment:created` / `updated` / `deleted` invalidations reach it.
+ */
+export function issueCommentsOptions(issueId: string) {
+  return queryOptions({
+    queryKey: [...issueKeys.timeline(issueId), "comments"] as const,
+    queryFn: () => api.listComments(issueId),
+    staleTime: 15_000,
+  });
+}
+
+/**
+ * Issues assigned to one member that may carry a member-todo marker. The
+ * server has no "has marker" filter, so this reads one bounded window and the
+ * view keeps only cards whose marker parses; ordinary tasks are unaffected.
+ */
+export function memberTodoIssuesOptions(wsId: string, userId: string) {
+  return queryOptions({
+    queryKey: [...issueKeys.all(wsId), "member-todos", userId] as const,
+    queryFn: async () => {
+      const res = await api.listIssues({
+        assignee_id: userId,
+        assignee_types: ["member"],
+        limit: 100,
+        offset: 0,
+      });
+      return res.issues;
+    },
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+  });
+}
+
 export function issueReactionsOptions(issueId: string) {
   return queryOptions({
     queryKey: issueKeys.reactions(issueId),

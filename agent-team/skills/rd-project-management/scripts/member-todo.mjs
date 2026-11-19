@@ -17,6 +17,12 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const MEMBER_TODO_MARKER = "multica-member-todo";
+export const MEMBER_ANSWER_MARKER = "multica-member-answer";
+// The active chief-of-staff role in agent-team/team.json. Answers are routed to
+// this recorded role name, never to a machine id: the client resolves the
+// workspace agent when it submits, and a missing or ambiguous match is an
+// honest failure instead of a fake delivery.
+export const CHIEF_OF_STAFF_NAME = "幕僚长";
 export const TECHNICAL_HEADING = "## 技术附录（团队内部，无需阅读）";
 export const TODO_KINDS = Object.freeze({
   material: "人工材料",
@@ -117,6 +123,29 @@ export const COMPLETION_SIGNALS = Object.freeze({
   manager: { done: "在本事项回复你的选择", next: "项目经理会在本待办收到你的回复后继续原事项" },
 });
 
+// Options travel with the machine marker so a client can render real choices
+// without guessing the readable Markdown. An explicit key keeps its identity
+// across edits; otherwise it is derived deterministically from the label, so
+// creators that already ship label/consequence keep working unchanged.
+export function optionKey(option) {
+  const explicit = isText(option?.key) ? option.key.trim() : "";
+  if (explicit) return explicit;
+  const digest = createHash("sha256").update(oneLine(option?.label ?? "")).digest("hex").slice(0, 10);
+  return `opt-${digest}`;
+}
+
+export function encodeOptions(options) {
+  if (!Array.isArray(options)) return [];
+  return options
+    .filter((option) => option && typeof option === "object" && isText(option.label) && isText(option.consequence ?? option.effect))
+    .map((option) => ({
+      key: optionKey(option),
+      label: oneLine(option.label),
+      consequence: oneLine(option.consequence ?? option.effect),
+      ...(isText(option.example) ? { example: oneLine(option.example) } : {}),
+    }));
+}
+
 function optionErrors(options, kind) {
   const errors = [];
   const rows = Array.isArray(options) ? options : [];
@@ -128,6 +157,7 @@ function optionErrors(options, kind) {
   if (kind === "material" && rows.length > 0) {
     errors.push("人工材料待办不需要选项；把需要提供的材料写进 submit");
   }
+  const seenKeys = new Set();
   rows.forEach((option, index) => {
     if (!option || typeof option !== "object") {
       errors.push(`第 ${index + 1} 个选项必须是对象`);
@@ -137,6 +167,14 @@ function optionErrors(options, kind) {
     if (!isText(option.consequence ?? option.effect)) errors.push(`选项「${option.label ?? index + 1}」缺少选择后的后果 consequence`);
     if (option.default !== undefined || option.recommended !== undefined) {
       errors.push(`选项「${option.label ?? index + 1}」预设了默认选择；请把差异写清楚，让用户自己选`);
+    }
+    if (isText(option.key) && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/.test(option.key.trim())) {
+      errors.push(`选项「${option.label ?? index + 1}」的 key 只能使用字母、数字、下划线或连字符，最长 48 位`);
+    }
+    if (isText(option.label)) {
+      const key = optionKey(option);
+      if (seenKeys.has(key)) errors.push(`选项「${option.label}」的唯一键 ${key} 重复；不同选项必须能被区分`);
+      seenKeys.add(key);
     }
     for (const [field, label] of [["label", "名称"], ["consequence", "后果"], ["effect", "后果"], ["example", "示例"]]) {
       if (!isText(option[field])) continue;
@@ -185,6 +223,18 @@ export function validateTodoInput(input) {
   }
   if (!isText(input.recipient?.name) && !isText(input.recipient?.id)) {
     errors.push("缺少真实接收人（recipient.name 或 recipient.id）");
+  }
+  // Receivers must not re-route a member answer by an arbitrary name in the
+  // issue body. The product convention is one receiver, the configured chief
+  // of staff, resolved in the current workspace; a different handler is
+  // rejected rather than silently ignored.
+  if (input.handler !== undefined) {
+    const handler = isText(input.handler?.name) ? input.handler.name.trim()
+      : isText(input.handler) ? input.handler.trim()
+        : "";
+    if (handler !== CHIEF_OF_STAFF_NAME) {
+      errors.push(`接件人统一为${CHIEF_OF_STAFF_NAME}；不能通过 handler 改派其他角色`);
+    }
   }
   if (!isText(input.source?.identifier)) errors.push("缺少来源事项 source.identifier，去重和回链会失效");
   if (!isText(input.request) && !isText(input.decision_key)) {
@@ -274,6 +324,16 @@ export function buildMemberTodo(input) {
     source_issue: input.source.identifier,
     ...(isText(input.source.id) ? { source_id: input.source.id } : {}),
     ...(isText(input.request) ? { request: input.request.trim() } : {}),
+    completion_signal: input.completion_signal,
+    // Always the configured chief of staff name. An arbitrary handler in an
+    // issue body never reassigns the answer to another role.
+    handler: CHIEF_OF_STAFF_NAME,
+    ...(isText(input.problem) ? { problem: oneLine(input.problem) } : {}),
+    ...(isText(input.why_you) ? { why_you: oneLine(input.why_you) } : {}),
+    ...(isText(input.action) ? { action: oneLine(input.action) } : {}),
+    // One atomic block: a client either understands the whole option set or
+    // shows no choice form at all. It never infers options from the prose.
+    ...(encodeOptions(options).length > 0 ? { options: encodeOptions(options) } : {}),
   };
   const marker = `<!-- ${MEMBER_TODO_MARKER} ${JSON.stringify(markerBody)} -->`;
   const keyLine = isText(input.decision_key) ? `decision_key: ${input.decision_key.trim()}` : null;
@@ -358,6 +418,31 @@ export function validateMemberTodo(todo) {
   if (!marker) errors.push("缺少可检索的成员待办标记");
   else if (!isText(marker.todo_key)) errors.push("成员待办标记缺少 todo_key");
   else if (todo.todo_key && marker.todo_key !== todo.todo_key) errors.push("标记里的 todo_key 与待办不一致");
+  if (marker && !isText(marker.handler)) errors.push("成员待办标记缺少接件角色 handler");
+  if (marker && !Object.hasOwn(COMPLETION_SIGNALS, marker.completion_signal)) {
+    errors.push("成员待办标记缺少真实完成信号 completion_signal");
+  }
+  if (marker) {
+    const markerOptions = Array.isArray(marker.options) ? marker.options : [];
+    if (todo.kind === "authorization" || todo.kind === "choice" || todo.kind === "decision") {
+      if (markerOptions.length < 2) errors.push("标记里需要至少两个可选项，客户端才能直接选择");
+    }
+    if (todo.kind === "material" && markerOptions.length > 0) {
+      errors.push("人工材料待办不应携带选择项");
+    }
+    const keys = new Set();
+    markerOptions.forEach((option, index) => {
+      if (!isText(option?.key) || !isText(option?.label) || !isText(option?.consequence)) {
+        errors.push(`标记里的第 ${index + 1} 个选项缺少唯一键、名称或后果`);
+        return;
+      }
+      if (keys.has(option.key)) errors.push(`标记里的选项唯一键 ${option.key} 重复`);
+      keys.add(option.key);
+      if (!visible.includes(oneLine(option.label))) {
+        errors.push(`标记里的选项「${option.label}」没有出现在首屏`);
+      }
+    });
+  }
   return [...new Set(errors)];
 }
 
@@ -392,8 +477,8 @@ function authorizationSample() {
     action: "确认是否允许团队只读最近 30 天的订单数据。",
     where: "直接在本事项回复。",
     options: [
-      { label: "允许", consequence: "团队可以只读最近 30 天的订单验证导入，不会改动任何数据。", example: "回复“允许”" },
-      { label: "不允许", consequence: "这项验证继续使用样例数据，真实账号下的问题暂时无法确认。", example: "回复“不允许”" },
+      { key: "allow", label: "允许", consequence: "团队可以只读最近 30 天的订单验证导入，不会改动任何数据。", example: "回复“允许”" },
+      { key: "deny", label: "不允许", consequence: "这项验证继续使用样例数据，真实账号下的问题暂时无法确认。", example: "回复“不允许”" },
     ],
     submit: "回复“允许”或“不允许”。",
     done: "在本事项回复“允许”或“不允许”",
@@ -414,8 +499,8 @@ function choiceSample() {
     action: "选一个你更希望打开列表就先看到的信息。",
     where: "直接在本事项回复。",
     options: [
-      { label: "先显示金额", consequence: "打开列表先看到每单金额，订单状态要点开详情查看。", example: "回复“金额”" },
-      { label: "先显示状态", consequence: "打开列表先看到订单进度，金额要点开详情查看。", example: "回复“状态”" },
+      { key: "amount", label: "先显示金额", consequence: "打开列表先看到每单金额，订单状态要点开详情查看。", example: "回复“金额”" },
+      { key: "status", label: "先显示状态", consequence: "打开列表先看到订单进度，金额要点开详情查看。", example: "回复“状态”" },
     ],
     submit: "回复“金额”或“状态”。",
     done: "在本事项回复“金额”或“状态”",
@@ -437,8 +522,8 @@ function decisionSample() {
     action: "选择这次 PDF 怎么发。",
     where: "直接在本事项回复你的选择。",
     options: [
-      { label: "本期先发，标注引用暂不可跳转", consequence: "读者先看到正文；引用暂时点不开，发布说明会写明这条限制。", example: "回复“先发”" },
-      { label: "等引用能跳转后再发", consequence: "发布时间推迟，直到 PDF 引用可以打开原文。", example: "回复“等修好”" },
+      { key: "ship", label: "本期先发，标注引用暂不可跳转", consequence: "读者先看到正文；引用暂时点不开，发布说明会写明这条限制。", example: "回复“先发”" },
+      { key: "wait", label: "等引用能跳转后再发", consequence: "发布时间推迟，直到 PDF 引用可以打开原文。", example: "回复“等修好”" },
     ],
     submit: "回复“先发”或“等修好”。",
     done: "选好后请把本事项标记为完成（只回复不会自动接续）",

@@ -53,13 +53,15 @@ node ./member-todo.mjs --check --input ./todo-input.json
 ```
 
 - `kind`：`material`（材料）、`authorization`（授权）、`choice`（偏好选择）、`decision`（业务取舍）。
+- `handler`：固定为已配置活跃的接件角色 `幕僚长`，产品约定所有成员答复统一交给它，不能通过正文或 `handler` 改派其他角色；客户端在**当前工作区**按名称解析角色身份，不写机器 UUID。项目经理的完成回调只作为原事项的必要衔接保留。
 - `recipient.name` 或 `recipient.id` 至少一个真实接收人；`source.identifier` 用于回链和查重。
 - `request` 是稳定的输入请求标识，同一请求重发时沿用原文；验收决策用 `decision_key`。
-- `completion_signal` 必须与真实登记的唤醒规则一致：`done`、`comment` 或 `manager`。正文里的“怎样算完成 / 之后”会被校验。默认用 `done`：用户在成员待办里回复并把待办标记完成，原事项用 `--until-issue <待办> --until-issue-state done` 等它完成。
+- `completion_signal` 必须与真实登记的唤醒规则一致：`done`、`comment` 或 `manager`。正文里的“怎样算完成 / 之后”会被校验。默认用 `done`：用户在成员待办里回复并把待办标记完成，原事项用 `--until-issue <待办> --until-issue-state done` 等它完成。新版「我的任务」一次提交会先写下答复评论（提到 `handler` 角色），再按 `completion_signal` 完成待办；旧客户端仍按正文的“评论 + 完成”方式操作，两条路径都必须真实可接续。
   - `done`：正文写“在本事项回复你的选择，并把本事项标记为完成（只回复不会自动接续）”；原事项登记 `--until-issue <待办> --until-issue-state done`。
-  - `comment`：正文只要求“在本事项回复”，就必须在**成员待办自身**登记 `comment.created` 事件唤醒项目经理（`issue wakeup create <待办> --event comment.created --filter-actor-type member --filter-actor-id <用户 id> --agent-id <项目经理 id>`），由他读取选择后接回原事项。不能把 `comment.created` 登记在原事项却让用户去待办回复——那是两个不同事项，永远不会唤醒。无法登记待办监听时，改成“请回原事项回复”并在原事项登记，或直接改用默认的 `done`。
+  - `comment`：正文只要求“在本事项回复”，就必须在**成员待办自身**登记 `comment.created` 事件唤醒项目经理（`issue wakeup create <待办> --event comment.created --filter-actor-type member --filter-actor-id <用户 id> --agent-id <项目经理 id>`），由他读取选择后接回原事项。不能把 `comment.created` 登记在原事项却让用户去待办回复——那是两个不同事项，永远不会唤醒。无法登记待办监听时，改成“请回原事项回复”并在原事项登记，或直接改用默认的 `done`。新版客户端答复时会提到 `handler` 角色；这条规则仍要保留，覆盖旧客户端和手工回复。
   - `manager`：同样必须有真实唤醒（待办 `comment.created` 或 `done` 规则唤醒项目经理）；只写“项目经理会查看”但没有规则会失联。
-- `options`：授权、偏好和取舍至少两项，每项写清 `label`、`consequence`、`example`；不设默认项或推荐项。
+- `options`：授权、偏好和取舍至少两项，每项写清 `label`、`consequence`、`example`；需要跨版本保持身份时再给稳定的 `key`（字母、数字、下划线或连字符），没有时生成器按名称派生。不设默认项或推荐项。选项会随标记原子写入正文末尾，客户端只读标记，不再从 Markdown 列表推测。
+- `problem` / `why_you` / `action`：会以同一份原文进入标记，供「我的任务」卡片直接展示；改正文时保持与标记一致，重新生成即可。
 - `technical`：键值对，会进入正文末尾的技术附录。标准号、缺口键、SHA、候选版本、环境等只放这里。
 
 ## 生成结果
@@ -83,10 +85,12 @@ node ./member-todo.mjs --check --input ./todo-input.json
 - 输入请求：<request>
 - <technical 键值>
 decision_key: <验收决策键>
-<!-- multica-member-todo {"todo_key":"…","kind":"…","source_issue":"…","request":"…"} -->
+<!-- multica-member-todo {"todo_key":"…","kind":"…","source_issue":"…","request":"…","completion_signal":"…","handler":"幕僚长","problem":"…","why_you":"…","action":"…","options":[{"key":"…","label":"…","consequence":"…","example":"…"}]} -->
 ```
 
 标题写用户能看懂的结论或取舍，不超过 60 字；不要放标准号、缺口键、SHA、轮次或环境。信息不足时先回原事项补齐上下文，再重新生成；不要用“这项功能”“需要你决定下一步”之类泛称兜底。
+
+标记里的 `options` 是一个整体：客户端要么完整渲染全部选项，要么安全回落到普通评论，不会猜测任意 Markdown。材料待办没有选项；DEV-86 及更早生成、标记里没有选项或 `completion_signal` 的历史待办同样回落为“评论 + 完成”的旧方式，不显示选择表单。
 
 ## 创建与登记
 
@@ -98,6 +102,7 @@ decision_key: <验收决策键>
    - `comment`：在**成员待办**上登记 `--event comment.created --filter-actor-type member --filter-actor-id <用户 id> --mode once --agent-id <项目经理 id>`；项目经理被唤醒后读取回复并接回原事项。正文写“在本事项回复”，不再写“原事项会自动继续”。
    - `manager`：同样在成员待办上登记 `done` 或 `comment.created` 规则唤醒项目经理，不能只有一句“项目经理会查看”。
    没有登记成功的规则，不要承诺“只回复就会自动继续”。
+5. 答复路由：新版「我的任务」在提交时按**当前工作区**解析 `幕僚长` 角色，写一条带 `multica-member-answer` 标记和 @mention 的答复评论；该评论只唤醒幕僚长一次（客户端用稳定的答复 UUID 防重）。幕僚长读取本人原话、判断下一步并派回原负责人。旧客户端的“评论 + 完成”路径保持不变，两条路径都必须能接回原事项。正文里出现别的 handler 名称不代表改派，接收端只认当前工作区的幕僚长。
 
 ## 查重与复用
 

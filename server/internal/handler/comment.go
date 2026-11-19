@@ -1439,6 +1439,11 @@ func keepRootConnected(byID map[string]db.Comment) []db.Comment {
 }
 
 type CreateCommentRequest struct {
+	// ID lets a client supply the comment UUID. A retried member answer reuses
+	// the same id, so a double click, retry or second window gets the existing
+	// comment back instead of creating a second answer or a second agent run.
+	// Omitted by every older client; the server generates one as before.
+	ID               *string  `json:"id"`
 	Content          string   `json:"content"`
 	Type             string   `json:"type"`
 	ParentID         *string  `json:"parent_id"`
@@ -1674,6 +1679,14 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	var requestedCommentID pgtype.UUID
+	if req.ID != nil {
+		parsed, ok := parseUUIDOrBadRequest(w, *req.ID, "id")
+		if !ok {
+			return
+		}
+		requestedCommentID = parsed
+	}
 
 	// Strip bytes PostgreSQL's TEXT column rejects before the empty check. The
 	// case reachable over the JSON API is an embedded NUL (0x00, SQLSTATE
@@ -1842,8 +1855,12 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	commentID := dbid.NewV7()
+	if requestedCommentID.Valid {
+		commentID = requestedCommentID
+	}
 	createParams := db.CreateCommentParams{
-		ID:           dbid.NewV7(),
+		ID:           commentID,
 		IssueID:      issue.ID,
 		WorkspaceID:  issue.WorkspaceID,
 		AuthorType:   authorType,
@@ -1919,6 +1936,16 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		// A client-supplied id that already exists is a retry, not a new
+		// comment. Replay the row for the same issue and author without
+		// publishing another event or triggering the mentioned agent again;
+		// any other collision stays a conflict rather than silently revealing
+		// another author's comment.
+		if requestedCommentID.Valid && isUniqueViolation(err) {
+			if h.replayRequestedComment(w, r, requestedCommentID, issue, authorType, authorID) {
+				return
+			}
+		}
 		slog.Warn("create comment failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create comment")
 		return
@@ -1955,6 +1982,28 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// replayRequestedComment answers a retried create with the comment that the
+// requested id already identifies. It only replays for the same issue and
+// author: a client must not learn another author's comment by guessing an id.
+func (h *Handler) replayRequestedComment(w http.ResponseWriter, r *http.Request, commentID pgtype.UUID, issue db.Issue, authorType, authorID string) bool {
+	existing, err := h.Queries.GetComment(r.Context(), commentID)
+	if err != nil {
+		return false
+	}
+	if uuidToString(existing.IssueID) != uuidToString(issue.ID) {
+		writeError(w, http.StatusConflict, "comment id is already in use on another issue")
+		return true
+	}
+	if existing.AuthorType != authorType || uuidToString(existing.AuthorID) != authorID {
+		writeError(w, http.StatusConflict, "comment id is already in use by another author")
+		return true
+	}
+	grouped := h.groupAttachments(r, []pgtype.UUID{existing.ID})
+	resp := commentToResponse(existing, nil, grouped[uuidToString(existing.ID)])
+	writeJSON(w, http.StatusOK, resp)
+	return true
 }
 
 // clientAuthorableCommentTypes is what POST /comments accepts. `status_change`

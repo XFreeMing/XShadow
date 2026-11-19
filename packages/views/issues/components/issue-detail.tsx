@@ -1,6 +1,8 @@
 "use client";
 
 import { subIssueCreateDefaults } from "@multica/core/issues";
+import { isAnswerableMemberTodo, parseMemberTodo } from "@multica/core/issues";
+import { MemberTodoCard } from "../../member-todos/member-todo-card";
 import {
   issueBehavesAs,
   issueBehavesAsAny,
@@ -3458,6 +3460,96 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   const titleSizeClass = isPeek ? "text-title-lg font-semibold" : "text-display-sm font-semibold";
 
+  const memberTodo = parseMemberTodo(issue.description);
+  // Only a card that will actually render an interaction panel may hide the
+  // raw body. Material todos, historical markers and other members get no
+  // card, so their description stays visible.
+  const showMemberTodoPanel = isAnswerableMemberTodo(memberTodo) &&
+    issue.assignee_type === "member" && issue.assignee_id === user?.id;
+
+  // A member interaction card already shows the decision. Keep the raw,
+  // editable task body (and its attachments) available, but collapsed so
+  // the same options and the technical appendix are not repeated on screen.
+  const descriptionBlock = (
+          <div
+            {...descDropZoneProps}
+            {...descriptionAnnotations.captureProps}
+            ref={descriptionAnnotations.cardRef}
+            className={cn("relative rounded-lg", !showMemberTodoPanel && "mt-5")}
+            onFocusCapture={() => {
+              if (!descriptionEditingRef.current) {
+                descriptionEditingRef.current = true;
+              }
+            }}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                descriptionEditingRef.current = false;
+              }
+            }}
+          >
+            {descriptionAnnotations.popup}
+            <div data-comment-content={descriptionSourceId}>
+              <ContentEditor
+                ref={descEditorRef}
+                key={id}
+                value={issue.description ?? ""}
+                placeholder={t(($) => $.detail.desc_placeholder)}
+                onUpdate={(md, baseMarkdown) => {
+                  // Bind any pending uploads still referenced in the markdown
+                  // so they appear in `issueAttachments` after refresh and the
+                  // editor's text/code preview keeps working past reload.
+                  //
+                  // Match with `contentReferencesAttachment`, NOT `md.includes(a.url)`:
+                  // the editor persists the durable `markdownLink`
+                  // (`/api/attachments/<id>/download` / `markdown_url`) into the
+                  // body, never the raw storage `a.url`. A bare `md.includes(a.url)`
+                  // therefore never matches, so the upload is never linked via
+                  // `attachment_ids`. After reload it's absent from
+                  // `issueAttachments`, the renderer can't resolve it to a
+                  // freshly-signed `download_url`, and the persisted auth-gated
+                  // download endpoint fails to load as a native <img> on clients
+                  // whose origin isn't the API host (Desktop/Electron, mobile
+                  // webview) — while still working on web via the cookie/proxy.
+                  // This mirrors the comment/reply/chat composers, which already
+                  // bind via `contentReferencesAttachment` (MUL-3130 / MUL-3192).
+                  const ids = descPendingAttachmentsRef.current
+                    .filter((a) => contentReferencesAttachment(md, a))
+                    .map((a) => a.id);
+                  queueDescriptionSave({
+                    markdown: md,
+                    baseMarkdown,
+                    attachmentIds: ids,
+                  });
+                }}
+                onUploadFile={handleDescriptionUpload}
+                debounceMs={1500}
+                // Closing the issue modal must save what the user last saw —
+                // without the flush, a paste followed by a quick close loses
+                // the image markdown and its attachment_ids bind (MUL-3254).
+                flushPendingOnUnmount
+                currentIssueId={id}
+                selectionAction={descriptionSelectionAction}
+                attachments={descEditorAttachments}
+              />
+            </div>
+
+            <div className="flex items-center gap-1 mt-3">
+              <ReactionBar
+                reactions={issueReactions}
+                currentUserId={user?.id}
+                onToggle={handleToggleIssueReaction}
+                getActorName={getActorName}
+              />
+              <FileUploadButton
+                size="sm"
+                multiple
+                onSelect={(file) => descEditorRef.current?.uploadFile(file)}
+              />
+            </div>
+            {descDragOver && <FileDropOverlay />}
+          </div>
+  );
+
   const detailContent = (
     <CurrentIssueRenderContextProvider value={currentIssueRenderContext}>
     <div className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -3760,83 +3852,20 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             />
           )}
 
-          <div
-            {...descDropZoneProps}
-            {...descriptionAnnotations.captureProps}
-            ref={descriptionAnnotations.cardRef}
-            className="relative mt-5 rounded-lg"
-            onFocusCapture={() => {
-              if (!descriptionEditingRef.current) {
-                descriptionEditingRef.current = true;
-              }
-            }}
-            onBlurCapture={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) {
-                descriptionEditingRef.current = false;
-              }
-            }}
-          >
-            {descriptionAnnotations.popup}
-            <div data-comment-content={descriptionSourceId}>
-              <ContentEditor
-                ref={descEditorRef}
-                key={id}
-                value={issue.description ?? ""}
-                placeholder={t(($) => $.detail.desc_placeholder)}
-                onUpdate={(md, baseMarkdown) => {
-                  // Bind any pending uploads still referenced in the markdown
-                  // so they appear in `issueAttachments` after refresh and the
-                  // editor's text/code preview keeps working past reload.
-                  //
-                  // Match with `contentReferencesAttachment`, NOT `md.includes(a.url)`:
-                  // the editor persists the durable `markdownLink`
-                  // (`/api/attachments/<id>/download` / `markdown_url`) into the
-                  // body, never the raw storage `a.url`. A bare `md.includes(a.url)`
-                  // therefore never matches, so the upload is never linked via
-                  // `attachment_ids`. After reload it's absent from
-                  // `issueAttachments`, the renderer can't resolve it to a
-                  // freshly-signed `download_url`, and the persisted auth-gated
-                  // download endpoint fails to load as a native <img> on clients
-                  // whose origin isn't the API host (Desktop/Electron, mobile
-                  // webview) — while still working on web via the cookie/proxy.
-                  // This mirrors the comment/reply/chat composers, which already
-                  // bind via `contentReferencesAttachment` (MUL-3130 / MUL-3192).
-                  const ids = descPendingAttachmentsRef.current
-                    .filter((a) => contentReferencesAttachment(md, a))
-                    .map((a) => a.id);
-                  queueDescriptionSave({
-                    markdown: md,
-                    baseMarkdown,
-                    attachmentIds: ids,
-                  });
-                }}
-                onUploadFile={handleDescriptionUpload}
-                debounceMs={1500}
-                // Closing the issue modal must save what the user last saw —
-                // without the flush, a paste followed by a quick close loses
-                // the image markdown and its attachment_ids bind (MUL-3254).
-                flushPendingOnUnmount
-                currentIssueId={id}
-                selectionAction={descriptionSelectionAction}
-                attachments={descEditorAttachments}
-              />
-            </div>
+          {showMemberTodoPanel ? (
+            <MemberTodoCard issue={issue} todo={memberTodo!} userId={user!.id} />
+          ) : null}
 
-            <div className="flex items-center gap-1 mt-3">
-              <ReactionBar
-                reactions={issueReactions}
-                currentUserId={user?.id}
-                onToggle={handleToggleIssueReaction}
-                getActorName={getActorName}
-              />
-              <FileUploadButton
-                size="sm"
-                multiple
-                onSelect={(file) => descEditorRef.current?.uploadFile(file)}
-              />
-            </div>
-            {descDragOver && <FileDropOverlay />}
-          </div>
+          {showMemberTodoPanel ? (
+            <details className="mt-5 rounded-lg border border-border/60 bg-muted/10">
+              <summary className="cursor-pointer select-none px-3 py-2 text-label font-medium text-muted-foreground transition-colors hover:text-foreground">
+                {t(($) => $.member_answer.description_toggle)}
+              </summary>
+              <div className="px-3 pb-3">{descriptionBlock}</div>
+            </details>
+          ) : (
+            descriptionBlock
+          )}
 
           </div>
 

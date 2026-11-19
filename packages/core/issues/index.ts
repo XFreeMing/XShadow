@@ -20,5 +20,6 @@ export {
   normalizeStatusPatch,
 } from "./status-category";
 export * from "./wakeups";
+export * from "./member-todo";
 
 export * from "./sub-issue-create";
