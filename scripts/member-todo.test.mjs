@@ -232,16 +232,17 @@ test("a completion signal that the platform will not deliver is rejected", () =>
   assert.ok(validateTodoInput({ ...done, done: "在本事项回复文件", next: "本事项完成后，原事项会自动继续处理。" }).some((e) => /done/.test(e)));
 });
 
-test("a done-wait accepts reply-then-mark but rejects reply-only continuation", () => {
+test("a done-wait generates its trigger from the signal and rejects reply-triggered wording", () => {
   const decisionInput = sampleTodoInputs()[3];
   const legal = {
     ...decisionInput,
     next: "回复后，请把本事项标记为完成，原事项会自动继续处理。",
   };
-  const contradictory = {
-    ...decisionInput,
-    next: "你一回复，原事项就会自动继续处理。请在本事项标记为完成后等通知。",
-  };
+  const contradictory = [
+    "你一回复，原事项就会自动继续处理。请在本事项标记为完成后等通知。",
+    "本事项标记为完成只是可选操作，你一回复，原事项就会自动继续处理。",
+    "原事项收到你的回复就会自动继续处理，之后可把本事项标记为完成。",
+  ];
   const dir = outsideRepo();
   try {
     const legalPath = join(dir, "legal.json");
@@ -256,17 +257,19 @@ test("a done-wait accepts reply-then-mark but rejects reply-only continuation", 
     assert.match(body, /怎样算完成：.*标记为完成/);
     assert.match(body, /之后：回复后，请把本事项标记为完成/);
 
-    const badPath = join(dir, "bad.json");
-    writeFileSync(badPath, JSON.stringify(contradictory));
-    const badCheck = runToolResult(PM_TOOL, ["--check", "--input", badPath], dir);
-    assert.equal(badCheck.status, 2, `contradictory --check: ${badCheck.stdout}${badCheck.stderr}`);
-    assert.match(`${badCheck.stdout}${badCheck.stderr}`, /next 与 completion_signal=done 矛盾/);
+    for (const [index, next] of contradictory.entries()) {
+      const inputPath = join(dir, `bad-${index}.json`);
+      writeFileSync(inputPath, JSON.stringify({ ...decisionInput, next }));
+      const check = runToolResult(PM_TOOL, ["--check", "--input", inputPath], dir);
+      assert.equal(check.status, 2, `contradictory ${index} --check: ${check.stdout}${check.stderr}`);
+      assert.match(`${check.stdout}${check.stderr}`, /next 与 completion_signal=done 矛盾/);
 
-    const badOut = join(dir, "bad-out");
-    const badGenerate = runToolResult(PM_TOOL, ["--input", badPath, "--out-dir", badOut], dir);
-    assert.equal(badGenerate.status, 2, `contradictory generation: ${badGenerate.stdout}${badGenerate.stderr}`);
-    assert.match(`${badGenerate.stdout}${badGenerate.stderr}`, /next 与 completion_signal=done 矛盾/);
-    assert.equal(existsSync(badOut), false, "contradictory generation must not write todo files");
+      const outDir = join(dir, `bad-out-${index}`);
+      const generate = runToolResult(PM_TOOL, ["--input", inputPath, "--out-dir", outDir], dir);
+      assert.equal(generate.status, 2, `contradictory ${index} generation: ${generate.stdout}${generate.stderr}`);
+      assert.match(`${generate.stdout}${generate.stderr}`, /next 与 completion_signal=done 矛盾/);
+      assert.equal(existsSync(outDir), false, `contradictory ${index} generation must not write todo files`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

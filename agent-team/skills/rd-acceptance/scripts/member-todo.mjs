@@ -159,11 +159,15 @@ function replyContinuationClash(text) {
     .split(/[。；;\n]/)
     .filter((clause) => clause.trim())
     .some((clause) => {
-      if (!/(?:回复|答复)(?:后|之后|完|一)|一(?:回复|答复)/.test(clause)) return false;
+      if (!/回复|答复/.test(clause)) return false;
       const continueAt = clause.search(/继续|恢复|接回|处理/);
       if (continueAt === -1) return false;
       const markAt = clause.search(MARK_COMPLETE);
-      return markAt === -1 || markAt > continueAt;
+      // "Marking is optional", "you can mark it later", or "no need to mark
+      // it" never makes a reply the trigger.
+      const negatedMark = /(?:不(?:必|需要|用|需)|无需|不是必须|并非必须)[^。；;\n]{0,16}标记|标记[^。；;\n]{0,8}(?:不是必须|并非必须|非必需|可选)/.test(clause);
+      const optionalMark = /可选|选做|可做可不做|不是必须|并非必须|非必需|不必须|不是硬性|并非硬性|不强制|不影响|无关紧要|无所谓|随你|由你(?:决定|选择)|只是形式|走形式|(?:之后|再|稍后|随后|最后)[^。；;\n]{0,8}(?:可|可以|再|才)?[^。；;\n]{0,4}标记/.test(clause);
+      return negatedMark || optionalMark || markAt === -1 || markAt > continueAt;
     });
 }
 
