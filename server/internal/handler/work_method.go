@@ -53,12 +53,12 @@ func (h *Handler) GetGoalWorkMethod(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, workmethod.Recommend(methods, "", "", service.WorkMethodGoalText(g.Title, g.Intent, g.AcceptanceCriteria)))
 }
 
-func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods []workmethod.Template) (workmethod.Run, *GoalPlanDelivery, error) {
+func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods []workmethod.Template) (workmethod.Run, *issuePlanContract, error) {
 	goal, goalErr := h.Queries.GetIssueMethodGoal(ctx, db.GetIssueMethodGoalParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID})
 	if goalErr != nil && !errors.Is(goalErr, pgx.ErrNoRows) {
 		return workmethod.Run{}, nil, goalErr
 	}
-	var delivery *GoalPlanDelivery
+	var delivery *issuePlanContract
 	var goalText string
 	if goalErr == nil {
 		var err error
@@ -91,7 +91,7 @@ func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods [
 	}
 	if delivery != nil {
 		for _, method := range methods {
-			if method.ID == delivery.MethodID {
+			if method.ID == delivery.Delivery.MethodID {
 				return workmethod.Run{
 					State: "ready", Source: "plan", Method: &method, History: []workmethod.Event{},
 					Reason: "目标计划建议采用「" + method.Name + "」。",
@@ -199,8 +199,8 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	var trace []byte
-	if run.State == "ready" && (change.Action == "start" || change.Action == "select" || change.Action == "advance") {
-		trace, err = plannedAcceptanceTrace(issue, delivery)
+	if delivery != nil && run.State == "ready" && (change.Action == "start" || change.Action == "select" || change.Action == "advance") {
+		trace, err = plannedAcceptanceTrace(issue, delivery.Delivery)
 		if err != nil {
 			writeError(w, 500, "failed to initialize planned acceptance criteria")
 			return

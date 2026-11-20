@@ -105,13 +105,13 @@ func (h *Handler) canActOnMethod(r *http.Request, issue db.Issue, run workmethod
 	return err == nil && !squad.ArchivedAt.Valid && uuidToString(squad.LeaderID) == id
 }
 
-func (h *Handler) writeIssueMethodView(w http.ResponseWriter, r *http.Request, issue db.Issue, run workmethod.Run, delivery *GoalPlanDelivery) {
+func (h *Handler) writeIssueMethodView(w http.ResponseWriter, r *http.Request, issue db.Issue, run workmethod.Run, delivery *issuePlanContract) {
 	actor, err := h.methodRecipient(r.Context(), issue, run)
 	run.CurrentActor = actor
 	writeJSON(w, 200, struct {
 		workmethod.Run
-		CanAct   bool              `json:"can_act"`
-		Delivery *GoalPlanDelivery `json:"planned_delivery,omitempty"`
+		CanAct bool `json:"can_act"`
+		*issuePlanContract
 	}{run, err == nil && h.canActOnMethod(r, issue, run, actor), delivery})
 }
 

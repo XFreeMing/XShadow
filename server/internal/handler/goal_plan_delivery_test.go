@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -27,7 +28,11 @@ func TestGoalPlanDeliverySeedsAcceptanceAndPreservesStartedMethod(t *testing.T) 
 		t.Helper()
 		rec := putPlanRaw(t, goal.ID, map[string]any{
 			"expected_revision": revision,
-			"items":             []GoalPlanItem{{ID: nodeID, Title: "Compare the results", Binding: GoalPlanItemBinding{Type: "existing", IssueID: &issue.ID}, Delivery: delivery}},
+			"items": []GoalPlanItem{
+				{ID: nodeID, Title: "Compare the results", Binding: GoalPlanItemBinding{Type: "existing", IssueID: &issue.ID}, Delivery: delivery},
+				{ID: "018f3a9e-2222-7c2b-9f1e-000000000022", Title: "Source archive", Binding: GoalPlanItemBinding{Type: "new"}},
+			},
+			"edges": []GoalPlanEdge{{DependentItemID: nodeID, PrerequisiteItemID: "018f3a9e-2222-7c2b-9f1e-000000000022", Kind: "conditional", Reason: "Only when the comparison uses archival data"}},
 		})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("save plan: HTTP %d %s", rec.Code, rec.Body.String())
@@ -44,6 +49,16 @@ func TestGoalPlanDeliverySeedsAcceptanceAndPreservesStartedMethod(t *testing.T) 
 	testutil.Call(t, testHandler.GetIssueWorkMethod, req(http.MethodGet, "/work-method", nil)).Want(200).JSON(&ready)
 	if ready.Method == nil || ready.Method.ID != "seven-step" || ready.Planned == nil || ready.Planned.Criteria[0].ID != "E1" || ready.State != "ready" {
 		t.Fatalf("issue did not read plan delivery: %+v", ready)
+	}
+	original, err := testHandler.Queries.GetIssue(t.Context(), parseUUID(issue.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := testHandler.claimProjectWorkflow(t.Context(), original, nil, false)
+	for _, want := range []string{"research", "seven-step", "E1", "Source archive", "conditional", "Only when the comparison uses archival data"} {
+		if brief == nil || !strings.Contains(brief.Brief, want) {
+			t.Fatalf("claim missing %q: %+v", want, brief)
+		}
 	}
 	revision := ready.Revision
 	testutil.Call(t, testHandler.ChangeIssueWorkMethod, req(http.MethodPost, "/work-method", workmethod.Change{Action: "start", MethodID: "seven-step", BaseRevision: &revision})).Want(200)

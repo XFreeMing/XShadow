@@ -463,7 +463,7 @@ func (h *Handler) assigneeActiveRuns(ctx context.Context, issue db.Issue) []db.L
 // legacyRuntimeRules is true for a daemon that does not advertise
 // protocol.DaemonCapabilityWorkflowStatusRulesV1; see BriefInput.
 func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task *db.AgentTaskQueue, legacyRuntimeRules bool) *TaskProjectWorkflowData {
-	method, methodErr := h.resolveIssueWorkMethod(ctx, issue)
+	method, contract, methodErr := h.issueWorkMethod(ctx, issue, nil)
 	if methodErr != nil {
 		slog.Warn("task claim: failed to read work method", "issue_id", uuidToString(issue.ID), "error", methodErr)
 	}
@@ -493,7 +493,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 			ownsStep = task != nil && (recipient.Kind == "agent" && uuidToString(task.AgentID) == recipient.ID || recipient.Kind == "squad" && task.IsLeaderTask && uuidToString(task.SquadID) == recipient.ID)
 		}
 		stepContext = usesCurrentStepContext(issue, method, task)
-		methodBrief = methodClaimBrief(method, issueRef, ownsStep, stepContext)
+		methodBrief = contract.claimBrief(issueRef) + methodClaimBrief(method, issueRef, ownsStep, stepContext)
 		if stepContext {
 			methodBrief = fmt.Sprintf("Issue %s: %q.\n", issueRef, issue.Title) + methodBrief + stepAcceptanceIndex(issue, method)
 		}

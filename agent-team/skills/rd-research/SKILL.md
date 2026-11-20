@@ -3,7 +3,7 @@ name: rd-research
 description: Investigate requirements, source evidence and alternatives before a research or design decision.
 ---
 
-Frame a standalone research or design delivery as a user story: who needs the result, in what scenario, and which decision or action it enables. Agree on a concrete report or other usable artifact and observable acceptance criteria. Deliver the actual report body, accessible link or attachment with sources, findings, recommendation and uncertainties; research activity or a promise to write a report is not completion. When research supports a feature story, keep it as an execution step in that story unless it provides an independently useful deliverable.
+Frame a standalone research delivery around its question, evidence, decision and verification. Use the selected method and its named reviewer. Deliver the actual report body, accessible link or attachment with sources, findings, recommendation and uncertainties. When research supports another card, work within its current step unless a separate usable artifact is required.
 
 
 Read the actual repository and relevant primary sources. Distinguish observed behavior, claims in documentation, and your proposal. Verify changeable claims against current primary sources. Cite concrete paths, line numbers or source URLs.

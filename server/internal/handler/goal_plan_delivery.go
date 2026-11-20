@@ -25,9 +25,64 @@ type GoalPlanCriterion struct {
 	Verification string `json:"verification"`
 }
 
+type issuePlanContract struct {
+	Delivery      *GoalPlanDelivery  `json:"planned_delivery"`
+	Prerequisites []planPrerequisite `json:"plan_prerequisites"`
+}
+
+type planPrerequisite struct {
+	Title   string  `json:"title"`
+	IssueID *string `json:"issue_id,omitempty"`
+	Kind    string  `json:"kind"`
+	Reason  string  `json:"reason"`
+}
+
+func (content GoalPlanContent) contractForIssue(issueID string) *issuePlanContract {
+	byID := make(map[string]GoalPlanItem, len(content.Items))
+	var bound GoalPlanItem
+	for _, item := range content.Items {
+		byID[item.ID] = item
+		if item.Binding.IssueID != nil && *item.Binding.IssueID == issueID {
+			bound = item
+		}
+	}
+	if bound.Delivery == nil {
+		return nil
+	}
+	contract := &issuePlanContract{Delivery: bound.Delivery, Prerequisites: []planPrerequisite{}}
+	for _, edge := range content.Edges {
+		if edge.DependentItemID != bound.ID {
+			continue
+		}
+		prerequisite := byID[edge.PrerequisiteItemID]
+		kind := edge.Kind
+		if kind == "" {
+			kind = "required"
+		}
+		contract.Prerequisites = append(contract.Prerequisites, planPrerequisite{prerequisite.Title, prerequisite.Binding.IssueID, kind, edge.Reason})
+	}
+	return contract
+}
+
+func (c *issuePlanContract) claimBrief(issueRef string) string {
+	if c == nil {
+		return ""
+	}
+	ids := make([]string, 0, len(c.Delivery.Criteria))
+	for _, criterion := range c.Delivery.Criteria {
+		ids = append(ids, criterion.ID)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Goal plan delivery: type %q, planned method %q, acceptance IDs %s. Read expected results, verification and prerequisite details with \"$MULTICA_CLI_PATH\" issue method %s. Follow the selected method's current owner and reviewer.\n", c.Delivery.Type, c.Delivery.MethodID, strings.Join(ids, ", "), issueRef)
+	for _, p := range c.Prerequisites {
+		fmt.Fprintf(&b, "Prerequisite (%s): %q — %q.\n", p.Kind, p.Title, p.Reason)
+	}
+	return b.String()
+}
+
 // A saved plan owns the proposed contract. The issue owns its execution and
 // never replaces existing acceptance evidence when a plan is edited.
-func (h *Handler) issuePlanDelivery(ctx context.Context, issue db.Issue, goalID string) (*GoalPlanDelivery, error) {
+func (h *Handler) issuePlanDelivery(ctx context.Context, issue db.Issue, goalID string) (*issuePlanContract, error) {
 	if goalID == "" {
 		return nil, nil
 	}
@@ -42,12 +97,7 @@ func (h *Handler) issuePlanDelivery(ctx context.Context, issue db.Issue, goalID 
 	if err := json.Unmarshal(plan.Content, &content); err != nil {
 		return nil, err
 	}
-	for _, item := range content.Items {
-		if item.Delivery != nil && item.Binding.IssueID != nil && *item.Binding.IssueID == uuidToString(issue.ID) {
-			return item.Delivery, nil
-		}
-	}
-	return nil, nil
+	return content.contractForIssue(uuidToString(issue.ID)), nil
 }
 
 var goalPlanDeliveryKey = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$`)
