@@ -338,7 +338,7 @@ test("a truncated wakeup read leaves continuation unknown instead of calling the
 
 test("portable template contains the current roster without machine identities or credentials", () => {
   assert.equal(template.agents.length, 23);
-  assert.equal(template.skills.length, 18);
+  assert.equal(template.skills.length, 19);
   assert.equal(template.squads.length, 5);
   const serialized = JSON.stringify(template);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
@@ -375,7 +375,7 @@ test("story gate and acceptance automation are private, capacity-limited and ind
   assert.equal(judge.name, "用户故事评判员");
   assert.equal(judge.max_concurrent_tasks, 1);
   assert.equal(judge.permission_mode, "private");
-  assert.deepEqual(judge.skills, ["rd-story-gate"]);
+  assert.deepEqual(judge.skills, ["rd-story-gate", "xshadow-story-evidence"]);
   assert.notEqual(judge.key, "requirements");
   assert.equal(automation.name, "验收自动化工程师");
   assert.equal(automation.provider, "claude");
@@ -398,7 +398,7 @@ test("story gate and acceptance automation initialize from the real template, re
   assert.equal(judge.model, "gpt-6.2-sol");
   assert.equal(judge.max_concurrent_tasks, 1);
   assert.equal(judge.permission_mode, "private");
-  assert.deepEqual(f.state.bindings[judge.id].map((id) => f.state.skills.find((s) => s.id === id).name), ["rd-story-gate"]);
+  assert.deepEqual(f.state.bindings[judge.id].map((id) => f.state.skills.find((s) => s.id === id).name), ["rd-story-gate", "xshadow-story-evidence"]);
   assert.equal(automation.model, "deepseek-v4.1-flash");
   assert.equal(automation.max_concurrent_tasks, 1);
   assert.equal(automation.permission_mode, "private");
@@ -428,7 +428,7 @@ test("new destination gets fresh references, prompts, skills and squad roles; re
   const f = fixture();
   const ids = await initializeTeam(f.api, template, options);
   assert.equal(f.state.agents.length, 23);
-  assert.equal(f.state.skills.length, 18);
+  assert.equal(f.state.skills.length, template.skills.length);
   assert.equal(f.state.squads.length, 5);
   for (const s of f.state.squads) {
     assert.doesNotMatch(s.instructions, /\{\{squad:/);
@@ -484,7 +484,7 @@ test("retry after a partial creation reuses completed objects", async () => {
   assert.equal(f.state.agents.length, 2);
   await initializeTeam(api, template, options);
   assert.equal(f.state.agents.length, 23);
-  assert.equal(f.state.skills.length, 18);
+  assert.equal(f.state.skills.length, template.skills.length);
 });
 
 test("readback detects a server that ignores the requested settings", async () => {
