@@ -1,6 +1,6 @@
 # Repository Instructions
 
-This fork is the owner's personal, customizable agent workbench. Its operating model is one shared service/workspace accessed from multiple computers and operating systems, with machine-local execution runtimes. Preserve this intent when choosing features and workflows; see [the personal workbench operating model](docs/personal-workbench.md).
+This fork is the owner's personal, customizable agent workbench. Its operating model is one shared service/workspace accessed from multiple computers and operating systems, with machine-local execution runtimes. Codex owns XShadow product development in the daily workbench checkout; the shared workspace hosts the owner’s active projects. Preserve this intent when choosing features and workflows; see [the personal workbench operating model](docs/personal-workbench.md).
 
 Multica is a task management platform where people and agents collaborate on issues. These instructions apply to all coding agents working in this repository.
 
@@ -137,7 +137,7 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 ## Change and Delivery Rules
 
 - Keep changes scoped; reuse existing patterns.
-- For accepted stories under the personal workbench delivery flow, the integration owner merges the verified revision into the project's named target as soon as required checks pass. For GitHub PRs, use the repository's auto-merge or merge queue when checks are still pending. Confirm the merge before cleaning up the story's temporary branches and unused, clean worktrees. Keep the reusable development environment and any worktree with pending changes. Record the merged revision and cleanup result on the original issue.
+- For accepted stories under the personal workbench delivery flow, the integration owner merges the verified revision into the project's named target as soon as required checks pass. For GitHub PRs, use the repository's auto-merge or merge queue when checks are still pending. Confirm the merge before cleaning up the story's temporary branches and unused, clean worktrees. Keep the daily checkout and preserve pending changes. Record the merged revision and cleanup result on the original issue.
 - Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost to the user and get their buy-in. Do not silently expand scope for theoretical robustness.
 - Do not add internal compatibility shims, dual writes, fallback paths, or legacy adapters unless requested. This does not relax API response compatibility above.
 - Use names, types, and tests to express behavior. Code comments are English and kept for non-obvious rationale and constraints; remove superseded plans and incident narratives when updating code. Preserve tool directives and mixed-version contracts.
