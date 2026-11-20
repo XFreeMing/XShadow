@@ -275,7 +275,7 @@ func TestAgileUpgradePreservesRoleOverridesAndFrozenProcedures(t *testing.T) {
 	old.Steps[0].Owner = &Actor{Kind: "creator"}
 	old.Steps[0].Reviewer = &Actor{Kind: "project_lead"}
 	upgraded := Catalog([]Template{old})[0]
-	if upgraded.Revision != 9 || upgraded.Steps[0].Gate != "criteria" || upgraded.Steps[0].Reviewer.Kind != "project_lead" || old.Steps[0].Gate != "" {
+	if upgraded.Revision != old.Revision+agileTemplate().Revision-legacyAgile().Revision || upgraded.Steps[0].Gate != "criteria" || upgraded.Steps[0].Reviewer.Kind != "project_lead" || old.Steps[0].Gate != "" {
 		t.Fatal(upgraded)
 	}
 	old.Steps[0].Checks = []string{"custom check"}
@@ -291,7 +291,7 @@ func TestAgileUpgradeFromEvidenceGates(t *testing.T) {
 	previous.Steps[1].Reviewer = &Actor{Kind: "project_lead"}
 	previous.Review = "workspace review"
 	upgraded := Catalog([]Template{previous})[0]
-	if upgraded.Revision != 4 || upgraded.Review != previous.Review || !reflect.DeepEqual(upgraded.Steps[1].Owner, previous.Steps[1].Owner) || !reflect.DeepEqual(upgraded.Steps[1].Reviewer, previous.Steps[1].Reviewer) {
+	if upgraded.Revision != previous.Revision+agileTemplate().Revision-evidenceGatedAgile().Revision || upgraded.Review != previous.Review || !reflect.DeepEqual(upgraded.Steps[1].Owner, previous.Steps[1].Owner) || !reflect.DeepEqual(upgraded.Steps[1].Reviewer, previous.Steps[1].Reviewer) {
 		t.Fatal(upgraded)
 	}
 	for i, step := range upgraded.Steps {
@@ -305,5 +305,36 @@ func TestAgileUpgradeFromEvidenceGates(t *testing.T) {
 	previous.Steps[1].Output = "custom procedure"
 	if custom := Catalog([]Template{previous})[0]; !reflect.DeepEqual(custom, previous) {
 		t.Fatal("overwrote a locally edited procedure")
+	}
+}
+
+func TestAgileCatalogRevisionCarriesDomainRulesIntoNewStories(t *testing.T) {
+	previous := ruleBasedAgile()
+	previous.Revision = 8
+	previous.Steps[0].Owner = &Actor{Kind: "creator"}
+	previous.Steps[0].Reviewer = &Actor{Kind: "project_lead"}
+	methods := Catalog([]Template{previous})
+	run := Recommend(methods, "开发功能", "", "")
+	next := run.Method
+	if next == nil || next.ID != previous.ID || next.Revision != previous.Revision+1 ||
+		!reflect.DeepEqual(next.Steps[0].Owner, previous.Steps[0].Owner) ||
+		!reflect.DeepEqual(next.Steps[0].Reviewer, previous.Steps[0].Reviewer) {
+		t.Fatalf("new story lost upgraded guidance or role bindings: %+v", run)
+	}
+	for i, count := range []int{2, 3, 3, 2} {
+		if next.Steps[i].Gate != previous.Steps[i].Gate || len(next.Steps[i].Checks) != count {
+			t.Fatal(next.Steps[i])
+		}
+	}
+	frozen := snapshot(previous)
+	if reflect.DeepEqual(frozen.Steps[0].Checks, next.Steps[0].Checks) {
+		t.Fatal("previous checklist was rewritten")
+	}
+	if got := Catalog([]Template{*next})[0]; !reflect.DeepEqual(&got, next) {
+		t.Fatal("repeated catalog read reapplied the upgrade")
+	}
+	previous.Steps[0].Instructions += " Local rule."
+	if got := Catalog([]Template{previous})[0]; !reflect.DeepEqual(got, previous) {
+		t.Fatal("custom method was overwritten")
 	}
 }

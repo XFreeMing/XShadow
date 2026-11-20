@@ -35,7 +35,7 @@ func evidenceGatedAgile() Template {
 	return m
 }
 
-func agileTemplate() Template {
+func ruleBasedAgile() Template {
 	m := legacyAgile()
 	m.Revision = 3
 	m.Steps = []Step{
@@ -72,9 +72,26 @@ func agileTemplate() Template {
 	return m
 }
 
+func agileTemplate() Template {
+	m := ruleBasedAgile()
+	m.Revision++
+	criteria, coverage, candidate, delivery := &m.Steps[0], &m.Steps[1], &m.Steps[2], &m.Steps[3]
+	criteria.Instructions = "用领域驱动设计（DDD）的统一语言写本次用户行为。遇到同名异义，指出各自的限界上下文、对象身份和有权确认结果的业务角色。挑出必须一直成立的不变量，用一对正反例说明错认对象会怎样影响用户。例如，检索命中属于索引，证据身份由获准原件的修订和出现位置确认；同一位置的多个命中计一份，相同文字出现在不同位置应能分别打开。简单增量只需写影响交付的一条规则。"
+	criteria.Output = "逐条登记带稳定编号和修订的领域规则，给出业务术语、适用边界、确认人和用户可观察结果。"
+	criteria.Checks = []string{"按标准编号可找到统一语言中的业务对象、触发条件、确认角色和可观察结果", "正反例说明领域身份和不变量，同名异义时已划清限界上下文"}
+	coverage.Instructions = "从已认可的原件独立写预期，再挑一种看似合理却违反领域不变量的实现，为每条标准登记前置条件、操作、观察入口和断言。选取两种实现会给出不同结果的正反例，说明哪一个断言识别了哪一种错误。涉及旧行为时记录应保留的基线，并单列本次变化。用例验收人独立对照原规则，预期无法判错就退回用例设计。"
+	coverage.Checks[1] = "能从原规则说明哪对边界样例能区分正确实现和具体错误实现，以及错在哪个断言"
+	candidate.Instructions += " 本步验收人用同一标准修订抽查实现如何保持对象身份和不变量，缺陷附首个失败用例交回实现负责人。"
+	candidate.Checks[1] = "最小实现与适用的重构已回归，关键领域不变量可追到真实执行，外部依赖的验证范围明确"
+	delivery.Instructions = "验收执行人按用户的真实入口操作，在同一候选上复演关键规则与边界反例。用前述统一语言，从实际结果反查原规则编号、修订、用例与原件。涉及跨角色履约时，核对谁有权确认及真实下游的确认结果；使用替身时说明真实依赖与未验范围。独立终验人逐项批准或指明首个偏离和返工步骤。"
+	delivery.Checks[0] = "关键正反例在真实入口可复演，可由候选实测追到同一修订的原领域规则与确认依据"
+	m.Review = "DDD 的领域规则由各步验收人用证据审核。词义、对象身份、不变量或确认权不清，退回定义增量；正反例不能区分两种实现，退回设计用例；候选违反已定规则，退回实现；用户入口缺少独立实测，退回演示。按当前标准修订和候选记录终验。"
+	return m
+}
+
 func upgradeAgile(m Template) Template {
 	current := agileTemplate()
-	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile()} {
+	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile()} {
 		if m.Kind != previous.Kind || len(m.Steps) != len(previous.Steps) {
 			continue
 		}
