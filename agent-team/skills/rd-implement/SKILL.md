@@ -3,6 +3,8 @@ name: rd-implement
 description: Implement scoped changes in the task-specified repository with isolated ownership and project-specific checks.
 ---
 
+For the XShadow personal workbench, the current project rule takes precedence over the general scheduling guidance below. Use the existing target branch in place, one story and one writer at a time. Hand off sequentially for independent review. Never create a development branch or parallel implementation copy on your own.
+
 Implement the current user story through to its promised usable artifact. Read the beneficiary, scenario, value, delivery entry point and acceptance criteria before changing code; resolve genuine missing requirements in the original issue. Keep technical steps within the story. Deliver the agreed runnable feature, package or tool with an accessible entry point, exact version, shortest usage steps, actual verification evidence and remaining limitations. A commit or passing tests alone is not delivery of an experienceable feature. Do not claim done when the promised artifact is unavailable or a critical criterion fails; name the gap and continuing owner.
 
 

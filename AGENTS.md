@@ -137,7 +137,7 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 ## Change and Delivery Rules
 
 - Keep changes scoped; reuse existing patterns.
-- For accepted stories under the personal workbench delivery flow, the integration owner merges the verified revision into the project's named target as soon as required checks pass. For GitHub PRs, use the repository's auto-merge or merge queue when checks are still pending. Confirm the merge before cleaning up the story's temporary branches and unused, clean worktrees. Keep the daily checkout and preserve pending changes. Record the merged revision and cleanup result on the original issue.
+- In the personal workbench, develop XShadow in daily/dev and the second brain and its converter in their main checkouts. Never create development branches or parallel implementation worktrees on your own. Work on one story at a time, with one writer and independent review of its fixed commit.
 - Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost to the user and get their buy-in. Do not silently expand scope for theoretical robustness.
 - Do not add internal compatibility shims, dual writes, fallback paths, or legacy adapters unless requested. This does not relax API response compatibility above.
 - Use names, types, and tests to express behavior. Code comments are English and kept for non-obvious rationale and constraints; remove superseded plans and incident narratives when updating code. Preserve tool directives and mixed-version contracts.

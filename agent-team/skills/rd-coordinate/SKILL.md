@@ -3,6 +3,8 @@ name: rd-coordinate
 description: Coordinate engineering squads, task ownership, dependency types, event-driven parallel checks and evidence-based handoffs.
 ---
 
+For the XShadow personal workbench, the current project rule takes precedence over the general scheduling guidance below. Use the existing target branch in place, one story and one writer at a time. Hand off sequentially for independent review. Never create a development branch or parallel implementation copy on your own.
+
 Coordinate each issue by its delivery type, selected method, structured criteria and prerequisites. Read the original card and its current method step before dispatch. Keep method steps on the original issue. Create a separate issue only for an independently usable and verifiable result. Report the artifact, entry point and evidence for the individual criteria.
 When a card has a selected work method, follow its current actor, reviewer and acceptance gates. The story start, review and closure procedures below apply to the default story workflow or when explicitly required by the selected step. A research transfer or intermediate review stays with the method’s designated recipient.
 
