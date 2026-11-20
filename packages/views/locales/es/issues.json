@@ -484,6 +484,17 @@
     }
   },
   "gantt": {
+    "calendar": "Calendario",
+    "goal_plan": "Dependencias del objetivo",
+    "empty_plan": "Este objetivo no tiene tareas guardadas en su plan.",
+    "invalid": "Comprueba si hay un ciclo o falta una tarea en el plan.",
+    "critical": "Ruta crítica",
+    "days": "{{value}} días",
+    "stages": "{{value}} etapas",
+    "peak": "Máximo en paralelo · {{value}}",
+    "day_basis": "El plan completo usa la duración prevista y las dependencias obligatorias. Selecciona una tarea para ver sus relaciones.",
+    "stage_basis": "Faltan duraciones. Cada tarea del plan completo cuenta como una etapa. Las dependencias obligatorias determinan el orden. Selecciona una tarea para ver sus relaciones.",
+    "exclusive": "Recursos exclusivos",
     "header_issue": "Tarea",
     "zoom_day": "Día",
     "zoom_week": "Semana",

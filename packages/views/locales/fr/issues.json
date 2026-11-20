@@ -494,6 +494,17 @@
     }
   },
   "gantt": {
+    "calendar": "Calendrier",
+    "goal_plan": "Dépendances de l’objectif",
+    "empty_plan": "Le plan de cet objectif ne contient aucune tâche enregistrée.",
+    "invalid": "Vérifiez si le plan comporte un cycle ou une tâche manquante.",
+    "critical": "Chemin critique",
+    "days": "{{value}} jours",
+    "stages": "{{value}} étapes",
+    "peak": "Maximum en parallèle · {{value}}",
+    "day_basis": "Le plan complet utilise les durées prévues et les dépendances obligatoires. Sélectionnez une tâche pour voir ses liens.",
+    "stage_basis": "Certaines durées manquent. Chaque tâche du plan compte pour une étape. Les dépendances obligatoires déterminent l’ordre. Sélectionnez une tâche pour voir ses liens.",
+    "exclusive": "Ressources exclusives",
     "header_issue": "Tâche",
     "zoom_day": "Jour",
     "zoom_week": "Semaine",

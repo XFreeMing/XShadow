@@ -500,6 +500,17 @@ describe("projectGanttIssuesOptions", () => {
     expect(data).toHaveLength(1);
   });
 
+  it("requests scheduled tasks across projects on the workspace surface", async () => {
+    const listIssues = vi.fn().mockResolvedValue({ issues: [makeIssue(1)], total: 1 });
+    installFakeApi(listIssues);
+    const options = projectGanttIssuesOptions(WS_ID, undefined, ["member"]);
+    await qc.fetchQuery(options);
+    expect(listIssues).toHaveBeenCalledWith({
+      scheduled: true, limit: PROJECT_GANTT_PAGE_LIMIT, offset: 0, assignee_types: ["member"],
+    });
+    expect(options.queryKey).not.toEqual(issueKeys.projectGantt(WS_ID, PROJECT_ID, ["member"]));
+  });
+
   it("uses the project-scoped Gantt cache key", () => {
     const options = projectGanttIssuesOptions(WS_ID, PROJECT_ID);
     expect(options.queryKey).toEqual(issueKeys.projectGantt(WS_ID, PROJECT_ID));

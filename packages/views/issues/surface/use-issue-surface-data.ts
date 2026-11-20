@@ -77,6 +77,7 @@ export interface IssueSurfaceData {
    *  sources its count from the `working_agents` server facet instead. */
   ganttWorkingScopeIssues: Issue[] | undefined;
   filteredGanttIssues: Issue[];
+  retryGantt?: () => void;
   ganttIssues: Issue[];
   visibleStatuses: IssueStatus[];
   columnStatuses: IssueStatus[];
@@ -186,7 +187,7 @@ export function useIssueSurfaceData({
   loadProjects: boolean;
 }): IssueSurfaceData {
   const ganttIssuesQuery = useQuery({
-    ...issueSurfaceGanttOptions(wsId, projectId ?? "", queryPlan),
+    ...issueSurfaceGanttOptions(wsId, projectId, queryPlan),
     enabled: usesGantt,
   });
   const projectsQuery = useQuery({
@@ -524,6 +525,7 @@ export function useIssueSurfaceData({
     swimlaneIssues,
     ganttWorkingScopeIssues,
     filteredGanttIssues,
+    retryGantt: ganttIssuesQuery.isError ? ganttIssuesQuery.refetch : undefined,
     ganttIssues,
     visibleStatuses,
     columnStatuses,

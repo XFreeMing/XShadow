@@ -497,21 +497,14 @@ export function GanttView({ issues }: { issues: Issue[] }) {
   const timelineWidth = totalDays * dayPx;
   const todayOffsetDays = daysBetween(range.start, today);
 
+  const empty = scheduled.length === 0;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || empty) return;
     const target = Math.max(0, LEFT_COL_WIDTH + todayOffsetDays * dayPx - 240);
     el.scrollLeft = target;
-  }, [todayOffsetDays, dayPx]);
-
-  if (scheduled.length === 0) {
-    return (
-      <div className="flex-1 min-h-0 flex items-center justify-center text-body text-muted-foreground">
-        {t(($) => $.gantt.empty)}
-      </div>
-    );
-  }
+  }, [todayOffsetDays, dayPx, empty]);
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -552,7 +545,11 @@ export function GanttView({ issues }: { issues: Issue[] }) {
       </div>
 
       {/* Body — single scroll container drives both vertical + horizontal */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
+      {empty ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center text-body text-muted-foreground">
+          {t(($) => $.gantt.empty)}
+        </div>
+      ) : <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
         <div style={{ minWidth: LEFT_COL_WIDTH + timelineWidth }}>
           {/* Sticky header row */}
           <div className="sticky top-0 z-20 flex">
@@ -599,7 +596,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
             ))}
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

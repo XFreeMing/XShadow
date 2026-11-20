@@ -94,6 +94,7 @@ export interface FilterDependencyError {
 }
 
 interface UseIssueSurfaceControllerInput {
+  showGanttCalendar?: boolean;
   scope: IssueScope;
   modes: IssueSurfaceMode[];
   createDefaults?: IssueCreateDefaults;
@@ -117,6 +118,7 @@ export interface IssueSurfaceController {
    *  number it cannot stand behind. */
   workingAgents: WorkingAgentSummary[] | undefined;
   filteredGanttIssues: Issue[];
+  retryGantt?: () => void;
   sort: IssueSortParam;
   ganttIssues: Issue[];
   visibleStatuses: IssueStatus[];
@@ -238,6 +240,7 @@ export function useIssueSurfaceController({
   modes,
   createDefaults,
   search = "",
+  showGanttCalendar = true,
 }: UseIssueSurfaceControllerInput): IssueSurfaceController {
   const wsId = useWorkspaceId();
   const queryPlan = useMemo<IssueSurfaceQueryPlan>(
@@ -445,7 +448,7 @@ export function useIssueSurfaceController({
     groupingPropertyId && catalogSettled && !activeGroupingProperty
       ? "status"
       : grouping;
-  const usesGantt = effectiveViewMode === "gantt" && !!projectId;
+  const usesGantt = effectiveViewMode === "gantt" && showGanttCalendar;
   const usesTable = effectiveViewMode === "table";
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
@@ -784,7 +787,7 @@ export function useIssueSurfaceController({
     // `agentRunningFilter` through the issue ids above, not this count. Skip
     // the aggregation rather than pay for it on every panel mount. Adding the
     // chip to that header means dropping this clause.
-    enabled: !usesGantt && scope.type !== "actor",
+    enabled: effectiveViewMode !== "gantt" && scope.type !== "actor",
   });
   const facetWorkingAgents = useMemo<WorkingAgentSummary[] | undefined>(() => {
     const facet = workingAgentsFacetQuery.data?.facets.find(
@@ -1068,7 +1071,7 @@ export function useIssueSurfaceController({
     projectId,
     createDefaults: resolvedCreateDefaults,
     viewMode: effectiveViewMode,
-    allowGantt: allowedModes.has("gantt") && !!projectId,
+    allowGantt: allowedModes.has("gantt"),
     ...surfaceData,
     isLoading: data.isLoading || workingDependency.pending || unreadDependency.pending,
     workingAgents,

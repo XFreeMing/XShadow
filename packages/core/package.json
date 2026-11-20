@@ -109,6 +109,7 @@
     "./projects/access": "./projects/access.ts",
     "./projects/config": "./projects/config.ts",
     "./goals": "./goals/index.ts",
+    "./goals/plan-schedule": "./goals/plan-schedule.ts",
     "./goals/queries": "./goals/queries.ts",
     "./goals/mutations": "./goals/mutations.ts",
     "./plugins": "./plugins/index.ts",

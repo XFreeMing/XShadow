@@ -123,7 +123,7 @@ export const issueKeys = {
    */
   projectGantt: (
     wsId: string,
-    projectId: string,
+    projectId: string | undefined,
     assigneeTypes?: IssueAssigneeType[],
   ) =>
     [
@@ -416,14 +416,14 @@ export const PROJECT_GANTT_PAGE_LIMIT = 100;
 export const PROJECT_GANTT_MAX_ISSUES = 10_000;
 
 async function fetchProjectGanttIssues(
-  projectId: string,
+  projectId: string | undefined,
   assigneeTypes?: IssueAssigneeType[],
 ) {
   const issues = [];
   let offset = 0;
   while (offset < PROJECT_GANTT_MAX_ISSUES) {
     const res = await api.listIssues({
-      project_id: projectId,
+      ...(projectId ? { project_id: projectId } : {}),
       scheduled: true,
       ...(assigneeTypes?.length ? { assignee_types: assigneeTypes } : {}),
       limit: PROJECT_GANTT_PAGE_LIMIT,
@@ -457,7 +457,7 @@ async function fetchProjectGanttIssues(
  */
 export function projectGanttIssuesOptions(
   wsId: string,
-  projectId: string,
+  projectId: string | undefined,
   // The page's assignee-type tab narrows the Gantt exactly like every
   // other mode — same scope, same single mapping upstream.
   assigneeTypes?: IssueAssigneeType[],
@@ -465,6 +465,18 @@ export function projectGanttIssuesOptions(
   return queryOptions({
     queryKey: issueKeys.projectGantt(wsId, projectId, assigneeTypes),
     queryFn: () => fetchProjectGanttIssues(projectId, assigneeTypes),
+  });
+}
+
+/** Bound plan items (at most 100) share the issue-array invalidation channel. */
+export function ganttBoundIssuesOptions(wsId: string, projectId: string | null, ids: string[]) {
+  const issueIds = [...new Set(ids)].sort();
+  return queryOptions({
+    queryKey: [...issueKeys.projectGanttAll(wsId), "plan-bindings", projectId, issueIds],
+    queryFn: async () => (await api.listIssues({
+      project_id: projectId ?? undefined, ids: issueIds, limit: PROJECT_GANTT_PAGE_LIMIT,
+    })).issues,
+    enabled: !!wsId && !!projectId && issueIds.length > 0,
   });
 }
 

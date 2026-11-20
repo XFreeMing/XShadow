@@ -494,6 +494,17 @@
     }
   },
   "gantt": {
+    "calendar": "Calendar",
+    "goal_plan": "Goal dependencies",
+    "empty_plan": "This goal has no saved plan items.",
+    "invalid": "Check the plan for a dependency cycle or a missing task.",
+    "critical": "Critical path",
+    "days": "{{value}} days",
+    "stages": "{{value}} stages",
+    "peak": "Peak concurrency in earliest schedule · {{value}}",
+    "day_basis": "Full goal plan, using scheduled durations and required dependencies. Select a task to inspect its links.",
+    "stage_basis": "Some durations are missing. Each task in the full goal plan counts as one stage. Required dependencies determine the order. Select a task to inspect its links.",
+    "exclusive": "Exclusive resources",
     "header_issue": "Issue",
     "zoom_day": "Day",
     "zoom_week": "Week",

@@ -10,7 +10,7 @@ import { projectGanttIssuesOptions } from "../queries";
  */
 export function issueSurfaceGanttOptions(
   wsId: string,
-  projectId: string,
+  projectId: string | undefined,
   plan: IssueSurfaceQueryPlan,
 ) {
   return projectGanttIssuesOptions(

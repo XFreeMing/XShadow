@@ -40,6 +40,7 @@ import { BoardView } from "../components/board-view";
 import { BOARD_COL_WIDTH } from "../components/board-column";
 import { BatchActionToolbar } from "../components/batch-action-toolbar";
 import { GanttView } from "../components/gantt-view";
+import { IssueGanttPanel, type GanttMode } from "../components/issue-gantt-panel";
 import { ListView } from "../components/list-view";
 import { SwimLaneView } from "../components/swimlane-view";
 import { TableView } from "../components/table-view";
@@ -221,7 +222,10 @@ function IssueSurfaceContent({
   // One polling owner for the whole surface; individual cards only select cache data.
   useQuery({ ...workspaceWakeupSummariesOptions(workspaceId), refetchInterval: 10_000 });
   const { t } = useT("projects");
+  const { t: issueText } = useT("issues");
+  const [ganttMode, setGanttMode] = useState<GanttMode>(scope.type === "project" ? "calendar" : "plan");
   const controller = useIssueSurfaceController({
+    showGanttCalendar: ganttMode === "calendar",
     scope,
     modes,
     createDefaults,
@@ -273,6 +277,15 @@ function IssueSurfaceContent({
       controller.viewMode === "list" ||
       controller.viewMode === "table");
 
+  const pending = controller.filterDependencyError ? (
+    <FilterDependencyErrorState
+      kind={controller.filterDependencyError.kind}
+      onRetry={controller.filterDependencyError.retry}
+    />
+  ) : controller.isLoading ? (
+    renderLoading ? renderLoading(renderContext) : <IssueSurfaceSkeleton mode={controller.viewMode} />
+  ) : null;
+
   return (
     <IssueSurfaceActionsProvider actions={controller.actions}>
       {/* One shared right-click menu for every card/row this surface renders
@@ -291,18 +304,16 @@ function IssueSurfaceContent({
             purpose. Row fetching is suspended while it is down, so every
             branch below would render an unexplained empty surface with no way
             out. */}
-        {controller.filterDependencyError ? (
-          <FilterDependencyErrorState
-            kind={controller.filterDependencyError.kind}
-            onRetry={controller.filterDependencyError.retry}
-          />
-        ) : controller.isLoading ? (
-          renderLoading ? (
-            renderLoading(renderContext)
-          ) : (
-            <IssueSurfaceSkeleton mode={controller.viewMode} />
-          )
-        ) : controller.isEmpty || shouldShowClientEmpty ? (
+        {controller.viewMode === "gantt" ? (
+          <IssueGanttPanel mode={ganttMode} setMode={setGanttMode} projectId={controller.projectId}>
+            {pending ?? (controller.retryGantt ? (
+              <div role="alert" className="flex items-center gap-2 p-4 text-body">
+                {issueText(($) => $.table.load_failed)}
+                <Button size="sm" variant="outline" onClick={controller.retryGantt}>{issueText(($) => $.table.load_failed_retry)}</Button>
+              </div>
+            ) : <GanttView issues={controller.filteredGanttIssues} />)}
+          </IssueGanttPanel>
+        ) : pending ? pending : controller.isEmpty || shouldShowClientEmpty ? (
           // A filtered-empty surface is NOT an empty surface. Claiming "no
           // issues here yet" and offering to create one is wrong when the rows
           // exist and a filter is hiding them — and it is the state the
@@ -379,9 +390,6 @@ function IssueSurfaceContent({
                 exportIssues={controller.exportTableIssues}
                 resolveExportLookups={controller.resolveTableExportLookups}
               />
-            )}
-            {controller.viewMode === "gantt" && (
-              <GanttView issues={controller.filteredGanttIssues} />
             )}
             {controller.viewMode === "swimlane" && (
               <SwimLaneView
