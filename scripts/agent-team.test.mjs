@@ -518,6 +518,7 @@ test("HTTP profile execution uses the selected account/workspace without an agen
     try {
       assert.equal(req.headers.authorization, "Bearer fixture-token");
       assert.equal(req.headers["x-workspace-id"], "fixture-workspace");
+      req.setEncoding("utf8");
       let text = ""; for await (const chunk of req) text += chunk;
       const result = await f.api(req.method, req.url, text ? JSON.parse(text) : undefined);
       res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(result));
