@@ -522,13 +522,16 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	return &TaskProjectWorkflowData{Brief: brief, StepContext: stepContext, stepMoved: stepMoved}
 }
 
-// A stage handoff or delegated assignment gets a fresh packet. Manual
-// reruns and retries keep their source conversation and directory contract.
+// A fresh rerun of step work gets the same brief as a new handoff.
+// Resumed runs and automatic retries keep their continuity contract.
 func usesCurrentStepContext(issue db.Issue, run workmethod.Run, task *db.AgentTaskQueue) bool {
 	if task == nil || (run.State != "working" && run.State != "review") {
 		return false
 	}
-	if task.RerunOfTaskID.Valid || task.RetryOfTaskID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+	if task.RetryOfTaskID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+		return false
+	}
+	if task.RerunOfTaskID.Valid && !service.IsFreshRerun(*task) {
 		return false
 	}
 	var trigger struct {

@@ -291,4 +291,13 @@ func TestBoundMethodStepContextKeepsCurrentReviewEvidence(t *testing.T) {
 	if claim().StepContext {
 		t.Fatal("manual retry lost continuity")
 	}
+	task.Context = []byte(`{"fresh_rerun":true}`)
+	fresh := claim()
+	if !fresh.StepContext || !strings.Contains(fresh.Brief, "Acceptance revision 4") {
+		t.Fatal("fresh rerun of step feedback is missing the current acceptance index")
+	}
+	task.RetryOfTaskID = util.MustParseUUID(id)
+	if claim().StepContext {
+		t.Fatal("automatic retry lost continuity")
+	}
 }
