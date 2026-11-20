@@ -629,7 +629,7 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 	step := run.Method.Steps[run.Step]
 	fmt.Fprintf(&b, "Step %d of %d: %q. Required output: %q.\n", run.Step+1, len(run.Method.Steps), step.Name, step.Output)
 	if stepContext && step.Gate != "" {
-		fmt.Fprintf(&b, "Acceptance gate %q. Use \"$MULTICA_CLI_PATH\" issue acceptance %s --criterion <ID> or --case <ID> for supporting details. ", step.Gate, issueRef)
+		fmt.Fprintf(&b, "Acceptance gate %q. Use \"$MULTICA_CLI_PATH\" issue acceptance %s --current-case <ID> for one case, its current rule, candidate and last run. Read --criterion <ID> when its history is needed. ", step.Gate, issueRef)
 		switch step.Gate {
 		case "criteria":
 			b.WriteString("Use current criterion texts and their user-facing scope.")

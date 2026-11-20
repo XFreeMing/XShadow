@@ -259,7 +259,7 @@ func TestBoundMethodStepContextKeepsCurrentReviewEvidence(t *testing.T) {
 	if !scoped.StepContext {
 		t.Fatal(scoped)
 	}
-	for _, want := range []string{"live criterion", "original sample", "Check original", "checked_items", "rework", "Acceptance revision 4"} {
+	for _, want := range []string{"live criterion", "original sample", "Check original", "checked_items", "rework", "Acceptance revision 4", "--current-case <ID>"} {
 		if !strings.Contains(scoped.Brief, want) {
 			t.Errorf("missing %q", want)
 		}

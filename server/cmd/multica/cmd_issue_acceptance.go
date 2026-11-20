@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -15,6 +16,7 @@ func init() {
 	cmd := &cobra.Command{Use: "acceptance <issue>", Short: "Inspect acceptance criteria, test coverage and implementation commits", Args: exactArgs(1), RunE: runIssueAcceptance,
 		Example: `  multica issue acceptance DEV-79 --criterion C1
   multica issue acceptance DEV-79 --case T1
+  multica issue acceptance DEV-79 --current-case T1
   multica issue acceptance DEV-79 --commit <full-sha>
   multica issue acceptance DEV-79 --change-file change.json
 
@@ -35,6 +37,10 @@ criterion. Retired cases appear under retired_cases in the impact output.`}
 	cmd.Flags().String("criterion", "", "Show one criterion and its history")
 	cmd.Flags().String("case", "", "Find the criterion owning this case")
 	cmd.Flags().String("commit", "", "Find criteria linked to this implementation commit")
+	cmd.Flags().String("current-case", "", "Read one case, its current rule, candidate and last run")
+	for _, other := range []string{"criterion", "case", "commit", "change-file", "change-stdin"} {
+		cmd.MarkFlagsMutuallyExclusive("current-case", other)
+	}
 	issueCmd.AddCommand(cmd)
 }
 
@@ -52,6 +58,14 @@ func runIssueAcceptance(cmd *cobra.Command, args []string) error {
 	trace := issue.Trace
 	if trace == nil {
 		return errors.New("this issue does not expose structured acceptance records")
+	}
+	if cmd.Flags().Changed("current-case") {
+		id, _ := cmd.Flags().GetString("current-case")
+		view, err := selectCurrentCase(trace, id)
+		if err != nil {
+			return err
+		}
+		return cli.PrintJSON(cmd.OutOrStdout(), view)
 	}
 	data, supplied, err := resolveTextFlag(cmd, "change")
 	if err != nil {
@@ -95,4 +109,53 @@ func runIssueAcceptance(cmd *cobra.Command, args []string) error {
 		*acceptance.Trace
 		Impact []acceptance.Impact `json:"impact"`
 	}{trace, impact})
+}
+
+type currentCaseView struct {
+	Revision       int                        `json:"revision"`
+	CriterionID    string                     `json:"criterion_id"`
+	Version        int                        `json:"criterion_version"`
+	Rule           string                     `json:"rule"`
+	ID             string                     `json:"case_id"`
+	Specification  string                     `json:"specification"`
+	Retired        *acceptance.Retirement     `json:"retired,omitempty"`
+	Implementation *acceptance.Implementation `json:"current_implementation"`
+	LatestRun      *acceptance.Run            `json:"latest_run"`
+	Impact         acceptance.Impact          `json:"impact"`
+}
+
+func selectCurrentCase(trace *acceptance.Trace, id string) (currentCaseView, error) {
+	for _, c := range trace.Criteria {
+		for _, tc := range c.Cases {
+			if tc.ID != id {
+				continue
+			}
+			version := len(c.Versions)
+			if version == 0 {
+				return currentCaseView{}, fmt.Errorf("criterion %s has no version", c.ID)
+			}
+			c.Cases = []acceptance.TestCase{tc}
+			view := currentCaseView{
+				Revision:      trace.Revision,
+				CriterionID:   c.ID,
+				Version:       version,
+				Rule:          c.Versions[version-1],
+				ID:            tc.ID,
+				Specification: tc.Specification,
+				Retired:       tc.Retired,
+				Impact:        c.Impact(),
+			}
+			for i := len(c.Implementations) - 1; i >= 0; i-- {
+				if c.Implementations[i].Version == version {
+					view.Implementation = &c.Implementations[i]
+					break
+				}
+			}
+			if len(tc.Runs) > 0 {
+				view.LatestRun = &tc.Runs[len(tc.Runs)-1]
+			}
+			return view, nil
+		}
+	}
+	return currentCaseView{}, fmt.Errorf("case %q was not found in this issue", id)
 }
