@@ -1,3 +1,4 @@
+import { GoalPlanDeliverySchema } from "../types/goal-plan-delivery";
 import { AcceptanceTraceSchema } from "../types/acceptance";
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
@@ -1906,6 +1907,7 @@ export const GoalPlanItemSchema = z
     proposed_owner: GoalPlanProposedOwnerSchema.nullable().catch(null).default(null),
     stage: z.number().nullable().catch(null).default(null),
     coordination: GoalPlanCoordinationSchema.nullable().catch(null).default(null),
+    delivery: GoalPlanDeliverySchema.nullish().catch(null),
   })
   .loose();
 
@@ -1914,6 +1916,7 @@ export const GoalPlanEdgeSchema = z
     dependent_item_id: z.string().catch("").default(""),
     prerequisite_item_id: z.string().catch("").default(""),
     reason: z.string().catch("").default(""),
+    kind: z.enum(["required", "conditional"]).optional().catch(undefined),
   })
   .loose();
 

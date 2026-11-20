@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { issueWorkMethodOptions, workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
+import type { WorkMethod } from "@multica/core/types/work-method";
 import type { Goal, GoalPlanEdge, GoalPlanItem, Issue } from "@multica/core/types";
 import {
   GitBranch,
@@ -26,6 +30,8 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useT } from "../../i18n";
 import { IssuePickerModal } from "../../modals/issue-picker-modal";
 import { prerequisitesOf } from "../plan";
+import { AppLink } from "../../navigation";
+import { PlanDeliveryEditor } from "./goal-plan-delivery";
 
 export interface PlanContent {
   items: GoalPlanItem[];
@@ -64,6 +70,8 @@ export function GoalPlanEditor({
   goal,
   items,
   edges,
+  linkedIssues = [],
+  issueHref,
   disabled = false,
   onChange,
   onItemEdited,
@@ -74,6 +82,8 @@ export function GoalPlanEditor({
   goal: Goal;
   items: GoalPlanItem[];
   edges: GoalPlanEdge[];
+  linkedIssues?: Issue[];
+  issueHref?: (issue: Issue) => string;
   disabled?: boolean;
   onChange: (next: PlanContent) => void;
   onItemEdited: (itemId: string) => void;
@@ -82,6 +92,12 @@ export function GoalPlanEditor({
   ownerLabel: (item: GoalPlanItem) => string | null;
 }) {
   const { t } = useT("goals");
+  const wsId = useWorkspaceId();
+  const { data: methods = [] } = useQuery({
+    ...workMethodCatalogOptions(wsId),
+    enabled: items.some((item) => !!item.delivery),
+  });
+  const issuesById = new Map(linkedIssues.map((issue) => [issue.id, issue]));
   const [pickingFor, setPickingFor] = useState<string | null>(null);
   const [issueLabels, setIssueLabels] = useState<Record<string, string>>({});
 
@@ -113,11 +129,8 @@ export function GoalPlanEditor({
     });
   };
 
-  const addEdge = (dependentItemId: string, prerequisiteItemId: string, reason: string) => {
-    onChange({
-      items,
-      edges: [...edges, { dependent_item_id: dependentItemId, prerequisite_item_id: prerequisiteItemId, reason }],
-    });
+  const addEdge = (edge: GoalPlanEdge) => {
+    onChange({ items, edges: [...edges, edge] });
   };
 
   const removeEdge = (edge: GoalPlanEdge) => {
@@ -139,8 +152,16 @@ export function GoalPlanEditor({
     updateItem(itemId, { binding: { type: "existing", issue_id: issue.id } });
   };
 
-  const itemTitle = (id: string) =>
-    items.find((item) => item.id === id)?.title || t(($) => $.plan.untitled_item);
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  const prerequisiteIssue = (id: string) => {
+    const issueId = itemById.get(id)?.binding.issue_id;
+    return issueId ? issuesById.get(issueId) : undefined;
+  };
+  const itemTitle = (id: string) => {
+    const title = itemById.get(id)?.title || t(($) => $.plan.untitled_item);
+    const issue = prerequisiteIssue(id);
+    return issue ? `${issue.identifier} · ${title}` : title;
+  };
 
   return (
     <div className="space-y-3" data-testid="goal-plan-editor">
@@ -164,8 +185,9 @@ export function GoalPlanEditor({
       <ol className="space-y-3">
         {items.map((item, index) => {
           const incoming = prerequisitesOf(item.id, edges);
+          const issue = item.binding.issue_id ? issuesById.get(item.binding.issue_id) : undefined;
           const boundLabel = item.binding.issue_id
-            ? (issueLabels[item.binding.issue_id] ?? `#${item.binding.issue_id.slice(0, 8)}`)
+            ? (issue?.identifier || issueLabels[item.binding.issue_id] || `#${item.binding.issue_id.slice(0, 8)}`)
             : null;
           const bindingKnown =
             item.binding.type === "new" || item.binding.type === "existing";
@@ -183,12 +205,12 @@ export function GoalPlanEditor({
                   {incoming.length === 0 ? (
                     <Badge variant="outline" className="gap-1">
                       <Workflow className="size-3" />
-                      {t(($) => $.plan.parallel)}
+                      {t(($) => $.plan.dependency_unrecorded)}
                     </Badge>
                   ) : (
                     <Badge variant="secondary" className="gap-1">
                       <GitBranch className="size-3" />
-                      {t(($) => $.plan.waits_for, { value: incoming.length })}
+                      {t(($) => $.plan.dependencies_count, { value: incoming.length })}
                     </Badge>
                   )}
                   <Button
@@ -215,7 +237,7 @@ export function GoalPlanEditor({
                 />
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className={item.delivery ? "space-y-1" : "grid gap-3 sm:grid-cols-2"}>
                 <div className="space-y-1">
                   <Label htmlFor={`plan-outcome-${item.id}`}>{t(($) => $.plan.outcome)}</Label>
                   <Textarea
@@ -226,7 +248,7 @@ export function GoalPlanEditor({
                     onChange={(event) => updateItem(item.id, { outcome: event.target.value })}
                   />
                 </div>
-                <div className="space-y-1">
+                {!item.delivery && <div className="space-y-1">
                   <Label htmlFor={`plan-acceptance-${item.id}`}>
                     {t(($) => $.plan.acceptance_criteria)}
                   </Label>
@@ -239,8 +261,20 @@ export function GoalPlanEditor({
                       updateItem(item.id, { acceptance_criteria: event.target.value })
                     }
                   />
-                </div>
+                </div>}
               </div>
+
+              <PlanMethodStatus
+                wsId={wsId}
+                issue={issue}
+                planned={methods.find(({ id }) => id === item.delivery?.method_id)}
+              />
+              <PlanDeliveryEditor
+                delivery={item.delivery}
+                methods={methods}
+                disabled={disabled}
+                onChange={(delivery) => updateItem(item.id, { delivery })}
+              />
 
               <div className="flex flex-wrap items-end gap-3">
                 <div className="space-y-1">
@@ -295,7 +329,9 @@ export function GoalPlanEditor({
                     {boundLabel ? (
                       <span className="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
                         <Link2 className="size-3 shrink-0" />
-                        <span className="truncate">{boundLabel}</span>
+                        {issue && issueHref
+                          ? <AppLink href={issueHref(issue)}>{boundLabel}</AppLink>
+                          : <span className="truncate">{boundLabel}</span>}
                       </span>
                     ) : null}
                     {item.binding.type === "existing" ? (
@@ -376,6 +412,10 @@ export function GoalPlanEditor({
                 edges={edges}
                 disabled={disabled}
                 itemTitle={itemTitle}
+                isSatisfied={(id) => {
+                  const prerequisite = prerequisiteIssue(id);
+                  return prerequisite?.status_category === "done" || prerequisite?.status === "done";
+                }}
                 onAdd={addEdge}
                 onRemove={removeEdge}
               />
@@ -402,12 +442,35 @@ export function GoalPlanEditor({
   );
 }
 
+function PlanMethodStatus({ wsId, issue, planned }: { wsId: string; issue?: Issue; planned?: WorkMethod }) {
+  const { t } = useT("goals");
+  const { data: run } = useQuery({
+    ...issueWorkMethodOptions(wsId, issue?.id ?? ""),
+    enabled: !!issue,
+  });
+  const selected = run && run.state !== "ready" ? run.method : null;
+  const method = selected ?? planned ?? run?.method;
+  if (!method) return null;
+  const step = selected && run?.state !== "closed" ? run?.method?.steps[run.step]?.name : undefined;
+  return (
+    <p className="text-caption text-muted-foreground">
+      {selected ? t(($) => $.plan.delivery_selected)
+        : planned ? t(($) => $.plan.delivery_plan)
+        : t(($) => $.plan.delivery_recommended)}
+      {" · "}{method.name}
+      {selected && ` · v${selected.revision}`}
+      {step && ` · ${step}`}
+    </p>
+  );
+}
+
 function DependencyEditor({
   itemId,
   items,
   edges,
   disabled,
   itemTitle,
+  isSatisfied,
   onAdd,
   onRemove,
 }: {
@@ -416,12 +479,14 @@ function DependencyEditor({
   edges: GoalPlanEdge[];
   disabled: boolean;
   itemTitle: (id: string) => string;
-  onAdd: (dependentItemId: string, prerequisiteItemId: string, reason: string) => void;
+  isSatisfied: (id: string) => boolean;
+  onAdd: (edge: GoalPlanEdge) => void;
   onRemove: (edge: GoalPlanEdge) => void;
 }) {
   const { t } = useT("goals");
   const [prerequisite, setPrerequisite] = useState("");
   const [reason, setReason] = useState("");
+  const [kind, setKind] = useState<NonNullable<GoalPlanEdge["kind"]>>("required");
   const [error, setError] = useState<string | null>(null);
 
   const incoming = prerequisitesOf(itemId, edges);
@@ -432,7 +497,7 @@ function DependencyEditor({
   );
   const options = candidates.map((candidate) => ({
     value: candidate.id,
-    label: candidate.title || t(($) => $.plan.untitled_item),
+    label: itemTitle(candidate.id),
   }));
 
   const submit = () => {
@@ -440,7 +505,8 @@ function DependencyEditor({
       setError(t(($) => $.plan.dependency_required));
       return;
     }
-    onAdd(itemId, prerequisite, reason.trim());
+    onAdd({ dependent_item_id: itemId, prerequisite_item_id: prerequisite, reason: reason.trim(), kind });
+    setKind("required");
     setPrerequisite("");
     setReason("");
     setError(null);
@@ -450,7 +516,7 @@ function DependencyEditor({
     <div className="space-y-2 border-t pt-2">
       <p className="text-caption font-medium">{t(($) => $.plan.dependencies)}</p>
       {incoming.length === 0 ? (
-        <p className="text-caption text-muted-foreground">{t(($) => $.plan.no_dependencies)}</p>
+        <p className="text-caption text-muted-foreground">{t(($) => $.plan.dependency_unrecorded)}</p>
       ) : (
         <ul className="space-y-1">
           {incoming.map((edge) => (
@@ -461,6 +527,12 @@ function DependencyEditor({
               <GitBranch className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
                 <span className="font-medium">{itemTitle(edge.prerequisite_item_id)}</span>
+                {isSatisfied(edge.prerequisite_item_id) && (
+                  <Badge variant="outline" className="ml-1">{t(($) => $.plan.dependency_satisfied)}</Badge>
+                )}
+                {edge.kind === "conditional" && (
+                  <Badge variant="outline" className="ml-1">{t(($) => $.plan.dependency_conditional)}</Badge>
+                )}
                 {edge.reason ? <span className="text-muted-foreground"> — {edge.reason}</span> : null}
               </span>
               <Button
@@ -502,6 +574,26 @@ function DependencyEditor({
                     {option.label}
                   </SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>{t(($) => $.plan.dependency_kind)}</Label>
+            <Select
+              value={kind}
+              disabled={disabled}
+              items={[
+                { value: "required", label: t(($) => $.plan.dependency_hard) },
+                { value: "conditional", label: t(($) => $.plan.dependency_conditional) },
+              ]}
+              onValueChange={(value) => {
+                if (value === "required" || value === "conditional") setKind(value);
+              }}
+            >
+              <SelectTrigger size="sm" aria-label={t(($) => $.plan.dependency_kind)}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="required">{t(($) => $.plan.dependency_hard)}</SelectItem>
+                <SelectItem value="conditional">{t(($) => $.plan.dependency_conditional)}</SelectItem>
               </SelectContent>
             </Select>
           </div>

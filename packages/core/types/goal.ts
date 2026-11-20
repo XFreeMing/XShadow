@@ -1,3 +1,4 @@
+import type { GoalPlanDelivery } from "./goal-plan-delivery";
 import type { Issue } from "./issue";
 
 /**
@@ -123,13 +124,15 @@ export interface GoalPlanItem {
   proposed_owner: GoalPlanProposedOwner | null;
   stage: number | null;
   coordination: GoalPlanCoordination | null;
+  delivery?: GoalPlanDelivery | null;
 }
 
-/** `dependent` must wait for `prerequisite`; no edge means they may run in parallel. */
+/** A prerequisite and the reason it applies. Existing edges default to required. */
 export interface GoalPlanEdge {
   dependent_item_id: string;
   prerequisite_item_id: string;
   reason: string;
+  kind?: "required" | "conditional";
 }
 
 /** Arbitrary JSON recorded about what a plan was based on. */

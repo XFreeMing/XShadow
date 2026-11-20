@@ -785,7 +785,7 @@ content=$(tr '\n' ' ' < "$path/context.md")
 version=$(sed -n 's/^version: //p' "$path/context.md" | head -n1)
 [ -n "$version" ] || { echo "context file has no version" >&2; exit 1; }
 cat > "$plan_out" <<JSON
-{"items":[{"title":"deliverable read from the project context","binding":{"type":"new"}}],
+{"items":[{"title":"deliverable read from the project context","delivery":{"type":"research","method_id":"seven-step","criteria":[{"id":"C1","expected":"The evidence supports the finding","verification":"Compare the finding with the fixed file"}]},"binding":{"type":"new"}}],
  "edges":[],
  "context_snapshot":{"files":[{"path":"context.md","version":"$version","summary":"$content"}],
  "resources":[{"id":"$resource_id","read":true}],

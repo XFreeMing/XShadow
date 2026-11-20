@@ -19,6 +19,7 @@ import {
 } from "../../workflows/work-method-step";
 import { Button } from "@multica/ui/components/ui/button";
 import { useLocale, useT } from "../../i18n";
+import { PlannedDeliverySummary } from "../../goals/components/goal-plan-delivery";
 import { useActorName } from "@multica/core/workspace/hooks";
 
 export function IssueWorkMethod({
@@ -60,13 +61,14 @@ export function IssueWorkMethod({
           </Button>
         </div>
       )}
+      {run.data?.planned_delivery && <PlannedDeliverySummary delivery={run.data.planned_delivery} />}
       {run.data && (
         <MethodCard
           wsId={wsId}
           issueId={issueId}
           run={run.data}
           roles={roles}
-          acceptance={run.data.method?.kind === "development" ? children : null}
+          acceptance={run.data.method && (run.data.method.kind === "development" || run.data.planned_delivery) ? children : null}
         />
       )}
       {run.data && !run.data.method && children}

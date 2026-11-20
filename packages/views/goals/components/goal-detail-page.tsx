@@ -293,7 +293,12 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
 
       <GoalMethodRecommendation wsId={wsId} goalId={goal.id} updatedAt={goal.updated_at} />
 
-      <GoalPlanSection key={goal.id} goal={goal} />
+      <GoalPlanSection
+        key={goal.id}
+        goal={goal}
+        linkedIssues={linkedIssues}
+        issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
+      />
 
       {!goal.project_id && (
         <p className="rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">

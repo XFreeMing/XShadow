@@ -53,41 +53,58 @@ func (h *Handler) GetGoalWorkMethod(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, workmethod.Recommend(methods, "", "", service.WorkMethodGoalText(g.Title, g.Intent, g.AcceptanceCriteria)))
 }
 
-func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods []workmethod.Template) (workmethod.Run, error) {
+func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods []workmethod.Template) (workmethod.Run, *GoalPlanDelivery, error) {
+	goal, goalErr := h.Queries.GetIssueMethodGoal(ctx, db.GetIssueMethodGoalParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID})
+	if goalErr != nil && !errors.Is(goalErr, pgx.ErrNoRows) {
+		return workmethod.Run{}, nil, goalErr
+	}
+	var delivery *GoalPlanDelivery
+	var goalText string
+	if goalErr == nil {
+		var err error
+		delivery, err = h.issuePlanDelivery(ctx, issue, uuidToString(goal.ID))
+		if err != nil {
+			return workmethod.Run{}, nil, err
+		}
+		goalText = service.WorkMethodGoalText(goal.Title, goal.Intent, goal.AcceptanceCriteria)
+	}
+
 	if len(issue.WorkMethodRun) > 0 {
 		var run workmethod.Run
 		if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil {
-			return run, err
+			return run, nil, err
 		}
 		if run.State != "ready" {
 			if run.Method != nil && run.Method.Revision == 0 {
 				run.Method.Revision = 1
 			}
-			return run, nil
+			return run, delivery, nil
 		}
 	}
-	// Ready is a recommendation. Only an explicit selection or first action
-	// freezes the template and the roles shown in the issue.
+
 	if methods == nil {
 		var err error
 		methods, err = h.workMethodCatalog(ctx, issue.WorkspaceID)
 		if err != nil {
-			return workmethod.Run{}, err
+			return workmethod.Run{}, nil, err
 		}
 	}
-	goal, err := h.Queries.GetIssueMethodGoal(ctx, db.GetIssueMethodGoalParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID})
-	var goalText string
-	switch {
-	case err == nil:
-		goalText = service.WorkMethodGoalText(goal.Title, goal.Intent, goal.AcceptanceCriteria)
-	case !errors.Is(err, pgx.ErrNoRows):
-		return workmethod.Run{}, err
+	if delivery != nil {
+		for _, method := range methods {
+			if method.ID == delivery.MethodID {
+				return workmethod.Run{
+					State: "ready", Source: "plan", Method: &method, History: []workmethod.Event{},
+					Reason: "目标计划建议采用「" + method.Name + "」。",
+				}, delivery, nil
+			}
+		}
 	}
-	return workmethod.Recommend(methods, issue.Title, issue.Description.String, goalText), nil
+	return workmethod.Recommend(methods, issue.Title, issue.Description.String, goalText), delivery, nil
 }
 
 func (h *Handler) resolveIssueWorkMethod(ctx context.Context, issue db.Issue) (workmethod.Run, error) {
-	return h.issueWorkMethod(ctx, issue, nil)
+	run, _, err := h.issueWorkMethod(ctx, issue, nil)
+	return run, err
 }
 
 func (h *Handler) GetIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
@@ -95,12 +112,12 @@ func (h *Handler) GetIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, err := h.resolveIssueWorkMethod(r.Context(), issue)
+	run, delivery, err := h.issueWorkMethod(r.Context(), issue, nil)
 	if err != nil {
 		writeError(w, 500, "failed to read issue work method")
 		return
 	}
-	h.writeIssueMethodView(w, r, issue, run)
+	h.writeIssueMethodView(w, r, issue, run, delivery)
 }
 
 func developmentReview(raw []byte, gate string) error {
@@ -150,7 +167,7 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, "failed to read work methods")
 		return
 	}
-	run, err := h.issueWorkMethod(r.Context(), issue, methods)
+	run, delivery, err := h.issueWorkMethod(r.Context(), issue, methods)
 	if err != nil {
 		writeError(w, 500, "failed to read method run")
 		return
@@ -181,13 +198,25 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	var trace []byte
+	if run.State == "ready" && (change.Action == "start" || change.Action == "select" || change.Action == "advance") {
+		trace, err = plannedAcceptanceTrace(issue, delivery)
+		if err != nil {
+			writeError(w, 500, "failed to initialize planned acceptance criteria")
+			return
+		}
+	}
 	if change.Action == "advance" || change.Action == "approve" {
 		gate := run.EvidenceGate()
 		if change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1 {
 			gate = "delivery"
 		}
 		if gate != "" {
-			if err := developmentReview(issue.AcceptanceCriteria, gate); err != nil {
+			criteria := issue.AcceptanceCriteria
+			if trace != nil {
+				criteria = trace
+			}
+			if err := developmentReview(criteria, gate); err != nil {
 				writeError(w, 409, err.Error())
 				return
 			}
@@ -203,7 +232,7 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, err.Error())
 		return
 	}
-	updated, ok := h.persistMethodTransition(w, r, issue, &run, nil)
+	updated, ok := h.persistMethodTransition(w, r, issue, &run, trace)
 	if !ok {
 		return
 	}
@@ -212,5 +241,5 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		"status_changed": issue.Status != updated.Status, "prev_status": issue.Status,
 		"assignee_changed":   issue.AssigneeType != updated.AssigneeType || issue.AssigneeID != updated.AssigneeID,
 		"prev_assignee_type": textToPtr(issue.AssigneeType), "prev_assignee_id": uuidToPtr(issue.AssigneeID)})
-	h.writeIssueMethodView(w, r, updated, run)
+	h.writeIssueMethodView(w, r, updated, run, delivery)
 }

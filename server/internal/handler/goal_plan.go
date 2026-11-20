@@ -41,6 +41,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 const (
@@ -70,6 +71,7 @@ type GoalPlanItem struct {
 	ProposedOwner      *GoalPlanProposedOwner `json:"proposed_owner"`
 	Stage              *int                   `json:"stage"`
 	Coordination       *GoalPlanCoordination  `json:"coordination"`
+	Delivery           *GoalPlanDelivery      `json:"delivery,omitempty"`
 }
 
 // GoalPlanEvidenceRef records one actual read: a project resource, a file and
@@ -108,12 +110,12 @@ type GoalPlanCoordination struct {
 	NextEvaluation     string   `json:"next_evaluation,omitempty"`
 }
 
-// GoalPlanEdge is a strong prerequisite: dependent_item_id waits for
-// prerequisite_item_id, and reason states why.
+// GoalPlanEdge records why a prerequisite applies. An omitted kind is required.
 type GoalPlanEdge struct {
 	DependentItemID    string `json:"dependent_item_id"`
 	PrerequisiteItemID string `json:"prerequisite_item_id"`
 	Reason             string `json:"reason"`
+	Kind               string `json:"kind,omitempty"`
 }
 
 type GoalPlanContent struct {
@@ -1106,6 +1108,21 @@ func (h *Handler) SubmitGoalPlanGenerationResult(w http.ResponseWriter, r *http.
 			writeError(w, http.StatusBadRequest, "a generated plan needs at least one item")
 			return
 		}
+		var input struct {
+			DeliveryContract bool `json:"delivery_contract"`
+		}
+		if err := json.Unmarshal(generation.InputContext, &input); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read generation input")
+			return
+		}
+		if input.DeliveryContract && generation.State != "succeeded" && generation.State != "failed" {
+			for i, item := range content.Items {
+				if item.Delivery == nil {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("items[%d].delivery is required", i))
+					return
+				}
+			}
+		}
 		snapshot, err := normalizeGoalPlanSnapshot(req.ContextSnapshot)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -1214,6 +1231,8 @@ func (h *Handler) validateGoalPlanContent(
 	}
 	out := GoalPlanContent{Items: make([]GoalPlanItem, 0, len(items)), Edges: make([]GoalPlanEdge, 0, len(edges))}
 	seen := make(map[string]bool, len(items))
+	var knownMethods map[string]bool
+	seenDeliveries := make(map[string]bool)
 	for i, item := range items {
 		id := strings.TrimSpace(item.ID)
 		if id == "" {
@@ -1275,6 +1294,33 @@ func (h *Handler) validateGoalPlanContent(
 			return GoalPlanContent{}, err
 		}
 
+		delivery, err := validateGoalPlanDelivery(item.Delivery, i)
+		if err != nil {
+			return GoalPlanContent{}, err
+		}
+
+		if delivery != nil {
+			if binding.IssueID != nil {
+				if seenDeliveries[*binding.IssueID] {
+					return GoalPlanContent{}, fmt.Errorf("items[%d] repeats a delivery for the same issue", i)
+				}
+				seenDeliveries[*binding.IssueID] = true
+			}
+			if knownMethods == nil {
+				methods, err := service.WorkMethodCatalog(ctx, q, workspaceID)
+				if err != nil {
+					return GoalPlanContent{}, err
+				}
+				knownMethods = make(map[string]bool, len(methods))
+				for _, method := range methods {
+					knownMethods[method.ID] = true
+				}
+			}
+			if !knownMethods[delivery.MethodID] {
+				return GoalPlanContent{}, fmt.Errorf("items[%d].delivery.method_id is not in the workspace catalog", i)
+			}
+		}
+
 		var owner *GoalPlanProposedOwner
 		if item.ProposedOwner != nil {
 			ownerType := strings.TrimSpace(item.ProposedOwner.Type)
@@ -1310,6 +1356,7 @@ func (h *Handler) validateGoalPlanContent(
 			ProposedOwner:      owner,
 			Stage:              item.Stage,
 			Coordination:       coordination,
+			Delivery:           delivery,
 		})
 	}
 
@@ -1338,8 +1385,12 @@ func (h *Handler) validateGoalPlanContent(
 		if err := checkGoalPlanText(reason, goalPlanTextFieldRunes); err != nil {
 			return GoalPlanContent{}, fmt.Errorf("edges[%d].reason %s", i, err)
 		}
+		kind := strings.TrimSpace(edge.Kind)
+		if kind != "" && kind != "required" && kind != "conditional" {
+			return GoalPlanContent{}, fmt.Errorf("edges[%d].kind is invalid", i)
+		}
 		out.Edges = append(out.Edges, GoalPlanEdge{
-			DependentItemID: dependent, PrerequisiteItemID: prerequisite, Reason: reason,
+			DependentItemID: dependent, PrerequisiteItemID: prerequisite, Reason: reason, Kind: kind,
 		})
 	}
 	if err := detectGoalPlanCycle(out.Edges); err != nil {
@@ -1438,6 +1489,9 @@ func detectGoalPlanCycle(edges []GoalPlanEdge) error {
 	next := make(map[string][]string, len(edges))
 	nodes := make(map[string]bool, len(edges))
 	for _, edge := range edges {
+		if edge.Kind == "conditional" {
+			continue
+		}
 		next[edge.PrerequisiteItemID] = append(next[edge.PrerequisiteItemID], edge.DependentItemID)
 		nodes[edge.PrerequisiteItemID] = true
 		nodes[edge.DependentItemID] = true
@@ -1484,6 +1538,7 @@ type goalPlanGenerationInput struct {
 	PlanRevision int32
 	PlanContent  json.RawMessage
 	Snapshot     json.RawMessage
+	Methods      []workmethod.Template
 }
 
 // loadGoalPlanDraft reads the saved draft inside the caller's transaction. The
@@ -1529,7 +1584,11 @@ func (h *Handler) buildGoalPlanGenerationInput(
 	if err != nil {
 		return goalPlanGenerationInput{}, err
 	}
-	input := goalPlanGenerationInput{Project: project, Resources: resources}
+	methods, err := service.WorkMethodCatalog(ctx, q, goal.WorkspaceID)
+	if err != nil {
+		return goalPlanGenerationInput{}, err
+	}
+	input := goalPlanGenerationInput{Project: project, Resources: resources, Methods: methods}
 	if hasPlan {
 		input.PlanRevision = plan.Revision
 		if len(plan.Content) > 0 {
@@ -1581,6 +1640,7 @@ func buildGoalPlanContextSnapshot(
 		"project_description": project.Description.String,
 		"resources":           resourceEntries,
 		"plan_revision":       planRevision,
+		"delivery_contract":   true,
 		"missing":             missing,
 		"read_at":             readAt.Format(time.RFC3339),
 	}
@@ -1637,14 +1697,19 @@ func buildGoalPlanPrompt(goal db.Goal, generation db.GoalPlanGeneration, input g
 		b.WriteString("  " + line + "\n")
 	}
 	fmt.Fprintf(&b, "\n## 当前计划\n%s\n\n", currentPlan)
+	b.WriteString("## 本工作区工作方法目录\n")
+	for _, method := range input.Methods {
+		fmt.Fprintf(&b, "- method_id=%s, name=%s, kind=%s\n", method.ID, method.Name, method.Kind)
+	}
 	b.WriteString("## 输出要求\n")
-	b.WriteString("1. 先实际阅读本项目资源的代码、AGENTS.md、README、相关文档和已有任务，再提出 1 到 8 个可独立验收的交付节点。\n")
+	b.WriteString("1. 先实际阅读本项目资源的代码、AGENTS.md、README、相关文档和已有任务，再提出可独立验收的交付节点。保留现有计划中仍适用的节点，本次最多新增 8 个。\n")
 	b.WriteString("2. 每个节点包含 title、outcome、acceptance_criteria；evidence_refs 至少一条，记录实际读到的依据：kind=resource|file|task|comment|contract，ref 写资源 ID/文件路径与行段/任务 UUID/评论 ID，version 写实际版本（仓库 SHA、任务 revision、评论 revision 等），note 写摘要。只有真正读到内容才算依据。\n")
-	b.WriteString("3. 依赖写在 edges：dependent_item_id 依赖 prerequisite_item_id，reason 说明为什么必须等待；没有依赖表示可以并行。不能自依赖、不能成环、不能重复。\n")
-	b.WriteString("4. 已有节点必须沿用原 id；新增节点请自行生成新的 UUID；删除节点直接从 items 去掉。标题不能作为去重键，不要复制已有事项。\n")
-	b.WriteString("5. 复用已有任务时 binding 写 {\"type\":\"existing\",\"issue_id\":\"<uuid>\"}，且该 issue 必须属于本项目；新节点写 {\"type\":\"new\"}。proposed_owner 只是建议责任人，不会指派，格式 {\"type\":\"member|agent|squad\",\"id\":\"<uuid>\"}。\n")
-	b.WriteString("6. 可选 coordination 记录：parallel_reason（为什么可以并行）、write_scope（将写入的路径/分支）、exclusive_resources（需要串行的独占资源）、integration_owner（集成负责人）、next_evaluation（下次重新评估触发的事件）。等待原因写在该边的 reason。\n")
-	b.WriteString("7. context_snapshot 记录实际读取依据：repo_sha、files（path/lines/summary）、tasks（issue_id/revision/read_at）、resources（对应输入资源的 id 和 read=true）、missing（未读到的缺失项）、read_at。缺失项如实填写，不要猜。\n\n")
+	b.WriteString("3. 每个节点必须有 delivery：type 是 feature（功能交付）、defect（缺陷修复）、research（调研验证）或 outcome（目标管理）；method_id 从工作方法目录选择；criteria 含稳定 id、expected（可观察结果）和 verification（真实核验步骤及证据）。功能侧重用户操作，缺陷侧重复现及回归，调研侧重问题与证据，目标管理侧重指标和数据来源。已有验收编号和前序计划中已配置的字段应复用。\n")
+	b.WriteString("4. 依赖写在 edges：dependent_item_id 依赖 prerequisite_item_id，reason 写清当前卡需消费的具体接口、产物或验收能力。即使上游已完成也记录真实依赖。直接使用原事项正文记载的前置和已满足状态，识别真正可独立推进的任务。kind 必需时写 required，只在特定部署、验收或未有等价能力时需要则写 conditional 并在原因写明条件。不能自依赖、不能成环、不能重复。\n")
+	b.WriteString("5. 已有节点必须沿用原 id；新增节点请自行生成新的 UUID；删除节点直接从 items 去掉。标题不能作为去重键，不要复制已有事项。\n")
+	b.WriteString("6. 复用已有任务时 binding 写 {\"type\":\"existing\",\"issue_id\":\"<uuid>\"}，且该 issue 必须属于本项目；新节点写 {\"type\":\"new\"}。proposed_owner 只是建议责任人，不会指派，格式 {\"type\":\"member|agent|squad\",\"id\":\"<uuid>\"}。\n")
+	b.WriteString("7. 可选 coordination 记录：parallel_reason（为什么可以并行）、write_scope（将写入的路径/分支）、exclusive_resources（需要串行的独占资源）、integration_owner（集成负责人）、next_evaluation（下次重新评估触发的事件）。等待原因写在该边的 reason。\n")
+	b.WriteString("8. context_snapshot 记录实际读取依据：repo_sha、files（path/lines/summary）、tasks（issue_id/revision/read_at）、resources（对应输入资源的 id 和 read=true）、missing（未读到的缺失项）、read_at。缺失项如实填写，不要猜。\n\n")
 	b.WriteString("## 提交方式\n")
 	b.WriteString("把结果写成一个 UTF-8 JSON 文件，结构为：\n")
 	b.WriteString(`{"items":[...],"edges":[...],"context_snapshot":{...}}` + "\n")

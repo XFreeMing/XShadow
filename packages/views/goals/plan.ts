@@ -207,6 +207,7 @@ function hasCycle(edges: GoalPlanEdge[]): boolean {
   const next = new Map<string, string[]>();
   const nodes = new Set<string>();
   for (const edge of edges) {
+    if (edge.kind === "conditional") continue;
     const list = next.get(edge.prerequisite_item_id);
     if (list) list.push(edge.dependent_item_id);
     else next.set(edge.prerequisite_item_id, [edge.dependent_item_id]);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GoalPlanDeliverySchema } from "./goal-plan-delivery";
 
 export const WorkMethodKindSchema = z.enum([
   "development",
@@ -56,6 +57,8 @@ export const WorkMethodRunSchema = z
     reason: z.string().optional().default(""),
     current_actor: actor.nullish(),
     can_act: z.boolean().optional(),
+    source: z.string().optional(),
+    planned_delivery: GoalPlanDeliverySchema.nullish().catch(null),
     history: z
       .array(
         z.object({

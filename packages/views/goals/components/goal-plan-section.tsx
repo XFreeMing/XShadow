@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FocusEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Goal, GoalPlanEdge, GoalPlanGeneration } from "@multica/core/types";
+import type { Goal, GoalPlanEdge, GoalPlanGeneration, Issue } from "@multica/core/types";
 import { goalKeys, goalPlanOptions, useSaveGoalPlan } from "@multica/core/goals";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -68,7 +68,15 @@ function saveFailureMessage(error: unknown, fallback: string): string {
  * workspace data, so this section is only rendered for a goal the viewer can
  * still see; losing that access hides the whole area, including cached content.
  */
-export function GoalPlanSection({ goal }: { goal: Goal }) {
+export function GoalPlanSection({
+  goal,
+  linkedIssues,
+  issueHref,
+}: {
+  goal: Goal;
+  linkedIssues?: Issue[];
+  issueHref?: (issue: Issue) => string;
+}) {
   const { t } = useT("goals");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -223,6 +231,7 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
           generation_id: generationId,
         },
       });
+      void queryClient.invalidateQueries({ queryKey: ["work-methods", wsId, "run"] });
       setDraft(draftFromPlan(saved));
       setDraftProjectId(saved.project_id);
       setDirty(false);
@@ -633,6 +642,8 @@ export function GoalPlanSection({ goal }: { goal: Goal }) {
           <GoalPlanEditor
             goal={goal}
             items={draft.items}
+            linkedIssues={linkedIssues}
+            issueHref={issueHref}
             edges={draft.edges}
             onChange={handleContentChange}
             onItemEdited={handleItemEdited}

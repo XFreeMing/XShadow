@@ -266,8 +266,8 @@ func TestGoalPlanGenerationDedupeLateCandidateAndApply(t *testing.T) {
 	// The run submits a plan without node ids; the server mints stable ones.
 	resultBody := map[string]any{
 		"items": []map[string]any{
-			{"title": "first", "outcome": "o1", "acceptance_criteria": "a1", "binding": map[string]any{"type": "new"}},
-			{"title": "second", "outcome": "o2", "acceptance_criteria": "a2", "binding": map[string]any{"type": "new"}},
+			{"title": "first", "delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}}, "outcome": "o1", "acceptance_criteria": "a1", "binding": map[string]any{"type": "new"}},
+			{"title": "second", "delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}}, "outcome": "o2", "acceptance_criteria": "a2", "binding": map[string]any{"type": "new"}},
 		},
 		"edges":            []map[string]any{},
 		"context_snapshot": map[string]any{"repo_sha": "deadbeef", "read_at": "2026-11-12T00:00:00Z"},
@@ -342,7 +342,7 @@ func TestGoalPlanGenerationDedupeLateCandidateAndApply(t *testing.T) {
 
 	lateBody := map[string]any{
 		"items": []map[string]any{
-			{"title": "late node", "outcome": "o", "acceptance_criteria": "a", "binding": map[string]any{"type": "new"}},
+			{"title": "late node", "delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}}, "outcome": "o", "acceptance_criteria": "a", "binding": map[string]any{"type": "new"}},
 		},
 		"edges": []map[string]any{},
 	}
@@ -433,6 +433,10 @@ func TestGoalPlanResultOwnershipAndValidation(t *testing.T) {
 
 	// The run's own token is the one credential that may submit.
 	ownerToken := mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID)
+	missingDelivery := postPlanResultRaw(ownerToken, testWorkspaceID, goal.ID, created.ID, body, nil)
+	if missingDelivery.Code != http.StatusBadRequest || !strings.Contains(missingDelivery.Body.String(), "delivery is required") {
+		t.Fatalf("result without a typed delivery = %d %s", missingDelivery.Code, missingDelivery.Body.String())
+	}
 	code, failed := submitPlanResultAsRun(t, ownerToken, goal.ID, created.ID,
 		map[string]any{"error": "the project has no readable resources"})
 	if code != http.StatusOK {

@@ -217,8 +217,9 @@ func TestGoalPlanGenerationFixesInputAtRevision(t *testing.T) {
 		mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID), goal.ID, created.ID,
 		map[string]any{
 			"items": []map[string]any{{
-				"title":   "candidate built on revision 1",
-				"binding": map[string]any{"type": "new"},
+				"title":    "candidate built on revision 1",
+				"delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}},
+				"binding":  map[string]any{"type": "new"},
 			}},
 			"edges": []map[string]any{},
 		})
@@ -581,9 +582,10 @@ func TestGoalPlanOldProjectCandidateRejectedAfterMove(t *testing.T) {
 	// Every candidate node is new; the only thing that makes it project-specific
 	// is the run's fixed input.
 	candidateItems := []map[string]any{{
-		"title":   "A-only candidate node",
-		"outcome": "only meaningful in project A",
-		"binding": map[string]any{"type": "new"},
+		"title":    "A-only candidate node",
+		"delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}},
+		"outcome":  "only meaningful in project A",
+		"binding":  map[string]any{"type": "new"},
 	}}
 	code, submitted := submitPlanResultAsRun(t,
 		mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID), goal.ID, created.ID,
@@ -744,8 +746,9 @@ func TestGoalPlanOldProjectCandidateHiddenWhenCallerSeesOnlyB(t *testing.T) {
 		mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID), goal.ID, created.ID,
 		map[string]any{
 			"items": []map[string]any{{
-				"title":   "private A candidate",
-				"binding": map[string]any{"type": "new"},
+				"title":    "private A candidate",
+				"delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}},
+				"binding":  map[string]any{"type": "new"},
 			}},
 			"edges": []map[string]any{},
 		})
@@ -861,8 +864,9 @@ func TestGoalPlanRunEvidenceChain(t *testing.T) {
 		mintGoalPlanTaskToken(t, testWorkspaceID, *created.TaskID, agentID), goal.ID, created.ID,
 		map[string]any{
 			"items": []map[string]any{{
-				"title":   "deliverable from the listed resources",
-				"binding": map[string]any{"type": "new"},
+				"title":    "deliverable from the listed resources",
+				"delivery": &GoalPlanDelivery{Type: "feature", MethodID: "agile", Criteria: []GoalPlanCriterion{{ID: "C1", Expected: "The result is usable", Verification: "Open the delivered result"}}},
+				"binding":  map[string]any{"type": "new"},
 			}},
 			"edges": []map[string]any{},
 			"context_snapshot": map[string]any{
