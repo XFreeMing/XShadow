@@ -129,3 +129,20 @@ it("shows pending review evidence without another reviewer's actions", async () 
     screen.queryByRole("button", { name: "Return for rework" }),
   ).toBeNull();
 });
+
+it("displays approvals against the checklist the reviewer signed", async () => {
+  const old = structuredClone(method);
+  old.revision = 1;
+  old.steps[0].checks = ["Original signed check"];
+  mount({
+    step: 1,
+    state: "working",
+    history: [
+      { action: "approve", step: 0, actor: "member/Bella", at: "2026-01-01T01:00:00Z",
+        checked_items: [0], evidence: "Original decision" },
+      { action: "adopt_revision", step: 1, actor: "member/Alice", at: "2026-01-02T01:00:00Z",
+        previous_method: old, method_revision: 2, evidence: "Apply to synthesis" },
+    ],
+  });
+  expect(await screen.findByText(/Original signed check/)).toBeInTheDocument();
+});

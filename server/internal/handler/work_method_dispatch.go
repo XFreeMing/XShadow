@@ -87,7 +87,7 @@ func (h *Handler) canActOnMethod(r *http.Request, issue db.Issue, run workmethod
 			if err != nil || task.AgentID != parseUUIDOrInvalid(id) || isTerminalTaskStatus(task.Status) {
 				return false
 			}
-			if revision := methodBoundRevision(&task); revision > 0 && (issue.ID != task.IssueID || run.Revision != revision) {
+			if revision := methodBoundRevision(&task); revision > 0 && (issue.ID != task.IssueID || !run.AcceptsTaskRevision(revision)) {
 				return false
 			}
 		}

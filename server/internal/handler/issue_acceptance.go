@@ -66,7 +66,7 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if task, hasTask := h.taskFromRequestHeader(r); hasTask && methodBoundRevision(&task) > 0 {
-			if task.IssueID != issue.ID || methodBoundRevision(&task) != run.Revision || isTerminalTaskStatus(task.Status) {
+			if task.IssueID != issue.ID || !run.AcceptsTaskRevision(methodBoundRevision(&task)) || isTerminalTaskStatus(task.Status) {
 				writeError(w, 409, "来源运行已结束或工作方法已推进，请读取当前步骤")
 				return
 			}

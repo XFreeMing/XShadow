@@ -51,13 +51,15 @@ type Run struct {
 }
 
 type Event struct {
-	CheckedItems []int  `json:"checked_items,omitempty"`
-	FromStep     *int   `json:"from_step,omitempty"`
-	Action       string `json:"action"`
-	Step         int    `json:"step"`
-	Evidence     string `json:"evidence"`
-	Actor        string `json:"actor"`
-	At           string `json:"at"`
+	PreviousMethod *Template `json:"previous_method,omitempty"`
+	MethodRevision int       `json:"method_revision,omitempty"`
+	CheckedItems   []int     `json:"checked_items,omitempty"`
+	FromStep       *int      `json:"from_step,omitempty"`
+	Action         string    `json:"action"`
+	Step           int       `json:"step"`
+	Evidence       string    `json:"evidence"`
+	Actor          string    `json:"actor"`
+	At             string    `json:"at"`
 }
 
 type Change struct {

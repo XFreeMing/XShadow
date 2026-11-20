@@ -65,6 +65,8 @@ export const WorkMethodRunSchema = z
           action: z.string(),
           step: index,
           from_step: index.optional(),
+          previous_method: WorkMethodSchema.optional(),
+          method_revision: z.number().int().positive().optional(),
           checked_items: z.array(index).nullish(),
           evidence: z
             .string()
@@ -88,6 +90,7 @@ export type NewWorkMethod = Omit<WorkMethod, "id" | "revision">;
 export type WorkMethodRun = z.infer<typeof WorkMethodRunSchema>;
 export type WorkMethodAction = { base_revision: number } & (
   | { action: "select"; method_id: string; method_revision?: number }
+  | { action: "adopt_revision"; method_id: string; method_revision: number; evidence: string }
   | { action: "start"; method_id?: string; method_revision?: number }
   | {
       action: "advance";

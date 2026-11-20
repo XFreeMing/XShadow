@@ -135,3 +135,13 @@ it("updates the template version opened in the editor and reads back its roles",
   expect(result.steps[0]?.reviewer).toEqual(step.reviewer);
   expect(result.revision).toBe(3);
 });
+
+it("rejects malformed archived review contracts in a revision adoption", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+    method, step: 0, state: "working", revision: 2,
+    history: [{ action: "adopt_revision", step: 0, actor: "member/A", at: "today",
+      method_revision: 2, previous_method: { ...method, steps: [] } }],
+  })));
+  await expect(new ApiClient("https://example.test").getIssueWorkMethod("DEV-1"))
+    .rejects.toThrow("Malformed");
+});

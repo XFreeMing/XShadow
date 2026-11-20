@@ -191,8 +191,17 @@ function MethodCard({
       });
     else mutation.mutate({ ...base, action, ...verdict });
   }
+  // Reviews refer to the checklist in force when they were recorded.
+  let historicalMethod = method;
+  const historicalMethods = latest.map((event) => {
+    const applicable = historicalMethod;
+    if (event.previous_method) historicalMethod = event.previous_method;
+    return applicable;
+  }).reverse();
   const actionText = (action: string) => {
     switch (action) {
+      case "adopt_revision":
+        return t(($) => $.method.catalog);
       case "start":
         return t(($) => $.method.start);
       case "select":
@@ -504,7 +513,10 @@ function MethodCard({
                       className="grid gap-1 border-l border-border pl-3"
                     >
                       <p>
-                        {actionText(entry.action)} ·{" "}
+                        {actionText(entry.action)}
+                        {entry.previous_method && entry.method_revision && (
+                          <> v{entry.previous_method.revision} → v{entry.method_revision}</>
+                        )} ·{" "}
                         {entry.from_step !== undefined &&
                           entry.from_step !== entry.step && (
                             <>{method.steps[entry.from_step]?.name} → </>
@@ -513,7 +525,7 @@ function MethodCard({
                       </p>
                       {entry.checked_items && (
                         <ul className="space-y-1 text-caption">
-                          {method.steps[
+                          {historicalMethods[i]?.steps[
                             entry.from_step ?? entry.step
                           ]?.checks?.map((text, idx) => (
                             <li key={idx}>

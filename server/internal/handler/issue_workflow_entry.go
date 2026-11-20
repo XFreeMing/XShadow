@@ -71,7 +71,7 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 			if err := json.Unmarshal(prev.WorkMethodRun, &method); err != nil {
 				return nil, err
 			}
-			if bound != method.Revision {
+			if !method.AcceptsTaskRevision(bound) {
 				return nil, errMethodStageMoved
 			}
 		}
@@ -476,7 +476,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	methodOwned := methodOwnsHandoff(method)
 	stepMoved := !methodOwned && workflowStepMoved(def, issue.Status, task)
 	bound := methodBoundRevision(task)
-	if bound > 0 && bound != method.Revision {
+	if bound > 0 && !method.AcceptsTaskRevision(bound) {
 		return &TaskProjectWorkflowData{Brief: "This work-method handoff has already moved. End this run. The current stage has a separate owner.", stepMoved: true}
 	}
 	ownsStep := taskRunsForAssignee(issue, task) && !stepMoved

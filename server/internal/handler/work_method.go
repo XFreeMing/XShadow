@@ -162,6 +162,10 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid method change")
 		return
 	}
+	if change.Action == workmethod.AdoptRevision {
+		h.adoptIssueMethod(w, r, issue, userID, change)
+		return
+	}
 	methods, err := h.workMethodCatalog(r.Context(), issue.WorkspaceID)
 	if err != nil {
 		writeError(w, 500, "failed to read work methods")

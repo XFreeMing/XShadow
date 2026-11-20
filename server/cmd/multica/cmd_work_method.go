@@ -44,6 +44,7 @@ or start a recommended method, submit a step's output, approve its review, or re
 Examples of changes (base_revision must match the latest read):
   {"action":"start","base_revision":0}
   {"action":"select","base_revision":0,"method_id":"seven-step"}
+  {"action":"adopt_revision","base_revision":5,"method_id":"your-method-id","method_revision":2,"evidence":"Adopt from this working step; retain earlier approvals"}
   {"action":"advance","base_revision":1,"evidence":"Report attachment and verified findings"}
   {"action":"rework","base_revision":8,"target_step":4,"evidence":"The data excludes returning customers"}
   {"action":"approve","base_revision":12,"checked_items":[0,1],"evidence":"Reviewer confirmed the revised sample and recommendation"}`,
