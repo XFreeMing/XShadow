@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -765,6 +766,7 @@ func init() {
 	issueCommentAddCmd.Flags().String("parent", "", "Parent comment ID to reply under. A comment-triggered agent run must reply under its trigger comment; omitting --parent to post a top-level comment is rejected")
 	issueCommentAddCmd.Flags().StringArray("attachment", nil, "File path to attach (one literal path per flag; repeat --attachment for multiple files). To show an image at a specific spot, reference the same path in the content (e.g. ![shot](./a.png)); that link is rewritten to the uploaded file before posting. Non-image files, HTML included, show as file cards that open in the viewer; to render a chart inside the comment, put a ```html or ```mermaid block in the content instead")
 	issueCommentAddCmd.Flags().StringSlice("steer", nil, "Run ID (full UUID or short prefix) whose in-progress turn should receive this comment instead of a follow-up run (repeatable)")
+	issueCommentAddCmd.Flags().StringSlice("suppress-agent", nil, "Record this comment without dispatching the named agent UUID (repeatable); other recipients follow normal routing")
 	issueCommentAddCmd.Flags().Bool("steer-active", false, "Add this comment to the running turn of every agent on this issue you may steer, and of any other recipient that is running")
 	issueCommentAddCmd.Flags().String("output", "json", "Output format: table or json")
 
@@ -2673,6 +2675,14 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 
 	// Use a longer timeout when attachments are present (file uploads can be slow).
 	timeout := cli.APITimeout()
+	suppressed, _ := cmd.Flags().GetStringSlice("suppress-agent")
+	for i, id := range suppressed {
+		parsed, err := uuid.Parse(strings.TrimSpace(id))
+		if err != nil {
+			return fmt.Errorf("--suppress-agent requires an agent UUID: %w", err)
+		}
+		suppressed[i] = parsed.String()
+	}
 	steerInputs, _ := cmd.Flags().GetStringSlice("steer")
 	steerActive, _ := cmd.Flags().GetBool("steer-active")
 	if (len(steerInputs) > 0 || steerActive) && len(attachments) > 0 {
@@ -2693,6 +2703,12 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	steerTargets, err := resolveSteerTargets(ctx, client, issueID, steerInputs, steerActive)
 	if err != nil {
 		return err
+	}
+
+	for _, target := range steerTargets {
+		if slices.Contains(suppressed, target.AgentID) {
+			return fmt.Errorf("agent %s is selected for both steering and suppression", target.AgentID)
+		}
 	}
 
 	// Validate and read ALL attachments before uploading any. URLs are skipped
@@ -2720,6 +2736,9 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	content = applyAttachmentLinks(os.Stderr, content, "comment body", pending, uploaded)
 
 	body := map[string]any{"content": content}
+	if len(suppressed) > 0 {
+		body["suppress_agent_ids"] = suppressed
+	}
 	if len(steerTargets) > 0 {
 		steerTaskIDs := make([]string, len(steerTargets))
 		for i, target := range steerTargets {

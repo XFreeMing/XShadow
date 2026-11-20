@@ -660,6 +660,9 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 			b.WriteString("Use current criteria, active cases, candidate commit and matching run evidence. Verify the original entry points.")
 		}
 		b.WriteString(" Record evidence with --change-file.\n")
+		if step.Gate == "candidate" {
+			b.WriteString("When sharing evidence an already assigned worker expects, reply on your assigned thread. If the worker is queued or waiting for the directory, put the evidence at the agreed location and use issue comment add --suppress-agent <worker-UUID> for the receipt; for a running turn that accepts input, use --steer <run-ID>.\n")
+		}
 	} else if step.Gate != "" {
 		fmt.Fprintf(&b, "The method synchronizes the board and dispatches the next actor. Read the versioned criteria, cases, candidate and impact with \"$MULTICA_CLI_PATH\" issue acceptance %s. Record actual structured evidence with --change-file; run issue acceptance --help for the JSON. Submit or review through issue method.\n", issueRef)
 	}

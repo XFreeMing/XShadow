@@ -561,6 +561,7 @@ func newIssueCommentAddTestCmd() *cobra.Command {
 	cmd.Flags().Bool("allow-external-file", false, "")
 	cmd.Flags().StringArray("attachment", nil, "")
 	cmd.Flags().String("parent", "", "")
+	cmd.Flags().StringSlice("suppress-agent", nil, "")
 	cmd.Flags().StringSlice("steer", nil, "")
 	cmd.Flags().Bool("steer-active", false, "")
 	cmd.Flags().String("output", "json", "")
@@ -603,6 +604,8 @@ func TestRunIssueCommentAddUploadsAttachmentWithoutIssueID(t *testing.T) {
 	t.Setenv("MULTICA_TOKEN", "mat_test-token")
 
 	cmd := newIssueCommentAddTestCmd()
+	const waitingAgent = "55555555-5555-4555-8555-555555555555"
+	_ = cmd.Flags().Set("suppress-agent", waitingAgent)
 	_ = cmd.Flags().Set("content", "with attachment")
 	_ = cmd.Flags().Set("attachment", attachmentPath)
 	if err := runIssueCommentAdd(cmd, []string{issueRef}); err != nil {
@@ -610,6 +613,10 @@ func TestRunIssueCommentAddUploadsAttachmentWithoutIssueID(t *testing.T) {
 	}
 	if uploadedIssueID != "" {
 		t.Fatalf("upload issue_id = %q, want empty for a comment attachment", uploadedIssueID)
+	}
+	suppressed, ok := commentBody["suppress_agent_ids"].([]any)
+	if !ok || len(suppressed) != 1 || suppressed[0] != waitingAgent {
+		t.Fatalf("suppress_agent_ids = %#v, want only %s", suppressed, waitingAgent)
 	}
 	attachmentIDs, ok := commentBody["attachment_ids"].([]any)
 	if !ok || len(attachmentIDs) != 1 || attachmentIDs[0] != "attachment-1" {
