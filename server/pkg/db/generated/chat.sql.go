@@ -379,7 +379,7 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
     runtime_connected_apps, originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
-    fire_at, channel_context_revision, id
+    fire_at, channel_context_revision, id, delegated_from_task_id
 )
 SELECT
     $1, $2, NULL,
@@ -395,7 +395,7 @@ SELECT
     $14,
     $6::timestamptz,
     $15::bigint,
-    COALESCE($16::uuid, gen_random_uuid())
+    COALESCE($16::uuid, gen_random_uuid()), $17
 WHERE lock_task_owner_rows($1, NULL, $2)
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
 `
@@ -417,6 +417,7 @@ type CreateChatTaskParams struct {
 	TriggerEvidenceRefID   pgtype.UUID        `json:"trigger_evidence_ref_id"`
 	ChannelContextRevision pgtype.Int8        `json:"channel_context_revision"`
 	ID                     pgtype.UUID        `json:"id"`
+	DelegatedFromTaskID    pgtype.UUID        `json:"delegated_from_task_id"`
 }
 
 // Fenced against workspace teardown: lock_task_owner_rows (migration 284)
@@ -444,6 +445,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		arg.TriggerEvidenceRefID,
 		arg.ChannelContextRevision,
 		arg.ID,
+		arg.DelegatedFromTaskID,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -1246,6 +1248,7 @@ const getPublicChatSessionInWorkspace = `-- name: GetPublicChatSessionInWorkspac
 SELECT cs.id, cs.workspace_id, cs.agent_id, cs.creator_id, cs.title, cs.session_id, cs.work_dir, cs.status, cs.created_at, cs.updated_at, cs.unread_since, cs.runtime_id, cs.last_read_at, cs.is_agent_intro, cs.pinned_at, cs.project_id, cs.explicitly_created_at, cs.is_goal_conversation FROM chat_session AS cs
 WHERE cs.id = $1
   AND cs.workspace_id = $2
+  AND NOT EXISTS (SELECT 1 FROM agent_task_queue published WHERE published.chat_session_id = cs.id AND published.context->>'evidence_issue_id' IS NOT NULL)
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -1772,6 +1775,7 @@ LEFT JOIN LATERAL (
    LIMIT 1
 ) lm ON true
 WHERE cs.workspace_id = $1 AND cs.creator_id = $2
+  AND NOT EXISTS (SELECT 1 FROM agent_task_queue published WHERE published.chat_session_id = cs.id AND published.context->>'evidence_issue_id' IS NOT NULL)
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -2396,6 +2400,7 @@ LEFT JOIN LATERAL (
    LIMIT 1
 ) lm ON true
 WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM agent_task_queue published WHERE published.chat_session_id = cs.id AND published.context->>'evidence_issue_id' IS NOT NULL)
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR

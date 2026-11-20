@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -117,6 +118,10 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				if err != nil {
 					slog.Warn("auth: invalid task token", "path", r.URL.Path, "error", err)
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				if len(tt.EvidenceInputs) > 0 && !allowsEvidenceInput(r, tt.EvidenceInputs) {
+					http.Error(w, `{"error":"evidence runs can only download their selected attachments"}`, http.StatusForbidden)
 					return
 				}
 				userID := uuidToString(tt.UserID)
@@ -319,4 +324,27 @@ func extractToken(r *http.Request) (token string, fromCookie bool) {
 	}
 
 	return "", false
+}
+
+// An opt-in evidence task gets no issue-write or review authority.
+func allowsEvidenceInput(r *http.Request, raw []byte) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if (len(path) != 3 && len(path) != 4) || path[0] != "api" || path[1] != "attachments" || (len(path) == 4 && path[3] != "download" && path[3] != "download-metadata") {
+		return false
+	}
+	var selected []struct {
+		ID string `json:"attachment_id"`
+	}
+	if json.Unmarshal(raw, &selected) != nil {
+		return false
+	}
+	for _, input := range selected {
+		if input.ID == path[2] {
+			return true
+		}
+	}
+	return false
 }

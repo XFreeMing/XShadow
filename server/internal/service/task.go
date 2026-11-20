@@ -2355,6 +2355,7 @@ var ErrChatSessionAlreadyStarted = errors.New("chat session already has a user m
 // SendPreparedDirectChatMessageInTx, so no network read runs with the
 // transaction open and no nested transaction is needed.
 type DirectChatSendPreparation struct {
+	delegatedFrom    pgtype.UUID
 	runtimeOverlay   runtimeMCPOverlayData
 	originatorUser   pgtype.UUID
 	accountableUser  pgtype.UUID
@@ -2373,6 +2374,19 @@ func (s *TaskService) PrepareDirectChatSend(
 	agent db.Agent,
 	initiatorUserID pgtype.UUID,
 ) (DirectChatSendPreparation, error) {
+	return s.prepareChatSend(ctx, agent, attribution.DirectHumanRun(initiatorUserID, attribution.EvidenceChat, sessionID))
+}
+
+// PrepareDelegatedEvidenceSend preserves the source issue run's authorizing human and lineage.
+func (s *TaskService) PrepareDelegatedEvidenceSend(ctx context.Context, issue db.Issue, agent db.Agent, source db.AgentTaskQueue) (DirectChatSendPreparation, error) {
+	attr := attribution.DelegatedIssueRun(source.IssueID, source.ID, source.OriginatorUserID, source.AccountableUserID)
+	if err := s.guardRunProjectAccess(ctx, issue, agent, attr.UserID, attr.AccountableUserID); err != nil {
+		return DirectChatSendPreparation{}, err
+	}
+	return s.prepareChatSend(ctx, agent, attr)
+}
+
+func (s *TaskService) prepareChatSend(ctx context.Context, agent db.Agent, attr attribution.Result) (DirectChatSendPreparation, error) {
 	// Re-read the agent before the transaction: the overlay and attribution
 	// must not be built with a transaction open, and the caller's row may have
 	// changed since it was loaded. The send re-checks both under the locks.
@@ -2393,15 +2407,15 @@ func (s *TaskService) PrepareDirectChatSend(
 	// path was a bypass: it set originator_user_id but left accountable_user_id
 	// / source / evidence NULL, violating the one-way invariant and dropping the
 	// audit source (MUL-4302 §2).
-	attr := attribution.DirectHumanRun(initiatorUserID, attribution.EvidenceChat, sessionID)
 	attr, err = s.applyAttributionFallback(ctx, attr, current)
 	if err != nil {
 		return DirectChatSendPreparation{}, err
 	}
-	attrSource, _, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
+	attrSource, delegatedFrom, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
 
 	return DirectChatSendPreparation{
-		runtimeOverlay:   s.buildRuntimeMCPOverlay(ctx, initiatorUserID, current),
+		delegatedFrom:    delegatedFrom,
+		runtimeOverlay:   s.buildRuntimeMCPOverlay(ctx, attr.UserID, current),
 		originatorUser:   attr.UserID,
 		accountableUser:  attr.AccountableUserID,
 		attrSource:       attrSource,
@@ -2538,6 +2552,7 @@ func (s *TaskService) SendPreparedDirectChatMessageInTx(
 		RuntimeMcpOverlay:    prepared.runtimeOverlay.Overlay,
 		RuntimeConnectedApps: prepared.runtimeOverlay.ConnectedApps,
 		OriginatorSource:     prepared.attrSource,
+		DelegatedFromTaskID:  prepared.delegatedFrom,
 		TriggerEvidenceKind:  prepared.attrEvidenceKind,
 		TriggerEvidenceRefID: prepared.attrEvidenceRef,
 	})

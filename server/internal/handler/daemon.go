@@ -3620,6 +3620,12 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 	}
 
+	var evidence struct {
+		IssueID string `json:"evidence_issue_id"`
+	}
+	if task.ChatSessionID.Valid {
+		_ = json.Unmarshal(task.Context, &evidence)
+	}
 	// Chat task: populate workspace/session info from the chat_session table.
 	if task.ChatSessionID.Valid {
 		cs, chatErr := h.Queries.GetChatSession(r.Context(), task.ChatSessionID)
@@ -3678,19 +3684,32 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.ChatNoticeLocale = h.qoderChatNoticeLocale(r.Context(), runtime, *task, cs, resp.ChatChannelType, resp.ChatType)
 		// A web chat can opt into the same durable project context as an
 		// issue-bound task.
-		projectCtx, projectErr := h.resolveClaimProjectContext(r.Context(), cs.ProjectID, cs.WorkspaceID)
-		if projectErr != nil {
-			slog.Error("chat claim: load project context failed; preserving task for redelivery",
-				"task_id", uuidToString(task.ID),
-				"chat_session_id", uuidToString(cs.ID),
-				"error", projectErr)
-			return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, &claimBuildFailure{
-				outcome: "error_project_context",
-				status:  http.StatusInternalServerError,
-				message: "failed to load project context",
+		if evidence.IssueID == "" {
+			projectCtx, projectErr := h.resolveClaimProjectContext(r.Context(), cs.ProjectID, cs.WorkspaceID)
+			if projectErr != nil {
+				slog.Error("chat claim: load project context failed; preserving task for redelivery",
+					"task_id", uuidToString(task.ID),
+					"chat_session_id", uuidToString(cs.ID),
+					"error", projectErr)
+				return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, &claimBuildFailure{
+					outcome: "error_project_context",
+					status:  http.StatusInternalServerError,
+					message: "failed to load project context",
+				}
 			}
+			projectCtx.applyTo(&resp)
+		} else {
+			allowed, checkErr := h.evidenceClaimAllowed(r.Context(), evidence.IssueID, cs, agent, *task, runtime)
+			if checkErr != nil {
+				return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, h.rejectClaimSourceLoad(r.Context(), task, checkErr, "issue evidence", evidence.IssueID)
+			}
+			if !allowed {
+				return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, h.failClaimedTaskBeforeLaunch(
+					r.Context(), task, "The evidence request no longer has access to its issue, agent, or local CLI runtime.", taskfailure.ReasonRuntimeAccessDenied, "error_evidence_access", http.StatusConflict, "evidence request is no longer available")
+			}
+			// The evidence task starts in a new managed directory even on automatic retry.
+			task.ForceFreshSession = true
 		}
-		projectCtx.applyTo(&resp)
 		if !task.ForceFreshSession && !task.ChannelContextRevision.Valid {
 			// Resume chat sessions only when the stored pointer was produced
 			// by the same runtime as the claiming task. When the chat_session
@@ -3800,7 +3819,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			if err == nil && missing {
 				resp.PriorSessionResumeUnavailable = true
 			}
-		} else if task.RetryOfTaskID.Valid {
+		} else if evidence.IssueID == "" && task.RetryOfTaskID.Valid {
 			// Same as the issue branch. The retry lineage is what separates this
 			// from a user-requested fresh start (the Lark fresh-session command),
 			// which still inherits nothing.
@@ -4249,6 +4268,22 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.InitiatorEmail = originator.Email
 	}
 
+	if evidence.IssueID != "" {
+		// The recipient keeps the role and model selected for the request.
+		// Do not send workspace content or grant integrations from a regular chat.
+		resp.WorkspaceContext = ""
+		resp.RequestingUserProfileDescription = ""
+		resp.PluginHookTools = nil
+		resp.RemoteMCPConnections = nil
+		resp.ConnectedApps = nil
+		resp.Agent.CustomArgs = nil
+		resp.Agent.CustomEnv = nil
+		resp.Agent.McpConfig = nil
+		resp.Agent.RuntimeConfig = nil
+		resp.Agent.SkillRefs = nil
+		resp.Agent.Skills = nil
+		agentSkillCount, builtinSkillCount = 0, 0
+	}
 	return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, nil
 }
 

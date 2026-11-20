@@ -38,6 +38,7 @@ WHERE id = ANY(@ids::uuid[]);
 SELECT cs.* FROM chat_session AS cs
 WHERE cs.id = $1
   AND cs.workspace_id = $2
+  AND NOT EXISTS (SELECT 1 FROM agent_task_queue published WHERE published.chat_session_id = cs.id AND published.context->>'evidence_issue_id' IS NOT NULL)
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -72,6 +73,7 @@ LEFT JOIN LATERAL (
    LIMIT 1
 ) lm ON true
 WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM agent_task_queue published WHERE published.chat_session_id = cs.id AND published.context->>'evidence_issue_id' IS NOT NULL)
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -109,6 +111,7 @@ LEFT JOIN LATERAL (
    LIMIT 1
 ) lm ON true
 WHERE cs.workspace_id = $1 AND cs.creator_id = $2
+  AND NOT EXISTS (SELECT 1 FROM agent_task_queue published WHERE published.chat_session_id = cs.id AND published.context->>'evidence_issue_id' IS NOT NULL)
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -1146,7 +1149,7 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
     runtime_connected_apps, originator_source, trigger_evidence_kind, trigger_evidence_ref_id,
-    fire_at, channel_context_revision, id
+    fire_at, channel_context_revision, id, delegated_from_task_id
 )
 SELECT
     $1, $2, NULL,
@@ -1162,7 +1165,7 @@ SELECT
     sqlc.narg(trigger_evidence_ref_id),
     sqlc.narg('fire_at')::timestamptz,
     sqlc.narg('channel_context_revision')::bigint,
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), sqlc.narg(delegated_from_task_id)
 WHERE lock_task_owner_rows($1, NULL, $2)
 RETURNING *;
 

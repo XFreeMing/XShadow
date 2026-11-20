@@ -26,7 +26,7 @@ WITH usage AS (
         COUNT(DISTINCT tu.task_id)::int AS task_count
     FROM task_usage tu
     JOIN agent_task_queue atq ON atq.id = tu.task_id
-    WHERE atq.issue_id = $1
+    WHERE (atq.issue_id = $1::uuid OR (atq.chat_session_id IS NOT NULL AND atq.context->>'evidence_issue_id' = ($1::uuid)::text))
 ), terminal_runs AS (
     SELECT
         COUNT(*)::int AS terminal_task_count,
@@ -34,7 +34,7 @@ WITH usage AS (
             SELECT 1 FROM task_usage tu WHERE tu.task_id = atq.id
         ))::int AS metered_task_count
     FROM agent_task_queue atq
-    WHERE atq.issue_id = $1
+    WHERE (atq.issue_id = $1::uuid OR (atq.chat_session_id IS NOT NULL AND atq.context->>'evidence_issue_id' = ($1::uuid)::text))
       AND atq.status IN ('completed', 'failed', 'cancelled')
       AND atq.started_at IS NOT NULL
       AND atq.completed_at IS NOT NULL

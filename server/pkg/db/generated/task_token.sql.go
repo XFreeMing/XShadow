@@ -70,13 +70,27 @@ func (q *Queries) DeleteTaskTokensByTask(ctx context.Context, taskID pgtype.UUID
 }
 
 const getTaskTokenByHash = `-- name: GetTaskTokenByHash :one
-SELECT id, token_hash, task_id, agent_id, workspace_id, user_id, expires_at, created_at FROM task_token
-WHERE token_hash = $1 AND expires_at > now()
+SELECT tok.id, tok.token_hash, tok.task_id, tok.agent_id, tok.workspace_id, tok.user_id, tok.expires_at, tok.created_at, CASE WHEN t.context ? 'evidence_issue_id'
+       THEN COALESCE(t.context->'evidence_input'->'inputs','[]'::jsonb) END::jsonb AS evidence_inputs
+FROM task_token tok JOIN agent_task_queue t ON t.id = tok.task_id
+WHERE tok.token_hash = $1 AND tok.expires_at > now()
 `
 
-func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (TaskToken, error) {
+type GetTaskTokenByHashRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TokenHash      string             `json:"token_hash"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	EvidenceInputs []byte             `json:"evidence_inputs"`
+}
+
+func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (GetTaskTokenByHashRow, error) {
 	row := q.db.QueryRow(ctx, getTaskTokenByHash, tokenHash)
-	var i TaskToken
+	var i GetTaskTokenByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.TokenHash,
@@ -86,6 +100,7 @@ func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (Tas
 		&i.UserID,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.EvidenceInputs,
 	)
 	return i, err
 }

@@ -4,8 +4,10 @@ VALUES ($1, $2, $3, $4, $5, $6, COALESCE(sqlc.narg('id')::uuid, gen_random_uuid(
 RETURNING *;
 
 -- name: GetTaskTokenByHash :one
-SELECT * FROM task_token
-WHERE token_hash = $1 AND expires_at > now();
+SELECT tok.*, CASE WHEN t.context ? 'evidence_issue_id'
+       THEN COALESCE(t.context->'evidence_input'->'inputs','[]'::jsonb) END::jsonb AS evidence_inputs
+FROM task_token tok JOIN agent_task_queue t ON t.id = tok.task_id
+WHERE tok.token_hash = $1 AND tok.expires_at > now();
 
 -- name: DeleteTaskTokensByTask :exec
 DELETE FROM task_token WHERE task_id = $1;

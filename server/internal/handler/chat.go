@@ -275,6 +275,17 @@ func (h *Handler) loadChatSessionForUser(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusForbidden, "not your chat session")
 		return db.ChatSession{}, false
 	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		evidence, err := h.Queries.IsIssueEvidenceSession(r.Context(), session.ID)
+		if err != nil {
+			writeError(w, 500, "failed to check chat session")
+			return db.ChatSession{}, false
+		}
+		if evidence {
+			writeError(w, 409, "this evidence run accepts only its original issue request")
+			return db.ChatSession{}, false
+		}
+	}
 	return session, true
 }
 
