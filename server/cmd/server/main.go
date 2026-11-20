@@ -30,6 +30,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/scheduler"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/llm"
@@ -840,6 +841,17 @@ func main() {
 	}
 	if err := schedulerMgr.Register(scheduler.IssueWakeupJob(&service.IssueWakeupService{Tasks: taskSvc})); err != nil {
 		slog.Error("scheduler: register issue wakeups", "error", err)
+	}
+	if value := os.Getenv("MULTICA_ISSUE_CONTINUATION_MANAGER_ID"); value != "" {
+		managerID, err := util.ParseUUID(value)
+		if err != nil {
+			slog.Error("invalid MULTICA_ISSUE_CONTINUATION_MANAGER_ID", "error", err)
+			os.Exit(1)
+		}
+		if err = schedulerMgr.Register(scheduler.IssueContinuationJob(&service.IssueContinuation{Tasks: taskSvc, ManagerID: managerID})); err != nil {
+			slog.Error("scheduler: register issue continuation", "error", err)
+			os.Exit(1)
+		}
 	}
 	if err := schedulerMgr.Register(scheduler.ChildEventSweepJob(&service.IssueWakeupService{Tasks: taskSvc})); err != nil {
 		slog.Error("scheduler: register child-done sweep", "error", err)

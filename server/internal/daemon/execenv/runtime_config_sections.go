@@ -275,6 +275,7 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("- `multica issue assign <id> (--to X | --to-id <uuid> | --unassign)` — change ownership; assigning to an agent can start a run.\n")
 	writeIssueStatusCommand(b, ctx)
 	b.WriteString(duplicateOfCommandLine)
+	b.WriteString("When the issue's requested work has been withdrawn or superseded, record the decision and its source on the issue, set its status to cancelled, and verify the result. Missing input or an unavailable dependency calls for a tracked wait.\n")
 	b.WriteString("- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>` — persist an event, condition or time wakeup on this issue, then finish the current run. When the platform can check the fact itself, use one `--until-*` condition so no run starts before it holds; check the rule's `last_error` for missing PR links or snapshots, which are retried automatically. Conditions, PR rules and actor filters: `multica issue wakeup create --help` and the multica-platform issues reference.\n")
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file` with a file inside your working directory; full flags: `multica issue comment add --help`.\n")

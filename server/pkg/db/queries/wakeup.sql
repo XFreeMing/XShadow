@@ -70,8 +70,8 @@ WHERE context->>'wakeup_id'= @wakeup_id::text AND status IN ('queued','deferred'
 UPDATE issue_wakeup SET enabled=false,disabled_at=clock_timestamp(),updated_at=clock_timestamp()
 WHERE issue_id= @issue_id AND disabled_at IS NULL AND system_rule IS NULL;
 -- name: CancelUnstartedIssueWakeupTasks :many
-UPDATE agent_task_queue SET status='cancelled',completed_at=now(),error='Issue closed; wakeup disabled'
-WHERE issue_id= @issue_id AND context->>'wakeup_id' IS NOT NULL AND status IN ('queued','deferred') AND started_at IS NULL RETURNING *;
+UPDATE agent_task_queue SET status='cancelled',completed_at=now(),error=CASE WHEN context ? 'continuation_gap' THEN 'Issue closed; continuation stopped' ELSE 'Issue closed; wakeup disabled' END
+WHERE issue_id= @issue_id AND (context->>'wakeup_id' IS NOT NULL OR context ? 'continuation_gap') AND status IN ('queued','deferred') AND started_at IS NULL RETURNING *;
 -- name: ListInputWakeups :many
 -- Scheduler lane 1: rules with unprocessed inputs (subscribed events,
 -- condition hints, "wake now"). Deliberately not filtered by enabled: a once
