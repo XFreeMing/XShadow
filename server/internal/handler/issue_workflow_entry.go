@@ -537,13 +537,34 @@ func usesCurrentStepContext(issue db.Issue, run workmethod.Run, task *db.AgentTa
 	var trigger struct {
 		Revision int    `json:"work_method_revision"`
 		Wakeup   string `json:"wakeup_id"`
+		Evidence struct {
+			Facts []struct {
+				Event   string `json:"event_type"`
+				Payload struct {
+					IssueID string `json:"issue_id"`
+					TaskID  string `json:"task_id"`
+				} `json:"payload"`
+			} `json:"facts"`
+		} `json:"wakeup_evidence"`
 	}
 	if len(task.Context) > 0 {
 		if err := json.Unmarshal(task.Context, &trigger); err != nil {
 			return false
 		}
 	}
-	if trigger.Wakeup != "" || (trigger.Revision == 0 && !task.TriggerCommentID.Valid && !task.DelegatedFromTaskID.Valid) {
+	if trigger.Wakeup != "" {
+		// A child completion carries the handoff instruction and its receipt.
+		// Timers and unrelated wakeups still resume their original conversation.
+		if !task.DelegatedFromTaskID.Valid || len(trigger.Evidence.Facts) == 0 {
+			return false
+		}
+		for _, f := range trigger.Evidence.Facts {
+			if f.Event != "task.completed" || f.Payload.IssueID != uuidToString(issue.ID) || f.Payload.TaskID == "" {
+				return false
+			}
+		}
+	}
+	if trigger.Revision == 0 && !task.TriggerCommentID.Valid && !task.DelegatedFromTaskID.Valid {
 		return false
 	}
 	var config struct {

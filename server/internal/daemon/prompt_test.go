@@ -2293,3 +2293,20 @@ func TestStepFeedbackRetainsTriggerAndReplyRouting(t *testing.T) {
 		t.Fatal("step feedback triggers a full discussion scan")
 	}
 }
+
+func TestScopedChildWakeupKeepsReceiptAndIndependentReview(t *testing.T) {
+	task := Task{IssueID: "issue", WakeupID: "wake", HandoffNote: "Child receipt for frozen C4", TriggerCommentID: "original-thread", ProjectWorkflow: &ProjectWorkflowData{StepContext: true, Brief: "Review C4 on the fixed candidate"}}
+	prompt := BuildPrompt(task, "codex")
+	for _, want := range []string{"Child receipt for frozen C4", "Review C4 on the fixed candidate", "independent acceptance", "--parent original-thread", "wakeup disable"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "--roots-only") || strings.Contains(prompt, "issue get issue --output json") {
+		t.Fatal("scoped wakeup requested the full issue and comment history")
+	}
+	task.ProjectWorkflow = nil
+	if !strings.Contains(BuildPrompt(task, "codex"), "--roots-only") {
+		t.Fatal("ordinary wakeup lost its state lookup")
+	}
+}

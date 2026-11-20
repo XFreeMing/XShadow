@@ -287,6 +287,30 @@ func TestBoundMethodStepContextKeepsCurrentReviewEvidence(t *testing.T) {
 	if !claim().StepContext {
 		t.Fatal("step feedback lost current context")
 	}
+	task.DelegatedFromTaskID = util.MustParseUUID(id)
+	dbfx.Cleanup(t, "DELETE FROM issue_wakeup WHERE issue_id=$1", id)
+	rule := createRule(t, id, agent, pgtype.UUID{}, service.WakeupInput{Instruction: "Resume review on child completion", Kind: "event", EventTypes: []string{"task.completed"}})
+	task.OriginatorUserID = util.MustParseUUID(testUserID)
+	task.Context = []byte(`{"wakeup_id":"` + rule + `","wakeup_revision":1,"wakeup_evidence":{"facts":[{"event_type":"task.completed","payload":{"issue_id":"` + id + `","task_id":"child"}}]}}`)
+	resp, _, _, _, _, failure = testHandler.buildClaimedTaskResponse(req, &task, runtime, uuidToString(task.RuntimeID), testWorkspaceID)
+	if failure != nil || resp.ProjectWorkflow == nil || !resp.ProjectWorkflow.StepContext || resp.PriorSessionID != "" || resp.PriorWorkDir != "/tmp/review-source" {
+		t.Fatalf("completion callback lost the current step or inherited the old session: %+v %v", resp.ProjectWorkflow, failure)
+	}
+	completionContext := string(task.Context)
+	task.Context = []byte(strings.Replace(completionContext, `"issue_id":"`+id+`"`, `"issue_id":"other"`, 1))
+	if claim().StepContext {
+		t.Fatal("a different issue's completion unexpectedly discarded the session")
+	}
+	task.Context = []byte(strings.Replace(completionContext, "task.completed", "comment.created", 1))
+	if claim().StepContext {
+		t.Fatal("comment wakeup unexpectedly discarded its session")
+	}
+	task.Context = []byte(`{"wakeup_id":"timer"}`)
+	if claim().StepContext {
+		t.Fatal("timer unexpectedly discarded its session")
+	}
+	task.Context = nil
+	task.DelegatedFromTaskID = pgtype.UUID{}
 	task.RerunOfTaskID = util.MustParseUUID(id)
 	if claim().StepContext {
 		t.Fatal("manual retry lost continuity")
