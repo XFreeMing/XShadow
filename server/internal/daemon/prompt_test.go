@@ -2280,3 +2280,16 @@ func TestPromptPointsSubIssueRunsAtTheirParent(t *testing.T) {
 		}
 	}
 }
+
+func TestStepFeedbackRetainsTriggerAndReplyRouting(t *testing.T) {
+	task := Task{IssueID: "issue", TriggerCommentID: "feedback", TriggerCommentContent: "Recheck the source", ProjectWorkflow: &ProjectWorkflowData{StepContext: true, Brief: "Compare the new sample"}}
+	prompt := BuildPrompt(task, "codex")
+	for _, want := range []string{"Recheck the source", "Compare the new sample", "--parent feedback"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "--roots-only") {
+		t.Fatal("step feedback triggers a full discussion scan")
+	}
+}

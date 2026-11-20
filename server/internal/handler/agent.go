@@ -372,7 +372,8 @@ type TaskIssueStatusData struct {
 // Brief is the server-rendered text (issueworkflow.Brief); the daemon puts it
 // in the per-turn prompt, never in the cached runtime brief.
 type TaskProjectWorkflowData struct {
-	Brief string `json:"brief"`
+	StepContext bool   `json:"step_context,omitempty"`
+	Brief       string `json:"brief"`
 	// stepMoved selects the server-side leader briefing without changing the wire.
 	stepMoved bool
 }

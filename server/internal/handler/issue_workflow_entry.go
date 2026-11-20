@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -357,7 +358,7 @@ func (h *Handler) workflowHandoffBrief(ctx context.Context, issue db.Issue, hand
 	in.StatusKey = hand.step.StatusKey
 	brief := issueworkflow.Brief(in)
 	if method, err := h.resolveIssueWorkMethod(ctx, issue); err == nil && method.Method != nil {
-		brief += "\n" + methodClaimBrief(method, in.IssueIdentifier, true)
+		brief += "\n" + methodClaimBrief(method, in.IssueIdentifier, true, false)
 	}
 	return brief
 }
@@ -480,6 +481,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	}
 	ownsStep := taskRunsForAssignee(issue, task) && !stepMoved
 	methodBrief := ""
+	stepContext := false
 	if method.Method != nil {
 		issueRef := h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
 		recipient, err := h.methodRecipient(ctx, issue, method)
@@ -490,13 +492,17 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 			method.CurrentActor = recipient
 			ownsStep = task != nil && (recipient.Kind == "agent" && uuidToString(task.AgentID) == recipient.ID || recipient.Kind == "squad" && task.IsLeaderTask && uuidToString(task.SquadID) == recipient.ID)
 		}
-		methodBrief = methodClaimBrief(method, issueRef, ownsStep)
+		stepContext = usesCurrentStepContext(issue, method, task)
+		methodBrief = methodClaimBrief(method, issueRef, ownsStep, stepContext)
+		if stepContext {
+			methodBrief = fmt.Sprintf("Issue %s: %q.\n", issueRef, issue.Title) + methodBrief + stepAcceptanceIndex(issue, method)
+		}
 	}
 	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) || methodOwned {
 		if methodBrief == "" {
 			return nil
 		}
-		return &TaskProjectWorkflowData{Brief: methodBrief, stepMoved: stepMoved}
+		return &TaskProjectWorkflowData{Brief: methodBrief, StepContext: stepContext, stepMoved: stepMoved}
 	}
 	in := h.workflowBriefInput(ctx, issue, *def, project)
 	in.LegacyRuntimeRules = legacyRuntimeRules
@@ -513,21 +519,99 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	if methodBrief != "" {
 		brief += "\n" + methodBrief
 	}
-	return &TaskProjectWorkflowData{Brief: brief, stepMoved: stepMoved}
+	return &TaskProjectWorkflowData{Brief: brief, StepContext: stepContext, stepMoved: stepMoved}
+}
+
+// A stage handoff or delegated assignment gets a fresh packet. Manual
+// reruns and retries keep their source conversation and directory contract.
+func usesCurrentStepContext(issue db.Issue, run workmethod.Run, task *db.AgentTaskQueue) bool {
+	if task == nil || (run.State != "working" && run.State != "review") {
+		return false
+	}
+	if task.RerunOfTaskID.Valid || task.RetryOfTaskID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+		return false
+	}
+	var trigger struct {
+		Revision int    `json:"work_method_revision"`
+		Wakeup   string `json:"wakeup_id"`
+	}
+	if len(task.Context) > 0 {
+		if err := json.Unmarshal(task.Context, &trigger); err != nil {
+			return false
+		}
+	}
+	if trigger.Wakeup != "" || (trigger.Revision == 0 && !task.TriggerCommentID.Valid && !task.DelegatedFromTaskID.Valid) {
+		return false
+	}
+	var config struct {
+		Mode string `json:"work_method_context"`
+	}
+	return json.Unmarshal(issue.Metadata, &config) == nil && config.Mode == "current_step"
+}
+
+// The handoff carries the current contract and an index into the ledger. Large
+// case specifications, superseded rows and per-run logs stay on demand.
+func stepAcceptanceIndex(issue db.Issue, run workmethod.Run) string {
+	if run.Step < 0 || run.Step >= len(run.Method.Steps) || run.Method.Steps[run.Step].Gate == "" {
+		return ""
+	}
+	trace, err := acceptance.Decode(issue.AcceptanceCriteria)
+	if err != nil {
+		return "\nRead the current acceptance contract from the issue before acting."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nAcceptance revision %d:", trace.Revision)
+	if run.Method.Steps[run.Step].Gate == "criteria" && issue.Description.Valid {
+		fmt.Fprintf(&b, "\nStory scope: %q", issue.Description.String)
+	}
+	for _, c := range trace.Criteria {
+		fmt.Fprintf(&b, "\n%s v%d: %q", c.ID, len(c.Versions), c.Versions[len(c.Versions)-1])
+		if run.Method.Steps[run.Step].Gate == "criteria" {
+			continue
+		}
+		var ids []string
+		for _, tc := range c.Cases {
+			if tc.Retired == nil {
+				ids = append(ids, tc.ID)
+			}
+		}
+		fmt.Fprintf(&b, " Active cases: %s.", strings.Join(ids, ", "))
+		if gate := run.Method.Steps[run.Step].Gate; gate == "candidate" || gate == "delivery" {
+			for i := len(c.Implementations) - 1; i >= 0; i-- {
+				link := c.Implementations[i]
+				if link.Version == len(c.Versions) {
+					fmt.Fprintf(&b, " Candidate: %s@%s.", link.Repository, link.Commit)
+					break
+				}
+			}
+		}
+	}
+	return b.String()
 }
 
 // The method instance is read again before a write: another contributor may
 // have advanced the step since this run was claimed.
-func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string {
+func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext bool) string {
 	if run.Method == nil {
 		return ""
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Work method for %s: %q (%s), state %s.\n", issueRef, run.Method.Name, run.Method.ID, run.State)
-	fmt.Fprintf(&b, "Read the latest revision, delivered evidence and checklist: \"$MULTICA_CLI_PATH\" issue method %s\n", issueRef)
+	if stepContext {
+		fmt.Fprintf(&b, "Method revision %d. On conflict or missing history, reload with \"$MULTICA_CLI_PATH\" issue method %s.\n", run.Revision, issueRef)
+	} else {
+		fmt.Fprintf(&b, "Read the latest revision, delivered evidence and checklist: \"$MULTICA_CLI_PATH\" issue method %s\n", issueRef)
+	}
 	if n := len(run.History); n > 0 {
 		last := run.History[n-1]
 		fmt.Fprintf(&b, "Latest recorded action %q; evidence: %q.\n", last.Action, last.Evidence)
+		if stepContext {
+			anchor := last.At
+			if n > 1 {
+				anchor = run.History[n-2].At
+			}
+			fmt.Fprintf(&b, "Check new feedback with issue comment list %s --since %s --compact. Expand relevant threads only.\n", issueRef, anchor)
+		}
 	}
 	if run.State == "closed" {
 		b.WriteString("The method review has been approved.")
@@ -541,7 +625,18 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string
 	}
 	step := run.Method.Steps[run.Step]
 	fmt.Fprintf(&b, "Step %d of %d: %q. Required output: %q.\n", run.Step+1, len(run.Method.Steps), step.Name, step.Output)
-	if step.Gate != "" {
+	if stepContext && step.Gate != "" {
+		fmt.Fprintf(&b, "Acceptance gate %q. Use \"$MULTICA_CLI_PATH\" issue acceptance %s --criterion <ID> or --case <ID> for supporting details. ", step.Gate, issueRef)
+		switch step.Gate {
+		case "criteria":
+			b.WriteString("Use current criterion texts and their user-facing scope.")
+		case "coverage":
+			b.WriteString("Check current criteria and active case specifications against original samples. Retrieve retired cases only for supersession checks.")
+		case "candidate", "delivery":
+			b.WriteString("Use current criteria, active cases, candidate commit and matching run evidence. Verify the original entry points.")
+		}
+		b.WriteString(" Record evidence with --change-file.\n")
+	} else if step.Gate != "" {
 		fmt.Fprintf(&b, "The method synchronizes the board and dispatches the next actor. Read the versioned criteria, cases, candidate and impact with \"$MULTICA_CLI_PATH\" issue acceptance %s. Record actual structured evidence with --change-file; run issue acceptance --help for the JSON. Submit or review through issue method.\n", issueRef)
 	}
 	if step.Inputs != "" {

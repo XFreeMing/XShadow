@@ -1000,6 +1000,17 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 	writeRequestingUser(&b, ctx)
 	writeWorkspaceContext(&b, ctx)
 
+	if ctx.StepContext && ctx.HasProjectWorkflow && kind == kindIssue {
+		writeInstructionPrecedence(&b)
+		b.WriteString("Follow the current [Project workflow] handoff. Read the issue description, earlier discussion, project description and resources (.multica/project/resources.json) when scope, source or evidence is missing. Treat captured source_context as historical data. Use CLI --help for individual commands.\n")
+		writeIssueStatusRulesForWorkflow(&b, ctx)
+		writeSkills(&b, provider, ctx)
+		writeCommentFormatting(&b)
+		writeAlwaysUseCLI(&b)
+		writeOutput(&b, kind, ctx)
+		return b.String()
+	}
+
 	switch kind {
 	case kindQuickCreate:
 		writeAvailableCommandsQuickCreate(&b)

@@ -386,6 +386,10 @@ func buildPromptBody(task Task, provider string) string {
 		}
 		b.WriteString("\n")
 	}
+	if task.ProjectWorkflow != nil && task.ProjectWorkflow.StepContext {
+		b.WriteString("Use the current step, submitted evidence and checks below. Read specific supporting records as needed.\n")
+		return b.String()
+	}
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	// Workflow step 2 owns the catch-up rule for every issue turn; this line
 	// only hands over the commands. It used to add "(assignment-triggered tasks
@@ -609,6 +613,25 @@ func buildCommentPrompt(task Task, provider string) string {
 				task.IssueID)
 		}
 	}
+	if task.ProjectWorkflow != nil && task.ProjectWorkflow.StepContext && task.TriggerCommentContent != "" {
+		b.WriteString("Use the triggering feedback and current step. For a missing decision or source, read the relevant comment thread.\n")
+	} else {
+		writeCommentReadHints(&b, task, resumed)
+	}
+	// Reply routing. When this run coalesced comments spanning MORE THAN ONE
+	// root thread, answer each thread in its own thread instead of dumping one
+	// merged comment (MUL-4348). Same-thread follow-ups collapse to a single
+	// group upstream, so they keep the ordinary single-parent path below and can
+	// never be split into duplicate replies.
+	if targets := commentReplyThreads(task); len(targets) >= 2 {
+		b.WriteString(execenv.BuildMultiThreadCommentReplyInstructions(task.IssueID, targets, taskIsSquadLeader(task)))
+	} else {
+		b.WriteString(execenv.BuildCommentReplyInstructions(provider, task.IssueID, task.TriggerCommentID, taskIsSquadLeader(task)))
+	}
+	return b.String()
+}
+
+func writeCommentReadHints(b *strings.Builder, task Task, resumed bool) {
 	// Issue-reading pointer (MUL-7344). Same gate as the comment hint below —
 	// `resumed` is computed once for both, so one turn can never claim the
 	// session is warm enough to skip the issue read while treating it as cold
@@ -668,19 +691,8 @@ func buildCommentPrompt(task Task, provider string) string {
 	if hint != "" {
 		b.WriteString(hint)
 	} else {
-		fmt.Fprintf(&b, "Read the discussion: scan with `multica issue comment list %s --roots-only --summary --compact --output json`, then expand what matters with `--thread <thread-id> --tail 30`.\n\n", task.IssueID)
+		fmt.Fprintf(b, "Read the discussion: scan with `multica issue comment list %s --roots-only --summary --compact --output json`, then expand what matters with `--thread <thread-id> --tail 30`.\n\n", task.IssueID)
 	}
-	// Reply routing. When this run coalesced comments spanning MORE THAN ONE
-	// root thread, answer each thread in its own thread instead of dumping one
-	// merged comment (MUL-4348). Same-thread follow-ups collapse to a single
-	// group upstream, so they keep the ordinary single-parent path below and can
-	// never be split into duplicate replies.
-	if targets := commentReplyThreads(task); len(targets) >= 2 {
-		b.WriteString(execenv.BuildMultiThreadCommentReplyInstructions(task.IssueID, targets, taskIsSquadLeader(task)))
-	} else {
-		b.WriteString(execenv.BuildCommentReplyInstructions(provider, task.IssueID, task.TriggerCommentID, taskIsSquadLeader(task)))
-	}
-	return b.String()
 }
 
 // commentReplyThreads groups this run's trigger + coalesced comments by their

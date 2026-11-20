@@ -97,3 +97,18 @@ func TestBriefWithoutProjectWorkflowKeepsBuiltInStatusRules(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentStepRuntimeBriefKeepsIdentityAndDefersBackground(t *testing.T) {
+	ctx := TaskContextForEnv{IssueID: "i", AgentName: "reviewer", AgentInstructions: "Review independently", HasProjectWorkflow: true, ProjectID: "p", ProjectDescription: "long project background"}
+	full := buildMetaSkillContent("codex", ctx)
+	ctx.StepContext = true
+	brief := buildMetaSkillContent("codex", ctx)
+	for _, want := range []string{"Review independently", "Instruction Precedence", "MULTICA_CLI_PATH", "resources.json", "issue comment add"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if len(brief) >= len(full) || strings.Contains(brief, ctx.ProjectDescription) || strings.Contains(brief, "scan every thread") {
+		t.Fatal("unrelated context carried into current step")
+	}
+}

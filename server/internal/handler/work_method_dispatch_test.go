@@ -229,3 +229,66 @@ func TestAgileDurableHandoffAfterLostNotification(t *testing.T) {
 		t.Fatalf("published %d queued events for one task", queuedEvents)
 	}
 }
+
+func TestBoundMethodStepContextKeepsCurrentReviewEvidence(t *testing.T) {
+	agent := seededReadyAgentID(t)
+	custom := workmethod.Template{Name: "Scoped review " + workflowTestSuffix(), Kind: "development", Review: "Independent verdict", Steps: []workmethod.Step{{Name: "Inspect", Gate: "criteria", Output: "Findings", Checks: []string{"Check original"}, Owner: &workmethod.Actor{Kind: "member", ID: testUserID}, Reviewer: &workmethod.Actor{Kind: "agent", ID: agent}}}}
+	var saved workmethod.Template
+	testutil.Call(t, testHandler.CreateWorkMethod, newRequest("POST", "/api/work-methods?workspace_id="+testWorkspaceID, custom)).Want(201).JSON(&saved)
+	id := dbfx.Issue(t, "Current step", testutil.Cols{"status": "todo"})
+	change := func(body map[string]any) {
+		req := withURLParam(newRequest("POST", "/api/issues/"+id+"/work-method", body), "id", id)
+		testutil.Call(t, testHandler.ChangeIssueWorkMethod, req).Want(200)
+	}
+	change(map[string]any{"action": "select", "base_revision": 0, "method_id": saved.ID})
+	dbfx.Exec(t, `UPDATE issue SET acceptance_criteria=$2 WHERE id=$1`, id, `{"revision":4,"criteria":[{"id":"C1","versions":["obsolete criterion","live criterion"]}]}`)
+	change(map[string]any{"action": "advance", "base_revision": 1, "evidence": "original sample"})
+	task := methodStageTask(t, id, 2)
+	issue, err := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := func() *TaskProjectWorkflowData {
+		return testHandler.claimProjectWorkflow(context.Background(), issue, &task, false)
+	}
+	if claim().StepContext {
+		t.Fatal("unconfigured issue opted in")
+	}
+	issue.Metadata = []byte(`{"work_method_context":"current_step"}`)
+	scoped := claim()
+	if !scoped.StepContext {
+		t.Fatal(scoped)
+	}
+	for _, want := range []string{"live criterion", "original sample", "Check original", "checked_items", "rework", "Acceptance revision 4"} {
+		if !strings.Contains(scoped.Brief, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(scoped.Brief, "obsolete criterion") {
+		t.Fatal("included old version")
+	}
+	dbfx.Exec(t, `UPDATE issue SET metadata=$2 WHERE id=$1`, id, string(issue.Metadata))
+	dbfx.Exec(t, `INSERT INTO agent_task_queue(agent_id,runtime_id,issue_id,status,started_at,completed_at,session_id,work_dir)
+		VALUES ($1,$2,$3,'completed',now(),now(),'previous-review','/tmp/review-source')`, task.AgentID, task.RuntimeID, id)
+	runtime, err := testHandler.Queries.GetAgentRuntime(context.Background(), task.RuntimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := newOwnerDaemonRequest("POST", "/claim", nil)
+	resp, _, _, _, _, failure := testHandler.buildClaimedTaskResponse(req, &task, runtime, uuidToString(task.RuntimeID), testWorkspaceID)
+	if failure != nil || resp.ProjectWorkflow == nil || !resp.ProjectWorkflow.StepContext || resp.PriorSessionID != "" || resp.PriorWorkDir != "/tmp/review-source" {
+		t.Fatalf("scoped claim failed: failure=%v session=%q dir=%q", failure, resp.PriorSessionID, resp.PriorWorkDir)
+	}
+	task.Context = nil
+	if claim().StepContext {
+		t.Fatal("unrelated run lost continuity")
+	}
+	task.TriggerCommentID = util.MustParseUUID(id)
+	if !claim().StepContext {
+		t.Fatal("step feedback lost current context")
+	}
+	task.RerunOfTaskID = util.MustParseUUID(id)
+	if claim().StepContext {
+		t.Fatal("manual retry lost continuity")
+	}
+}
