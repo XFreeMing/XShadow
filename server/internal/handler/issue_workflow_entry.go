@@ -162,8 +162,7 @@ func methodOwnsHandoff(run workmethod.Run) bool {
 // Only a frozen evidence-gated method owns the board. Recommendations and
 // older snapshots keep the project's existing status behavior.
 func methodBoardStatus(run workmethod.Run) string {
-	gate := run.EvidenceGate()
-	if gate == "" || run.State == "ready" {
+	if run.EvidenceGate() == "" || run.State == "ready" {
 		return ""
 	}
 	switch run.State {
@@ -172,9 +171,6 @@ func methodBoardStatus(run workmethod.Run) string {
 	case "review":
 		return issuestatus.InReview
 	case "working":
-		if gate == "criteria" || gate == "coverage" {
-			return issuestatus.Todo
-		}
 		return issuestatus.InProgress
 	}
 	return ""
@@ -563,6 +559,9 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep bool) string
 	if !ownsStep {
 		b.WriteString("Provide findings to the current assignee. That assignee advances the method.")
 		return b.String()
+	}
+	if status := methodBoardStatus(run); status != "" {
+		fmt.Fprintf(&b, "If an external dependency prevents this step, record the dependency and the event that makes work possible. Register that wakeup on %s and confirm it is enabled with issue wakeup list. Mark the issue blocked with --no-start. On waking, verify the dependency, then restore status %s with --no-start before submitting the step.\n", issueRef, status)
 	}
 	action := "advance"
 	if run.State == "review" {

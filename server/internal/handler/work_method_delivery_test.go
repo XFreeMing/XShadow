@@ -145,6 +145,22 @@ func TestReopeningRoutedAgileReviewDispatchesOnce(t *testing.T) {
 	}
 }
 
+func TestAgileStartMovesTodoIntoProgress(t *testing.T) {
+	seedTestCatalog(t)
+	id := dbfx.Issue(t, "开始敏捷研发", testutil.Cols{"status": "todo"})
+	path := "/api/issues/" + id + "/work-method"
+	req := withURLParam(newRequest(http.MethodPost, path, map[string]any{
+		"action": "select", "method_id": "agile", "base_revision": 0,
+	}), "id", id)
+	testutil.Call(t, testHandler.ChangeIssueWorkMethod, req).Want(http.StatusOK)
+	if got, _, _ := issueStatusAndAssignee(t, id); got != "in_progress" {
+		t.Fatalf("first working step left the board at %q", got)
+	}
+	updateIssueForTest(t, id, map[string]any{"status": "blocked"}).Want(http.StatusOK)
+	updateIssueForTest(t, id, map[string]any{"status": "todo"}).Want(http.StatusConflict)
+	updateIssueForTest(t, id, map[string]any{"status": "in_progress"}).Want(http.StatusOK)
+}
+
 func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	seedTestCatalog(t)
 	agent := seededReadyAgentID(t)
@@ -200,7 +216,7 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	move("advance", 200)
 	board("in_review")
 	move("approve", 200)
-	board("todo")
+	board("in_progress")
 	move("advance", 409)
 	for _, key := range []string{"T1", "T2"} {
 		accept("case", map[string]any{"case_id": key, "text": "运行 " + key})
@@ -243,7 +259,7 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 		t.Fatalf("wanted one reviewer task per step, got %d", count)
 	}
 	accept("criterion", map[string]any{"text": "增加边界输入"})
-	board("todo")
+	board("in_progress")
 	if run.Step != 0 || run.State != "working" || run.History[len(run.History)-1].Action != "rework" || len(trace.Criteria[0].Impact().Retest) != 2 {
 		t.Fatal(run, trace)
 	}
@@ -264,8 +280,8 @@ func TestAgileChangedEvidenceDispatchesResponsibleOwnerOnce(t *testing.T) {
 		step   int
 		board  string
 	}{
-		{"criterion", map[string]any{"text": "新范围"}, 0, "todo"},
-		{"case", map[string]any{"case_id": "T2", "text": "复现异常"}, 1, "todo"},
+		{"criterion", map[string]any{"text": "新范围"}, 0, "in_progress"},
+		{"case", map[string]any{"case_id": "T2", "text": "复现异常"}, 1, "in_progress"},
 		{"implementation", map[string]any{"repository": "org/app", "branch": "dev", "commit": strings.Repeat("b", 40)}, 2, "in_progress"},
 		{"run", map[string]any{"case_id": "T1", "result": "fail", "candidate": sha, "evidence": "CI/failed"}, 2, "in_progress"},
 	} {
