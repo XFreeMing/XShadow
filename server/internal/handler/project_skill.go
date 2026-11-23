@@ -133,7 +133,7 @@ func (h *Handler) ListProjectSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, skill := range skills {
 		view.Skills = append(view.Skills, projectSkillEntry{
-			ID: uuidToString(skill.ID), Name: strings.TrimSuffix(skill.Name, projectSkillSuffix(project.ID)),
+			ID: uuidToString(skill.ID), Name: skill.Name,
 			Description: skill.Description,
 		})
 	}
@@ -275,16 +275,12 @@ func projectSkillSourceCurrent(issue db.Issue, proposal db.ProjectSkillProposal)
 		json.Unmarshal(issue.WorkMethodRun, &run) == nil && run.State == "closed" && int32(run.Revision) == proposal.MethodRevision
 }
 
-func projectSkillSuffix(projectID pgtype.UUID) string {
-	return "-p-" + uuidToString(projectID)[24:]
-}
-
 func publishProjectLesson(ctx context.Context, q *db.Queries, proposal db.ProjectSkillProposal, userID pgtype.UUID) (pgtype.UUID, pgtype.Int4, error) {
 	var lesson workmethod.ProjectLesson
 	if err := json.Unmarshal(proposal.Lesson, &lesson); err != nil {
 		return pgtype.UUID{}, pgtype.Int4{}, err
 	}
-	name := lesson.Name + projectSkillSuffix(proposal.ProjectID)
+	name := lesson.Name
 	description := sanitizeNullBytes(strings.TrimSpace(lesson.When))
 	// JSON-quoted YAML scalars preserve punctuation and cannot break frontmatter.
 	quotedDescription, _ := json.Marshal(description)

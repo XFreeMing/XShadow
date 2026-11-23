@@ -25,7 +25,7 @@ WHERE id = $1 AND workspace_id = $2 AND project_id IS NULL;
 
 -- name: GetSkillByWorkspaceAndName :one
 -- Used by skill import and runtime-local skill discovery to reuse a workspace
--- skill by name rather than violating UNIQUE(workspace_id, name).
+-- workspace skill by name. Project skills have an independent namespace.
 SELECT * FROM skill
 WHERE workspace_id = $1 AND name = $2 AND project_id IS NULL;
 

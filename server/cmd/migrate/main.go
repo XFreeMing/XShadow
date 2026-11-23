@@ -140,6 +140,7 @@ var pgBigmOperatorClass = extensionOperatorClass{
 // they are still pending: a fresh self-hosted install, which is exactly where an
 // interrupted build would otherwise leave a permanently unusable index.
 var concurrentIndexCleanups = map[string]string{
+	"682_skill_scope_name_index":                                "idx_skill_scope_name",
 	"681_project_skill_proposal_identity":                       "idx_project_skill_proposal_identity",
 	"679_skill_run_observation_task_index":                      "idx_skill_run_observation_task",
 	"678_skill_run_observation_identity_index":                  "idx_skill_run_observation_identity",
@@ -414,6 +415,7 @@ var concurrentIndexCleanups = map[string]string{
 // the retry, while a bare CREATE would stay wedged on "already exists"; both
 // cases need direction-specific cleanup before the rollback can retry safely.
 var concurrentDownIndexCleanups = map[string]string{
+	"683_retire_workspace_wide_skill_name":                  "skill_workspace_id_name_key",
 	"144_drop_agent_task_queue_chat_pending_v1":             "idx_agent_task_queue_chat_pending",
 	"171_drop_legacy_label_namespace_index":                 "issue_label_workspace_name_lower_idx",
 	"256_drop_agent_task_queue_chat_pending_v2":             "idx_agent_task_queue_chat_pending_v2",
@@ -455,6 +457,17 @@ var preRollbackHooks = func() map[string]preMigrationHook {
 	hooks := make(map[string]preMigrationHook, len(concurrentDownIndexCleanups)+len(sourceContextMigrationVersions)+1)
 	for version, index := range concurrentDownIndexCleanups {
 		hooks[version] = cleanupInvalidConcurrentIndexHook(index)
+	}
+	const skillNameScope = "683_retire_workspace_wide_skill_name"
+	hooks[skillNameScope] = func(ctx context.Context, pool *pgxpool.Pool) error {
+		var hasProjectSkills bool
+		if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM skill WHERE project_id IS NOT NULL)").Scan(&hasProjectSkills); err != nil {
+			return err
+		}
+		if hasProjectSkills {
+			return errors.New("remove project skills before reverting project skill scope")
+		}
+		return cleanupInvalidConcurrentIndexHook(concurrentDownIndexCleanups[skillNameScope])(ctx, pool)
 	}
 	// Source-context indexes are split into one-statement concurrent
 	// migrations. Register the guard on every step so a rollback from any

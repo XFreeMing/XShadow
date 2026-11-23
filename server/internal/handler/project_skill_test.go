@@ -64,7 +64,9 @@ func TestProjectSkillFromIndependentReviewToScopedRun(t *testing.T) {
 		Avoid:       "Matching just the string opens the first hit.",
 		CriterionID: "C1", CaseID: "T1",
 	}
-	submit := func(lesson workmethod.ProjectLesson) (string, int) {
+	workspaceSkill := createVersionTestSkill(t, lesson.Name, nil)
+	dbfx.InsertNoID(t, "agent_skill", testutil.Cols{"agent_id": agent, "skill_id": workspaceSkill.ID}, "skill_id = $1", workspaceSkill.ID)
+	submit := func(project string, lesson workmethod.ProjectLesson) (string, int) {
 		t.Helper()
 		id := dbfx.Issue(t, "Check citation delivery", testutil.Cols{
 			"project_id": project, "status": "in_progress", "acceptance_criteria": trace, "work_method_run": method,
@@ -105,7 +107,7 @@ func TestProjectSkillFromIndependentReviewToScopedRun(t *testing.T) {
 			"id", project, "issueId", issue, "revision", fmt.Sprint(revision))
 		testutil.Call(t, h.DecideProjectSkill, req).Want(want)
 	}
-	id, revision := submit(lesson)
+	id, revision := submit(project, lesson)
 	pending := list(testUserID, project, http.StatusOK)
 	if len(pending.Skills) != 0 || len(pending.Proposals) != 1 || pending.Proposals[0].State != "pending" || pending.Proposals[0].Candidate != commit {
 		t.Fatalf("accepted review did not yield exactly one pending skill: %+v", pending)
@@ -123,20 +125,49 @@ func TestProjectSkillFromIndependentReviewToScopedRun(t *testing.T) {
 	dbfx.Cleanup(t, "DELETE FROM skill WHERE id=$1", skillID)
 	dbfx.Cleanup(t, "DELETE FROM skill_version WHERE skill_id=$1", skillID)
 	dbfx.Cleanup(t, "DELETE FROM skill_run_observation WHERE skill_id=$1", skillID)
+	labelID := dbfx.Insert(t, "issue_label", testutil.Cols{
+		"workspace_id": testWorkspaceID, "resource_type": "skill", "name": "Scoped experience",
+		"color": "#3b82f6",
+	})
+	labelRequest := withURLParam(newRequest("POST", "/api/skills/"+skillID+"/labels", map[string]string{"label_id": labelID}), "id", skillID)
+	testutil.Call(t, h.AttachLabelToSkill, labelRequest).Want(http.StatusOK)
+	dbfx.Cleanup(t, "DELETE FROM skill_to_label WHERE skill_id=$1", skillID)
+	for user, want := range map[string]int64{testUserID: 1, outsider: 0} {
+		var labels struct{ Labels []LabelResponse }
+		testutil.Call(t, h.ListLabels, newRequestAs(user, "GET", "/api/labels?resource_type=skill", nil)).Want(http.StatusOK).JSON(&labels)
+		if !slices.ContainsFunc(labels.Labels, func(label LabelResponse) bool {
+			return label.ID == labelID && label.UsageCount == want
+		}) {
+			t.Fatal("label usage count did not follow private project visibility")
+		}
+	}
 
 	lesson.Verify += " Compare the document revision as well."
-	secondID, secondRevision := submit(lesson)
+	secondID, secondRevision := submit(project, lesson)
 	decide(testUserID, project, secondID, secondRevision, "publish", http.StatusNoContent)
 	second := list(testUserID, project, http.StatusOK)
 	if len(second.Skills) != 1 || second.Skills[0].ID != skillID || second.Proposals[0].SkillVersion == nil || *second.Proposals[0].SkillVersion != 2 {
 		t.Fatalf("same-name proposal did not advance the existing project skill: %+v", second)
 	}
+	otherID, otherRevision := submit(otherProject, lesson)
+	decide(testUserID, otherProject, otherID, otherRevision, "publish", http.StatusNoContent)
+	other := list(testUserID, otherProject, http.StatusOK)
+	if len(other.Skills) != 1 || other.Skills[0].Name != lesson.Name || other.Skills[0].ID == skillID {
+		t.Fatalf("another project did not get its own skill with the same name: %+v", other)
+	}
+	otherSkillID := other.Skills[0].ID
+	dbfx.Cleanup(t, "DELETE FROM skill WHERE id=$1", otherSkillID)
+	dbfx.Cleanup(t, "DELETE FROM skill_version WHERE skill_id=$1", otherSkillID)
+	dbfx.Cleanup(t, "DELETE FROM project_skill_proposal WHERE project_id=$1", otherProject)
 	req := withURLParam(newRequestAs(outsider, "GET", "/api/skills/"+skillID, nil), "id", skillID)
 	testutil.Call(t, h.GetSkill, req).Want(http.StatusNotFound)
 	var workspaceSkills []SkillSummaryResponse
 	testutil.Call(t, h.ListSkills, newRequest("GET", "/api/skills", nil)).Want(http.StatusOK).JSON(&workspaceSkills)
 	if slices.ContainsFunc(workspaceSkills, func(s SkillSummaryResponse) bool { return s.ID == skillID }) {
 		t.Fatal("project skill appeared in the workspace catalog")
+	}
+	if !slices.ContainsFunc(workspaceSkills, func(s SkillSummaryResponse) bool { return s.ID == workspaceSkill.ID && s.Name == lesson.Name }) {
+		t.Fatal("the workspace skill's independent name was lost")
 	}
 	for _, item := range []struct {
 		project, originator string

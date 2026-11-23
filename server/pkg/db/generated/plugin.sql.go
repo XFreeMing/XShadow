@@ -1573,7 +1573,7 @@ func (q *Queries) UpsertPluginSecret(ctx context.Context, arg UpsertPluginSecret
 const upsertPluginSkill = `-- name: UpsertPluginSkill :one
 INSERT INTO skill (workspace_id, name, description, content, config, created_by, plugin_installation_id)
 VALUES ($1, $2, $3, $4, '{}'::jsonb, $6, $5)
-ON CONFLICT (workspace_id, name) DO UPDATE SET
+ON CONFLICT (workspace_id, project_id, name) DO UPDATE SET
     description = EXCLUDED.description,
     content = EXCLUDED.content,
     updated_at = now()
@@ -1592,8 +1592,8 @@ type UpsertPluginSkillParams struct {
 
 // A plugin's skill resource, as an ordinary workspace skill.
 //
-// Upsert on (workspace_id, name) because that is the table's own uniqueness
-// rule and an upgrade re-installs the same skill. The WHERE clause is the
+// Upsert on the workspace skill's scope and name. An upgrade re-installs the
+// same skill. The WHERE clause is the
 // important half: it refuses to overwrite a skill a PERSON created, or one
 // another installation owns. A plugin claiming a name someone already used must
 // fail the install loudly, not silently replace their work.

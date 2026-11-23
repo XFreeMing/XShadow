@@ -672,7 +672,9 @@ func (h *Handler) AttachLabelToSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to attach skill label")
 		return
 	}
-	h.publish(protocol.EventLabelUpdated, uuidToString(skill.WorkspaceID), "member", requestUserID(r), map[string]any{"label": labelToResponse(label)})
+	if !skill.ProjectID.Valid {
+		h.publish(protocol.EventLabelUpdated, uuidToString(skill.WorkspaceID), "member", requestUserID(r), map[string]any{"label": labelToResponse(label)})
+	}
 	h.ListLabelsForSkill(w, r)
 }
 
@@ -691,6 +693,8 @@ func (h *Handler) DetachLabelFromSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to detach skill label")
 		return
 	}
-	h.publish(protocol.EventLabelUpdated, uuidToString(skill.WorkspaceID), "member", requestUserID(r), map[string]any{"label_id": uuidToString(labelID), "resource_type": "skill"})
+	if !skill.ProjectID.Valid {
+		h.publish(protocol.EventLabelUpdated, uuidToString(skill.WorkspaceID), "member", requestUserID(r), map[string]any{"label_id": uuidToString(labelID), "resource_type": "skill"})
+	}
 	h.ListLabelsForSkill(w, r)
 }

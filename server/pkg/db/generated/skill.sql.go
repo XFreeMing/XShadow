@@ -236,7 +236,7 @@ type GetSkillByWorkspaceAndNameParams struct {
 }
 
 // Used by skill import and runtime-local skill discovery to reuse a workspace
-// skill by name rather than violating UNIQUE(workspace_id, name).
+// workspace skill by name. Project skills have an independent namespace.
 func (q *Queries) GetSkillByWorkspaceAndName(ctx context.Context, arg GetSkillByWorkspaceAndNameParams) (Skill, error) {
 	row := q.db.QueryRow(ctx, getSkillByWorkspaceAndName, arg.WorkspaceID, arg.Name)
 	var i Skill

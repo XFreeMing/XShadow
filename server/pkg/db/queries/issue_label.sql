@@ -9,7 +9,13 @@ SELECT l.*,
                   AND hidden_issue.project_id = ANY(sqlc.narg('hidden_project_ids')::uuid[])
             )))
         WHEN 'agent' THEN (SELECT COUNT(*) FROM agent_to_label x WHERE x.label_id = l.id)
-        WHEN 'skill' THEN (SELECT COUNT(*) FROM skill_to_label x WHERE x.label_id = l.id)
+        WHEN 'skill' THEN (
+            SELECT COUNT(*) FROM skill_to_label x
+            JOIN skill s ON s.id = x.skill_id AND s.workspace_id = l.workspace_id
+            WHERE x.label_id = l.id
+              AND (s.project_id IS NULL OR sqlc.narg('hidden_project_ids')::uuid[] IS NULL
+                  OR s.project_id <> ALL(sqlc.narg('hidden_project_ids')::uuid[]))
+        )
         ELSE 0
     END::bigint AS usage_count
 FROM issue_label l

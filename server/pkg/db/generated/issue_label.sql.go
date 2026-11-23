@@ -400,7 +400,13 @@ SELECT l.id, l.workspace_id, l.name, l.color, l.created_at, l.updated_at, l.reso
                   AND hidden_issue.project_id = ANY($1::uuid[])
             )))
         WHEN 'agent' THEN (SELECT COUNT(*) FROM agent_to_label x WHERE x.label_id = l.id)
-        WHEN 'skill' THEN (SELECT COUNT(*) FROM skill_to_label x WHERE x.label_id = l.id)
+        WHEN 'skill' THEN (
+            SELECT COUNT(*) FROM skill_to_label x
+            JOIN skill s ON s.id = x.skill_id AND s.workspace_id = l.workspace_id
+            WHERE x.label_id = l.id
+              AND (s.project_id IS NULL OR $1::uuid[] IS NULL
+                  OR s.project_id <> ALL($1::uuid[]))
+        )
         ELSE 0
     END::bigint AS usage_count
 FROM issue_label l
