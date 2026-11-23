@@ -95,6 +95,34 @@ func TestSkillActivityRecordsTheDeliveredVersionAndReview(t *testing.T) {
 	if got = read(); got.Counts.Adopted != 0 || got.Counts.NotApplied != 1 {
 		t.Fatalf("a review of non-adoption counted as adoption: %+v", got.Counts)
 	}
+
+	restore := skillVersionRequest(http.MethodPost, saved.ID, "1", "/restore")
+	testutil.Call(t, h.RestoreSkillVersion, restore).Want(http.StatusOK)
+	ambiguousID := dbfx.Task(t, agentID, testutil.Cols{
+		"issue_id": issueID, "runtime_id": testRuntimeID, "status": "dispatched",
+		"dispatched_at": testutil.Raw("now()"),
+	})
+	ambiguousTask, err := h.Queries.GetAgentTask(ctx, parseUUID(ambiguousID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startSkillActivityRun(t, ambiguousTask, first, http.StatusOK)
+	foundAmbiguous := false
+	for _, run := range read().Runs {
+		if run.ID == ambiguousID {
+			foundAmbiguous = true
+			if run.ContentHash != hash1 || run.Version != nil {
+				t.Fatalf("cannot assign a revision number to reused content: %+v", run)
+			}
+		}
+	}
+	if !foundAmbiguous {
+		t.Fatal("run with reused content was not counted")
+	}
+
+	deleteIssue := withURLParam(newRequest(http.MethodDelete, "/api/issues/"+issueID, nil), "id", issueID)
+	testutil.Call(t, h.DeleteIssue, deleteIssue).Want(http.StatusNoContent)
+	assertNoSkillActivityRows(t, saved.ID)
 }
 
 func TestSkillActivityHidesPrivateProjectRunsBeforeCounting(t *testing.T) {
@@ -130,6 +158,18 @@ func TestSkillActivityHidesPrivateProjectRunsBeforeCounting(t *testing.T) {
 		if result.Counts.Available != tc.want || len(result.Runs) != tc.want || result.Versions[0].Available != tc.want {
 			t.Fatalf("visibility was not applied to all views: %+v", result)
 		}
+	}
+	deleteSkill := withURLParam(newRequest(http.MethodDelete, "/api/skills/"+saved.ID, nil), "id", saved.ID)
+	testutil.Call(t, testHandler.DeleteSkill, deleteSkill).Want(http.StatusNoContent)
+	assertNoSkillActivityRows(t, saved.ID)
+}
+
+func assertNoSkillActivityRows(t *testing.T, skillID string) {
+	t.Helper()
+	var count int
+	err := testPool.QueryRow(context.Background(), "SELECT count(*) FROM skill_run_observation WHERE skill_id = $1", skillID).Scan(&count)
+	if err != nil || count != 0 {
+		t.Fatalf("permanent deletion left %d skill activity rows: %v", count, err)
 	}
 }
 

@@ -81,12 +81,13 @@ func (q *Queries) ListSkillRunObservations(ctx context.Context, arg ListSkillRun
 const recordSkillRunAvailability = `-- name: RecordSkillRunAvailability :exec
 INSERT INTO skill_run_observation (workspace_id, skill_id, task_id, dispatched_at, content_hash, version)
 SELECT s.workspace_id, s.id, t.id, t.dispatched_at, offered.content_hash,
-       (SELECT v.version FROM skill_version v
+       (SELECT max(v.version) FROM skill_version v
          WHERE v.skill_id = s.id AND v.workspace_id = s.workspace_id
-           AND v.content_hash = offered.content_hash ORDER BY v.version DESC LIMIT 1)
+           AND v.content_hash = offered.content_hash HAVING count(*) = 1)
 FROM (SELECT unnest($1::uuid[]) AS skill_id,
              unnest($2::text[]) AS content_hash) AS offered
 JOIN skill s ON s.id = offered.skill_id AND s.workspace_id = $3
+    AND s.plugin_installation_id IS NULL
 JOIN agent_task_queue t ON t.id = $4 AND t.runtime_id = $5
 JOIN issue i ON i.id = t.issue_id AND i.workspace_id = s.workspace_id
 WHERE t.dispatched_at = $6 AND t.started_at IS NOT NULL AND t.status = 'running'

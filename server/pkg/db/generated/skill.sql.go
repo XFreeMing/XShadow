@@ -141,6 +141,9 @@ const deleteSkill = `-- name: DeleteSkill :exec
 WITH deleted_versions AS (
     DELETE FROM skill_version
     WHERE skill_version.skill_id = $1 AND skill_version.workspace_id = $2
+), deleted_observations AS (
+    DELETE FROM skill_run_observation
+    WHERE skill_run_observation.skill_id = $1 AND skill_run_observation.workspace_id = $2
 )
 DELETE FROM skill WHERE skill.id = $1 AND skill.workspace_id = $2
 `

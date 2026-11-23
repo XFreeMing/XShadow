@@ -533,6 +533,13 @@ cleared_unread AS (
 cleared_environments AS (
     DELETE FROM issue_environment WHERE issue_id IN (SELECT target.id FROM target)
 ),
+cleared_skill_observations AS (
+    DELETE FROM skill_run_observation
+    WHERE workspace_id = $2 AND task_id IN (
+        SELECT agent_task_queue.id FROM agent_task_queue
+        WHERE issue_id IN (SELECT target.id FROM target)
+    )
+),
 cleared_environment_commands AS (
     DELETE FROM issue_environment_command WHERE issue_id IN (SELECT target.id FROM target)
 ),
