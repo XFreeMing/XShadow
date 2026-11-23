@@ -195,9 +195,35 @@ func TestGoalExecutionPrivateHandoffsAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	running(resumed)
+	failed, err := testHandler.TaskService.FailTask(ctx, resumed.ID,
+		"FAILED_PRECONDITION (code 400): User location is not supported for the API use.",
+		"", "", "", "agent_error.unknown", false, "", "")
+	if err != nil || failed.FailureReason.String != "agent_error.provider_auth_or_access" {
+		t.Fatalf("expected classified provider access failure: %v", err)
+	}
+	dbfx.Exec(t, "UPDATE agent_task_queue SET completed_at=now()-interval '2 minutes' WHERE id=$1", failed.ID)
+	dbfx.Exec(t, "UPDATE issue SET updated_at=now()-interval '2 minutes' WHERE id=$1", first)
+	tick()
+	if latest := load(first, reviewer); latest.ID != failed.ID {
+		t.Fatal("the same provider was automatically retried after a terminal access failure")
+	}
+	if run := readDeliveryMethod(t, first); run.State != "review" || run.Revision != 2 {
+		t.Fatalf("provider failure changed the review stage: %+v", run)
+	}
+	replacementRuntime := dbfx.Runtime(t, "Replacement review runtime")
+	dbfx.Exec(t, "UPDATE agent SET runtime_id=$2 WHERE id=$1", reviewer, replacementRuntime)
+	tick()
+	recovered := load(first, reviewer)
+	if recovered.ID == failed.ID || recovered.RuntimeID != util.MustParseUUID(replacementRuntime) {
+		t.Fatal("a new runtime did not resume the same independent reviewer")
+	}
+	if err := wakeup.CheckClaim(ctx, recovered); err != nil {
+		t.Fatalf("resumed review lost its scoped authority: %v", err)
+	}
+	running(recovered)
 	postMethod(first, implementation, "approve", "", 2, 403)
-	postMethod(first, resumed, "approve", "", 2, 200)
-	finish(resumed)
+	postMethod(first, recovered, "approve", "", 2, 200)
+	finish(recovered)
 	tick()
 	successor := load(next, manager)
 	if err := wakeup.CheckClaim(ctx, successor); err != nil {

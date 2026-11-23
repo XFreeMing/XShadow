@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -216,12 +217,36 @@ func CheckGoalExecutionTask(ctx context.Context, q *db.Queries, issue db.Issue, 
 	return execution, nil
 }
 
+// Older servers may have queued a generic recovery for a formal goal step.
+func rejectLegacyGoalRecovery(ctx context.Context, q *db.Queries, task db.AgentTaskQueue) error {
+	if task.TriggerEvidenceKind.String != string(attribution.EvidenceDelegatedFailure) || !task.TriggerEvidenceRefID.Valid {
+		return nil
+	}
+	failed, err := q.GetAgentTask(ctx, task.TriggerEvidenceRefID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ReadGoalExecutionTask(failed).ID.Valid {
+		return ErrWakeupForbidden
+	}
+	return nil
+}
+
 // Recheck between claim preparation and daemon start. A queued run carries no
 // lasting right to launch after approval is revoked.
 func verifyGoalExecutionStart(ctx context.Context, q *db.Queries, taskID pgtype.UUID) error {
 	task, err := q.GetAgentTask(ctx, taskID)
-	if err != nil || task.Status == "running" || !ReadGoalExecutionTask(task).ID.Valid {
+	if err != nil || task.Status == "running" {
 		return err
+	}
+	if err := rejectLegacyGoalRecovery(ctx, q, task); err != nil {
+		return err
+	}
+	if !ReadGoalExecutionTask(task).ID.Valid {
+		return nil
 	}
 	issue, err := q.GetIssue(ctx, task.IssueID)
 	if err != nil {

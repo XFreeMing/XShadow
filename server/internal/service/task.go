@@ -6668,6 +6668,11 @@ func delegatedFailureRecoveryContent(failed, source db.AgentTaskQueue) string {
 // Lifecycle is checked only at dispatch: even an unresolved or paused status
 // must leave a durable signal that can be replayed when it becomes executable.
 func loadDelegatedFailureRecoveryTarget(ctx context.Context, q *db.Queries, failed db.AgentTaskQueue) (*delegatedFailureRecoveryTarget, error) {
+	// A frozen goal step has its own recovery route. It cannot delegate the
+	// decision back to the preceding step, whose authority ended at handoff.
+	if ReadGoalExecutionTask(failed).ID.Valid {
+		return nil, nil
+	}
 	if failed.Status != "failed" || !failed.DelegatedFromTaskID.Valid || failed.AutopilotRunID.Valid ||
 		(failed.TriggerEvidenceKind.Valid && failed.TriggerEvidenceKind.String == string(attribution.EvidenceDelegatedFailure)) {
 		return nil, nil
@@ -7175,6 +7180,14 @@ func (s *TaskService) dispatchDelegatedFailureRecoveryComment(ctx context.Contex
 	failed, err := s.Queries.GetAgentTask(ctx, comment.SourceTaskID)
 	if err != nil {
 		return delegatedFailureRecoveryCovered, fmt.Errorf("load failed recovery source: %w", err)
+	}
+	if ReadGoalExecutionTask(failed).ID.Valid {
+		if failed.IssueID != comment.IssueID {
+			return delegatedFailureRecoveryCovered, fmt.Errorf("goal recovery comment scope mismatch")
+		}
+		// Upgrade an existing outbox entry without erasing incident history.
+		_, err := s.Queries.SettleDelegatedFailureRecoveryComment(ctx, comment.ID)
+		return delegatedFailureRecoveryCovered, err
 	}
 	target, err := loadDelegatedFailureRecoveryTarget(ctx, s.Queries, failed)
 	if err != nil || target == nil {

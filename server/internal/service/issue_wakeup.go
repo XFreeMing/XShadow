@@ -1476,6 +1476,9 @@ func (s *IssueWakeupService) Disable(ctx context.Context, issueID, id, member pg
 // CheckClaim revalidates stored human authority after an offline wait. The
 // enqueue-time MCP overlay does not grant permission to execute forever.
 func (s *IssueWakeupService) CheckClaim(ctx context.Context, task db.AgentTaskQueue) error {
+	if err := rejectLegacyGoalRecovery(ctx, s.Tasks.Queries, task); err != nil {
+		return err
+	}
 	if ReadGoalExecutionTask(task).ID.Valid {
 		issue, err := s.Tasks.Queries.GetIssue(ctx, task.IssueID)
 		if err != nil {

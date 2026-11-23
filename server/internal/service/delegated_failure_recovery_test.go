@@ -1336,3 +1336,61 @@ func TestPendingDelegatedFailureSweepSkipsTriageSourceIssue(t *testing.T) {
 		t.Fatalf("recovery tasks after accept = %d, want 1", n)
 	}
 }
+
+func TestGoalExecutionRetiresLegacyDelegatedFailureRecovery(t *testing.T) {
+	f, svc := seedDelegatedFailureFixture(t)
+	ctx := context.Background()
+	stamp := func(taskID pgtype.UUID) {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, `UPDATE agent_task_queue SET issue_id=$2, context=jsonb_build_object(
+			'goal_execution_id',gen_random_uuid(),'work_method_revision',2) WHERE id=$1`, taskID, f.issueID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	newTask := f.insertWorkerTask(t, "running", "comment", 1, 2)
+	stamp(newTask)
+	if _, err := svc.FailTask(ctx, newTask, "reviewer exited", "", "", "", "agent_error.process_failure", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE type='progress_update' AND source_task_id=$1`, newTask).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("goal failure created %d legacy recovery comments: %v", count, err)
+	}
+	if n := f.recoveryTasks(t, newTask); n != 0 {
+		t.Fatalf("goal failure dispatched %d legacy coordinators", n)
+	}
+
+	legacy := f.insertWorkerTask(t, "failed", "comment", 1, 2)
+	target, created, err := svc.ensureDelegatedFailureRecoveryComment(ctx, legacy)
+	if err != nil || target == nil || !created {
+		t.Fatalf("seed pre-upgrade recovery: %v", err)
+	}
+	stamp(legacy)
+	sweepDelegatedFailureRecoveries(t, svc)
+	var settled bool
+	if err := f.pool.QueryRow(ctx, `SELECT recovery_settled_at IS NOT NULL FROM comment WHERE id=$1`, target.comment.ID).Scan(&settled); err != nil || !settled {
+		t.Fatalf("legacy recovery receipt was not settled in place: %v", err)
+	}
+	if n := f.recoveryTasks(t, legacy); n != 0 {
+		t.Fatalf("legacy recovery replayed %d times after upgrade", n)
+	}
+
+	// A runner queued or prepared by the previous release is checked at the
+	// claim and again at start, where the worker process is authorized.
+	queued := f.insertWorkerTask(t, "dispatched", "comment", 1, 2)
+	if _, err := f.pool.Exec(ctx, `UPDATE agent_task_queue SET trigger_evidence_kind='delegated_failure',
+		trigger_evidence_ref_id=$2 WHERE id=$1`, queued, legacy); err != nil {
+		t.Fatal(err)
+	}
+	row, err := svc.Queries.GetAgentTask(ctx, queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&IssueWakeupService{Tasks: svc}).CheckClaim(ctx, row); !errors.Is(err, ErrWakeupForbidden) {
+		t.Fatalf("legacy recovery passed the claim guard: %v", err)
+	}
+	if _, err := svc.StartTask(ctx, queued); !errors.Is(err, ErrWakeupForbidden) {
+		t.Fatalf("prepared legacy recovery passed the spawn guard: %v", err)
+	}
+}

@@ -174,6 +174,7 @@ func Classify(rawError string) Reason {
 			"subscription access",
 			"does not have access",
 			"you may not have access",
+			providerLocationUnsupportedPhrase,
 		):
 		return ReasonAgentProviderAuthOrAccess
 
@@ -371,6 +372,8 @@ func Classify(rawError string) Reason {
 // ProviderUnconfigured below. Keep them together; a second literal copy is how
 // the two drift apart.
 const providerUnconfiguredPhrase = "no llm provider configured"
+
+const providerLocationUnsupportedPhrase = "user location is not supported for the api use"
 
 // ProviderUnconfigured reports whether an agent error is the runtime refusing
 // to start because it resolved no provider whatsoever. Callers use it to
@@ -698,6 +701,9 @@ func NormalizeDaemonReason(reason, rawError string) Reason {
 	// flaky provider. Upgrading here makes the retry work the moment the server
 	// deploys, without waiting on the daemon fleet.
 	lowerError := strings.ToLower(strings.TrimSpace(rawError))
+	if strings.Contains(lowerError, providerLocationUnsupportedPhrase) {
+		return ReasonAgentProviderAuthOrAccess
+	}
 	// Normalize before retry eligibility is evaluated so installed daemons
 	// receive the same bounded, resume-safe recovery as current ones. Retain
 	// Classify's precedence if a more specific provider failure is present.

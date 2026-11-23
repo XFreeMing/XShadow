@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
@@ -169,15 +170,41 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	if dependencyChange != "" {
 		gap += "/" + dependencyChange
 	}
+	target, err := continuationOwner(ctx, q, issue, method)
+	if err != nil {
+		return err
+	}
+	var recoveryRuntime pgtype.UUID
+	if method.GoalExecution {
+		if !target.Agent.ID.Valid {
+			return nil
+		}
+		recoveryRuntime = target.Agent.RuntimeID
+		// An unavailable provider must not be retried through the same runtime.
+		// A different runtime or a new explicit grant starts a fresh attempt
+		// for the same frozen role, preserving the independent reviewer.
+		var status string
+		var reason, detail pgtype.Text
+		err := tx.QueryRow(ctx, `
+SELECT status, failure_reason, error FROM agent_task_queue
+WHERE issue_id=$1 AND agent_id=$2 AND runtime_id=$3
+  AND context->>'goal_execution_id'=$4 AND context->>'work_method_revision'=$5
+ORDER BY created_at DESC, id DESC LIMIT 1`,
+			id, target.Agent.ID, recoveryRuntime, util.UUIDToString(execution.ID), fmt.Sprint(method.Revision),
+		).Scan(&status, &reason, &detail)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if status == "failed" && taskfailure.NormalizeDaemonReason(reason.String, detail.String) == taskfailure.ReasonAgentProviderAuthOrAccess {
+			return nil
+		}
+	}
 	var attempted, waitingForRecheck bool
 	if err = tx.QueryRow(ctx, `SELECT count(*)>0,coalesce(max(coalesce(completed_at,created_at))
  FILTER (WHERE context->>'continuation_role'='coordinator') > now()-interval '24 hours', false)
  OR ($3 AND coalesce(bool_or(status='completed' AND context->>'continuation_role'='coordinator'),false))
- FROM agent_task_queue WHERE issue_id=$1 AND context->>'continuation_gap'=$2`, id, gap, dependencyChange != "").Scan(&attempted, &waitingForRecheck); err != nil || waitingForRecheck {
-		return err
-	}
-	target, err := continuationOwner(ctx, q, issue, method)
-	if err != nil {
+ FROM agent_task_queue WHERE issue_id=$1 AND context->>'continuation_gap'=$2
+ AND ($4::uuid IS NULL OR runtime_id=$4)`, id, gap, dependencyChange != "", recoveryRuntime).Scan(&attempted, &waitingForRecheck); err != nil || waitingForRecheck {
 		return err
 	}
 	coord := attempted || !target.Agent.ID.Valid || issue.Status == issuestatus.Blocked || isBacklog || startGoal || latestStatus == "cancelled"
@@ -186,7 +213,7 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		invoker = execution.By
 		if method.GoalExecution {
 			// Only the frozen current actor may resume a granted step.
-			if !target.Agent.ID.Valid || attempted {
+			if attempted {
 				return nil
 			}
 			coord = false
@@ -203,6 +230,9 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	}
 	if goalGate.ready {
 		note = goalGate.note + "\n" + note
+	}
+	if method.GoalExecution {
+		note = "在已授权的原事项接续当前工作方法步骤。先读取本步骤的产物、标准和已有证据。仅提交本步骤的结果或独立评审，平台按正式工作方法派送下一位。"
 	}
 	if startGoal {
 		note = fmt.Sprintf("目标已授权启动本卡的正式工作方法。用 \"$MULTICA_CLI_PATH\" issue method <本事项编号> 读取当前步骤，再用同一命令加 --change-stdin 提交 action=start、method_id=%q、当前 base_revision。平台将自动交给方法指定角色。", execution.Progress.MethodID)
