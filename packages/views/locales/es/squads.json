@@ -122,6 +122,8 @@
     "instructions": "Instrucciones",
     "edit": "Editar",
     "cancel": "Cancelar",
+    "discussion": "Comentar",
+    "open_discussion": "Comentar en {{identifier}}",
     "recent_work": "Trabajo reciente",
     "recent_work_empty": "Aún no se han asignado tareas a este squad.",
     "member_menu": "Acciones de {{name}}",

@@ -79,6 +79,8 @@
     "instructions": "指引",
     "edit": "编辑",
     "cancel": "取消",
+    "discussion": "讨论",
+    "open_discussion": "讨论 {{identifier}}",
     "recent_work": "近期工作",
     "recent_work_empty": "还没有分配给这个小队的任务。",
     "member_menu": "{{name}} 的操作",

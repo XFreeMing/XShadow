@@ -35,6 +35,7 @@ import {
   Link2,
   ListTodo,
   Loader2,
+  MessageSquare,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -90,6 +91,8 @@ import { ContentEditor } from "../../editor/content-editor";
 import { TitleEditor } from "../../editor/title-editor";
 import { ReadonlyContent } from "../../editor/readonly-content";
 import { StatusIcon } from "../../issues/components/status-icon";
+import { IssuePeekHost } from "../../issues/components/issue-peek";
+import { useIssuePeekActions } from "../../issues/surface/peek-context";
 import { useStatusLabel } from "../../issues/utils/status-label";
 import {
   PickerItem,
@@ -103,6 +106,14 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 const RECENT_WORK_LIMIT = 5;
 
 export function SquadDetailPage() {
+  return (
+    <IssuePeekHost>
+      <SquadDetail />
+    </IssuePeekHost>
+  );
+}
+
+function SquadDetail() {
   const { t } = useT("squads");
   const { t: tLayout } = useT("layout");
   const { t: tCommon } = useT("common");
@@ -142,13 +153,20 @@ export function SquadDetailPage() {
 
   const { data: recentWork, isPending: recentWorkPending } = useQuery({
     queryKey: [...workspaceKeys.squads(wsId), squadId, "recent-issues"],
-    queryFn: () =>
-      api.listIssues({
-        assignee_filters: [{ type: "squad", id: squadId }],
+    queryFn: async () => {
+      const window = {
         sort_by: "updated_at",
         sort_direction: "desc",
         limit: RECENT_WORK_LIMIT,
-      }),
+      } satisfies Parameters<typeof api.listIssues>[0];
+      const [assigned, linked] = await Promise.all([
+        api.listIssues({ ...window, assignee_filters: [{ type: "squad", id: squadId }] }),
+        api.listIssues({ ...window, metadata: { agile_squad_id: squadId } }),
+      ]);
+      return [...new Map([...assigned.issues, ...linked.issues].map((issue) => [issue.id, issue])).values()]
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .slice(0, RECENT_WORK_LIMIT);
+    },
     enabled: !!workspace?.id && !!squadId,
   });
 
@@ -462,7 +480,7 @@ export function SquadDetailPage() {
         />
 
         <SquadRecentWorkSection
-          issues={recentWork?.issues}
+          issues={recentWork}
           loading={recentWorkPending}
         />
       </div>
@@ -870,6 +888,7 @@ function SquadRecentWorkSection({
   const timeAgo = useTimeAgo();
   const wsId = useWorkspaceId();
   const p = useWorkspacePaths();
+  const peek = useIssuePeekActions();
   const { categoryOf, colorOf, iconOf } = useIssueStatuses(wsId);
   const statusLabel = useStatusLabel(wsId);
 
@@ -880,24 +899,32 @@ function SquadRecentWorkSection({
       ) : issues && issues.length > 0 ? (
         <ObjectSectionCard>
           {issues.map((issue) => (
-            <AppLink
-              key={issue.id}
-              href={p.issueDetail(issue.id)}
-              className="flex h-10 items-center gap-3 px-3 text-body transition-colors hover:bg-accent/50"
-            >
-              <StatusIcon
-                status={issue.status}
-                category={categoryOf(issue.status)}
-                color={colorOf(issue.status)}
-                icon={iconOf(issue.status)}
-                className="size-3.5"
-              />
-              <span className="shrink-0 font-mono text-caption text-muted-foreground">{issue.identifier}</span>
-              <span className="min-w-0 flex-1 truncate">{issue.title}</span>
-              <span className="shrink-0 text-caption text-muted-foreground">
-                {statusLabel(issue.status)} · {timeAgo(issue.updated_at)}
-              </span>
-            </AppLink>
+            <div key={issue.id} className="flex items-center gap-2 pr-2">
+              <AppLink href={p.issueDetail(issue.id)} className="flex h-10 min-w-0 flex-1 items-center gap-3 px-3 text-body transition-colors hover:bg-accent/50">
+                <StatusIcon
+                  status={issue.status}
+                  category={categoryOf(issue.status)}
+                  color={colorOf(issue.status)}
+                  icon={iconOf(issue.status)}
+                  className="size-3.5"
+                />
+                <span className="shrink-0 font-mono text-caption text-muted-foreground">{issue.identifier}</span>
+                <span className="min-w-0 flex-1 truncate">{issue.title}</span>
+                <span className="shrink-0 text-caption text-muted-foreground">
+                  {statusLabel(issue.status)} · {timeAgo(issue.updated_at)}
+                </span>
+              </AppLink>
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label={t(($) => $.detail.open_discussion, { identifier: issue.identifier })}
+                onClick={() => peek?.open(issue.id)}
+                size="xs"
+              >
+                <MessageSquare />
+                {t(($) => $.detail.discussion)}
+              </Button>
+            </div>
           ))}
         </ObjectSectionCard>
       ) : (

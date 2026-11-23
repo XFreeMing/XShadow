@@ -79,6 +79,8 @@
     "instructions": "Instructions",
     "edit": "Edit",
     "cancel": "Cancel",
+    "discussion": "Discuss",
+    "open_discussion": "Discuss {{identifier}}",
     "recent_work": "Recent work",
     "recent_work_empty": "No issues have been assigned to this squad yet.",
     "member_menu": "Actions for {{name}}",

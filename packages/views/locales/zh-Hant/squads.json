@@ -79,6 +79,8 @@
     "instructions": "指引",
     "edit": "編輯",
     "cancel": "取消",
+    "discussion": "討論",
+    "open_discussion": "討論 {{identifier}}",
     "recent_work": "近期工作",
     "recent_work_empty": "還沒有指派給這個小隊的任務。",
     "member_menu": "{{name}} 的操作",

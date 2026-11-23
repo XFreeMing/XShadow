@@ -79,6 +79,8 @@
     "instructions": "지침",
     "edit": "편집",
     "cancel": "취소",
+    "discussion": "토론",
+    "open_discussion": "{{identifier}} 토론",
     "recent_work": "최근 작업",
     "recent_work_empty": "아직 이 스쿼드에 할당된 태스크가 없습니다.",
     "member_menu": "{{name}} 작업",

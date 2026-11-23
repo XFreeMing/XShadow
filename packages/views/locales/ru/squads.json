@@ -77,6 +77,8 @@
     "instructions": "Инструкции",
     "edit": "Изменить",
     "cancel": "Отмена",
+    "discussion": "Обсудить",
+    "open_discussion": "Обсудить {{identifier}}",
     "recent_work": "Недавняя работа",
     "recent_work_empty": "Этому отряду ещё не назначали задач.",
     "member_menu": "Действия для {{name}}",

@@ -65,6 +65,9 @@ vi.mock("../../issues/utils/status-label", () => ({
   useStatusLabel: () => (status: string) => (status === "in_progress" ? "In Progress" : status),
 }));
 vi.mock("../../issues/components/status-icon", () => ({ StatusIcon: () => null }));
+vi.mock("../../issues/components/issue-detail", () => ({
+  IssueDetail: ({ issueId }: { issueId: string }) => <div>Issue discussion for {issueId}</div>,
+}));
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
 vi.mock("../../common/avatar-upload-control", () => ({
   AvatarUploadControl: () => <span data-testid="avatar-upload" />,
@@ -161,7 +164,7 @@ function seed(squad: Squad | undefined = SQUAD, extra: Record<string, QueryResul
     "squads/sq-1": { data: squad },
     "squads/sq-1/members": { data: MEMBERS },
     "member-status": { data: { members: STATUSES } },
-    "squads/sq-1/recent-issues": { data: { issues: [ISSUE], total: 1 } },
+    "squads/sq-1/recent-issues": { data: [ISSUE] },
     agents: {
       data: [
         { id: "agent-lead", name: "Lambda", archived_at: null },
@@ -211,6 +214,18 @@ beforeEach(() => {
 });
 
 describe("SquadDetailPage", () => {
+  it("opens the original issue discussion inside the squad, including after handoff", async () => {
+    seed(SQUAD, {
+      "squads/sq-1/recent-issues": { data: [{ ...ISSUE, status: "in_review", assignee_type: "agent" }] },
+    });
+    const { push } = renderPage();
+    await userEvent.click(screen.getByRole("button", { name: `Discuss ${ISSUE.identifier}` }));
+    const preview = await screen.findByRole("complementary", { name: "Issue preview" });
+    expect(within(preview).getByText(`Issue discussion for ${ISSUE.id}`)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Strike Team", level: 1 })).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("puts the squads list in the breadcrumb and the squad in the leaf", () => {
     renderPage();
     const header = screen.getByRole("banner");
