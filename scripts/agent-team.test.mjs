@@ -337,7 +337,7 @@ test("a truncated wakeup read leaves continuation unknown instead of calling the
 });
 
 test("portable template contains the current roster without machine identities or credentials", () => {
-  assert.equal(template.agents.length, 23);
+  assert.equal(template.agents.length, 22);
   assert.equal(template.skills.length, 21);
   assert.equal(template.squads.length, 5);
   const serialized = JSON.stringify(template);
@@ -371,12 +371,22 @@ test("research, frontend and management roles use their assigned runtimes and mo
     assert.equal(agent.model, "kimi-code/k3.1-pro");
     assert.equal(agent.thinking_level, "high");
   }
-  for (const key of ["research", "engineering", "python-engineer", "acceptance-automation"]) {
+  for (const key of ["research", "engineering", "acceptance-automation"]) {
     const agent = template.agents.find((a) => a.key === key);
     assert.equal(agent.provider, "antigravity");
     assert.equal(agent.model, "gemini-4-neon-high");
     assert.equal(agent.thinking_level, "");
   }
+  const integrator = template.agents.find((a) => a.key === "toolsmith");
+  assert.equal(integrator.name, "Python 与工具集成工程师");
+  assert.equal(integrator.provider, "claude");
+  assert.ok(integrator.skills.includes("tech-python"));
+  assert.ok(integrator.skills.includes("tech-cli-mcp"));
+  assert.ok(!template.agents.some((a) => a.key === "python-engineer"));
+  assert.deepEqual(
+    template.squads.find((s) => s.key === "engineering").members.filter((m) => m.agent === integrator.key),
+    [{ agent: integrator.key, role: integrator.name }],
+  );
   assert.equal(template.runtime_limits.grok, 12);
   assert.equal(template.runtime_limits.codex, 5);
 });
@@ -437,7 +447,7 @@ test("cross-squad story roles initialize and read back in delivery and their pro
 test("new destination gets fresh references, prompts, skills and squad roles; rerun is a no-op", async () => {
   const f = fixture();
   const ids = await initializeTeam(f.api, template, options);
-  assert.equal(f.state.agents.length, 23);
+  assert.equal(f.state.agents.length, template.agents.length);
   assert.equal(f.state.skills.length, template.skills.length);
   assert.equal(f.state.squads.length, 5);
   for (const s of f.state.squads) {
@@ -493,7 +503,7 @@ test("retry after a partial creation reuses completed objects", async () => {
   await assert.rejects(initializeTeam(api, template, options), /interrupted/);
   assert.equal(f.state.agents.length, 2);
   await initializeTeam(api, template, options);
-  assert.equal(f.state.agents.length, 23);
+  assert.equal(f.state.agents.length, template.agents.length);
   assert.equal(f.state.skills.length, template.skills.length);
 });
 
@@ -542,7 +552,7 @@ test("HTTP profile execution uses the selected account/workspace without an agen
   writeFileSync(join(dir, "fixture/config.json"), JSON.stringify(config));
   const args = ["init", "--profile", "fixture", "--profiles-dir", dir, ...f.state.runtimes.flatMap((r) => ["--runtime", `${r.provider}=${r.id}`])];
   await main(args, { MULTICA_TOKEN: "wrong-token", MULTICA_SERVER_URL: "https://wrong.invalid" });
-  assert.equal(f.state.agents.length, 23);
+  assert.equal(f.state.agents.length, template.agents.length);
   assert.throws(() => apiClient({ ...config, token: "" }), /Profile needs/);
 });
 
@@ -606,7 +616,7 @@ test("offline context never discovers a profile, connects, starts services or pr
     root: "/missing", client() { throw new Error("must not connect"); }, discoverProfile() { throw new Error("must not discover"); },
   });
   assert.equal(report.live.status, "offline");
-  assert.equal(report.template.agents.length, 23);
+  assert.equal(report.template.agents.length, template.agents.length);
   assert.match(formatContext(report), /仅仓库模板；实时状态未核验/);
   assert.doesNotMatch(formatContext(report), /已读取目标工作区实时配置/);
 });
@@ -632,7 +642,7 @@ test("local profile selection is explicit, overrideable and unavailable state st
   assert.doesNotMatch(JSON.stringify(local), /hidden-token/);
   const down = await buildContext(template, { profilesDir: dir }, { ...deps, client() { return async () => { throw new Error("service unavailable"); }; } });
   assert.equal(down.live.status, "unavailable");
-  assert.equal(down.template.agents.length, 23);
+  assert.equal(down.template.agents.length, template.agents.length);
   assert.match(formatContext(down), /无法比较/);
   const missing = await buildContext(template, { profile: "missing", profilesDir: dir }, deps);
   assert.equal(missing.live.status, "unavailable");
