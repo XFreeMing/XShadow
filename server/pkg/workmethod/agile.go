@@ -121,3 +121,23 @@ func (r Run) EvidenceGate() string {
 	}
 	return r.Method.Steps[r.Step].Gate
 }
+
+const Delegate = "delegate"
+
+func (r Run) CanDelegateCandidate() bool {
+	return r.GoalExecution && r.State == "working" && r.EvidenceGate() == "candidate" &&
+		r.CurrentActor != nil && r.CurrentActor.Kind == "squad"
+}
+
+// SlotRevision is stable across guidance adoption in the same working step.
+func (r Run) SlotRevision() int {
+	revision := r.Revision
+	for i := len(r.History) - 1; i >= 0 && revision > 1; i-- {
+		event := r.History[i]
+		if event.Action != AdoptRevision || event.Step != r.Step {
+			break
+		}
+		revision--
+	}
+	return revision
+}

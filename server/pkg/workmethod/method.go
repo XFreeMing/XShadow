@@ -64,13 +64,14 @@ type Event struct {
 }
 
 type Change struct {
-	MethodRevision *int   `json:"method_revision,omitempty"`
-	CheckedItems   []int  `json:"checked_items,omitempty"`
-	Action         string `json:"action"`
-	BaseRevision   *int   `json:"base_revision"`
-	MethodID       string `json:"method_id,omitempty"`
-	Evidence       string `json:"evidence,omitempty"`
-	TargetStep     *int   `json:"target_step,omitempty"`
+	MethodRevision  *int   `json:"method_revision,omitempty"`
+	CheckedItems    []int  `json:"checked_items,omitempty"`
+	Action          string `json:"action"`
+	DelegateAgentID string `json:"delegate_agent_id,omitempty"`
+	BaseRevision    *int   `json:"base_revision"`
+	MethodID        string `json:"method_id,omitempty"`
+	Evidence        string `json:"evidence,omitempty"`
+	TargetStep      *int   `json:"target_step,omitempty"`
 }
 
 var (

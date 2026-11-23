@@ -2698,6 +2698,14 @@ SELECT * FROM agent_task_queue
 WHERE issue_id = $1
 ORDER BY created_at DESC;
 
+-- name: GetGoalCandidateWorker :one
+SELECT * FROM agent_task_queue
+WHERE issue_id = $1 AND squad_id = $2 AND NOT is_leader_task
+  AND context->>'goal_execution_id' = sqlc.arg(execution_id)::text
+  AND context->>'work_method_revision' = sqlc.arg(slot_revision)::text
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
 -- name: ListTasksByIssueSubtree :many
 -- UNION deduplicates IDs, so even a corrupt parent cycle terminates.
 -- Constrain every recursive step to the authorized root's workspace.

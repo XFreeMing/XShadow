@@ -207,7 +207,17 @@ func CheckGoalExecutionTask(ctx context.Context, q *db.Queries, issue db.Issue, 
 		if err != nil {
 			return GoalExecution{}, err
 		}
-		if recipient.Agent.ID != task.AgentID || recipient.SquadID != task.SquadID {
+		if recipient.SquadID != task.SquadID {
+			return GoalExecution{}, ErrWakeupForbidden
+		}
+		if task.SquadID.Valid && !task.IsLeaderTask {
+			if !run.CanDelegateCandidate() || task.AgentID == recipient.Agent.ID {
+				return GoalExecution{}, ErrWakeupForbidden
+			}
+			if err := checkGoalCandidateWorker(ctx, q, task.SquadID, task.AgentID); err != nil {
+				return GoalExecution{}, err
+			}
+		} else if recipient.Agent.ID != task.AgentID {
 			return GoalExecution{}, ErrWakeupForbidden
 		}
 	}

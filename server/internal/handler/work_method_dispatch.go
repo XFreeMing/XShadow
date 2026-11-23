@@ -36,7 +36,8 @@ func (h *Handler) methodRecipient(ctx context.Context, issue db.Issue, run workm
 	switch {
 	case run.State == "review":
 		recipient = step.Reviewer
-	case step.Owner != nil && len(run.History) > 0 && run.History[len(run.History)-1].Action == "rework":
+	case step.Owner != nil && !(run.GoalExecution && step.Gate == "candidate" && step.Owner.Kind == "squad") &&
+		len(run.History) > 0 && run.History[len(run.History)-1].Action == "rework":
 		for i := len(run.History) - 2; i >= 0; i-- {
 			e := run.History[i]
 			if e.Action == "advance" && e.Step == run.Step {
@@ -135,6 +136,10 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "goal execution requires its current authenticated run")
 		return db.Issue{}, false
 	}
+	if scoped && source.SquadID.Valid && !source.IsLeaderTask {
+		writeError(w, http.StatusForbidden, "only the squad leader can transition the candidate step")
+		return db.Issue{}, false
+	}
 	if run.GoalExecution && !scoped && actorKind != "member" {
 		writeError(w, http.StatusForbidden, "goal execution requires its current authenticated run")
 		return db.Issue{}, false
@@ -222,6 +227,12 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 				(event.Actor == "agent/"+uuidToString(agentID) || event.Actor == "member/"+uuidToString(id))) {
 				writeError(w, http.StatusConflict, "此步骤需要不同于提交人的独立审核人")
 				return db.Issue{}, false
+			}
+			if event.Action == "advance" && len(issue.WorkMethodRun) > 0 {
+				if err := checkGoalCandidateReview(ctx, q, issue, execution.ID, agentID); err != nil {
+					writeError(w, http.StatusConflict, err.Error())
+					return db.Issue{}, false
+				}
 			}
 		}
 		if err == nil && agentID.Valid {

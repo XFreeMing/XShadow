@@ -168,6 +168,14 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "目标授权仅用于本事项的当前工作方法步骤")
 		return
 	}
+	if change.Action == workmethod.Delegate {
+		h.delegateGoalCandidate(w, r, issue, task, change)
+		return
+	}
+	if change.DelegateAgentID != "" {
+		writeError(w, http.StatusBadRequest, "delegate_agent_id is only valid for candidate delegation")
+		return
+	}
 	if change.Action == workmethod.AdoptRevision {
 		h.adoptIssueMethod(w, r, issue, userID, change)
 		return

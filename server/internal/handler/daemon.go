@@ -40,6 +40,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/skillbundle"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 // claimPollHintMinDelay bounds a future mismatch between the hint query and
@@ -3244,6 +3245,12 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 						issue.AssigneeType.String == "squad" &&
 						uuidToString(issue.AssigneeID) == uuidToString(squad.ID)
 					briefing := buildSquadLeaderBriefing(r.Context(), h.Queries, squad, ownsIssueStatus, leaderWorkflow, requestHasClientCapability(r, protocol.DaemonCapabilityCLICommentSteerV1))
+					if binding := service.ReadGoalExecutionTask(*task); binding.ID.Valid && binding.Revision > 0 {
+						var method workmethod.Run
+						if json.Unmarshal(issue.WorkMethodRun, &method) == nil && method.CanDelegateCandidate() {
+							briefing = buildGoalCandidateSquadBriefing(r.Context(), h.Queries, squad, method.Revision)
+						}
+					}
 					if strings.TrimSpace(resp.Agent.Instructions) == "" {
 						resp.Agent.Instructions = briefing
 					} else {

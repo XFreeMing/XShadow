@@ -39,12 +39,13 @@ On a routed step, advance submits the output to its reviewer. Approval dispatche
 next step, and rework returns to an executed step. Include all verified check indices
 in checked_items when approving a routed step. Step and check indices start at zero.
 Supply one JSON change with --change-file or --change-stdin to select
-or start a recommended method, submit a step's output, approve its review, or return work for revision.
+or start a recommended method, delegate its candidate step, submit a step's output, approve its review, or return work for revision.
 
 Examples of changes (base_revision must match the latest read):
   {"action":"start","base_revision":0}
   {"action":"select","base_revision":0,"method_id":"seven-step"}
   {"action":"adopt_revision","base_revision":5,"method_id":"your-method-id","method_revision":2,"evidence":"Adopt from this working step; retain earlier approvals"}
+  {"action":"delegate","base_revision":5,"delegate_agent_id":"<squad member agent UUID>","evidence":"Implement the candidate from the accepted cases"}
   {"action":"advance","base_revision":1,"evidence":"Report attachment and verified findings"}
   {"action":"rework","base_revision":8,"target_step":4,"evidence":"The data excludes returning customers"}
   {"action":"approve","base_revision":12,"checked_items":[0,1],"evidence":"Reviewer confirmed the revised sample and recommendation"}`,

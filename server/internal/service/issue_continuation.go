@@ -227,6 +227,14 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 	}
 	if method.GoalExecution {
 		note = "在已授权的原事项接续当前工作方法步骤。先读取本步骤的产物、标准和已有证据。仅提交本步骤的结果或独立评审，平台按正式工作方法派送下一位。"
+		if method.CanDelegateCandidate() {
+			worker, err := GoalCandidateWorker(ctx, q, issue, method, execution.ID)
+			if err == nil {
+				note = fmt.Sprintf("本步骤的实现运行 %s 已结束，状态为 %s。核对同一候选及实测回执，再按正式方法送独立评审。", util.UUIDToString(worker.ID), worker.Status)
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 	}
 	if startGoal {
 		note = fmt.Sprintf("目标已授权启动本卡的正式工作方法。用 \"$MULTICA_CLI_PATH\" issue method <本事项编号> 读取当前步骤，再用同一命令加 --change-stdin 提交 action=start、method_id=%q、当前 base_revision。平台将自动交给方法指定角色。", execution.Progress.MethodID)

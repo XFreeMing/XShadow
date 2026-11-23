@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -285,8 +286,13 @@ func buildSquadLeaderBriefing(ctx context.Context, q *db.Queries, squad db.Squad
 		sb.WriteString(squadSteerRule)
 	}
 	sb.WriteString("\n\n")
-	sb.WriteString(buildSquadRoster(ctx, q, squad))
+	sb.WriteString(buildSquadRosterAndInstructions(ctx, q, squad))
+	return sb.String()
+}
 
+func buildSquadRosterAndInstructions(ctx context.Context, q *db.Queries, squad db.Squad) string {
+	var sb strings.Builder
+	sb.WriteString(buildSquadRoster(ctx, q, squad))
 	if trimmed := strings.TrimSpace(squad.Instructions); trimmed != "" {
 		sb.WriteString("\n\n## Squad Instructions (")
 		sb.WriteString(squad.Name)
@@ -294,6 +300,20 @@ func buildSquadLeaderBriefing(ctx context.Context, q *db.Queries, squad db.Squad
 		sb.WriteString(trimmed)
 	}
 	return sb.String()
+}
+
+func buildGoalCandidateSquadBriefing(ctx context.Context, q *db.Queries, squad db.Squad, revision int) string {
+	return fmt.Sprintf(`## Goal-authorized candidate implementation
+
+Read the issue's current method, implementation run history and acceptance ledger. Coordinate a single implementer from the squad roster.
+Use "$MULTICA_CLI_PATH" issue method <issue> --change-stdin with one JSON object:
+{"action":"delegate","base_revision":%d,"delegate_agent_id":"<squad member agent UUID>","evidence":"Implementation brief"}
+Use the latest base_revision from the method read. This action records the run and dispatches the engineer.
+Keep stage coordination on the original issue. After dispatch, end this run so the engineer can work.
+When resumed, check the implementation run and candidate evidence before you advance the method to independent review.
+Ordinary @mentions use comment permissions, so use the method action for this delegation.
+
+%s`, revision, buildSquadRosterAndInstructions(ctx, q, squad))
 }
 
 // buildSquadRoster renders the "## Squad Roster" section: a leader self-row
