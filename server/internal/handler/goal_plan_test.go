@@ -172,6 +172,14 @@ func TestGoalPlanSaveRevisionAndValidation(t *testing.T) {
 	if saved.Revision != 1 || saved.ID == nil || len(saved.Items) != 1 || saved.Items[0].ID != itemID {
 		t.Fatalf("first save = %+v, want revision 1 with the given item id", saved)
 	}
+	if saved.Progress == nil || saved.Progress.Phase != "waiting_for_binding" ||
+		saved.Progress.ItemID != itemID || saved.Progress.Total != 1 || saved.Progress.Completed != 0 {
+		t.Fatalf("saved plan progress = %+v, want one unbound delivery", saved.Progress)
+	}
+	code, persisted := getPlan(t, goal.ID)
+	if code != http.StatusOK || persisted.Progress == nil || persisted.Progress.Phase != saved.Progress.Phase {
+		t.Fatalf("read progress = %+v (HTTP %d), want the saved unbound delivery", persisted.Progress, code)
+	}
 
 	// Same expected_revision: the draft moved on, so this must conflict instead
 	// of overwriting the newer revision.

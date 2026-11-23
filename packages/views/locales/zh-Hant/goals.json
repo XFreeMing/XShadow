@@ -109,6 +109,21 @@
     "completed": "目標已完成",
     "reopened": "目標已重新開啟"
   },
+  "plan_progress": {
+    "count": "計畫已完成 {{completed}}/{{total}} 項",
+    "waiting_for": "等待 {{tasks}}",
+    "phase": {
+      "planning": "待規劃",
+      "delivering": "交付中",
+      "waiting_for_binding": "等待綁定任務",
+      "waiting_for_prerequisite": "等待前置驗收",
+      "blocked": "受阻",
+      "needs_replan": "待調整計畫",
+      "goal_inactive": "目標尚未執行",
+      "awaiting_goal_review": "待目標驗收",
+      "goal_completed": "目標已完成"
+    }
+  },
   "plan": {
     "dependency_kind": "相依類型",
     "dependency_hard": "必須",

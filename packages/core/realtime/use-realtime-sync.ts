@@ -1227,6 +1227,7 @@ export function useRealtimeSync(
         // issue change must refresh it — including a project move, after
         // which the server may have removed the link.
         qc.invalidateQueries({ queryKey: goalKeys.issuesAll(wsId) });
+        qc.invalidateQueries({ queryKey: goalKeys.plansAll(wsId) });
       }
     });
 
@@ -1248,6 +1249,7 @@ export function useRealtimeSync(
         // Deleting a task also removes its goal link server-side; refresh
         // every visible goal's task list. The goal itself never changes.
         qc.invalidateQueries({ queryKey: goalKeys.issuesAll(wsId) });
+        qc.invalidateQueries({ queryKey: goalKeys.plansAll(wsId) });
       }
     });
 

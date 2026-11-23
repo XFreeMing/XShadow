@@ -107,13 +107,24 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		return err
 	}
 
-	// A recorded wait stays quiet until its observed facts change.
+	// A bound goal uses its saved sequence. Other work keeps its own
+	// explicitly recorded wait and can be coordinated independently.
 	var dependencyChange string
-	if issue.Status == issuestatus.Backlog {
-		var waiting bool
-		waiting, dependencyChange, err = backlogPlanWait(ctx, tx, issue)
-		if err != nil || waiting {
+	var goalGate goalBacklogGate
+	isBacklog := issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == issuestatus.Backlog
+	if isBacklog {
+		goalGate, err = goalBacklogPosition(ctx, q, issue)
+		if err != nil || (goalGate.managed && !goalGate.ready) {
 			return err
+		}
+		if goalGate.managed {
+			dependencyChange = goalGate.key
+		} else {
+			var waiting bool
+			waiting, dependencyChange, err = backlogPlanWait(ctx, tx, issue)
+			if err != nil || waiting {
+				return err
+			}
 		}
 	}
 	if issue.AssigneeType.String == "member" {
@@ -155,7 +166,7 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	if err != nil {
 		return err
 	}
-	coord := attempted || !target.Agent.ID.Valid || issue.Status == issuestatus.Blocked || issue.Status == issuestatus.Backlog || latestStatus == "cancelled"
+	coord := attempted || !target.Agent.ID.Valid || issue.Status == issuestatus.Blocked || isBacklog || latestStatus == "cancelled"
 	if !coord && !CanMemberInvokeAgent(ctx, q, target.Agent, manager.OwnerID, issue.WorkspaceID) {
 		coord = true
 	}
@@ -164,6 +175,9 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		target = wakeTarget{Type: "agent", Agent: manager}
 		role = "coordinator"
 		note = coordinationBrief + "\n" + note
+	}
+	if goalGate.ready {
+		note = goalGate.note + "\n" + note
 	}
 	if err = (&IssueWakeupService{Tasks: s.Tasks}).authorize(ctx, q, issue.WorkspaceID, manager.OwnerID, target.Agent); err != nil {
 		return err
@@ -186,7 +200,7 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE agent_task_queue SET context=coalesce(context,'{}')||jsonb_build_object('continuation_gap',$2::text,'continuation_role',$3::text,'continuation_manager',$4::text) WHERE id=$1`, task.ID, gap, role, util.UUIDToString(manager.ID)); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE agent_task_queue SET context=coalesce(context,'{}')||jsonb_build_object('continuation_gap',$2::text,'continuation_role',$3::text,'continuation_manager',$4::text,'continuation_goal_key',$5::text) WHERE id=$1`, task.ID, gap, role, util.UUIDToString(manager.ID), goalGate.key); err != nil {
 		return err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -270,6 +284,7 @@ func (s *IssueWakeupService) checkContinuationClaim(ctx context.Context, task db
 	var binding struct {
 		Manager string `json:"continuation_manager"`
 		Role    string `json:"continuation_role"`
+		GoalKey string `json:"continuation_goal_key"`
 	}
 	if err := json.Unmarshal(task.Context, &binding); err != nil {
 		return ErrWakeupForbidden
@@ -289,6 +304,15 @@ func (s *IssueWakeupService) checkContinuationClaim(ctx context.Context, task db
 	}
 	if !active || issue.TriageState.Valid || issue.Status != task.WorkflowStep.String {
 		return ErrWakeupForbidden
+	}
+	if issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == issuestatus.Backlog {
+		gate, err := goalBacklogPosition(ctx, q, issue)
+		if err != nil {
+			return err
+		}
+		if (gate.managed && !gate.ready) || (binding.GoalKey != "" && binding.GoalKey != gate.key) {
+			return ErrWakeupForbidden
+		}
 	}
 	manager, err := q.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: issue.WorkspaceID})
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -124,16 +124,17 @@ type GoalPlanContent struct {
 }
 
 type GoalPlanResponse struct {
-	ID              *string         `json:"id"`
-	GoalID          string          `json:"goal_id"`
-	ProjectID       *string         `json:"project_id"`
-	Revision        int32           `json:"revision"`
-	State           string          `json:"state"`
-	Items           []GoalPlanItem  `json:"items"`
-	Edges           []GoalPlanEdge  `json:"edges"`
-	ContextSnapshot json.RawMessage `json:"context_snapshot"`
-	CreatedAt       *string         `json:"created_at"`
-	UpdatedAt       *string         `json:"updated_at"`
+	Progress        *service.GoalWorkProgress `json:"progress,omitempty"`
+	ID              *string                   `json:"id"`
+	GoalID          string                    `json:"goal_id"`
+	ProjectID       *string                   `json:"project_id"`
+	Revision        int32                     `json:"revision"`
+	State           string                    `json:"state"`
+	Items           []GoalPlanItem            `json:"items"`
+	Edges           []GoalPlanEdge            `json:"edges"`
+	ContextSnapshot json.RawMessage           `json:"context_snapshot"`
+	CreatedAt       *string                   `json:"created_at"`
+	UpdatedAt       *string                   `json:"updated_at"`
 }
 
 type PutGoalPlanRequest struct {
@@ -201,7 +202,7 @@ func emptyGoalPlanResponse(goal db.Goal) GoalPlanResponse {
 	}
 }
 
-func goalPlanToResponse(goal db.Goal, plan db.GoalPlan) (GoalPlanResponse, error) {
+func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan) (GoalPlanResponse, error) {
 	var content GoalPlanContent
 	if len(plan.Content) > 0 {
 		if err := json.Unmarshal(plan.Content, &content); err != nil {
@@ -221,6 +222,11 @@ func goalPlanToResponse(goal db.Goal, plan db.GoalPlan) (GoalPlanResponse, error
 	id := uuidToString(plan.ID)
 	createdAt := timestampToString(plan.CreatedAt)
 	updatedAt := timestampToString(plan.UpdatedAt)
+	progress, err := service.ReadGoalWorkProgress(ctx, q, goal, plan)
+	if err != nil {
+		return GoalPlanResponse{}, err
+	}
+
 	return GoalPlanResponse{
 		ID:              &id,
 		GoalID:          uuidToString(goal.ID),
@@ -230,6 +236,7 @@ func goalPlanToResponse(goal db.Goal, plan db.GoalPlan) (GoalPlanResponse, error
 		Items:           content.Items,
 		Edges:           content.Edges,
 		ContextSnapshot: snapshot,
+		Progress:        &progress,
 		CreatedAt:       &createdAt,
 		UpdatedAt:       &updatedAt,
 	}, nil
@@ -365,7 +372,7 @@ func (h *Handler) GetGoalPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	// The goal's project may have become invisible since the plan was saved;
 	// the loaded goal already answered 404 in that case.
-	resp, err := goalPlanToResponse(goal, plan)
+	resp, err := goalPlanToResponse(r.Context(), h.Queries, goal, plan)
 	if err != nil {
 		slog.Error("decode goal plan failed",
 			append(logger.RequestAttrs(r), "goal_id", uuidToString(goal.ID), "error", err)...)
@@ -534,18 +541,17 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resp, err := goalPlanToResponse(r.Context(), qtx, locked, saved)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load plan")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit plan save")
 		return
 	}
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(locked.WorkspaceID))
 	h.publishGoalChanged(uuidToString(locked.WorkspaceID), actorType, actorID)
-
-	resp, err := goalPlanToResponse(locked, saved)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load plan")
-		return
-	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

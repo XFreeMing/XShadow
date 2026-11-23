@@ -109,6 +109,21 @@
     "completed": "Goal completed",
     "reopened": "Goal reopened"
   },
+  "plan_progress": {
+    "count": "{{completed}} of {{total}} tasks complete",
+    "waiting_for": "Waiting for {{tasks}}",
+    "phase": {
+      "planning": "Planning",
+      "delivering": "In delivery",
+      "waiting_for_binding": "Waiting for task link",
+      "waiting_for_prerequisite": "Waiting for prerequisites",
+      "blocked": "Blocked",
+      "needs_replan": "Plan needs revision",
+      "goal_inactive": "Goal inactive",
+      "awaiting_goal_review": "Ready for goal review",
+      "goal_completed": "Goal complete"
+    }
+  },
   "plan": {
     "dependency_kind": "Dependency type",
     "dependency_hard": "Required",

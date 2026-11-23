@@ -109,6 +109,21 @@
     "completed": "ゴールを完了しました",
     "reopened": "ゴールを再開しました"
   },
+  "plan_progress": {
+    "count": "{{total}} 件中 {{completed}} 件完了",
+    "waiting_for": "{{tasks}} の完了待ち",
+    "phase": {
+      "planning": "計画中",
+      "delivering": "進行中",
+      "waiting_for_binding": "タスクの関連付け待ち",
+      "waiting_for_prerequisite": "前提タスクの完了待ち",
+      "blocked": "ブロック中",
+      "needs_replan": "計画の見直しが必要",
+      "goal_inactive": "目標は停止中",
+      "awaiting_goal_review": "目標のレビュー待ち",
+      "goal_completed": "目標達成"
+    }
+  },
   "plan": {
     "dependency_kind": "依存関係の種類",
     "dependency_hard": "必須",

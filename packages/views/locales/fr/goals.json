@@ -109,6 +109,21 @@
     "completed": "Objectif terminé",
     "reopened": "Objectif rouvert"
   },
+  "plan_progress": {
+    "count": "{{completed}} tâches terminées sur {{total}}",
+    "waiting_for": "En attente de {{tasks}}",
+    "phase": {
+      "planning": "Planification",
+      "delivering": "En cours",
+      "waiting_for_binding": "En attente du lien vers la tâche",
+      "waiting_for_prerequisite": "En attente des prérequis",
+      "blocked": "Bloqué",
+      "needs_replan": "Plan à revoir",
+      "goal_inactive": "Objectif inactif",
+      "awaiting_goal_review": "Objectif prêt à être évalué",
+      "goal_completed": "Objectif atteint"
+    }
+  },
   "plan": {
     "dependency_kind": "Type de dépendance",
     "dependency_hard": "Obligatoire",

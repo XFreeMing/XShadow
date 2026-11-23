@@ -109,6 +109,21 @@
     "completed": "목표를 완료했습니다",
     "reopened": "목표를 다시 열었습니다"
   },
+  "plan_progress": {
+    "count": "작업 {{total}}개 중 {{completed}}개 완료",
+    "waiting_for": "{{tasks}} 대기 중",
+    "phase": {
+      "planning": "계획 중",
+      "delivering": "진행 중",
+      "waiting_for_binding": "작업 연결 대기 중",
+      "waiting_for_prerequisite": "선행 작업 대기 중",
+      "blocked": "진행 차단",
+      "needs_replan": "계획 수정 필요",
+      "goal_inactive": "목표 비활성",
+      "awaiting_goal_review": "목표 검토 대기 중",
+      "goal_completed": "목표 완료"
+    }
+  },
   "plan": {
     "dependency_kind": "종속성 유형",
     "dependency_hard": "필수",

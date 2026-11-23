@@ -23,10 +23,11 @@ export const goalKeys = {
   issuesAll: (wsId: string) => [...goalKeys.all(wsId), "issues"] as const,
   issues: (wsId: string, goalId: string) =>
     [...goalKeys.issuesAll(wsId), goalId] as const,
+  plansAll: (wsId: string) => [...goalKeys.all(wsId), "plan"] as const,
   /** The goal's editable plan draft, under `goalKeys.all` so every existing
    *  `goal:changed` / reconnect invalidation reaches it too. */
   plan: (wsId: string, goalId: string) =>
-    [...goalKeys.all(wsId), "plan", goalId] as const,
+    [...goalKeys.plansAll(wsId), goalId] as const,
   planGenerationAll: (wsId: string, goalId: string) =>
     [...goalKeys.plan(wsId, goalId), "generation"] as const,
   planGeneration: (wsId: string, goalId: string, generationId: string) =>

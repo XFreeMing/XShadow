@@ -147,6 +147,26 @@ describe("GoalPlanSection", () => {
     );
   }
 
+  it("shows the current plan task and the prerequisite blocking it", async () => {
+    api.getGoalPlan.mockResolvedValue(plan({
+      items: [item("memory", "Publish reviewed memory"), item("access", "Use memory with an agent")],
+      progress: {
+        phase: "waiting_for_prerequisite",
+        total: 2,
+        completed: 0,
+        item_id: "access",
+        waiting_for: ["memory"],
+      },
+    }));
+    renderSection();
+
+    const progress = await screen.findByRole("status");
+    expect(progress).toHaveTextContent("0 of 2 tasks complete");
+    expect(progress).toHaveTextContent("Waiting for prerequisites");
+    expect(progress).toHaveTextContent("Use memory with an agent");
+    expect(progress).toHaveTextContent("Waiting for Publish reviewed memory");
+  });
+
   it("starts from an empty draft and saves an added task with its revision", async () => {
     const user = userEvent.setup();
     renderSection();

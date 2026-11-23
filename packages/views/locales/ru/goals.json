@@ -109,6 +109,21 @@
     "completed": "Цель завершена",
     "reopened": "Цель открыта заново"
   },
+  "plan_progress": {
+    "count": "Выполнено задач: {{completed}} из {{total}}",
+    "waiting_for": "Ожидание: {{tasks}}",
+    "phase": {
+      "planning": "Планирование",
+      "delivering": "В работе",
+      "waiting_for_binding": "Ожидание привязки задачи",
+      "waiting_for_prerequisite": "Ожидание предварительных задач",
+      "blocked": "Заблокировано",
+      "needs_replan": "План требует пересмотра",
+      "goal_inactive": "Цель неактивна",
+      "awaiting_goal_review": "Цель готова к проверке",
+      "goal_completed": "Цель достигнута"
+    }
+  },
   "plan": {
     "dependency_kind": "Тип зависимости",
     "dependency_hard": "Обязательная",

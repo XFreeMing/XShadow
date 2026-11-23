@@ -84,6 +84,10 @@ export function GoalPlanSection({
   const planQuery = useQuery(goalPlanOptions(wsId, goal.id));
   const plan = planQuery.data && planQuery.data.goal_id === goal.id ? planQuery.data : null;
   const savePlan = useSaveGoalPlan();
+  const progress = plan?.progress;
+  const current = plan?.items.find((item) => item.id === progress?.item_id);
+  const blockers = plan?.items.filter((item) => progress?.waiting_for?.includes(item.id)) ?? [];
+
 
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
@@ -552,6 +556,28 @@ export function GoalPlanSection({
       data-testid="goal-plan-section"
     >
       {header}
+
+      {progress && progress.total > 0 ? (
+        <div role="status" className="space-y-1 rounded-md border px-3 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
+            <span className="font-medium">
+              {t(($) => $.plan_progress.count, { completed: progress.completed, total: progress.total })}
+            </span>
+            <Badge variant="secondary">{t(($) => $.plan_progress.phase[progress.phase])}</Badge>
+          </div>
+          {current ? (
+            <p className="text-body">
+              {current.title}
+              {progress.method_step ? <span className="text-muted-foreground"> · {progress.method_step}</span> : null}
+            </p>
+          ) : null}
+          {blockers.length > 0 ? (
+            <p className="text-caption text-muted-foreground">
+              {t(($) => $.plan_progress.waiting_for, { tasks: blockers.map((item) => item.title).join(" · ") })}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {planQuery.isError && plan ? (
         <div className="flex items-center gap-2 text-caption text-destructive" role="alert">

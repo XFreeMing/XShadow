@@ -138,6 +138,19 @@ export interface GoalPlanEdge {
 /** Arbitrary JSON recorded about what a plan was based on. */
 export type GoalPlanContextSnapshot = Record<string, unknown>;
 
+export interface GoalPlanProgress {
+  phase: "planning" | "delivering" | "waiting_for_binding" | "waiting_for_prerequisite"
+    | "needs_replan" | "blocked" | "goal_inactive" | "awaiting_goal_review" | "goal_completed";
+  total: number;
+  completed: number;
+  item_id?: string;
+  issue_id?: string;
+  issue_status?: string;
+  method_state?: string;
+  method_step?: string;
+  waiting_for?: string[];
+}
+
 export interface GoalPlan {
   /** null for a goal that has never saved a plan (synthetic empty draft). */
   id: string | null;
@@ -149,6 +162,7 @@ export interface GoalPlan {
   edges: GoalPlanEdge[];
   context_snapshot: GoalPlanContextSnapshot;
   created_at: string | null;
+  progress?: GoalPlanProgress;
   updated_at: string | null;
 }
 
