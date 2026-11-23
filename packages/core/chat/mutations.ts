@@ -104,6 +104,7 @@ export function useUnpinChatAgent() {
 export function useCreateChatSession() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
+  const sessionsKey = chatKeys.sessions(wsId);
 
   return useMutation({
     mutationFn: (data: { agent_id: string; title?: string; project_id?: string | null }) => {
@@ -114,14 +115,22 @@ export function useCreateChatSession() {
       });
       return api.createChatSession(data);
     },
-    onSuccess: (session) => {
+    onSuccess: async (session) => {
       logger.info("createChatSession.success", { sessionId: session.id, agentId: session.agent_id });
+      // Deep links reject IDs absent from an already-loaded list. Prime the
+      // list before the caller navigates and discard any pre-create response.
+      await qc.cancelQueries({ queryKey: sessionsKey });
+      qc.setQueryData<ChatSession[]>(sessionsKey, (sessions = []) =>
+        sessions.some((entry) => entry.id === session.id)
+          ? sessions
+          : sortChatSessions([session, ...sessions]),
+      );
     },
     onError: (err) => {
       logger.error("createChatSession.error", err);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+      qc.invalidateQueries({ queryKey: sessionsKey });
     },
   });
 }

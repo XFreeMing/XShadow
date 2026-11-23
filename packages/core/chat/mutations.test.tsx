@@ -10,6 +10,7 @@ import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import {
   useConsumeChatDraftRestore,
+  useCreateChatSession,
   useSetChatSessionArchived,
   useSetChatSessionProject,
 } from "./mutations";
@@ -43,6 +44,27 @@ function createWrapper(qc: QueryClient) {
     return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
   };
 }
+
+it("makes a newly created session immediately selectable with a warm chat list", async () => {
+  const qc = new QueryClient();
+  const older = makeSession();
+  const created = makeSession({ id: "s2", updated_at: "2026-07-11T00:00:00Z" });
+  const createChatSession = vi.fn().mockResolvedValue(created);
+  setApiInstance({ createChatSession } as unknown as ApiClient);
+  const key = chatKeys.sessions(WS_ID);
+  qc.setQueryData(key, [older]);
+  const { result, unmount } = renderHook(useCreateChatSession, { wrapper: createWrapper(qc) });
+
+  try {
+    await act(async () => {
+      await result.current.mutateAsync({ agent_id: created.agent_id });
+      expect(qc.getQueryData(key)).toEqual([created, older]);
+    });
+  } finally {
+    unmount();
+    qc.clear();
+  }
+});
 
 describe("useSetChatSessionArchived", () => {
   let qc: QueryClient;
