@@ -15,21 +15,30 @@ import (
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
-func (h *Handler) delegateGoalCandidate(w http.ResponseWriter, r *http.Request, issue db.Issue, source db.AgentTaskQueue, change workmethod.Change) {
+func (h *Handler) dispatchGoalCandidate(w http.ResponseWriter, r *http.Request, issue db.Issue, source db.AgentTaskQueue, change workmethod.Change) {
 	if r.Header.Get("X-Actor-Source") != "task_token" || source.Status != "running" ||
 		source.AgentID != parseUUIDOrInvalid(r.Header.Get("X-Agent-ID")) || !service.ReadGoalExecutionTask(source).ID.Valid {
-		writeError(w, http.StatusForbidden, "candidate delegation requires the current authorized squad leader run")
+		writeError(w, http.StatusForbidden, "candidate actions require the current authorized run")
 		return
 	}
 	brief := strings.TrimSpace(change.Evidence)
 	if change.BaseRevision == nil || *change.BaseRevision < 1 || brief == "" || len(brief) > 12000 ||
 		change.MethodID != "" || change.MethodRevision != nil || change.TargetStep != nil || len(change.CheckedItems) != 0 {
-		writeError(w, http.StatusBadRequest, "candidate delegation requires base_revision, delegate_agent_id and an implementation brief in evidence")
+		writeError(w, http.StatusBadRequest, "candidate actions require base_revision and evidence")
 		return
 	}
-	workerID, ok := parseUUIDOrBadRequest(w, change.DelegateAgentID, "delegate_agent_id")
-	if !ok {
-		return
+	workerID := source.AgentID
+	if change.Action == workmethod.ClaimCandidate {
+		if change.DelegateAgentID != "" {
+			writeError(w, http.StatusBadRequest, "claim_candidate uses the authenticated agent identity")
+			return
+		}
+	} else {
+		var ok bool
+		workerID, ok = parseUUIDOrBadRequest(w, change.DelegateAgentID, "delegate_agent_id")
+		if !ok {
+			return
+		}
 	}
 	var run workmethod.Run
 	if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil || !run.CanDelegateCandidate() {
@@ -57,10 +66,10 @@ func (h *Handler) delegateGoalCandidate(w http.ResponseWriter, r *http.Request, 
 		}
 		reviewerID = squad.LeaderID
 	}
-	task, err := h.TaskService.DelegateGoalCandidate(r.Context(), issue, source, *change.BaseRevision, workerID, reviewerID, brief)
+	task, err := h.TaskService.DispatchGoalCandidate(r.Context(), issue, source, change.Action, *change.BaseRevision, workerID, reviewerID, brief)
 	switch {
 	case errors.Is(err, service.ErrWakeupForbidden):
-		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "current goal authorization does not permit this candidate delegation")
+		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "current goal authorization does not permit this candidate action")
 	case errors.Is(err, service.ErrGoalCandidateConflict):
 		writeError(w, http.StatusConflict, err.Error())
 	case err != nil:
@@ -87,12 +96,15 @@ func checkGoalCandidateReview(ctx context.Context, q *db.Queries, issue db.Issue
 	}
 	worker, err := service.GoalCandidateWorker(ctx, q, issue, before, executionID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if before.UsesCandidateSelfClaim() {
+			return errors.New("the candidate requires a self-claimed implementation before submission")
+		}
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if !isTerminalTaskStatus(worker.Status) {
+	if !isTerminalTaskStatus(worker.Status) || (before.UsesCandidateSelfClaim() && worker.Status != "completed") {
 		return errors.New("the candidate implementation run must finish before submission")
 	}
 	if worker.AgentID == reviewerID {

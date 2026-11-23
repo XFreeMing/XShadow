@@ -43,12 +43,23 @@ func checkGoalCandidateWorker(ctx context.Context, q *db.Queries, squadID, worke
 	return nil
 }
 
-func (s *TaskService) DelegateGoalCandidate(ctx context.Context, issue db.Issue, source db.AgentTaskQueue, revision int, workerID, reviewerID pgtype.UUID, brief string) (db.AgentTaskQueue, error) {
+func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue, source db.AgentTaskQueue, action string, revision int, workerID, reviewerID pgtype.UUID, brief string) (db.AgentTaskQueue, error) {
 	var empty db.AgentTaskQueue
 	var run workmethod.Run
 	if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil || !run.CanDelegateCandidate() ||
-		!source.IsLeaderTask || !source.SquadID.Valid || source.SquadID != parseGoalCandidateSquad(run) ||
-		workerID == source.AgentID || workerID == reviewerID {
+		!source.SquadID.Valid || source.SquadID != parseGoalCandidateSquad(run) || workerID == reviewerID {
+		return empty, ErrWakeupForbidden
+	}
+	switch action {
+	case workmethod.ClaimCandidate:
+		if !run.UsesCandidateSelfClaim() || workerID != source.AgentID || !IsGoalCandidateOffer(source) {
+			return empty, ErrWakeupForbidden
+		}
+	case workmethod.OfferCandidate, workmethod.Delegate:
+		if !source.IsLeaderTask || workerID == source.AgentID || run.UsesCandidateSelfClaim() != (action == workmethod.OfferCandidate) {
+			return empty, ErrWakeupForbidden
+		}
+	default:
 		return empty, ErrWakeupForbidden
 	}
 	if revision != run.Revision {
@@ -77,9 +88,18 @@ func (s *TaskService) DelegateGoalCandidate(ctx context.Context, issue db.Issue,
 	if err := CheckGoalExecutionRecipient(ctx, q, issue, workerID, execution.By); err != nil {
 		return empty, err
 	}
+	if action == workmethod.OfferCandidate {
+		offer, err := q.GetGoalCandidateOffer(ctx, db.GetGoalCandidateOfferParams{
+			IssueID: issue.ID, SquadID: source.SquadID, AgentID: workerID,
+			ExecutionID: util.UUIDToString(execution.ID), SlotRevision: fmt.Sprint(run.SlotRevision()),
+		})
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return offer, err
+		}
+	}
 	prior, err := GoalCandidateWorker(ctx, q, issue, run, execution.ID)
 	if err == nil {
-		if prior.AgentID != workerID {
+		if action == workmethod.OfferCandidate || prior.AgentID != workerID {
 			return empty, ErrGoalCandidateConflict
 		}
 		return prior, nil
@@ -87,25 +107,45 @@ func (s *TaskService) DelegateGoalCandidate(ctx context.Context, issue db.Issue,
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return empty, err
 	}
-	active, err := q.ListActiveTasksByIssue(ctx, issue.ID)
-	if err != nil {
-		return empty, err
-	}
-	for _, task := range active {
-		if task.ID != source.ID {
+	if action != workmethod.OfferCandidate {
+		active, err := q.ListActiveTasksByIssue(ctx, issue.ID)
+		if err != nil {
+			return empty, err
+		}
+		for _, task := range active {
+			if task.ID == source.ID {
+				continue
+			}
+			binding := ReadGoalExecutionTask(task)
+			if action == workmethod.ClaimCandidate && binding.ID == execution.ID &&
+				run.AcceptsTaskRevision(binding.Revision) && task.SquadID == source.SquadID &&
+				(task.IsLeaderTask || IsGoalCandidateOffer(task)) {
+				continue
+			}
 			return empty, ErrGoalCandidateConflict
 		}
 	}
 	scoped := &TaskService{Queries: q, Composio: s.Composio, FeatureFlags: s.FeatureFlags}
 	attr := attribution.DelegatedIssueRun(issue.ID, source.ID, pgtype.UUID{}, source.AccountableUserID)
 	note := "Implement the current candidate on the original issue. Read its work method and acceptance ledger. Record evidence there for the squad leader to verify and submit for independent review.\n\n" + brief
-	params, err := scoped.prepareMentionTask(ctx, issue, workerID, pgtype.UUID{}, nil, false, source.SquadID, false, note, attr, pgtype.UUID{}, OriginDerived, false)
+	summary := "Work method candidate delegation"
+	switch action {
+	case workmethod.OfferCandidate:
+		attr.EvidenceKind, attr.EvidenceRefID = attribution.EvidenceCandidateOffer, source.ID
+		summary = "Candidate self-claim invitation"
+		note = fmt.Sprintf("Assess the current candidate using the original issue and acceptance ledger. This run is for assessment only. Do not edit the project or start implementation. If ready, use \"$MULTICA_CLI_PATH\" issue method <issue> --change-stdin with {\"action\":\"claim_candidate\",\"base_revision\":%d,\"evidence\":\"Why you are ready\"}, using the latest revision. After receiving the receipt, end this run. If you need information or cannot take the work, explain what is missing in your result.\n\n%s", revision, brief)
+	case workmethod.ClaimCandidate:
+		summary = "Self-claimed candidate implementation"
+		note = "You claimed this implementation. Read the original issue and the assessment run linked to this implementation for context.\n\n" + note
+	}
+	params, err := scoped.prepareMentionTask(ctx, issue, workerID, pgtype.UUID{}, nil, false, source.SquadID, action != workmethod.Delegate, note, attr, pgtype.UUID{}, OriginDerived, false)
 	if err != nil {
 		return empty, err
 	}
 	params.GoalExecutionID = execution.ID
+	params.GoalCandidateOffer = pgtype.Bool{Bool: action == workmethod.OfferCandidate, Valid: action == workmethod.OfferCandidate}
 	params.WorkMethodRevision = pgtype.Int8{Int64: int64(run.SlotRevision()), Valid: true}
-	params.TriggerSummary = pgtype.Text{String: "Work method candidate delegation", Valid: true}
+	params.TriggerSummary = pgtype.Text{String: summary, Valid: true}
 	params.FireAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	task, err := q.CreateAgentTask(ctx, params)
 	if err != nil {
@@ -115,4 +155,8 @@ func (s *TaskService) DelegateGoalCandidate(ctx context.Context, issue db.Issue,
 		return empty, err
 	}
 	return task, nil
+}
+
+func IsGoalCandidateOffer(task db.AgentTaskQueue) bool {
+	return ReadGoalExecutionTask(task).CandidateOffer
 }

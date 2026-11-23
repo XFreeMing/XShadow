@@ -2301,8 +2301,11 @@ SELECT
         WHEN $17::uuid IS NOT NULL
         THEN jsonb_build_object('goal_execution_id', $17::uuid)
         ELSE '{}'::jsonb
+    END || CASE
+        WHEN COALESCE($18::boolean, FALSE)
+        THEN '{"goal_candidate_offer":true}'::jsonb
+        ELSE '{}'::jsonb
     END, '{}'::jsonb),
-    $18,
     $19,
     $20,
     $21,
@@ -2312,10 +2315,11 @@ SELECT
     $25,
     $26,
     $27,
+    $28,
     -- The issue's status as this task is queued: the workflow step it works on (MUL-7420).
-    COALESCE($28::text, (SELECT i.status FROM issue i WHERE i.id = $3)),
+    COALESCE($29::text, (SELECT i.status FROM issue i WHERE i.id = $3)),
     $5,
-    COALESCE($29::uuid, gen_random_uuid())
+    COALESCE($30::uuid, gen_random_uuid())
 WHERE lock_task_owner_rows($1, $3, $2)
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
 `
@@ -2338,6 +2342,7 @@ type CreateAgentTaskParams struct {
 	WorkflowHandoffRevision pgtype.Int8        `json:"workflow_handoff_revision"`
 	WorkMethodRevision      pgtype.Int8        `json:"work_method_revision"`
 	GoalExecutionID         pgtype.UUID        `json:"goal_execution_id"`
+	GoalCandidateOffer      pgtype.Bool        `json:"goal_candidate_offer"`
 	OriginatorUserID        pgtype.UUID        `json:"originator_user_id"`
 	AccountableUserID       pgtype.UUID        `json:"accountable_user_id"`
 	RuntimeMcpOverlay       []byte             `json:"runtime_mcp_overlay"`
@@ -2393,6 +2398,7 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		arg.WorkflowHandoffRevision,
 		arg.WorkMethodRevision,
 		arg.GoalExecutionID,
+		arg.GoalCandidateOffer,
 		arg.OriginatorUserID,
 		arg.AccountableUserID,
 		arg.RuntimeMcpOverlay,
@@ -4336,9 +4342,102 @@ func (q *Queries) GetCommentThreadRootID(ctx context.Context, commentID pgtype.U
 	return id, err
 }
 
+const getGoalCandidateOffer = `-- name: GetGoalCandidateOffer :one
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step FROM agent_task_queue
+WHERE issue_id = $1 AND squad_id = $2 AND agent_id = $3
+  AND context->>'goal_candidate_offer' = 'true'
+  AND context->>'goal_execution_id' = $4::text
+  AND context->>'work_method_revision' = $5::text
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetGoalCandidateOfferParams struct {
+	IssueID      pgtype.UUID `json:"issue_id"`
+	SquadID      pgtype.UUID `json:"squad_id"`
+	AgentID      pgtype.UUID `json:"agent_id"`
+	ExecutionID  string      `json:"execution_id"`
+	SlotRevision string      `json:"slot_revision"`
+}
+
+func (q *Queries) GetGoalCandidateOffer(ctx context.Context, arg GetGoalCandidateOfferParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, getGoalCandidateOffer,
+		arg.IssueID,
+		arg.SquadID,
+		arg.AgentID,
+		arg.ExecutionID,
+		arg.SlotRevision,
+	)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+		&i.WaitReason,
+		&i.InitiatorUserID,
+		&i.HandoffNote,
+		&i.PrepareLeaseExpiresAt,
+		&i.SquadID,
+		&i.RuntimeMcpOverlay,
+		&i.EscalationForTaskID,
+		&i.FireAt,
+		&i.OriginatorUserID,
+		&i.RuntimeConnectedApps,
+		&i.CoalescedCommentIds,
+		&i.DeliveredCommentIds,
+		&i.ChatInputTaskID,
+		&i.ChatFinalizeDeferredAt,
+		&i.OriginatorSource,
+		&i.DelegatedFromTaskID,
+		&i.RetryOfTaskID,
+		&i.RerunOfTaskID,
+		&i.RuleVersionID,
+		&i.TriggerEvidenceKind,
+		&i.TriggerEvidenceRefID,
+		&i.AccountableUserID,
+		&i.SessionRolloutMissing,
+		&i.RetiredSessionID,
+		&i.QuickActionsDisabled,
+		&i.RegenerateQuickActionsFor,
+		&i.BranchName,
+		&i.DurableWorkDir,
+		&i.ChannelContextRevision,
+		&i.CommentThreadID,
+		&i.CancelledByType,
+		&i.CancelledByID,
+		&i.CancelledByName,
+		&i.IssueSnapshot,
+		&i.WorkflowStep,
+	)
+	return i, err
+}
+
 const getGoalCandidateWorker = `-- name: GetGoalCandidateWorker :one
 SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step FROM agent_task_queue
 WHERE issue_id = $1 AND squad_id = $2 AND NOT is_leader_task
+  AND context->>'goal_candidate_offer' IS DISTINCT FROM 'true'
   AND context->>'goal_execution_id' = $3::text
   AND context->>'work_method_revision' = $4::text
 ORDER BY created_at DESC, id DESC
@@ -7625,6 +7724,8 @@ WHERE t.runtime_id = ANY($1::uuid[])
         AND occupant.id <> t.id
         AND (
           occupant.status IN ('queued', 'dispatched')
+          OR (occupant.status = 'running' AND occupant.context->>'goal_candidate_offer' = 'true'
+              AND occupant.id = t.delegated_from_task_id)
           OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
         )
     )
@@ -7755,6 +7856,8 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
+            OR (occupant.status = 'running' AND occupant.context->>'goal_candidate_offer' = 'true'
+                AND occupant.id = t.delegated_from_task_id)
             OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
           )
       )
@@ -7775,6 +7878,7 @@ type PromoteDueDeferredTasksForRuntimeParams struct {
 // row is NOT covered by that index, so it can legitimately coexist with a queued
 // one — a manual rerun enqueued behind a running task, plus the deferred retry
 // that task's failure armed (runtime_offline, provider_network's final attempt).
+// A self-claimed implementation also waits for its assessment run to finish.
 // Flipping such a row to 'queued' unconditionally violates the index, and because
 // the claim loop promotes before it claims, that error blocked every claim on the
 // runtime — including the rerun the operator was waiting for.
@@ -7893,6 +7997,8 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
+            OR (occupant.status = 'running' AND occupant.context->>'goal_candidate_offer' = 'true'
+                AND occupant.id = t.delegated_from_task_id)
             OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
           )
       )

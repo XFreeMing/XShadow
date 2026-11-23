@@ -23,6 +23,15 @@ import (
 )
 
 func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T) {
+	testGoalCandidateHandoff(t, false)
+}
+
+func TestGoalCandidateSelfClaimRequiresTheCandidatesOwnDecision(t *testing.T) {
+	testGoalCandidateHandoff(t, true)
+}
+
+func testGoalCandidateHandoff(t *testing.T, selfClaim bool) {
+	t.Helper()
 	ctx := context.Background()
 	seedTestCatalog(t)
 	runtime := dbfx.Runtime(t, "Goal candidate runtime")
@@ -46,8 +55,8 @@ func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T)
 	}
 	var template workmethod.Template
 	testutil.Call(t, testHandler.CreateWorkMethod, newRequest("POST", "/api/work-methods?workspace_id="+testWorkspaceID,
-		workmethod.Template{Name: "Build and review candidate", Kind: "development", Review: "Check the working candidate",
-			Steps: []workmethod.Step{{Name: "Implement candidate", Gate: "candidate", Output: "Verified candidate",
+		workmethod.Template{Name: "Build and review candidate " + workflowTestSuffix(), Kind: "development", Review: "Check the working candidate",
+			Steps: []workmethod.Step{{Name: "Implement candidate", Gate: "candidate", SelfClaim: selfClaim, Output: "Verified candidate",
 				Owner: &workmethod.Actor{Kind: "squad", ID: squad}, Reviewer: &workmethod.Actor{Kind: "agent", ID: reviewer}}}},
 	)).Want(http.StatusCreated).JSON(&template)
 	planPath := "/api/goals/" + goal.ID + "/plan"
@@ -129,16 +138,24 @@ func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	delegate := func(card, token, target string, revision, want int) string {
+	dispatch := func(action, card, token, target string, revision, want int) string {
 		t.Helper()
 		var result map[string]string
 		var out any
 		if want == http.StatusOK {
 			out = &result
 		}
-		post(card, "work-method", token, map[string]any{"action": "delegate", "base_revision": revision,
+		post(card, "work-method", token, map[string]any{"action": action, "base_revision": revision,
 			"delegate_agent_id": target, "evidence": "Implement and test the approved report"}, want, out)
 		return result["task_id"]
+	}
+	offerMode := workmethod.Delegate
+	if selfClaim {
+		offerMode = "offer_candidate"
+	}
+	delegate := func(card, token, target string, revision, want int) string {
+		t.Helper()
+		return dispatch(offerMode, card, token, target, revision, want)
 	}
 
 	tick()
@@ -166,10 +183,67 @@ func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T)
 	if taskID := delegate(issue, leaderToken, worker, 1, http.StatusOK); taskID == "" || delegate(issue, leaderToken, worker, 1, http.StatusOK) != taskID {
 		t.Fatalf("same selection must return one durable run, got %s", taskID)
 	}
-	delegate(issue, leaderToken, alternate, 1, http.StatusConflict)
+	var parentID = leader.ID
+	priorWorkerTasks := 0
+	if selfClaim {
+		dispatch("delegate", issue, leaderToken, worker, 1, http.StatusForbidden)
+		delegate(issue, leaderToken, alternate, 1, http.StatusOK)
+		first, second := start(latest(worker)), start(latest(alternate))
+		if !service.IsGoalCandidateOffer(first) || !service.IsGoalCandidateOffer(second) ||
+			taskCountFor(t, issue, worker) != 1 || taskCountFor(t, issue, alternate) != 1 {
+			t.Fatal("inviting agents should only create assessment runs")
+		}
+		dispatch("claim_candidate", issue, leaderToken, "", 1, http.StatusForbidden)
+		dispatch("claim_candidate", issue, tokenFor(first), alternate, 1, http.StatusBadRequest)
+		dispatch("claim_candidate", otherIssue, tokenFor(first), "", 1, http.StatusForbidden)
+		dispatch("claim_candidate", issue, tokenFor(first), "", 2, http.StatusConflict)
+		post(issue, "comments", tokenFor(first), map[string]string{"content": "Do work now"}, http.StatusForbidden, nil)
+		claims := make([]*http.Request, 0, 2)
+		for _, assessment := range []db.AgentTaskQueue{first, second} {
+			request := httptest.NewRequest(http.MethodPost, "/api/issues/"+issue+"/work-method",
+				strings.NewReader(`{"action":"claim_candidate","base_revision":1,"evidence":"I read the accepted cases and can implement them"}`))
+			request.Header.Set("Authorization", "Bearer "+tokenFor(assessment))
+			request.Header.Set("X-Workspace-ID", testWorkspaceID)
+			claims = append(claims, request)
+		}
+		startRace := make(chan struct{})
+		outcomes := make(chan int, len(claims))
+		for _, request := range claims {
+			go func() {
+				<-startRace
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				outcomes <- response.Code
+			}()
+		}
+		close(startRace)
+		a, b := <-outcomes, <-outcomes
+		if !(a == http.StatusOK && b == http.StatusConflict || a == http.StatusConflict && b == http.StatusOK) {
+			t.Fatalf("competing claims got %d and %d, want one success and one conflict", a, b)
+		}
+		if taskCountFor(t, issue, alternate) == 2 {
+			worker, alternate = alternate, worker
+			first, second = second, first
+		}
+		parentID, priorWorkerTasks = first.ID, 1
+		claimID := dispatch("claim_candidate", issue, tokenFor(first), "", 1, http.StatusOK)
+		if implementation := latest(worker); claimID != uuidToString(implementation.ID) || implementation.Status != "deferred" {
+			t.Fatalf("retry must return the same implementation, held until assessment stops: %s %s", claimID, implementation.Status)
+		}
+		finish(first)
+		finish(second)
+		if err := testHandler.TaskService.PromoteDueDeferredTasksForRuntime(ctx, first.RuntimeID); err != nil {
+			t.Fatal(err)
+		}
+		if got := latest(worker).Status; got != "queued" {
+			t.Fatalf("finishing assessment should release the implementation for claim, got %s", got)
+		}
+	} else {
+		delegate(issue, leaderToken, alternate, 1, http.StatusConflict)
+	}
 	implementer := latest(worker)
-	if taskCountFor(t, issue, worker) != 1 || implementer.IsLeaderTask || implementer.OriginatorUserID.Valid ||
-		implementer.DelegatedFromTaskID != leader.ID || service.ReadGoalExecutionTask(implementer).Revision != 1 {
+	if taskCountFor(t, issue, worker) != priorWorkerTasks+1 || implementer.IsLeaderTask || implementer.OriginatorUserID.Valid ||
+		implementer.DelegatedFromTaskID != parentID || service.ReadGoalExecutionTask(implementer).Revision != 1 {
 		t.Fatalf("unexpected worker binding: %s", uuidToString(implementer.ID))
 	}
 	finish(leader)
@@ -214,6 +288,11 @@ func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T)
 	finish(independent)
 	rework := start(latest(lead))
 	delegate(issue, tokenFor(rework), worker, 3, http.StatusOK)
+	if selfClaim {
+		assessment := start(latest(worker))
+		dispatch("claim_candidate", issue, tokenFor(assessment), "", 3, http.StatusOK)
+		finish(assessment)
+	}
 	next := latest(worker)
 	if next.ID == implementer.ID {
 		t.Fatal("an independent rework must have its own candidate run")

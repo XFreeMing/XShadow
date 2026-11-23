@@ -122,11 +122,19 @@ func (r Run) EvidenceGate() string {
 	return r.Method.Steps[r.Step].Gate
 }
 
-const Delegate = "delegate"
+const (
+	Delegate       = "delegate"
+	OfferCandidate = "offer_candidate"
+	ClaimCandidate = "claim_candidate"
+)
 
 func (r Run) CanDelegateCandidate() bool {
 	return r.GoalExecution && r.State == "working" && r.EvidenceGate() == "candidate" &&
 		r.CurrentActor != nil && r.CurrentActor.Kind == "squad"
+}
+
+func (r Run) UsesCandidateSelfClaim() bool {
+	return r.CanDelegateCandidate() && r.Method.Steps[r.Step].SelfClaim
 }
 
 // SlotRevision is stable across guidance adoption in the same working step.

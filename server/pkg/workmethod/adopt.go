@@ -59,7 +59,7 @@ func (r *Run) Adopt(c Change, catalog []Template, actor, at string) error {
 	}
 	for i, prior := range old.Steps {
 		s := next.Steps[i]
-		if prior.Name != s.Name || prior.Gate != s.Gate || !reflect.DeepEqual(prior.Owner, s.Owner) ||
+		if prior.Name != s.Name || prior.Gate != s.Gate || prior.SelfClaim != s.SelfClaim || !reflect.DeepEqual(prior.Owner, s.Owner) ||
 			!reflect.DeepEqual(prior.Reviewer, s.Reviewer) || len(prior.Checks) != len(s.Checks) {
 			return fmt.Errorf("%w：第 %d 步的顺序、门槛、分工或验收项结构不兼容", ErrConflict, i+1)
 		}

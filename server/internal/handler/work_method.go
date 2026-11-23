@@ -168,8 +168,12 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "目标授权仅用于本事项的当前工作方法步骤")
 		return
 	}
-	if change.Action == workmethod.Delegate {
-		h.delegateGoalCandidate(w, r, issue, task, change)
+	if service.IsGoalCandidateOffer(task) && change.Action != workmethod.ClaimCandidate {
+		writeError(w, http.StatusForbidden, "candidate assessments can only accept their own offer")
+		return
+	}
+	if change.Action == workmethod.Delegate || change.Action == workmethod.OfferCandidate || change.Action == workmethod.ClaimCandidate {
+		h.dispatchGoalCandidate(w, r, issue, task, change)
 		return
 	}
 	if change.DelegateAgentID != "" {

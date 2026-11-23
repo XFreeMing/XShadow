@@ -129,9 +129,10 @@ func goalExecutionForIssue(ctx context.Context, q *db.Queries, issue db.Issue, l
 }
 
 type GoalExecutionTask struct {
-	ID       pgtype.UUID `json:"goal_execution_id"`
-	Revision int         `json:"work_method_revision"`
-	Role     string      `json:"continuation_role"`
+	ID             pgtype.UUID `json:"goal_execution_id"`
+	Revision       int         `json:"work_method_revision"`
+	Role           string      `json:"continuation_role"`
+	CandidateOffer bool        `json:"goal_candidate_offer"`
 }
 
 func ReadGoalExecutionTask(task db.AgentTaskQueue) GoalExecutionTask {
@@ -216,6 +217,9 @@ func CheckGoalExecutionTask(ctx context.Context, q *db.Queries, issue db.Issue, 
 			}
 			if err := checkGoalCandidateWorker(ctx, q, task.SquadID, task.AgentID); err != nil {
 				return GoalExecution{}, err
+			}
+			if IsGoalCandidateOffer(task) && !run.UsesCandidateSelfClaim() {
+				return GoalExecution{}, ErrWakeupForbidden
 			}
 		} else if recipient.Agent.ID != task.AgentID {
 			return GoalExecution{}, ErrWakeupForbidden

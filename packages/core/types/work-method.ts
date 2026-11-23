@@ -19,6 +19,7 @@ const handler = z.union([
   z.object({ kind: z.enum(["creator", "project_lead"]) }),
 ]);
 const step = z.object({
+  self_claim: z.boolean().optional(),
   acceptance_gate: z.enum(["criteria", "coverage", "candidate", "delivery"]).optional(),
   name: nonEmpty,
   output: nonEmpty,

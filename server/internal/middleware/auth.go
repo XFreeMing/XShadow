@@ -124,6 +124,10 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 					http.Error(w, `{"error":"evidence runs can only download their selected attachments"}`, http.StatusForbidden)
 					return
 				}
+				if tt.GoalCandidateOffer && !allowsCandidateAssessment(r) {
+					writeError(w, http.StatusForbidden, "candidate assessments can only read and accept their current offer")
+					return
+				}
 				userID := uuidToString(tt.UserID)
 				if rejectTemporarilyDisabledUser(w, r, userID, "", "task_token") {
 					return
@@ -307,6 +311,15 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func allowsCandidateAssessment(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	return r.Method == http.MethodPost && len(parts) == 4 &&
+		parts[0] == "api" && parts[1] == "issues" && parts[3] == "work-method"
 }
 
 // extractToken returns the bearer token and whether it came from a cookie.

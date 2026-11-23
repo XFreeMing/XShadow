@@ -126,7 +126,7 @@ function MethodEditor({
 }) {
   const { t } = useT("issues");
   const qc = useQueryClient();
-  type DraftStep = Pick<WorkMethodStep, "acceptance_gate"> & {
+  type DraftStep = Pick<WorkMethodStep, "acceptance_gate" | "self_claim"> & {
     id: number;
     name: string;
     output: string;
@@ -150,6 +150,7 @@ function MethodEditor({
       ? original.steps.map((step, i) => ({
           id: i,
           acceptance_gate: step.acceptance_gate,
+          self_claim: step.self_claim,
           name: step.name,
           output: step.output,
           inputs: step.inputs ?? "",
@@ -207,6 +208,9 @@ function MethodEditor({
       ],
       steps: steps.map((step) => ({
         ...(kind === "development" && step.acceptance_gate ? { acceptance_gate: step.acceptance_gate } : {}),
+        ...(kind === "development" && step.acceptance_gate === "candidate" && step.owner?.kind === "squad" && step.self_claim
+          ? { self_claim: true }
+          : {}),
         name: step.name.trim(),
         output: step.output.trim(),
         ...(step.inputs.trim() ? { inputs: step.inputs.trim() } : {}),

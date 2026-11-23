@@ -51,6 +51,30 @@ it("reads a goal recommendation without creating a run", async () => {
   expect(fetch.mock.calls[0]?.[0]).toContain("/api/goals/goal/work-method");
 });
 
+it("preserves a squad candidate's self-claim setting and rejects a non-boolean setting", async () => {
+  const candidate = {
+    ...method,
+    kind: "development",
+    steps: [{
+      name: "Implement",
+      output: "Candidate",
+      acceptance_gate: "candidate",
+      owner: { kind: "squad", id: "squad-1" },
+      reviewer: { kind: "agent", id: "reviewer-1" },
+      self_claim: true,
+    }],
+  };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json({ methods: [candidate] }))
+    .mockResolvedValueOnce(Response.json({
+      methods: [{ ...candidate, steps: [{ ...candidate.steps[0], self_claim: "yes" }] }],
+    }));
+  vi.stubGlobal("fetch", fetch);
+  const client = new ApiClient("https://example.test");
+  expect((await client.listWorkMethods())[0]?.steps[0]?.self_claim).toBe(true);
+  await expect(client.listWorkMethods()).rejects.toThrow("Malformed");
+});
+
 it("previews a new issue using the draft deliverable and project", async () => {
   const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
     Response.json({

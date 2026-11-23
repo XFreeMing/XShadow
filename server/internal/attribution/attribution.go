@@ -114,6 +114,7 @@ const (
 	// EvidenceDelegatedFailure points at the terminal worker task that handed
 	// control back to its source coordinator.
 	EvidenceDelegatedFailure EvidenceKind = "delegated_failure"
+	EvidenceCandidateOffer   EvidenceKind = "goal_candidate_offer"
 	// EvidenceChat points the uniform evidence pair at the chat session that
 	// triggered the run — the chat analogue of autopilot_run/issue_assignment.
 	// The dedicated chat_session_id column still exists for its own consumers;

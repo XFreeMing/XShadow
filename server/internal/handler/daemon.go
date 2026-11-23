@@ -3248,7 +3248,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 					if binding := service.ReadGoalExecutionTask(*task); binding.ID.Valid && binding.Revision > 0 {
 						var method workmethod.Run
 						if json.Unmarshal(issue.WorkMethodRun, &method) == nil && method.CanDelegateCandidate() {
-							briefing = buildGoalCandidateSquadBriefing(r.Context(), h.Queries, squad, method.Revision)
+							briefing = buildGoalCandidateSquadBriefing(r.Context(), h.Queries, squad, method)
 						}
 					}
 					if strings.TrimSpace(resp.Agent.Instructions) == "" {

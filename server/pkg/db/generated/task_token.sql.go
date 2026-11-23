@@ -71,21 +71,23 @@ func (q *Queries) DeleteTaskTokensByTask(ctx context.Context, taskID pgtype.UUID
 
 const getTaskTokenByHash = `-- name: GetTaskTokenByHash :one
 SELECT tok.id, tok.token_hash, tok.task_id, tok.agent_id, tok.workspace_id, tok.user_id, tok.expires_at, tok.created_at, CASE WHEN t.context ? 'evidence_issue_id'
-       THEN COALESCE(t.context->'evidence_input'->'inputs','[]'::jsonb) END::jsonb AS evidence_inputs
+       THEN COALESCE(t.context->'evidence_input'->'inputs','[]'::jsonb) END::jsonb AS evidence_inputs,
+       COALESCE(t.context->>'goal_candidate_offer' = 'true', FALSE)::boolean AS goal_candidate_offer
 FROM task_token tok JOIN agent_task_queue t ON t.id = tok.task_id
 WHERE tok.token_hash = $1 AND tok.expires_at > now()
 `
 
 type GetTaskTokenByHashRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	TokenHash      string             `json:"token_hash"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	UserID         pgtype.UUID        `json:"user_id"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	EvidenceInputs []byte             `json:"evidence_inputs"`
+	ID                 pgtype.UUID        `json:"id"`
+	TokenHash          string             `json:"token_hash"`
+	TaskID             pgtype.UUID        `json:"task_id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	UserID             pgtype.UUID        `json:"user_id"`
+	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	EvidenceInputs     []byte             `json:"evidence_inputs"`
+	GoalCandidateOffer bool               `json:"goal_candidate_offer"`
 }
 
 func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (GetTaskTokenByHashRow, error) {
@@ -101,6 +103,7 @@ func (q *Queries) GetTaskTokenByHash(ctx context.Context, tokenHash string) (Get
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.EvidenceInputs,
+		&i.GoalCandidateOffer,
 	)
 	return i, err
 }

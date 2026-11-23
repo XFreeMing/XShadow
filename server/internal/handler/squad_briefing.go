@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 // squadOperatingProtocolHeader is the hard-coded system-level briefing
@@ -302,7 +303,17 @@ func buildSquadRosterAndInstructions(ctx context.Context, q *db.Queries, squad d
 	return sb.String()
 }
 
-func buildGoalCandidateSquadBriefing(ctx context.Context, q *db.Queries, squad db.Squad, revision int) string {
+func buildGoalCandidateSquadBriefing(ctx context.Context, q *db.Queries, squad db.Squad, method workmethod.Run) string {
+	if method.UsesCandidateSelfClaim() {
+		return fmt.Sprintf(`## Goal-authorized candidate self-claim
+
+Read the original issue, task history and acceptance ledger. If the candidate still needs an implementer, invite suitable squad members to assess it using "$MULTICA_CLI_PATH" issue method <issue> --change-stdin:
+{"action":"offer_candidate","base_revision":%d,"delegate_agent_id":"<squad member agent UUID>","evidence":"Candidate brief with acceptance references"}
+Read the latest revision before acting. An invitation creates an assessment only. Each invited member decides whether to claim, and one claim can schedule implementation.
+If the assessments end without a claim, read their results and record what blocked the handoff. After implementation, verify the candidate and evidence before submitting it for independent review.
+
+%s`, method.Revision, buildSquadRosterAndInstructions(ctx, q, squad))
+	}
 	return fmt.Sprintf(`## Goal-authorized candidate implementation
 
 Read the issue's current method, implementation run history and acceptance ledger. Coordinate a single implementer from the squad roster.
@@ -313,7 +324,7 @@ Keep stage coordination on the original issue. After dispatch, end this run so t
 When resumed, check the implementation run and candidate evidence before you advance the method to independent review.
 Ordinary @mentions use comment permissions, so use the method action for this delegation.
 
-%s`, revision, buildSquadRosterAndInstructions(ctx, q, squad))
+%s`, method.Revision, buildSquadRosterAndInstructions(ctx, q, squad))
 }
 
 // buildSquadRoster renders the "## Squad Roster" section: a leader self-row

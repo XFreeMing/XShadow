@@ -29,6 +29,7 @@ type Actor struct {
 }
 
 type Step struct {
+	SelfClaim    bool     `json:"self_claim,omitempty"`
 	Gate         string   `json:"acceptance_gate,omitempty"`
 	Name         string   `json:"name"`
 	Output       string   `json:"output"`
@@ -144,6 +145,9 @@ func Validate(m Template) error {
 		if (step.Owner == nil) != (step.Reviewer == nil) ||
 			(step.Owner != nil && (!validActor(step.Owner) || !validActor(step.Reviewer))) {
 			return fmt.Errorf("第 %d 步须同时指定有效的执行人和验收人", i+1)
+		}
+		if step.SelfClaim && (step.Gate != "candidate" || step.Owner == nil || step.Owner.Kind != "squad") {
+			return fmt.Errorf("第 %d 步仅小队负责的候选实现支持自主认领", i+1)
 		}
 	}
 	if !validText(m.Review, 2000) {

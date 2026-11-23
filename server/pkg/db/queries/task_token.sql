@@ -5,7 +5,8 @@ RETURNING *;
 
 -- name: GetTaskTokenByHash :one
 SELECT tok.*, CASE WHEN t.context ? 'evidence_issue_id'
-       THEN COALESCE(t.context->'evidence_input'->'inputs','[]'::jsonb) END::jsonb AS evidence_inputs
+       THEN COALESCE(t.context->'evidence_input'->'inputs','[]'::jsonb) END::jsonb AS evidence_inputs,
+       COALESCE(t.context->>'goal_candidate_offer' = 'true', FALSE)::boolean AS goal_candidate_offer
 FROM task_token tok JOIN agent_task_queue t ON t.id = tok.task_id
 WHERE tok.token_hash = $1 AND tok.expires_at > now();
 

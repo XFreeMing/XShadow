@@ -376,6 +376,10 @@ SELECT
         WHEN sqlc.narg(goal_execution_id)::uuid IS NOT NULL
         THEN jsonb_build_object('goal_execution_id', sqlc.narg(goal_execution_id)::uuid)
         ELSE '{}'::jsonb
+    END || CASE
+        WHEN COALESCE(sqlc.narg(goal_candidate_offer)::boolean, FALSE)
+        THEN '{"goal_candidate_offer":true}'::jsonb
+        ELSE '{}'::jsonb
     END, '{}'::jsonb),
     sqlc.narg(originator_user_id),
     sqlc.narg(accountable_user_id),
@@ -2262,6 +2266,7 @@ RETURNING *;
 -- row is NOT covered by that index, so it can legitimately coexist with a queued
 -- one — a manual rerun enqueued behind a running task, plus the deferred retry
 -- that task's failure armed (runtime_offline, provider_network's final attempt).
+-- A self-claimed implementation also waits for its assessment run to finish.
 -- Flipping such a row to 'queued' unconditionally violates the index, and because
 -- the claim loop promotes before it claims, that error blocked every claim on the
 -- runtime — including the rerun the operator was waiting for.
@@ -2298,6 +2303,8 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
+            OR (occupant.status = 'running' AND occupant.context->>'goal_candidate_offer' = 'true'
+                AND occupant.id = t.delegated_from_task_id)
             OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
           )
       )
@@ -2366,6 +2373,8 @@ WHERE t.runtime_id = ANY(@runtime_ids::uuid[])
         AND occupant.id <> t.id
         AND (
           occupant.status IN ('queued', 'dispatched')
+          OR (occupant.status = 'running' AND occupant.context->>'goal_candidate_offer' = 'true'
+              AND occupant.id = t.delegated_from_task_id)
           OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
         )
     )
@@ -2401,6 +2410,8 @@ WITH due AS (
           AND occupant.id <> t.id
           AND (
             occupant.status IN ('queued', 'dispatched')
+            OR (occupant.status = 'running' AND occupant.context->>'goal_candidate_offer' = 'true'
+                AND occupant.id = t.delegated_from_task_id)
             OR (occupant.status = 'deferred' AND occupant.context->>'channel_issue_media_pending' = 'true')
           )
       )
@@ -2701,6 +2712,16 @@ ORDER BY created_at DESC;
 -- name: GetGoalCandidateWorker :one
 SELECT * FROM agent_task_queue
 WHERE issue_id = $1 AND squad_id = $2 AND NOT is_leader_task
+  AND context->>'goal_candidate_offer' IS DISTINCT FROM 'true'
+  AND context->>'goal_execution_id' = sqlc.arg(execution_id)::text
+  AND context->>'work_method_revision' = sqlc.arg(slot_revision)::text
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
+-- name: GetGoalCandidateOffer :one
+SELECT * FROM agent_task_queue
+WHERE issue_id = $1 AND squad_id = $2 AND agent_id = $3
+  AND context->>'goal_candidate_offer' = 'true'
   AND context->>'goal_execution_id' = sqlc.arg(execution_id)::text
   AND context->>'work_method_revision' = sqlc.arg(slot_revision)::text
 ORDER BY created_at DESC, id DESC
