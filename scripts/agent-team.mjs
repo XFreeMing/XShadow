@@ -48,7 +48,7 @@ export function parseArgs(args) {
     if (!key || !args[0] || args[0].startsWith("--")) throw new Error(`Invalid option: ${flag}\n${HELP}`);
     const value = args.shift();
     if (key === "runtime") {
-      const match = /^(claude|codex|grok)=([^/\s]+)$/.exec(value);
+      const match = /^(antigravity|claude|codex|grok|kimi)=([^/\s]+)$/.exec(value);
       if (!match || options.runtimeIds[match[1]]) throw new Error(`Invalid or repeated runtime mapping: ${value}`);
       options.runtimeIds[match[1]] = match[2];
     } else options[key] = value;

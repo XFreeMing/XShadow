@@ -19,7 +19,7 @@ make agent init
 ## 运行前提
 
 - 使用仓库支持的开发环境，安装 Git、Make、Bash、Node.js、Go、curl 和 PostgreSQL 启动所需依赖；具体版本与数据库方式见 [CONTRIBUTING.md](../CONTRIBUTING.md)。Linux/macOS 可使用本机工具链；Windows 使用具备这些依赖的 WSL 环境。
-- 安装并登录 Claude Code、Codex 和 Grok，使 daemon 能发现它们。模型账号、API Key 和认证不会随模板迁移。
+- 安装并登录模板要求的 CLI，使 daemon 能发现 Claude Code、Codex、Grok、Kimi Code 和 Antigravity CLI。模型账号、API Key 和认证不会随模板迁移。
 - Claude Code 的本机提供商配置需要支持 `deepseek-v4.1-flash`，推理等级为 `high`。
 - 各角色的提供商、模型、推理等级和并发以 `team.json` 为准。`thinking_level: ""` 明确使用运行时默认推理等级；非空值必须由所选模型支持，字段不能省略。
 - Cursor 暂不纳入初始化。
@@ -53,7 +53,7 @@ make agent init ARGS="--profile my-team --runtime claude=运行时UUID --runtime
 
 脚本按工作区中的**名称**匹配技能、智能体和小队。重复执行会同步模板拥有的字段，包括人设、描述、模型、运行时绑定、权限、并发、聊天入口和技能文件；请先将需要保留的定制同步到模板。同名智能体属于其他账号或已归档时会停止。
 
-未出现在模板中的项目、任务、角色、技能、小队，以及额外绑定的技能和小队成员会保留。所有模板角色默认仅创建者可调用。三个被选中运行时的总并发取自 `team.json` 的 `runtime_limits`，初始化会把该值写入对应运行时，因此也会影响绑定到它们的其他智能体；需要调整时修改模板，不要只改界面。
+未出现在模板中的项目、任务、角色、技能、小队，以及额外绑定的技能和小队成员会保留。所有模板角色默认仅创建者可调用。各个被选中运行时的总并发取自 `team.json` 的 `runtime_limits`，初始化会把该值写入对应运行时，因此也会影响绑定到它们的其他智能体；需要调整时修改模板，不要只改界面。
 
 创建顺序为技能、智能体、小队和成员关系；小队指令中的 `{{squad:key}}` 会替换成目标实例的 ID。写入中途失败时，已经成功的部分会保留；重跑按名称继续，不重复创建。完成后逐项读回核验。一次只运行一个初始化进程。
 

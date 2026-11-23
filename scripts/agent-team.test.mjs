@@ -358,12 +358,24 @@ test("every agent description fits the server's 255-character limit", () => {
   assert.ok([...pm.instructions].length > [...pm.description].length, "detailed workflow belongs in instructions");
 });
 
-test("research, requirements and management roles use their configured Codex model", () => {
-  for (const key of ["pm", "quality", "product", "research", "requirements", "story-judge"]) {
+test("research, frontend and management roles use their assigned runtimes and models", () => {
+  for (const key of ["pm", "quality", "product", "requirements", "story-judge"]) {
     const agent = template.agents.find((a) => a.key === key);
     assert.equal(agent.provider, "codex");
     assert.equal(agent.model, "gpt-6.2-sol");
     assert.equal(agent.thinking_level, "high");
+  }
+  for (const key of ["ux", "frontend", "test"]) {
+    const agent = template.agents.find((a) => a.key === key);
+    assert.equal(agent.provider, "kimi");
+    assert.equal(agent.model, "kimi-code/k3.1-pro");
+    assert.equal(agent.thinking_level, "high");
+  }
+  for (const key of ["research", "engineering", "python-engineer", "acceptance-automation"]) {
+    const agent = template.agents.find((a) => a.key === key);
+    assert.equal(agent.provider, "antigravity");
+    assert.equal(agent.model, "gemini-4-neon-high");
+    assert.equal(agent.thinking_level, "");
   }
   assert.equal(template.runtime_limits.grok, 12);
   assert.equal(template.runtime_limits.codex, 5);
@@ -378,9 +390,6 @@ test("story gate and acceptance automation are private, capacity-limited and ind
   assert.deepEqual(judge.skills, ["rd-story-gate", "xshadow-story-evidence"]);
   assert.notEqual(judge.key, "requirements");
   assert.equal(automation.name, "验收自动化工程师");
-  assert.equal(automation.provider, "claude");
-  assert.equal(automation.model, "deepseek-v4.1-flash");
-  assert.equal(automation.thinking_level, "high");
   assert.equal(automation.max_concurrent_tasks, 1);
   assert.equal(automation.permission_mode, "private");
   assert.ok(automation.skills.includes("rd-acceptance"));
@@ -399,7 +408,8 @@ test("story gate and acceptance automation initialize from the real template, re
   assert.equal(judge.max_concurrent_tasks, 1);
   assert.equal(judge.permission_mode, "private");
   assert.deepEqual(f.state.bindings[judge.id].map((id) => f.state.skills.find((s) => s.id === id).name), ["rd-story-gate", "xshadow-story-evidence"]);
-  assert.equal(automation.model, "deepseek-v4.1-flash");
+  assert.equal(automation.runtime_id, "target-antigravity");
+  assert.equal(automation.model, "gemini-4-neon-high");
   assert.equal(automation.max_concurrent_tasks, 1);
   assert.equal(automation.permission_mode, "private");
   assert.ok(f.state.bindings[automation.id].map((id) => f.state.skills.find((s) => s.id === id).name).includes("rd-acceptance"));
