@@ -221,17 +221,30 @@ func backlogPlanWait(ctx context.Context, tx pgx.Tx, issue db.Issue) (bool, stri
 		return false, "", nil
 	}
 	var changes []string
+	tracked := make(map[string]bool, len(plan.Dependencies))
+	for _, dep := range plan.Dependencies {
+		tracked[strings.ToUpper(dep.Issue)] = true
+	}
 	for _, dep := range plan.Dependencies {
 		if dep.Issue == "" || dep.Status == "" {
 			return false, "", nil
 		}
-		var status, transition string
-		err := tx.QueryRow(ctx, `SELECT i.status, CASE WHEN i.status=$3 THEN '' ELSE coalesce((SELECT a.id::text FROM activity_log a WHERE a.issue_id=i.id AND a.action='status_changed' ORDER BY a.created_at DESC,a.id DESC LIMIT 1),'') END
-    FROM issue i JOIN workspace w ON w.id=i.workspace_id WHERE w.id=$1 AND upper(w.issue_prefix||'-'||i.number)=upper($2)`, issue.WorkspaceID, dep.Issue, dep.Status).Scan(&status, &transition)
+		var status, transition, choiceOwner string
+		err := tx.QueryRow(ctx, `SELECT i.status,
+    CASE WHEN i.assignee_type='member' AND i.metadata ? 'member_todo_key'
+      AND upper(i.metadata->>'member_todo_source') <> upper(w.issue_prefix||'-'||$4::integer)
+      THEN coalesce(upper(i.metadata->>'member_todo_source'),'') ELSE '' END,
+    CASE WHEN i.status=$3 THEN '' ELSE coalesce((SELECT a.id::text FROM activity_log a WHERE a.issue_id=i.id AND a.action='status_changed' ORDER BY a.created_at DESC,a.id DESC LIMIT 1),'') END
+    FROM issue i JOIN workspace w ON w.id=i.workspace_id WHERE w.id=$1 AND upper(w.issue_prefix||'-'||i.number)=upper($2)`, issue.WorkspaceID, dep.Issue, dep.Status, issue.Number).Scan(&status, &choiceOwner, &transition)
 		if errors.Is(err, pgx.ErrNoRows) {
 			status = "missing"
 		} else if err != nil {
 			return false, "", err
+		}
+		// A downstream plan tracking the requesting story observes its delivery.
+		// The member's choice is input to that story alone.
+		if choiceOwner != "" && tracked[choiceOwner] {
+			continue
 		}
 		if status != dep.Status {
 			changes = append(changes, fmt.Sprintf("%s:%s>%s:%s", strings.ToUpper(dep.Issue), dep.Status, status, transition))

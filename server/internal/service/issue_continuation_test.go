@@ -148,3 +148,42 @@ func TestIssueContinuationBacklogRechecksChangedPrerequisite(t *testing.T) {
 		t.Fatalf("planning changed status to %q: %v", status, err)
 	}
 }
+
+// A member's decision belongs to its requesting story. Sibling consumers wait
+// for the deliverable on that story, even if an older plan also lists the choice.
+func TestIssueContinuationSiblingWaitsForDeliverable(t *testing.T) {
+	f, w, consumer, agent := wakeFixture(t)
+	source := f.Issue(t, "prepare shared questions")
+	member := f.Issue(t, "choose sources", testutil.Cols{"assignee_type": "member", "assignee_id": f.UserID})
+	ctx := context.Background()
+	issueRef := func(id string) string {
+		t.Helper()
+		var ref string
+		if err := f.Pool.QueryRow(ctx, "SELECT w.issue_prefix||'-'||i.number FROM issue i JOIN workspace w ON w.id=i.workspace_id WHERE i.id=$1", id).Scan(&ref); err != nil {
+			t.Fatal(err)
+		}
+		return ref
+	}
+	f.Exec(t, `UPDATE issue SET status='todo', metadata=jsonb_build_object('member_todo_key','todo-choice','member_todo_source',$2::text), updated_at=now()-interval '2 days' WHERE id=$1`, member, issueRef(source))
+	f.Exec(t, "UPDATE issue SET status='backlog' WHERE id=$1", source)
+	meta := condition(t, map[string]any{"backlog_plan": map[string]any{"state": "needs_story", "next": "wait for reviewed questions", "dependencies": []map[string]string{{"issue": issueRef(member), "status": "todo"}, {"issue": issueRef(source), "status": "backlog"}}}})
+	f.Exec(t, "UPDATE issue SET status='backlog', metadata=$2,updated_at=now()-interval '2 days' WHERE id=$1", consumer, meta)
+	svc := IssueContinuation{Tasks: w.Tasks, ManagerID: parseTestUUID(t, agent)}
+	scan := func(want int) {
+		t.Helper()
+		if err := svc.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1", consumer); got != want {
+			t.Fatalf("consumer dispatched %d, want %d", got, want)
+		}
+	}
+	scan(0)
+	if got := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1", member); got != 0 {
+		t.Fatal("waiting for the member started a coordinator")
+	}
+	f.Exec(t, "UPDATE issue SET status='done' WHERE id=$1", member)
+	scan(0)
+	f.Exec(t, "UPDATE issue SET status='in_review' WHERE id=$1", source)
+	scan(1)
+}
