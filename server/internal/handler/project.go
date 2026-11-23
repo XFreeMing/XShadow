@@ -850,6 +850,14 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project plans")
 		return
 	}
+	if err := qtx.DeleteProjectSkillProposals(r.Context(), db.DeleteProjectSkillProposalsParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project skill proposals")
+		return
+	}
+	if err := qtx.DeleteProjectSkills(r.Context(), db.DeleteProjectSkillsParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete project skills")
+		return
+	}
 	if err := qtx.DeleteProject(r.Context(), db.DeleteProjectParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,

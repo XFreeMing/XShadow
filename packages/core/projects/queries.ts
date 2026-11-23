@@ -26,6 +26,14 @@ export function projectDetailOptions(wsId: string, id: string) {
   });
 }
 
+export function projectSkillsOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: [...projectKeys.detail(wsId, id), "skills"] as const,
+    queryFn: () => api.listProjectSkills(id),
+    refetchInterval: 30_000,
+  });
+}
+
 export function projectMembersOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: projectKeys.members(wsId, id),

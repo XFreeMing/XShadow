@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "スキル",
+    "published": "公開済みスキル",
+    "empty": "このプロジェクトで公開されたスキルはありません。",
+    "proposals": "知見の提案",
+    "no_proposals": "最終レビュー担当者は、検証済みの再利用可能な手法を提案できます。",
+    "pending": "レビュー待ち",
+    "version": "バージョン {{version}}",
+    "dismissed": "却下済み",
+    "source": "元のタスク #{{number}}",
+    "verify": "検証方法",
+    "avoid": "避けること",
+    "dismiss": "却下",
+    "publish": "プロジェクトに公開",
+    "publish_version": "新しいバージョンを公開",
+    "load_failed": "プロジェクトのスキルを読み込めませんでした。",
+    "retry": "再試行",
+    "save_failed": "審査結果を保存できませんでした。"
+  },
   "page": {
     "title": "プロジェクト",
     "new_project": "新規プロジェクト",

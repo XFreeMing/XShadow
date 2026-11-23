@@ -42,6 +42,7 @@ export function SkillActivityPanel({ skill, canReview }: { skill: Skill; canRevi
     useModalStore.getState().open("create-issue", {
       skill_maintenance_title: t(($) => $.activity.proposal_title, { name: skill.name }),
       skill_maintenance_description: t(($) => $.activity.proposal_description, { url }),
+      project_id: skill.project_id,
     });
   };
 

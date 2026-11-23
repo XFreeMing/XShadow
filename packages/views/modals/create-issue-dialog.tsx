@@ -62,6 +62,7 @@ export function CreateIssueDialog({
         onClose={onClose}
         title={data.skill_maintenance_title}
         description={data.skill_maintenance_description}
+        projectId={typeof data.project_id === "string" ? data.project_id : undefined}
       />
     );
   }
@@ -69,8 +70,8 @@ export function CreateIssueDialog({
 }
 
 function SkillMaintenanceIssueDialog({
-  onClose, title, description,
-}: { onClose: () => void; title: string; description: string }) {
+  onClose, title, description, projectId,
+}: { onClose: () => void; title: string; description: string; projectId?: string }) {
   const [draftReady, setDraftReady] = useState(false);
   useLayoutEffect(() => {
     const store = useIssueDraftStore.getState();
@@ -80,7 +81,7 @@ function SkillMaintenanceIssueDialog({
     return () => store.endIsolatedDraft();
   }, [title, description]);
   if (!draftReady) return null;
-  return <CreateIssueDialogBody onClose={onClose} initialMode="manual" data={{ assignee_id: null, assignee_type: null }} />;
+  return <CreateIssueDialogBody onClose={onClose} initialMode="manual" data={{ project_id: projectId, assignee_id: null, assignee_type: null }} />;
 }
 
 function SourceContextCreateIssueDialog({

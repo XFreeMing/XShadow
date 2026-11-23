@@ -88,6 +88,7 @@ import {
 } from "../../layout/object-page";
 import { RichContent } from "../../rich-content";
 import { useCanEditSkill } from "../hooks/use-can-edit-skill";
+import { projectSkillsOptions } from "@multica/core/projects/queries";
 import { useSkillPermissions } from "@multica/core/permissions";
 import { CapabilityBanner } from "@multica/ui/components/common/capability-banner";
 import { isRefreshableOrigin, readOrigin } from "../lib/origin";
@@ -352,6 +353,7 @@ function UsedByList({ agents }: { agents: Agent[] }) {
 export function SkillDetailPage({ skillId }: { skillId: string }) {
   const { t } = useT("skills");
   const { t: tCommon } = useT("common");
+  const { t: tProjects } = useT("projects");
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const paths = useWorkspacePaths();
@@ -383,7 +385,15 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
 
   const assignments = useMemo(() => selectSkillAssignments(agents), [agents]);
 
-  const canEdit = useCanEditSkill(skill, wsId);
+  const canEditWorkspaceSkill = useCanEditSkill(skill, wsId);
+  const projectId = skill?.project_id;
+  const projectSkills = projectSkillsOptions(wsId, projectId ?? "");
+  const { data: projectSkillAccess } = useQuery({
+    ...projectSkills,
+    enabled: Boolean(projectId),
+  });
+  const canEdit = projectId ? projectSkillAccess?.can_manage === true : canEditWorkspaceSkill;
+  const skillListHref = projectId ? `${paths.projectDetail(projectId)}?tab=skills` : paths.skills();
   const skillPermissions = useSkillPermissions(skill ?? null, wsId);
 
   // Context for the shared "Add to agent" dialog (also used by the skills
@@ -625,6 +635,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         exact: true,
       });
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      if (projectId) qc.invalidateQueries({ queryKey: projectSkills.queryKey });
       // Read the history back so the toast can name the version this save
       // became. The save already succeeded, so a failed read only costs the
       // version number in the toast.
@@ -670,12 +681,13 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     setDeleting(true);
     try {
       await api.deleteSkill(skill.id);
-      navigation.replace(paths.skills());
+      navigation.replace(skillListHref);
       qc.removeQueries({
         queryKey: skillDetailOptions(wsId, skill.id).queryKey,
       });
       qc.invalidateQueries({ queryKey: workspaceKeys.skills(wsId) });
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      if (projectId) qc.invalidateQueries({ queryKey: projectSkills.queryKey });
       toast.success(t(($) => $.detail.toast_deleted));
     } catch (err) {
       toast.error(
@@ -744,7 +756,10 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   };
 
   const supportingQueryDown = !!agentsError || !!membersError || !!runtimesError;
-  const listSegment = { href: paths.skills(), label: t(($) => $.page.title) };
+  const listSegment = {
+    href: skillListHref,
+    label: projectId ? tProjects(($) => $.skills.published) : t(($) => $.page.title),
+  };
 
   if (isLoading) {
     return (
@@ -814,7 +829,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       : null,
   ].filter((part): part is string => part !== null);
 
-  const canRefresh = canEdit && !!origin && isRefreshableOrigin(origin);
+  const canRefresh = !projectId && canEdit && !!origin && isRefreshableOrigin(origin);
   const displayName = name.trim() || skill.name;
   const supportingPaths = filePaths.filter((p) => p !== SKILL_MD);
 
@@ -839,10 +854,12 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
 
   const headerActions = (
     <>
-      <Button size="sm" onClick={() => setShowAddToAgents(true)}>
-        <Plus />
-        {t(($) => $.actions.add_to_agent)}
-      </Button>
+      {!projectId && (
+        <Button size="sm" onClick={() => setShowAddToAgents(true)}>
+          <Plus />
+          {t(($) => $.actions.add_to_agent)}
+        </Button>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
@@ -989,7 +1006,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
 
       <SkillActivityPanel skill={skill} canReview={canEdit} />
 
-      <ObjectSection
+      {!projectId && <ObjectSection
         title={t(($) => $.table.used_by)}
         count={skillAgents.length}
         action={
@@ -999,7 +1016,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         }
       >
         <UsedByList agents={skillAgents} />
-      </ObjectSection>
+      </ObjectSection>}
     </div>
   );
 
@@ -1201,12 +1218,12 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         </DialogContent>
       </Dialog>
 
-      <AddToAgentDialog
+      {!projectId && <AddToAgentDialog
         skills={[skill]}
         ctx={actionsCtx}
         open={showAddToAgents}
         onOpenChange={setShowAddToAgents}
-      />
+      />}
 
       <RefreshSkillDialog
         skill={skill}

@@ -12,6 +12,7 @@ JOIN agent_task_queue t ON t.id = sqlc.arg(task_id) AND t.runtime_id = sqlc.arg(
 JOIN issue i ON i.id = t.issue_id AND i.workspace_id = s.workspace_id
 WHERE t.dispatched_at = sqlc.arg(dispatched_at) AND t.started_at IS NOT NULL AND t.status = 'running'
   AND t.chat_session_id IS NULL
+  AND (s.project_id IS NULL OR s.project_id = i.project_id)
 ON CONFLICT (workspace_id, skill_id, task_id) DO UPDATE
 SET dispatched_at = EXCLUDED.dispatched_at, content_hash = EXCLUDED.content_hash,
     version = EXCLUDED.version, provided_at = EXCLUDED.provided_at,
@@ -59,6 +60,7 @@ JOIN skill s ON s.id = o.skill_id AND s.workspace_id = o.workspace_id
 JOIN agent_task_queue t ON t.id = o.task_id AND t.dispatched_at = o.dispatched_at
 JOIN issue i ON i.id = t.issue_id AND i.workspace_id = o.workspace_id
 WHERE o.workspace_id = sqlc.arg(workspace_id)
+  AND s.project_id IS NULL
   AND o.provided_at >= sqlc.arg(since)::timestamptz
   AND t.chat_session_id IS NULL
   AND t.started_at IS NOT NULL

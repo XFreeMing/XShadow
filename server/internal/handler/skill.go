@@ -47,6 +47,7 @@ func sanitizeNullBytes(s string) string {
 type SkillResponse struct {
 	ID          string  `json:"id"`
 	WorkspaceID string  `json:"workspace_id"`
+	ProjectID   *string `json:"project_id,omitempty"`
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
 	Content     string  `json:"content"`
@@ -174,6 +175,7 @@ func skillToResponse(s db.Skill) SkillResponse {
 	return SkillResponse{
 		ID:          uuidToString(s.ID),
 		WorkspaceID: uuidToString(s.WorkspaceID),
+		ProjectID:   uuidToPtr(s.ProjectID),
 		Name:        s.Name,
 		Description: s.Description,
 		Content:     s.Content,
@@ -323,13 +325,16 @@ func (h *Handler) loadSkillForUser(w http.ResponseWriter, r *http.Request, id st
 		return db.Skill{}, false
 	}
 
-	skill, err := h.Queries.GetSkillInWorkspace(r.Context(), db.GetSkillInWorkspaceParams{
-		ID:          skillUUID,
-		WorkspaceID: parseUUID(workspaceID),
-	})
-	if err != nil {
+	skill, err := h.Queries.GetSkill(r.Context(), skillUUID)
+	if err != nil || skill.WorkspaceID != parseUUID(workspaceID) {
 		writeError(w, http.StatusNotFound, "skill not found")
 		return skill, false
+	}
+	if !h.requireProjectVisible(w, r, workspaceID, skill.ProjectID, http.StatusNotFound, "skill not found") {
+		return db.Skill{}, false
+	}
+	if skill.ProjectID.Valid && !h.requireProjectSkillRunScope(w, r, skill.WorkspaceID, skill.ProjectID) {
+		return db.Skill{}, false
 	}
 	return skill, true
 }
@@ -577,6 +582,16 @@ func (h *Handler) canManageSkill(w http.ResponseWriter, r *http.Request, skill d
 	if !ok {
 		return false
 	}
+	if skill.ProjectID.Valid {
+		project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+			ID: skill.ProjectID, WorkspaceID: skill.WorkspaceID,
+		})
+		if err != nil || isMachineCredentialActor(r) || !canManageProjectAccess(member, project) {
+			writeError(w, http.StatusForbidden, "only a project maintainer can manage this skill")
+			return false
+		}
+		return true
+	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
 	isSkillCreator := skill.CreatedBy.Valid && uuidToString(skill.CreatedBy) == requestUserID(r)
 	if !isAdmin && !isSkillCreator {
@@ -608,6 +623,10 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 	var req UpdateSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if skill.ProjectID.Valid && req.Name != nil && *req.Name != skill.Name {
+		writeError(w, http.StatusBadRequest, "the project skill name is its stable experience key")
 		return
 	}
 
@@ -714,7 +733,9 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	wsID := h.resolveWorkspaceID(r)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), wsID)
-	h.publish(protocol.EventSkillUpdated, wsID, actorType, actorID, map[string]any{"skill": resp})
+	if !skill.ProjectID.Valid {
+		h.publish(protocol.EventSkillUpdated, wsID, actorType, actorID, map[string]any{"skill": resp})
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -751,7 +772,9 @@ func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(skill.WorkspaceID))
-	h.publish(protocol.EventSkillDeleted, uuidToString(skill.WorkspaceID), actorType, actorID, map[string]any{"skill_id": uuidToString(skill.ID)})
+	if !skill.ProjectID.Valid {
+		h.publish(protocol.EventSkillDeleted, uuidToString(skill.WorkspaceID), actorType, actorID, map[string]any{"skill_id": uuidToString(skill.ID)})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -2689,6 +2712,9 @@ func skillWithFilesInTx(ctx context.Context, qtx *db.Queries, skill db.Skill) (S
 // UpdateSkill announces an edit: a file change is a change to the skill, and
 // clients holding the skill (detail page, agent skill lists) must refetch it.
 func (h *Handler) publishSkillFilesChanged(r *http.Request, resp SkillWithFilesResponse) {
+	if resp.ProjectID != nil {
+		return
+	}
 	wsID := h.resolveWorkspaceID(r)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), wsID)
 	h.publish(protocol.EventSkillUpdated, wsID, actorType, actorID, map[string]any{"skill": resp})

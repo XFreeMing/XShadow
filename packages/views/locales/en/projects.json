@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "Skills",
+    "published": "Released skills",
+    "empty": "No skills released for this project.",
+    "proposals": "Experience proposals",
+    "no_proposals": "Final reviewers can propose a reusable technique with passing evidence.",
+    "pending": "Awaiting review",
+    "version": "Version {{version}}",
+    "dismissed": "Dismissed",
+    "source": "Source issue #{{number}}",
+    "verify": "Verify",
+    "avoid": "Avoid",
+    "dismiss": "Dismiss",
+    "publish": "Publish to project",
+    "publish_version": "Publish new version",
+    "load_failed": "Could not load project skills.",
+    "retry": "Retry",
+    "save_failed": "Could not save the decision."
+  },
   "page": {
     "title": "Projects",
     "new_project": "New project",

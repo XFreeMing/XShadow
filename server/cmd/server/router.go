@@ -2327,6 +2327,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/subscription", h.SubscribeToProject)
 					r.Delete("/subscription", h.UnsubscribeFromProject)
 					r.Get("/resources", h.ListProjectResources)
+					r.Get("/skills", h.ListProjectSkills)
+					r.With(handler.RequireHumanActor).Put("/skill-proposals/{issueId}/{revision}", h.DecideProjectSkill)
 					r.Post("/resources", h.CreateProjectResource)
 					r.Put("/resources/{resourceId}", h.UpdateProjectResource)
 					r.Delete("/resources/{resourceId}", h.DeleteProjectResource)

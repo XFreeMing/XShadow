@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "Compétences",
+    "published": "Compétences publiées",
+    "empty": "Aucune compétence publiée pour ce projet.",
+    "proposals": "Propositions issues de l’expérience",
+    "no_proposals": "La validation finale peut proposer une technique réutilisable dont les résultats sont vérifiés.",
+    "pending": "En attente de validation",
+    "version": "Version {{version}}",
+    "dismissed": "Écartée",
+    "source": "Tâche source nº {{number}}",
+    "verify": "Vérifier",
+    "avoid": "Éviter",
+    "dismiss": "Écarter",
+    "publish": "Publier dans le projet",
+    "publish_version": "Publier une nouvelle version",
+    "load_failed": "Impossible de charger les compétences du projet.",
+    "retry": "Réessayer",
+    "save_failed": "Impossible d’enregistrer la décision."
+  },
   "page": {
     "title": "Projets",
     "new_project": "Nouveau projet",

@@ -240,7 +240,7 @@ export function SkillPropertiesPanel({
     <div className="space-y-5">
       <ObjectPanelSection title={t(($) => $.detail.overview.properties)}>
         <ObjectProperty label={t(($) => $.detail.overview.name)}>
-          {canEdit ? (
+          {canEdit && !skill.project_id ? (
             <input
               id="skill-name"
               aria-label={t(($) => $.detail.overview.name)}

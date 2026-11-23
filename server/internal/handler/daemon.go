@@ -3296,6 +3296,19 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			}
 		}
 		projectCtx.applyTo(&resp)
+		if projectCtx.ProjectID != "" {
+			skills, err := h.TaskService.LoadIssueProjectSkills(r.Context(), *task, issue, agent, nil)
+			if err != nil {
+				return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, h.rejectClaimSkillLoad(task, err)
+			}
+			if useSkillRefs {
+				_, refs := service.BuildAgentSkillBundles(skills)
+				resp.Agent.SkillRefs = append(resp.Agent.SkillRefs, refs...)
+			} else {
+				resp.Agent.Skills = append(resp.Agent.Skills, skills...)
+			}
+			agentSkillCount += len(skills)
+		}
 		resp.ProjectWorkflow = projectWorkflow
 
 		// Load every planned input as one chronological, de-duplicated set.
@@ -4596,6 +4609,25 @@ func (h *Handler) ResolveTaskSkillBundles(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	var missing []pgtype.UUID
+	for _, ref := range req.Skills {
+		if _, ok := allowed[service.AgentSkillBundleKey(ref.Source, ref.ID)]; !ok && ref.Source == skillbundle.SourceWorkspace {
+			if id := parseUUIDOrInvalid(ref.ID); id.Valid {
+				missing = append(missing, id)
+			}
+		}
+	}
+	if len(missing) > 0 {
+		skills, err := h.TaskService.ResolveIssueProjectSkills(r.Context(), task, missing)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load project skill bundles")
+			return
+		}
+		bundles, _ := service.BuildAgentSkillBundles(skills)
+		for _, skill := range bundles {
+			allowed[service.AgentSkillBundleKey(skill.Source, skill.ID)] = skill
+		}
+	}
 	resolved := make([]service.AgentSkillData, 0, len(req.Skills))
 	for _, ref := range req.Skills {
 		bundle, ok := allowed[service.AgentSkillBundleKey(ref.Source, ref.ID)]

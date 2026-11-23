@@ -4809,6 +4809,9 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 		if goalLinks > 0 {
 			result.GoalLinksChanged = true
 		}
+		if err := qtx.DeleteIssueSkillProposals(ctx, db.DeleteIssueSkillProposalsParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID}); err != nil {
+			return issueDeleteResult{}, fmt.Errorf("delete issue skill proposals: %w", err)
+		}
 		if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue: %w", err)
 		}

@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "技能",
+    "published": "已發佈的專案技能",
+    "empty": "此專案尚未發佈技能。",
+    "proposals": "經驗提議",
+    "no_proposals": "終驗人可提煉經驗證、可重複使用的做法。",
+    "pending": "待審核",
+    "version": "第 {{version}} 版",
+    "dismissed": "已駁回",
+    "source": "來源任務 #{{number}}",
+    "verify": "如何驗證",
+    "avoid": "應避免的做法",
+    "dismiss": "駁回",
+    "publish": "發佈到專案",
+    "publish_version": "發佈新版本",
+    "load_failed": "無法載入專案技能。",
+    "retry": "重試",
+    "save_failed": "無法儲存審核結果。"
+  },
   "page": {
     "title": "專案",
     "new_project": "新建專案",

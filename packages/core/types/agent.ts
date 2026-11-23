@@ -896,6 +896,7 @@ export interface SkillSummary {
 }
 
 export interface Skill extends SkillSummary {
+  project_id?: string;
   content: string;
   files: SkillFile[];
 }

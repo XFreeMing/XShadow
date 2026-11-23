@@ -1619,6 +1619,21 @@ type ProjectResource struct {
 	CreatedBy    pgtype.UUID        `json:"created_by"`
 }
 
+type ProjectSkillProposal struct {
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	MethodRevision  int32              `json:"method_revision"`
+	TraceRevision   int32              `json:"trace_revision"`
+	CandidateCommit string             `json:"candidate_commit"`
+	Lesson          []byte             `json:"lesson"`
+	ProposedAt      pgtype.Timestamptz `json:"proposed_at"`
+	DecidedAt       pgtype.Timestamptz `json:"decided_at"`
+	DecidedBy       pgtype.UUID        `json:"decided_by"`
+	SkillID         pgtype.UUID        `json:"skill_id"`
+	SkillVersion    pgtype.Int4        `json:"skill_version"`
+}
+
 type ProjectSubscriber struct {
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
 	ProjectID   pgtype.UUID        `json:"project_id"`
@@ -1710,6 +1725,7 @@ type Skill struct {
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	PluginInstallationID pgtype.UUID        `json:"plugin_installation_id"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
 }
 
 type SkillFile struct {

@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "Habilidades",
+    "published": "Habilidades publicadas",
+    "empty": "Este proyecto aún no tiene habilidades publicadas.",
+    "proposals": "Propuestas de aprendizaje",
+    "no_proposals": "La revisión final puede proponer una técnica reutilizable con evidencia de validación.",
+    "pending": "Pendiente de revisión",
+    "version": "Versión {{version}}",
+    "dismissed": "Descartada",
+    "source": "Tarea de origen n.º {{number}}",
+    "verify": "Verificar",
+    "avoid": "Evitar",
+    "dismiss": "Descartar",
+    "publish": "Publicar en el proyecto",
+    "publish_version": "Publicar nueva versión",
+    "load_failed": "No se pudieron cargar las habilidades del proyecto.",
+    "retry": "Reintentar",
+    "save_failed": "No se pudo guardar la decisión."
+  },
   "page": {
     "title": "Proyectos",
     "new_project": "Nuevo proyecto",

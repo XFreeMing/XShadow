@@ -390,6 +390,8 @@ import {
   RuntimeUsageListSchema,
   SearchIssuesResponseSchema,
   ProjectSchema,
+  ProjectSkillsSchema,
+  type ProjectSkills,
   ListProjectMembersResponseSchema,
   ProjectSubscriptionSchema,
   ListProjectsResponseSchema,
@@ -4663,6 +4665,20 @@ export class ApiClient {
 
   async removeProjectMember(id: string, userId: string): Promise<void> {
     await this.fetch(`/api/projects/${id}/members/${userId}`, { method: "DELETE" });
+  }
+
+  async listProjectSkills(projectId: string): Promise<ProjectSkills | null> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/skills`);
+    return parseWithFallback<ProjectSkills | null>(raw, ProjectSkillsSchema, null, {
+      endpoint: "GET /api/projects/:id/skills",
+    });
+  }
+
+  async decideProjectSkill(projectId: string, issueId: string, revision: number, decision: "publish" | "dismiss") {
+    await this.fetch(`/api/projects/${projectId}/skill-proposals/${issueId}/${revision}`, {
+      method: "PUT",
+      body: JSON.stringify({ decision }),
+    });
   }
 
   // Project resources

@@ -341,6 +341,8 @@ func (h *Handler) RestoreSkillVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	wsID := uuidToString(skill.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, requestUserID(r), wsID)
-	h.publish(protocol.EventSkillUpdated, wsID, actorType, actorID, map[string]any{"skill": resp})
+	if !skill.ProjectID.Valid {
+		h.publish(protocol.EventSkillUpdated, wsID, actorType, actorID, map[string]any{"skill": resp})
+	}
 	writeJSON(w, http.StatusOK, resp)
 }

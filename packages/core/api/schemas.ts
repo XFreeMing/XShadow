@@ -4178,9 +4178,38 @@ export const EMPTY_SKILL_SUMMARY: SkillSummary = {
 };
 
 export const SkillSchema = SkillSummarySchema.extend({
+  project_id: z.string().optional().catch(undefined),
   content: z.string().optional().default(""),
   files: z.array(SkillFileSchema).optional().default([]),
 }).loose();
+
+export const ProjectSkillsSchema = z.object({
+  can_manage: z.boolean(),
+  skills: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    description: z.string(),
+  })),
+  proposals: z.array(z.object({
+    issue_id: z.string(),
+    issue_number: z.number().int(),
+    method_revision: z.number().int().positive(),
+    candidate_commit: z.string(),
+    state: z.enum(["pending", "published", "dismissed"]),
+    skill_id: z.string().nullable(),
+    skill_version: z.number().int().positive().nullable(),
+    lesson: z.object({
+      name: z.string(),
+      when: z.string(),
+      steps: z.array(z.string()),
+      verify: z.string(),
+      avoid: z.string(),
+      criterion_id: z.string(),
+      case_id: z.string(),
+    }),
+  })),
+});
+export type ProjectSkills = z.infer<typeof ProjectSkillsSchema>;
 
 export const EMPTY_SKILL: Skill = {
   ...EMPTY_SKILL_SUMMARY,

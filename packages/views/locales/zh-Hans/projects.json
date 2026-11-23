@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "技能",
+    "published": "已发布的项目技能",
+    "empty": "此项目还没有已发布的技能。",
+    "proposals": "经验提议",
+    "no_proposals": "终验人可提炼经验证、可复用的做法。",
+    "pending": "待审核",
+    "version": "第 {{version}} 版",
+    "dismissed": "已驳回",
+    "source": "来源任务 #{{number}}",
+    "verify": "如何验证",
+    "avoid": "应避开的做法",
+    "dismiss": "驳回",
+    "publish": "发布到项目",
+    "publish_version": "发布新版本",
+    "load_failed": "无法加载项目技能。",
+    "retry": "重试",
+    "save_failed": "无法保存审核结果。"
+  },
   "page": {
     "title": "项目",
     "new_project": "新建项目",

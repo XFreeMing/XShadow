@@ -38,6 +38,7 @@ import { ProjectWorkflowControl } from "../../workflows/project-workflow-row";
 import { ProjectWorkflowMenuItem, ProjectWorkflowSheet } from "../../workflows/project-workflow-sheet";
 import { IssueSurface } from "../../issues/surface/issue-surface";
 import { ProjectGoalsTab } from "../../goals/components/project-goals-tab";
+import { ProjectSkillsTab } from "./project-skills-tab";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { TooltipHint } from "@multica/ui/components/common/tooltip-hint";
@@ -124,8 +125,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const router = useNavigation();
-  // `?tab=goals` is a view of the same project page, not a second route.
-  const activeTab = router.searchParams.get("tab") === "goals" ? "goals" : "tasks";
+  const tabParam = router.searchParams.get("tab");
+  const activeTab = tabParam === "goals" || tabParam === "skills" ? tabParam : "tasks";
   const userId = useAuthStore((s) => s.user?.id);
   const deleteProject = useDeleteProject();
   const deleted = deleteProject.isSuccess && deleteProject.variables === projectId;
@@ -586,8 +587,23 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             >
               {tGoals(($) => $.tab.goals)}
             </button>
+            <button
+              type="button"
+              aria-current={activeTab === "skills" ? "page" : undefined}
+              onClick={() => router.push(`${wsPaths.projectDetail(projectId)}?tab=skills`)}
+              className={cn(
+                "-mb-px border-b-2 px-1 pb-2 text-body transition-colors",
+                activeTab === "skills"
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t(($) => $.skills.tab)}
+            </button>
           </nav>
-          {activeTab === "goals" ? (
+          {activeTab === "skills" ? (
+            <ProjectSkillsTab projectId={project.id} />
+          ) : activeTab === "goals" ? (
             <ProjectGoalsTab projectId={projectId} projectTitle={project.title} />
           ) : (
           <IssueSurface

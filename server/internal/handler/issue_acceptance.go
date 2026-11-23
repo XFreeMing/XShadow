@@ -99,7 +99,7 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 	}
 	var updated db.Issue
 	if redispatch {
-		updated, ok = h.persistMethodTransition(w, r, issue, &run, raw)
+		updated, ok = h.persistMethodTransition(w, r, issue, &run, raw, nil)
 		if !ok {
 			return
 		}

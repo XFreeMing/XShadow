@@ -143,7 +143,7 @@ func (h *Handler) writeIssueMethodView(w http.ResponseWriter, r *http.Request, i
 	}{run, err == nil && h.canActOnMethod(r, issue, run, actor), delivery})
 }
 
-func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request, issue db.Issue, run *workmethod.Run, trace []byte) (db.Issue, bool) {
+func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request, issue db.Issue, run *workmethod.Run, trace []byte, lesson *verifiedProjectLesson) (db.Issue, bool) {
 	run.CurrentActor = nil
 	actor, err := h.methodRecipient(r.Context(), issue, *run)
 	if err != nil {
@@ -236,6 +236,12 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(ctx)
 	q := h.Queries.WithTx(tx)
+	if lesson != nil {
+		if _, err := q.LockProjectForDelete(ctx, db.LockProjectForDeleteParams{WorkspaceID: issue.WorkspaceID, ID: issue.ProjectID}); err != nil {
+			writeError(w, 409, "project changed; reload the issue")
+			return db.Issue{}, false
+		}
+	}
 	var executionID pgtype.UUID
 	if scoped {
 		execution, err := service.CheckGoalExecutionTask(ctx, q, issue, source, true)
@@ -313,6 +319,16 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeError(w, 500, "failed to update method run")
 		return db.Issue{}, false
+	}
+	if lesson != nil {
+		if err := q.ProposeProjectSkill(ctx, db.ProposeProjectSkillParams{
+			WorkspaceID: updated.WorkspaceID, ProjectID: updated.ProjectID, IssueID: updated.ID,
+			MethodRevision: int32(run.Revision), TraceRevision: lesson.traceRevision,
+			CandidateCommit: lesson.commit, Lesson: lesson.raw,
+		}); err != nil {
+			writeError(w, 500, "failed to save project skill proposal")
+			return db.Issue{}, false
+		}
 	}
 	var task db.AgentTaskQueue
 	if agentID.Valid {

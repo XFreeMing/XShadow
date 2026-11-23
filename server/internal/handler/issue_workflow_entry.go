@@ -502,6 +502,9 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 		if stepContext {
 			methodBrief = fmt.Sprintf("Issue %s: %q.\n", issueRef, issue.Title) + methodBrief + stepAcceptanceIndex(issue, method)
 		}
+		if ownsStep && issue.ProjectID.Valid && method.CanProposeProjectLesson() {
+			methodBrief += "\n\n" + workmethod.ProjectLessonBrief
+		}
 	}
 	if def == nil || (def.IsDefault && !def.HandsOffAnywhere()) || methodOwned {
 		if methodBrief == "" {

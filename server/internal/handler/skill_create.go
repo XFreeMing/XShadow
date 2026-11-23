@@ -14,6 +14,7 @@ import (
 
 type skillCreateInput struct {
 	WorkspaceID pgtype.UUID
+	ProjectID   pgtype.UUID
 	CreatorID   pgtype.UUID
 	Name        string
 	Description string
@@ -41,6 +42,7 @@ func createSkillWithFilesInTx(ctx context.Context, qtx *db.Queries, input skillC
 
 	skill, err := qtx.CreateSkill(ctx, db.CreateSkillParams{
 		WorkspaceID: input.WorkspaceID,
+		ProjectID:   input.ProjectID,
 		Name:        sanitizeNullBytes(input.Name),
 		Description: sanitizeNullBytes(input.Description),
 		Content:     sanitizeNullBytes(input.Content),

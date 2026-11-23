@@ -1,4 +1,23 @@
 {
+  "skills": {
+    "tab": "스킬",
+    "published": "게시된 스킬",
+    "empty": "이 프로젝트에 게시된 스킬이 없습니다.",
+    "proposals": "경험 제안",
+    "no_proposals": "최종 검토자는 검증을 통과한 재사용 가능한 방법을 제안할 수 있습니다.",
+    "pending": "검토 대기",
+    "version": "버전 {{version}}",
+    "dismissed": "반려됨",
+    "source": "출처 작업 #{{number}}",
+    "verify": "검증 방법",
+    "avoid": "피해야 할 방법",
+    "dismiss": "반려",
+    "publish": "프로젝트에 게시",
+    "publish_version": "새 버전 게시",
+    "load_failed": "프로젝트 스킬을 불러오지 못했습니다.",
+    "retry": "다시 시도",
+    "save_failed": "검토 결과를 저장하지 못했습니다."
+  },
   "page": {
     "title": "프로젝트",
     "new_project": "새 프로젝트",

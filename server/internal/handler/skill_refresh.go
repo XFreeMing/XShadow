@@ -123,6 +123,10 @@ func (h *Handler) RefreshSkill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if skill.ProjectID.Valid {
+		writeError(w, http.StatusUnprocessableEntity, errSkillNotRefreshable.Error())
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return

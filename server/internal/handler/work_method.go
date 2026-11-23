@@ -162,6 +162,10 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid method change")
 		return
 	}
+	if change.ProjectLesson != nil && change.Action != "approve" {
+		writeError(w, http.StatusBadRequest, "project_lesson is only valid for final approval")
+		return
+	}
 	task, hasSource := h.taskFromRequestHeader(r)
 	binding := service.ReadGoalExecutionTask(task)
 	if binding.ID.Valid && (task.IssueID != issue.ID || (binding.Revision == 0 && change.Action != "start")) {
@@ -250,6 +254,14 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	}
 	ws := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, ws)
+	var lesson *verifiedProjectLesson
+	if change.ProjectLesson != nil {
+		lesson, err = verifyProjectLesson(issue, run, change.ProjectLesson, actorType+"/"+actorID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if err := run.Apply(change, methods, actorType+"/"+actorID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, workmethod.ErrConflict) {
@@ -258,7 +270,7 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, err.Error())
 		return
 	}
-	updated, ok := h.persistMethodTransition(w, r, issue, &run, trace)
+	updated, ok := h.persistMethodTransition(w, r, issue, &run, trace, lesson)
 	if !ok {
 		return
 	}

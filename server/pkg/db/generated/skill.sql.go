@@ -28,9 +28,9 @@ func (q *Queries) AddAgentSkill(ctx context.Context, arg AddAgentSkillParams) er
 }
 
 const createSkill = `-- name: CreateSkill :one
-INSERT INTO skill (workspace_id, name, description, content, config, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id
+INSERT INTO skill (workspace_id, name, description, content, config, created_by, project_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id
 `
 
 type CreateSkillParams struct {
@@ -40,6 +40,7 @@ type CreateSkillParams struct {
 	Content     string      `json:"content"`
 	Config      []byte      `json:"config"`
 	CreatedBy   pgtype.UUID `json:"created_by"`
+	ProjectID   pgtype.UUID `json:"project_id"`
 }
 
 func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill, error) {
@@ -50,6 +51,7 @@ func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill
 		arg.Content,
 		arg.Config,
 		arg.CreatedBy,
+		arg.ProjectID,
 	)
 	var i Skill
 	err := row.Scan(
@@ -63,6 +65,7 @@ func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -199,7 +202,7 @@ func (q *Queries) GetLatestSkillVersion(ctx context.Context, skillID pgtype.UUID
 }
 
 const getSkill = `-- name: GetSkill :one
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id FROM skill
 WHERE id = $1
 `
 
@@ -217,13 +220,14 @@ func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const getSkillByWorkspaceAndName = `-- name: GetSkillByWorkspaceAndName :one
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill
-WHERE workspace_id = $1 AND name = $2
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id FROM skill
+WHERE workspace_id = $1 AND name = $2 AND project_id IS NULL
 `
 
 type GetSkillByWorkspaceAndNameParams struct {
@@ -247,6 +251,7 @@ func (q *Queries) GetSkillByWorkspaceAndName(ctx context.Context, arg GetSkillBy
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -271,8 +276,8 @@ func (q *Queries) GetSkillFile(ctx context.Context, id pgtype.UUID) (SkillFile, 
 }
 
 const getSkillInWorkspace = `-- name: GetSkillInWorkspace :one
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill
-WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id FROM skill
+WHERE id = $1 AND workspace_id = $2 AND project_id IS NULL
 `
 
 type GetSkillInWorkspaceParams struct {
@@ -294,6 +299,7 @@ func (q *Queries) GetSkillInWorkspace(ctx context.Context, arg GetSkillInWorkspa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -335,7 +341,7 @@ SELECT ask.agent_id, s.name
 FROM agent_skill ask
 JOIN skill s ON s.id = ask.skill_id
 WHERE ask.agent_id = ANY($1::uuid[])
-  AND ask.enabled = TRUE
+  AND ask.enabled = TRUE AND s.project_id IS NULL
 ORDER BY ask.agent_id, s.name ASC
 `
 
@@ -368,7 +374,7 @@ const listAgentSkillSummaries = `-- name: ListAgentSkillSummaries :many
 SELECT s.id, s.workspace_id, s.name, s.description, s.config, s.created_by, s.created_at, s.updated_at, ask.enabled
 FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
-WHERE ask.agent_id = $1
+WHERE ask.agent_id = $1 AND s.project_id IS NULL
 ORDER BY s.name ASC
 `
 
@@ -418,9 +424,9 @@ func (q *Queries) ListAgentSkillSummaries(ctx context.Context, agentID pgtype.UU
 
 const listAgentSkills = `-- name: ListAgentSkills :many
 
-SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at, s.plugin_installation_id FROM skill s
+SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at, s.plugin_installation_id, s.project_id FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
-WHERE ask.agent_id = $1 AND ask.enabled = TRUE
+WHERE ask.agent_id = $1 AND ask.enabled = TRUE AND s.project_id IS NULL
 ORDER BY s.name ASC
 `
 
@@ -445,6 +451,7 @@ func (q *Queries) ListAgentSkills(ctx context.Context, agentID pgtype.UUID) ([]S
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PluginInstallationID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -457,10 +464,11 @@ func (q *Queries) ListAgentSkills(ctx context.Context, agentID pgtype.UUID) ([]S
 }
 
 const listAgentSkillsByIDs = `-- name: ListAgentSkillsByIDs :many
-SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at, s.plugin_installation_id FROM skill s
+SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at, s.plugin_installation_id, s.project_id FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
 WHERE ask.agent_id = $1
   AND ask.enabled = TRUE
+  AND s.project_id IS NULL
   AND s.id = ANY($2::uuid[])
 ORDER BY s.name ASC
 `
@@ -496,6 +504,7 @@ func (q *Queries) ListAgentSkillsByIDs(ctx context.Context, arg ListAgentSkillsB
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PluginInstallationID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -511,7 +520,7 @@ const listAgentSkillsByWorkspace = `-- name: ListAgentSkillsByWorkspace :many
 SELECT ask.agent_id, s.id, s.name, s.description, ask.enabled
 FROM agent_skill ask
 JOIN skill s ON s.id = ask.skill_id
-WHERE s.workspace_id = $1
+WHERE s.workspace_id = $1 AND s.project_id IS NULL
 ORDER BY s.name ASC
 `
 
@@ -687,7 +696,7 @@ func (q *Queries) ListSkillFilesBySkillIDs(ctx context.Context, skillIds []pgtyp
 const listSkillSummariesByWorkspace = `-- name: ListSkillSummariesByWorkspace :many
 SELECT id, workspace_id, name, description, config, created_by, created_at, updated_at
 FROM skill
-WHERE workspace_id = $1
+WHERE workspace_id = $1 AND project_id IS NULL
 ORDER BY name ASC
 `
 
@@ -792,8 +801,8 @@ func (q *Queries) ListSkillVersions(ctx context.Context, arg ListSkillVersionsPa
 
 const listSkillsByWorkspace = `-- name: ListSkillsByWorkspace :many
 
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill
-WHERE workspace_id = $1
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id FROM skill
+WHERE workspace_id = $1 AND project_id IS NULL
 ORDER BY name ASC
 `
 
@@ -818,6 +827,7 @@ func (q *Queries) ListSkillsByWorkspace(ctx context.Context, workspaceID pgtype.
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PluginInstallationID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -831,7 +841,7 @@ func (q *Queries) ListSkillsByWorkspace(ctx context.Context, workspaceID pgtype.
 
 const lockSkillForVersioning = `-- name: LockSkillForVersioning :one
 
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill WHERE id = $1 FOR UPDATE
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id FROM skill WHERE id = $1 FOR UPDATE
 `
 
 // Skill versions
@@ -852,6 +862,7 @@ func (q *Queries) LockSkillForVersioning(ctx context.Context, id pgtype.UUID) (S
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -903,7 +914,7 @@ func (q *Queries) SetAgentSkillEnabled(ctx context.Context, arg SetAgentSkillEna
 const touchSkill = `-- name: TouchSkill :one
 UPDATE skill SET updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id
+RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id
 `
 
 type TouchSkillParams struct {
@@ -928,6 +939,7 @@ func (q *Queries) TouchSkill(ctx context.Context, arg TouchSkillParams) (Skill, 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -940,7 +952,7 @@ UPDATE skill SET
     config = COALESCE($5, config),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id
+RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id, project_id
 `
 
 type UpdateSkillParams struct {
@@ -971,6 +983,7 @@ func (q *Queries) UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PluginInstallationID,
+		&i.ProjectID,
 	)
 	return i, err
 }
