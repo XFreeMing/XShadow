@@ -99,6 +99,34 @@
     "no_labels": "Aucune étiquette pour l'instant",
     "no_results": "Aucun résultat"
   },
+  "activity": {
+    "title": "Utilisation et impact",
+    "propose": "Demander une maintenance",
+    "window": "Nombre de jours",
+    "available": "Disponible",
+    "reviewed": "Évaluée",
+    "adopted": "Appliquée",
+    "helped": "Utile",
+    "versions": "Par version",
+    "recent": "Exécutions récentes",
+    "empty": "Aucune exécution observée sur cette période.",
+    "unavailable": "Impossible de charger l’activité de la compétence.",
+    "scope": "Les compteurs couvrent les exécutions de tâches observées. L’impact repose sur les éléments consignés lors de l’évaluation.",
+    "review": "Consigner une évaluation",
+    "unreviewed": "Non évaluée",
+    "outcome": "Sélectionner un résultat",
+    "evidence": "Élément issu de l’exécution ou de la validation",
+    "review_failed": "Impossible d’enregistrer l’évaluation.",
+    "proposal_title": "Maintenir {{name}}",
+    "proposal_description": "[Ouvrir la compétence]({{url}})\n\nIndiquez le problème, la version concernée, les preuves et l’action proposée : mettre à jour, faire évoluer ou retirer la compétence.",
+    "version_counts": "{{available}} disponibles · {{adopted}} applications · {{regressed}} régressions",
+    "outcomes": {
+      "not_applied": "Non appliquée",
+      "helped": "Utile",
+      "neutral": "Aucun changement net",
+      "regressed": "Résultat dégradé"
+    }
+  },
   "detail": {
     "read_only": "Lecture seule",
     "supporting_data_warning": "Certaines données de l'espace de travail n'ont pas pu être chargées. L'attribution des créateurs, les noms de runtimes ou les droits de modification peuvent apparaître incomplets jusqu'à la prochaine actualisation.",

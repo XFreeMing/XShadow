@@ -56,7 +56,31 @@ export function CreateIssueDialog({
       />
     );
   }
+  if (typeof data?.skill_maintenance_title === "string" && typeof data.skill_maintenance_description === "string") {
+    return (
+      <SkillMaintenanceIssueDialog
+        onClose={onClose}
+        title={data.skill_maintenance_title}
+        description={data.skill_maintenance_description}
+      />
+    );
+  }
   return <CreateIssueDialogBody onClose={onClose} initialMode={initialMode} data={data} />;
+}
+
+function SkillMaintenanceIssueDialog({
+  onClose, title, description,
+}: { onClose: () => void; title: string; description: string }) {
+  const [draftReady, setDraftReady] = useState(false);
+  useLayoutEffect(() => {
+    const store = useIssueDraftStore.getState();
+    store.beginIsolatedDraft();
+    store.setManual({ title, description, status: "backlog", assigneeType: undefined, assigneeId: undefined });
+    setDraftReady(true);
+    return () => store.endIsolatedDraft();
+  }, [title, description]);
+  if (!draftReady) return null;
+  return <CreateIssueDialogBody onClose={onClose} initialMode="manual" data={{ assignee_id: null, assignee_type: null }} />;
 }
 
 function SourceContextCreateIssueDialog({

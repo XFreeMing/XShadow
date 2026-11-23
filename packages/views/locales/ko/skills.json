@@ -92,6 +92,34 @@
     "no_labels": "아직 라벨이 없습니다",
     "no_results": "결과 없음"
   },
+  "activity": {
+    "title": "사용 현황 및 효과",
+    "propose": "유지보수 요청",
+    "window": "최근 일수",
+    "available": "사용 가능",
+    "reviewed": "평가 완료",
+    "adopted": "적용됨",
+    "helped": "도움 됨",
+    "versions": "버전별",
+    "recent": "최근 실행",
+    "empty": "이 기간에 관측된 실행이 없습니다.",
+    "unavailable": "스킬 활동을 불러오지 못했습니다.",
+    "scope": "관측된 이슈 실행을 집계합니다. 효과는 검토자가 기록한 근거를 기반으로 합니다.",
+    "review": "평가 기록",
+    "unreviewed": "평가 대기",
+    "outcome": "결과 선택",
+    "evidence": "실행 또는 인수 검토의 근거",
+    "review_failed": "스킬 평가를 저장하지 못했습니다.",
+    "proposal_title": "{{name}} 유지보수",
+    "proposal_description": "[스킬 열기]({{url}})\n\n문제, 영향을 받는 버전, 근거와 업데이트·업그레이드·사용 중단 중 제안하는 조치를 작성하세요.",
+    "version_counts": "사용 가능 {{available}}회 · 적용 {{adopted}}회 · 성능 저하 {{regressed}}회",
+    "outcomes": {
+      "not_applied": "미적용",
+      "helped": "도움 됨",
+      "neutral": "뚜렷한 변화 없음",
+      "regressed": "결과 악화"
+    }
+  },
   "detail": {
     "read_only": "읽기 전용",
     "supporting_data_warning": "일부 워크스페이스 데이터를 불러오지 못했습니다. 다음 새로고침 전까지 생성자 표시, 런타임 이름, 수정 권한이 불완전하게 보일 수 있습니다.",

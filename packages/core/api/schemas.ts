@@ -4199,6 +4199,48 @@ const SKILL_VERSION_SOURCES = [
   "restore",
 ] as const;
 
+const SkillActivityCountsSchema = z.object({
+  available: z.number().int().nonnegative(),
+  reviewed: z.number().int().nonnegative(),
+  adopted: z.number().int().nonnegative(),
+  helped: z.number().int().nonnegative(),
+  neutral: z.number().int().nonnegative(),
+  regressed: z.number().int().nonnegative(),
+  not_applied: z.number().int().nonnegative(),
+});
+
+export const SkillRunOutcomeSchema = z.enum(["not_applied", "helped", "neutral", "regressed"]);
+export type SkillRunOutcome = z.infer<typeof SkillRunOutcomeSchema>;
+
+export const SkillActivitySchema = z.object({
+  days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+  counts: SkillActivityCountsSchema,
+  versions: z.array(SkillActivityCountsSchema.extend({
+    content_hash: z.string(),
+    version: z.number().int().positive().nullable(),
+  })),
+  runs: z.array(z.object({
+    id: z.string(),
+    issue_id: z.string(),
+    issue_number: z.number().int(),
+    content_hash: z.string(),
+    version: z.number().int().positive().nullable(),
+    status: z.string(),
+    provided_at: z.string(),
+    outcome: SkillRunOutcomeSchema.optional().catch(undefined),
+    evidence: z.string().optional(),
+    reviewed_at: z.string().optional(),
+  })),
+});
+
+export type SkillActivity = z.infer<typeof SkillActivitySchema>;
+export type SkillActivityRun = SkillActivity["runs"][number];
+export type SkillActivityReview = Pick<SkillActivityRun, "content_hash"> & {
+  run_id: SkillActivityRun["id"];
+  outcome: SkillRunOutcome;
+  evidence: string;
+};
+
 export const SkillVersionSummarySchema = z.object({
   id: z.string(),
   skill_id: z.string(),

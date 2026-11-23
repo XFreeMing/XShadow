@@ -16,6 +16,8 @@ const canEditRef = vi.hoisted(() => ({ current: true }));
 const versionsRef = vi.hoisted(() => ({ current: [] as unknown[] }));
 const copyTextMock = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
 
+vi.mock("./skill-activity-panel", () => ({ SkillActivityPanel: () => null }));
+
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/workspace/queries", () => ({
   skillDetailOptions: (wsId: string, id: string) => ({

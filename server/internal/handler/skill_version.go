@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -31,11 +29,6 @@ const (
 	skillVersionSourceRestore  = "restore"
 )
 
-type skillVersionFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-}
-
 type SkillVersionSummaryResponse struct {
 	ID                  string  `json:"id"`
 	SkillID             string  `json:"skill_id"`
@@ -49,9 +42,9 @@ type SkillVersionSummaryResponse struct {
 
 type SkillVersionResponse struct {
 	SkillVersionSummaryResponse
-	Description string             `json:"description"`
-	Content     string             `json:"content"`
-	Files       []skillVersionFile `json:"files"`
+	Description string                 `json:"description"`
+	Content     string                 `json:"content"`
+	Files       []skillpkg.VersionFile `json:"files"`
 }
 
 type skillVersionRecord struct {
@@ -116,11 +109,11 @@ func appendSkillVersion(ctx context.Context, qtx *db.Queries, skill db.Skill, re
 	if err != nil {
 		return false, err
 	}
-	snapshot := make([]skillVersionFile, len(files))
+	snapshot := make([]skillpkg.VersionFile, len(files))
 	for i, f := range files {
-		snapshot[i] = skillVersionFile{Path: f.Path, Content: f.Content}
+		snapshot[i] = skillpkg.VersionFile{Path: f.Path, Content: f.Content}
 	}
-	hash, err := skillVersionHash(skill.Name, skill.Description, skill.Content, snapshot)
+	hash, err := skillpkg.VersionHash(skill.Name, skill.Description, skill.Content, snapshot)
 	if err != nil {
 		return false, err
 	}
@@ -161,22 +154,6 @@ func appendSkillVersion(ctx context.Context, qtx *db.Queries, skill db.Skill, re
 	return true, nil
 }
 
-// skillVersionHash fingerprints the versioned fields. Files come from
-// ListSkillFiles, which orders by path, so the encoding is deterministic.
-func skillVersionHash(name, description, content string, files []skillVersionFile) (string, error) {
-	payload, err := json.Marshal(struct {
-		Name        string             `json:"name"`
-		Description string             `json:"description"`
-		Content     string             `json:"content"`
-		Files       []skillVersionFile `json:"files"`
-	}{name, description, content, files})
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), nil
-}
-
 func skillVersionSummaryToResponse(id, skillID pgtype.UUID, version int32, name, source string, restoredFrom pgtype.Int4, createdBy pgtype.UUID, createdAt pgtype.Timestamptz) SkillVersionSummaryResponse {
 	return SkillVersionSummaryResponse{
 		ID:                  uuidToString(id),
@@ -190,8 +167,8 @@ func skillVersionSummaryToResponse(id, skillID pgtype.UUID, version int32, name,
 	}
 }
 
-func decodeSkillVersionFiles(raw []byte) ([]skillVersionFile, error) {
-	files := []skillVersionFile{}
+func decodeSkillVersionFiles(raw []byte) ([]skillpkg.VersionFile, error) {
+	files := []skillpkg.VersionFile{}
 	if len(raw) == 0 {
 		return files, nil
 	}

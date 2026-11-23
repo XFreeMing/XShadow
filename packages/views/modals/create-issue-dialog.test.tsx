@@ -5,6 +5,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 const mockSetLastMode = vi.hoisted(() => vi.fn());
 const mockBeginIsolatedDraft = vi.hoisted(() => vi.fn());
 const mockEndIsolatedDraft = vi.hoisted(() => vi.fn());
+const mockSetManual = vi.hoisted(() => vi.fn());
 const mockRefetchSourceContext = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
@@ -33,6 +34,7 @@ vi.mock("@multica/core/issues/stores/draft-store", () => ({
     getState: () => ({
       beginIsolatedDraft: mockBeginIsolatedDraft,
       endIsolatedDraft: mockEndIsolatedDraft,
+      setManual: mockSetManual,
     }),
   },
 }));
@@ -140,6 +142,28 @@ describe("CreateIssueDialog sizing", () => {
     expect(mockBeginIsolatedDraft).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "switch manual" }));
     expect(screen.getByText(/manual panel · ordinary/)).toBeInTheDocument();
+  });
+
+  it("opens a skill maintenance draft without overriding the member's draft or carrying over its assignee", () => {
+    const view = render(
+      <CreateIssueDialog
+        onClose={vi.fn()}
+        initialMode="manual"
+        data={{
+          skill_maintenance_title: "Maintain tech-web-graph",
+          skill_maintenance_description: "[Open the skill](/dev/skills/graph)",
+        }}
+      />,
+    );
+    expect(screen.getByText(/manual panel · ordinary/)).toBeInTheDocument();
+    expect(screen.getByTestId("manual-owner")).toHaveTextContent("draft");
+    expect(mockBeginIsolatedDraft).toHaveBeenCalledTimes(1);
+    expect(mockSetManual).toHaveBeenCalledWith({
+      title: "Maintain tech-web-graph", description: "[Open the skill](/dev/skills/graph)",
+      status: "backlog", assigneeType: undefined, assigneeId: undefined,
+    });
+    view.unmount();
+    expect(mockEndIsolatedDraft).toHaveBeenCalledTimes(1);
   });
 
   it("seeds the parent owner on the first agent-to-manual switch only", () => {

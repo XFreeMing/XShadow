@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_skill_run_observation_identity;

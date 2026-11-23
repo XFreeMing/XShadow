@@ -8674,6 +8674,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if supplementSupported {
 		taskCapabilities = append(taskCapabilities, protocol.DaemonCapabilityTaskSupplementV1)
 	}
+	if task.IssueID != "" && task.ChatSessionID == "" {
+		task.PreparedSkills = preparedWorkspaceSkills(skills, env.PreparedSkillNames)
+	}
 	taskSupplementNegotiated, err := d.client.StartTask(prepareCtx, task, taskCapabilities...)
 	if err != nil {
 		stopPrepareLease()

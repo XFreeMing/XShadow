@@ -92,6 +92,34 @@
     "no_labels": "まだラベルがありません",
     "no_results": "結果なし"
   },
+  "activity": {
+    "title": "利用状況と効果",
+    "propose": "メンテナンスを依頼",
+    "window": "直近の日数",
+    "available": "利用可能だった実行",
+    "reviewed": "評価済み",
+    "adopted": "適用済み",
+    "helped": "効果あり",
+    "versions": "バージョン別",
+    "recent": "最近の実行",
+    "empty": "この期間に観測された実行はありません。",
+    "unavailable": "スキルの活動を読み込めませんでした。",
+    "scope": "観測した課題の実行を集計します。効果はレビュー担当者が記録した根拠に基づきます。",
+    "review": "評価を記録",
+    "unreviewed": "未評価",
+    "outcome": "結果を選択",
+    "evidence": "実行または受け入れ確認の根拠",
+    "review_failed": "スキルの評価を保存できませんでした。",
+    "proposal_title": "{{name}} のメンテナンス",
+    "proposal_description": "[スキルを開く]({{url}})\n\n問題、影響するバージョン、根拠、更新・アップグレード・利用終了の提案を記入してください。",
+    "version_counts": "利用可能 {{available}} · 適用 {{adopted}} · 悪化 {{regressed}}",
+    "outcomes": {
+      "not_applied": "未適用",
+      "helped": "効果あり",
+      "neutral": "明確な変化なし",
+      "regressed": "結果が悪化"
+    }
+  },
   "detail": {
     "read_only": "読み取り専用",
     "supporting_data_warning": "一部のワークスペースデータを読み込めませんでした。次回の更新まで、作成者の表示、ランタイム名、編集権限が不完全に見える場合があります。",

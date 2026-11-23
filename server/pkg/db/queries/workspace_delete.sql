@@ -381,6 +381,9 @@ deleted_agent_labels AS (
     WHERE agent_id IN (SELECT id FROM ws_agents)
        OR label_id IN (SELECT id FROM ws_labels)
 ),
+deleted_skill_run_observations AS (
+    DELETE FROM skill_run_observation WHERE workspace_id = $1
+),
 deleted_skill_labels AS (
     DELETE FROM skill_to_label
     WHERE skill_id IN (SELECT id FROM ws_skills)

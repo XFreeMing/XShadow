@@ -99,6 +99,34 @@
     "no_labels": "Todavía no hay etiquetas",
     "no_results": "Sin resultados"
   },
+  "activity": {
+    "title": "Uso e impacto",
+    "propose": "Solicitar mantenimiento",
+    "window": "Días anteriores",
+    "available": "Disponible",
+    "reviewed": "Evaluada",
+    "adopted": "Aplicada",
+    "helped": "Útil",
+    "versions": "Por versión",
+    "recent": "Ejecuciones recientes",
+    "empty": "No se observaron ejecuciones en este periodo.",
+    "unavailable": "No se pudo cargar la actividad de la habilidad.",
+    "scope": "El recuento cubre las ejecuciones observadas de tareas. El impacto se basa en la evidencia que registran los revisores.",
+    "review": "Registrar evaluación",
+    "unreviewed": "Sin evaluar",
+    "outcome": "Seleccionar resultado",
+    "evidence": "Evidencia de la ejecución o de la validación",
+    "review_failed": "No se pudo guardar la evaluación.",
+    "proposal_title": "Mantenimiento de {{name}}",
+    "proposal_description": "[Abrir la habilidad]({{url}})\n\nIndica el problema, la versión afectada, la evidencia y si propones actualizar, mejorar o retirar la habilidad.",
+    "version_counts": "{{available}} disponibles · {{adopted}} aplicadas · {{regressed}} regresiones",
+    "outcomes": {
+      "not_applied": "No aplicada",
+      "helped": "Útil",
+      "neutral": "Sin cambio claro",
+      "regressed": "El resultado empeoró"
+    }
+  },
   "detail": {
     "read_only": "Solo lectura",
     "supporting_data_warning": "No se han podido cargar algunos datos del espacio de trabajo. La atribución del creador, los nombres de runtime o los permisos de edición pueden aparecer incompletos hasta la próxima actualización.",

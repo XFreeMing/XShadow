@@ -99,6 +99,34 @@
     "no_labels": "No labels yet",
     "no_results": "No results"
   },
+  "activity": {
+    "title": "Usage and impact",
+    "propose": "Request maintenance",
+    "window": "Past days",
+    "available": "Available to runs",
+    "reviewed": "Reviewed",
+    "adopted": "Applied",
+    "helped": "Helped",
+    "versions": "By version",
+    "recent": "Recent runs",
+    "empty": "No observed runs in this period.",
+    "unavailable": "Could not load skill activity.",
+    "scope": "Counts cover observed issue runs. Impact comes from evidence recorded by reviewers.",
+    "review": "Record review",
+    "unreviewed": "Not reviewed",
+    "outcome": "Select outcome",
+    "evidence": "Evidence from the run or acceptance review",
+    "review_failed": "Could not save the skill review.",
+    "proposal_title": "Maintain {{name}}",
+    "proposal_description": "[Open the skill]({{url}})\n\nDescribe the problem, the affected version, the evidence, and whether to update, upgrade, or retire the skill.",
+    "version_counts": "{{available}} available · {{adopted}} applied · {{regressed}} regressions",
+    "outcomes": {
+      "not_applied": "Not applied",
+      "helped": "Helped",
+      "neutral": "No clear change",
+      "regressed": "Made the result worse"
+    }
+  },
   "detail": {
     "read_only": "Read-only",
     "supporting_data_warning": "Some workspace data failed to load. Creator attribution, runtime names, or edit permissions may appear incomplete until the next refresh.",

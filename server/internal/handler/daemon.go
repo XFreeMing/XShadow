@@ -4702,9 +4702,10 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Capabilities []string `json:"capabilities"`
-		RuntimeID    string   `json:"runtime_id"`
-		DispatchedAt string   `json:"dispatched_at"`
+		Capabilities   []string                 `json:"capabilities"`
+		RuntimeID      string                   `json:"runtime_id"`
+		DispatchedAt   string                   `json:"dispatched_at"`
+		PreparedSkills []protocol.PreparedSkill `json:"prepared_skills"`
 	}
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -4791,6 +4792,9 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !legacy {
+		h.recordSkillRunAvailability(r.Context(), *task, parseUUID(workspaceID), req.PreparedSkills)
+	}
 	slog.Info("task started", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	resp := taskToResponse(*task, workspaceID)
 	var result struct {

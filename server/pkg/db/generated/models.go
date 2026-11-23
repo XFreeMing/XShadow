@@ -1721,6 +1721,20 @@ type SkillFile struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type SkillRunObservation struct {
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	SkillID      pgtype.UUID        `json:"skill_id"`
+	TaskID       pgtype.UUID        `json:"task_id"`
+	DispatchedAt pgtype.Timestamptz `json:"dispatched_at"`
+	ContentHash  string             `json:"content_hash"`
+	Version      pgtype.Int4        `json:"version"`
+	ProvidedAt   pgtype.Timestamptz `json:"provided_at"`
+	ReviewedAt   pgtype.Timestamptz `json:"reviewed_at"`
+	ReviewedBy   pgtype.UUID        `json:"reviewed_by"`
+	Outcome      pgtype.Text        `json:"outcome"`
+	Evidence     pgtype.Text        `json:"evidence"`
+}
+
 type SkillToLabel struct {
 	SkillID   pgtype.UUID        `json:"skill_id"`
 	LabelID   pgtype.UUID        `json:"label_id"`

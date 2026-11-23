@@ -25,6 +25,13 @@ export const workspaceKeys = {
   mcpServers: (wsId: string) => ["workspaces", wsId, "mcp-servers"] as const,
 };
 
+export function skillActivityOptions(wsId: string, skillId: string, days: 7 | 30 | 90) {
+  return queryOptions({
+    queryKey: [...workspaceKeys.skills(wsId), "activity", skillId, days],
+    queryFn: () => api.getSkillActivity(skillId, days),
+  });
+}
+
 export function workspaceListOptions() {
   return queryOptions({
     queryKey: workspaceKeys.list(),

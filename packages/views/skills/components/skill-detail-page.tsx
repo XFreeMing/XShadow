@@ -99,6 +99,7 @@ import {
   type SkillActionsContext,
 } from "./skill-list-actions";
 import { RefreshSkillDialog } from "./refresh-skill-dialog";
+import { SkillActivityPanel } from "./skill-activity-panel";
 import { SkillVersionsTab } from "./skill-versions-tab";
 import { useT } from "../../i18n";
 
@@ -985,6 +986,8 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       >
         <SupportingFileList paths={supportingPaths} onOpen={openFiles} />
       </ObjectSection>
+
+      <SkillActivityPanel skill={skill} canReview={canEdit} />
 
       <ObjectSection
         title={t(($) => $.table.used_by)}

@@ -92,6 +92,34 @@
     "no_labels": "還沒有標籤",
     "no_results": "無結果"
   },
+  "activity": {
+    "title": "使用與成效",
+    "propose": "發起維護",
+    "window": "最近天數",
+    "available": "已提供",
+    "reviewed": "已評估",
+    "adopted": "已採用",
+    "helped": "有幫助",
+    "versions": "依版本統計",
+    "recent": "近期執行",
+    "empty": "這段期間沒有觀測到執行。",
+    "unavailable": "無法載入技能活動。",
+    "scope": "統計涵蓋已觀測的任務執行，成效來自審核人員記錄的證據。",
+    "review": "記錄評估",
+    "unreviewed": "待評估",
+    "outcome": "選擇結果",
+    "evidence": "執行或驗收證據",
+    "review_failed": "無法儲存技能評估。",
+    "proposal_title": "維護 {{name}}",
+    "proposal_description": "[開啟技能]({{url}})\n\n寫明問題、受影響的版本、證據，以及建議更新、升級或退役。",
+    "version_counts": "已提供 {{available}} 次 · 採用 {{adopted}} 次 · 退化 {{regressed}} 次",
+    "outcomes": {
+      "not_applied": "未採用",
+      "helped": "有幫助",
+      "neutral": "未見明顯變化",
+      "regressed": "結果退化"
+    }
+  },
   "detail": {
     "read_only": "只讀",
     "supporting_data_warning": "部分工作區資料載入失敗。建立者歸屬、執行時名稱、編輯權限可能要等下次重新整理才完整。",

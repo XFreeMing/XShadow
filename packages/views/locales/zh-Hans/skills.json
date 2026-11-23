@@ -92,6 +92,34 @@
     "no_labels": "还没有标签",
     "no_results": "无结果"
   },
+  "activity": {
+    "title": "使用与效果",
+    "propose": "发起维护",
+    "window": "最近天数",
+    "available": "已提供",
+    "reviewed": "已评估",
+    "adopted": "已采用",
+    "helped": "有帮助",
+    "versions": "按版本统计",
+    "recent": "近期运行",
+    "empty": "这段时间没有观测到运行。",
+    "unavailable": "无法加载技能活动。",
+    "scope": "统计覆盖已观测的任务运行，效果来自审核人记录的证据。",
+    "review": "记录评估",
+    "unreviewed": "待评估",
+    "outcome": "选择结果",
+    "evidence": "运行或验收证据",
+    "review_failed": "无法保存技能评估。",
+    "proposal_title": "维护 {{name}}",
+    "proposal_description": "[打开技能]({{url}})\n\n写明问题、受影响的版本、证据，以及建议更新、升级还是退役。",
+    "version_counts": "已提供 {{available}} 次 · 采用 {{adopted}} 次 · 退化 {{regressed}} 次",
+    "outcomes": {
+      "not_applied": "未采用",
+      "helped": "有帮助",
+      "neutral": "未见明显变化",
+      "regressed": "结果退化"
+    }
+  },
   "detail": {
     "read_only": "只读",
     "supporting_data_warning": "部分工作区数据加载失败。创建者归属、运行时名称、编辑权限可能要等下次刷新才完整。",
