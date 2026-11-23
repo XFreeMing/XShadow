@@ -9,11 +9,11 @@
         "description": "工作區裡所有 skill"
       },
       "used": {
-        "label": "使用中",
+        "label": "已綁定",
         "description": "至少分配給一個 AI 代理的 skill"
       },
       "unused": {
-        "label": "未使用",
+        "label": "未綁定",
         "description": "未分配給任何 AI 代理的 skill"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "supporting_data_warning": "部分工作區資料載入失敗。建立者歸屬、執行時名稱、編輯權限可能顯示不完整。"
   },
   "table": {
+    "last_adopted": "最近採用",
+    "available_30d": "近 30 天提供",
+    "adopted_30d": "近 30 天採用",
     "name": "名稱",
     "created_by": "新增者",
-    "used_by": "被誰使用",
+    "used_by": "綁定智慧體",
     "source": "來源",
     "updated": "更新時間",
     "created": "建立時間",
     "lock_tooltip": "只讀——只有建立者或管理員能編輯",
-    "unused": "— 未使用",
+    "unused": "— 未綁定",
     "by_creator": "由 {{name}} 建立",
     "source_manual": "手動建立",
     "source_runtime_named": "來自 {{name}}",
@@ -86,7 +89,7 @@
     "added_multi_toast_other": "已新增到 {{count}} 個 AI 代理"
   },
   "toolbar": {
-    "section_usage": "使用狀態",
+    "section_usage": "綁定狀態",
     "section_labels": "標籤",
     "filter_search_placeholder": "篩選...",
     "no_labels": "還沒有標籤",

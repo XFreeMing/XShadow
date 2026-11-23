@@ -14,7 +14,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useModalStore } from "@multica/core/modals";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { Skill } from "@multica/core/types";
-import { skillActivityOptions } from "@multica/core/workspace/queries";
+import { skillActivityOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useT, useTimeAgo } from "../../i18n";
@@ -118,7 +118,7 @@ export function SkillActivityPanel({ skill, canReview }: { skill: Skill; canRevi
                           run={editing}
                           onCancel={() => setEditing(null)}
                           onSaved={() => {
-                            void queryClient.invalidateQueries({ queryKey: skillActivityOptions(wsId, skill.id, days).queryKey });
+                            void queryClient.invalidateQueries({ queryKey: workspaceKeys.skillActivity(wsId) });
                             setEditing(null);
                           }}
                         />

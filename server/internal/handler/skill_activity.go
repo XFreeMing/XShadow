@@ -106,6 +106,43 @@ type skillActivityResponse struct {
 
 const skillActivityRecentLimit = 20
 
+type skillActivitySummary struct {
+	SkillID       string  `json:"skill_id"`
+	Available     int64   `json:"available"`
+	Adopted       int64   `json:"adopted"`
+	LastAdoptedAt *string `json:"last_adopted_at"`
+}
+
+func (h *Handler) ListWorkspaceSkillActivity30d(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	hidden, ok := h.requestHiddenProjects(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.ListWorkspaceSkillActivity30d(r.Context(), db.ListWorkspaceSkillActivity30dParams{
+		WorkspaceID:      parseUUID(workspaceID),
+		Since:            pgtype.Timestamptz{Time: time.Now().AddDate(0, 0, -30), Valid: true},
+		HiddenProjectIds: hidden.IDs(),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load workspace skill activity")
+		return
+	}
+	result := make([]skillActivitySummary, 0, len(rows))
+	for _, row := range rows {
+		summary := skillActivitySummary{SkillID: uuidToString(row.SkillID), Available: row.Available, Adopted: row.Adopted}
+		if row.LastAdoptedAt.Valid {
+			at := row.LastAdoptedAt.Time.Format(time.RFC3339Nano)
+			summary.LastAdoptedAt = &at
+		}
+		result = append(result, summary)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) GetSkillActivity(w http.ResponseWriter, r *http.Request) {
 	skill, ok := h.loadSkillForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {

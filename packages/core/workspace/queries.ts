@@ -21,14 +21,23 @@ export const workspaceKeys = {
   squadMemberStatus: (wsId: string, squadId: string) =>
     ["workspaces", wsId, "squads", squadId, "members-status"] as const,
   skills: (wsId: string) => ["workspaces", wsId, "skills"] as const,
+  skillActivity: (wsId: string) => [...workspaceKeys.skills(wsId), "activity"] as const,
   assigneeFrequency: (wsId: string) => ["workspaces", wsId, "assignee-frequency"] as const,
   mcpServers: (wsId: string) => ["workspaces", wsId, "mcp-servers"] as const,
 };
 
 export function skillActivityOptions(wsId: string, skillId: string, days: 7 | 30 | 90) {
   return queryOptions({
-    queryKey: [...workspaceKeys.skills(wsId), "activity", skillId, days],
+    queryKey: [...workspaceKeys.skillActivity(wsId), skillId, days],
     queryFn: () => api.getSkillActivity(skillId, days),
+  });
+}
+
+export function skillActivitySummaryOptions(wsId: string) {
+  return queryOptions({
+    queryKey: [...workspaceKeys.skillActivity(wsId), "summary-30d"],
+    queryFn: () => api.listWorkspaceSkillActivity30d(),
+    refetchInterval: 30_000,
   });
 }
 

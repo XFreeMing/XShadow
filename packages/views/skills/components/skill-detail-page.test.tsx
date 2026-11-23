@@ -260,14 +260,14 @@ describe("SkillDetailPage header", () => {
 });
 
 describe("SkillDetailPage body", () => {
-  it("reads as identity, then Content, Files and Used by — with no tabs", async () => {
+  it("reads as identity, then Content, Files and Bound agents — with no tabs", async () => {
     renderPage();
     expect(
       await screen.findByRole("heading", { name: "aiforui-animations", level: 1 }),
     ).toBeInTheDocument();
     expect(
       screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
-    ).toEqual(["Content", "Files", "Used by"]);
+    ).toEqual(["Content", "Files", "Bound agents"]);
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
@@ -286,11 +286,11 @@ describe("SkillDetailPage body", () => {
     expect(within(files).getByRole("button", { name: "patterns.md" })).toBeInTheDocument();
   });
 
-  it("opens Add to agent from the Used by section too", async () => {
+  it("opens Add to agent from the Bound agents section too", async () => {
     renderPage();
-    await screen.findByRole("heading", { name: "Used by", level: 2 });
+    await screen.findByRole("heading", { name: "Bound agents", level: 2 });
     await userEvent.click(
-      within(section("Used by")).getByRole("button", { name: "Add to agent" }),
+      within(section("Bound agents")).getByRole("button", { name: "Add to agent" }),
     );
     expect(screen.getByTestId("add-to-agent-dialog")).toBeInTheDocument();
   });

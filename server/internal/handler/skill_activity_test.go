@@ -147,16 +147,40 @@ func TestSkillActivityHidesPrivateProjectRunsBeforeCounting(t *testing.T) {
 		if _, err := testPool.Exec(ctx, "UPDATE agent_task_queue SET status = 'completed', started_at = now() WHERE id = $1", id); err != nil {
 			t.Fatal(err)
 		}
+		if issueID == f.secretIssue {
+			review := withURLParam(newRequest(http.MethodPost, "/api/skills/"+saved.ID+"/activity/review", map[string]string{
+				"run_id": id, "content_hash": hash, "outcome": "helped", "evidence": "Confirmed privately.",
+			}), "id", saved.ID)
+			testutil.Call(t, testHandler.ReviewSkillActivity, review).Want(http.StatusNoContent)
+		}
 	}
 	for _, tc := range []struct {
-		viewer string
-		want   int
-	}{{f.insider, 2}, {f.outsider, 1}} {
+		viewer    string
+		available int
+		adopted   int
+	}{{f.insider, 2, 1}, {f.outsider, 1, 0}, {testUserID, 2, 1}} {
 		var result skillActivityResponse
 		req := withURLParam(asUser(newRequest(http.MethodGet, "/api/skills/"+saved.ID+"/activity", nil), tc.viewer), "id", saved.ID)
 		testutil.Call(t, testHandler.GetSkillActivity, req).Want(http.StatusOK).JSON(&result)
-		if result.Counts.Available != tc.want || len(result.Runs) != tc.want || result.Versions[0].Available != tc.want {
+		if result.Counts.Available != tc.available || len(result.Runs) != tc.available || result.Versions[0].Available != tc.available {
 			t.Fatalf("visibility was not applied to all views: %+v", result)
+		}
+		var summaries []skillActivitySummary
+		workspaceRequest := asUser(newRequest(http.MethodGet, "/api/skill-activity-30d", nil), tc.viewer)
+		testutil.Call(t, testHandler.ListWorkspaceSkillActivity30d, workspaceRequest).Want(http.StatusOK).JSON(&summaries)
+		var found bool
+		for _, summary := range summaries {
+			if summary.SkillID != saved.ID {
+				continue
+			}
+			found = true
+			if summary.Available != int64(tc.available) || summary.Adopted != int64(tc.adopted) ||
+				(summary.LastAdoptedAt != nil) != (tc.adopted > 0) {
+				t.Fatalf("workspace summary included hidden or unreviewed activity: %+v", summary)
+			}
+		}
+		if !found {
+			t.Fatal("test skill missing from workspace summary")
 		}
 	}
 	deleteSkill := withURLParam(newRequest(http.MethodDelete, "/api/skills/"+saved.ID, nil), "id", saved.ID)

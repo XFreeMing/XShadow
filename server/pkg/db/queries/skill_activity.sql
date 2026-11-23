@@ -49,3 +49,19 @@ WHERE so.workspace_id = sqlc.arg(workspace_id) AND so.skill_id = sqlc.arg(skill_
   AND t.id = so.task_id AND t.dispatched_at = so.dispatched_at
   AND t.status IN ('completed', 'failed', 'cancelled') AND t.started_at IS NOT NULL
   AND t.chat_session_id IS NULL AND i.id = t.issue_id AND i.workspace_id = so.workspace_id;
+
+-- name: ListWorkspaceSkillActivity30d :many
+SELECT o.skill_id, count(*) AS available,
+       count(*) FILTER (WHERE o.outcome IN ('helped', 'neutral', 'regressed')) AS adopted,
+       (max(o.provided_at) FILTER (WHERE o.outcome IN ('helped', 'neutral', 'regressed')))::timestamptz AS last_adopted_at
+FROM skill_run_observation o
+JOIN skill s ON s.id = o.skill_id AND s.workspace_id = o.workspace_id
+JOIN agent_task_queue t ON t.id = o.task_id AND t.dispatched_at = o.dispatched_at
+JOIN issue i ON i.id = t.issue_id AND i.workspace_id = o.workspace_id
+WHERE o.workspace_id = sqlc.arg(workspace_id)
+  AND o.provided_at >= sqlc.arg(since)::timestamptz
+  AND t.chat_session_id IS NULL
+  AND t.started_at IS NOT NULL
+  AND t.status IN ('running', 'completed', 'failed', 'cancelled')
+  AND (i.project_id IS NULL OR i.project_id <> ALL(sqlc.arg(hidden_project_ids)::uuid[]))
+GROUP BY o.skill_id;

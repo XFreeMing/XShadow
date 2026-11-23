@@ -4209,6 +4209,15 @@ const SkillActivityCountsSchema = z.object({
   not_applied: z.number().int().nonnegative(),
 });
 
+export const SkillActivitySummaryListSchema = z.array(z.object({
+  skill_id: z.string(),
+  available: SkillActivityCountsSchema.shape.available,
+  adopted: SkillActivityCountsSchema.shape.adopted,
+  last_adopted_at: z.iso.datetime({ offset: true }).nullable(),
+}));
+
+export type SkillActivitySummary = z.infer<typeof SkillActivitySummaryListSchema>[number];
+
 export const SkillRunOutcomeSchema = z.enum(["not_applied", "helped", "neutral", "regressed"]);
 export type SkillRunOutcome = z.infer<typeof SkillRunOutcomeSchema>;
 

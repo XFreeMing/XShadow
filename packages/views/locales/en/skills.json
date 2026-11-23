@@ -9,11 +9,11 @@
         "description": "All skills in this workspace"
       },
       "used": {
-        "label": "In use",
+        "label": "Bound",
         "description": "Skills assigned to at least one agent"
       },
       "unused": {
-        "label": "Unused",
+        "label": "Unbound",
         "description": "Skills not assigned to any agent"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "supporting_data_warning": "Some workspace data failed to load. Creator attribution, runtime names, or edit permissions may appear incomplete."
   },
   "table": {
+    "last_adopted": "Last applied",
+    "available_30d": "Provided · 30d",
+    "adopted_30d": "Applied · 30d",
     "name": "Name",
     "created_by": "Added by",
-    "used_by": "Used by",
+    "used_by": "Bound agents",
     "source": "Source",
     "updated": "Updated",
     "created": "Created",
     "lock_tooltip": "Read-only — only creator or admin can edit",
-    "unused": "— unused",
+    "unused": "— Unbound",
     "by_creator": "by {{name}}",
     "source_manual": "Created manually",
     "source_runtime_named": "From {{name}}",
@@ -93,7 +96,7 @@
     "added_multi_toast_other": "Added to {{count}} agents"
   },
   "toolbar": {
-    "section_usage": "Usage",
+    "section_usage": "Binding status",
     "section_labels": "Labels",
     "filter_search_placeholder": "Filter...",
     "no_labels": "No labels yet",

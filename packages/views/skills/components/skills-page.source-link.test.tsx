@@ -86,6 +86,7 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
 
 vi.mock("@multica/core/workspace/queries", () => ({
   skillListOptions: () => ({ queryKey: ["skills"] }),
+  skillActivitySummaryOptions: () => ({ queryKey: ["skill-activity-summary"] }),
   agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
   selectSkillAssignments: () => new Map(),

@@ -9,11 +9,11 @@
         "description": "이 워크스페이스의 모든 스킬"
       },
       "used": {
-        "label": "사용 중",
+        "label": "연결됨",
         "description": "하나 이상의 에이전트에 할당된 스킬"
       },
       "unused": {
-        "label": "미사용",
+        "label": "연결 안 됨",
         "description": "어떤 에이전트에도 할당되지 않은 스킬"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "supporting_data_warning": "일부 워크스페이스 데이터를 불러오지 못했습니다. 생성자 표시, 런타임 이름, 수정 권한이 불완전하게 보일 수 있습니다."
   },
   "table": {
+    "last_adopted": "최근 적용",
+    "available_30d": "제공 · 30일",
+    "adopted_30d": "적용 · 30일",
     "name": "이름",
     "created_by": "추가한 사람",
-    "used_by": "사용 중",
+    "used_by": "연결된 에이전트",
     "source": "출처",
     "updated": "수정일",
     "created": "생성일",
     "lock_tooltip": "읽기 전용 — 생성자 또는 관리자만 수정할 수 있습니다",
-    "unused": "— 미사용",
+    "unused": "— 연결 안 됨",
     "by_creator": "{{name}}님",
     "source_manual": "직접 생성",
     "source_runtime_named": "{{name}}에서 가져옴",
@@ -86,7 +89,7 @@
     "added_multi_toast_other": "에이전트 {{count}}개에 추가했습니다"
   },
   "toolbar": {
-    "section_usage": "사용 상태",
+    "section_usage": "연결 상태",
     "section_labels": "라벨",
     "filter_search_placeholder": "필터...",
     "no_labels": "아직 라벨이 없습니다",

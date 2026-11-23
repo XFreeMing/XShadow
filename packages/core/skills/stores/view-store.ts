@@ -12,7 +12,8 @@ import {
 // they are session-scoped, and persisting them would greet returning users
 // with an inexplicably narrowed list.
 
-export type SkillSortField = "name" | "usedBy" | "updated" | "created";
+export type SkillSortField =
+  | "name" | "usedBy" | "updated" | "created" | "available" | "adopted" | "lastAdopted";
 
 export type SkillSortDirection = CollectionSortDirection;
 
@@ -25,6 +26,9 @@ export const SKILL_SORT_DEFAULT_DIRECTION: Record<
   usedBy: "desc",
   updated: "desc",
   created: "desc",
+  available: "desc",
+  adopted: "desc",
+  lastAdopted: "desc",
 };
 
 export type SkillOriginType =
@@ -58,7 +62,10 @@ export type SkillColumnKey =
   | "source"
   | "creator"
   | "updated"
-  | "created";
+  | "created"
+  | "available"
+  | "adopted"
+  | "lastAdopted";
 
 /** Source and created are opt-in: hidden until the user enables them. */
 export const DEFAULT_HIDDEN_COLUMNS: SkillColumnKey[] = ["source", "created"];

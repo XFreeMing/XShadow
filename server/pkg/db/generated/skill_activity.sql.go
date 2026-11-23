@@ -78,6 +78,61 @@ func (q *Queries) ListSkillRunObservations(ctx context.Context, arg ListSkillRun
 	return items, nil
 }
 
+const listWorkspaceSkillActivity30d = `-- name: ListWorkspaceSkillActivity30d :many
+SELECT o.skill_id, count(*) AS available,
+       count(*) FILTER (WHERE o.outcome IN ('helped', 'neutral', 'regressed')) AS adopted,
+       (max(o.provided_at) FILTER (WHERE o.outcome IN ('helped', 'neutral', 'regressed')))::timestamptz AS last_adopted_at
+FROM skill_run_observation o
+JOIN skill s ON s.id = o.skill_id AND s.workspace_id = o.workspace_id
+JOIN agent_task_queue t ON t.id = o.task_id AND t.dispatched_at = o.dispatched_at
+JOIN issue i ON i.id = t.issue_id AND i.workspace_id = o.workspace_id
+WHERE o.workspace_id = $1
+  AND o.provided_at >= $2::timestamptz
+  AND t.chat_session_id IS NULL
+  AND t.started_at IS NOT NULL
+  AND t.status IN ('running', 'completed', 'failed', 'cancelled')
+  AND (i.project_id IS NULL OR i.project_id <> ALL($3::uuid[]))
+GROUP BY o.skill_id
+`
+
+type ListWorkspaceSkillActivity30dParams struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Since            pgtype.Timestamptz `json:"since"`
+	HiddenProjectIds []pgtype.UUID      `json:"hidden_project_ids"`
+}
+
+type ListWorkspaceSkillActivity30dRow struct {
+	SkillID       pgtype.UUID        `json:"skill_id"`
+	Available     int64              `json:"available"`
+	Adopted       int64              `json:"adopted"`
+	LastAdoptedAt pgtype.Timestamptz `json:"last_adopted_at"`
+}
+
+func (q *Queries) ListWorkspaceSkillActivity30d(ctx context.Context, arg ListWorkspaceSkillActivity30dParams) ([]ListWorkspaceSkillActivity30dRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceSkillActivity30d, arg.WorkspaceID, arg.Since, arg.HiddenProjectIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWorkspaceSkillActivity30dRow{}
+	for rows.Next() {
+		var i ListWorkspaceSkillActivity30dRow
+		if err := rows.Scan(
+			&i.SkillID,
+			&i.Available,
+			&i.Adopted,
+			&i.LastAdoptedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordSkillRunAvailability = `-- name: RecordSkillRunAvailability :exec
 INSERT INTO skill_run_observation (workspace_id, skill_id, task_id, dispatched_at, content_hash, version)
 SELECT s.workspace_id, s.id, t.id, t.dispatched_at, offered.content_hash,

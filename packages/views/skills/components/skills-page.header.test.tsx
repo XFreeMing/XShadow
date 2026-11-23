@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { SkillActivitySummary } from "@multica/core/api/schemas";
 import type { SkillSummary } from "@multica/core/types";
 import {
   EMPTY_SKILL_FILTERS,
@@ -13,11 +14,13 @@ import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 
 const mocks = vi.hoisted(() => ({
   skills: [] as SkillSummary[],
+  summaries: [] as SkillActivitySummary[],
 }));
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: { queryKey?: readonly unknown[] }) => ({
-    data: options.queryKey?.[0] === "skills" ? mocks.skills : [],
+    data: options.queryKey?.[0] === "skills" ? mocks.skills
+      : options.queryKey?.[0] === "skill-activity-summary" ? mocks.summaries : [],
     isLoading: false,
     error: null,
     refetch: vi.fn(),
@@ -52,6 +55,7 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
 }));
 vi.mock("@multica/core/workspace/queries", () => ({
   skillListOptions: () => ({ queryKey: ["skills"] }),
+  skillActivitySummaryOptions: () => ({ queryKey: ["skill-activity-summary"] }),
   agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
   selectSkillAssignments: () => new Map(),
@@ -121,6 +125,7 @@ beforeEach(() => {
     filters: EMPTY_SKILL_FILTERS,
     search: "",
   });
+  mocks.summaries = [];
   mocks.skills = [
     skill("skill-1", "mine-skill", "user-1"),
     skill("skill-2", "team-skill", "user-2"),
@@ -138,6 +143,24 @@ describe("SkillsPage header", () => {
     }
     expect(screen.queryByRole("link", { name: /Learn more/ })).toBeNull();
     expect(screen.queryByText("New skill")).toBeNull();
+  });
+
+  it("shows and sorts recent prepared and confirmed adopted runs independently", async () => {
+    const user = userEvent.setup();
+    mocks.summaries = [{
+      skill_id: "skill-2", available: 9, adopted: 2, last_adopted_at: new Date().toISOString(),
+    }];
+    renderPage();
+    const skillRows = () => screen.getAllByRole("row").filter((row) => row.textContent?.includes("-skill"));
+    const team = skillRows().find((row) => row.textContent?.includes("team-skill"));
+    const mine = skillRows().find((row) => row.textContent?.includes("mine-skill"));
+    if (!team || !mine) throw new Error("Expected skill rows");
+    expect(within(team).getByText("9", { exact: true })).toBeInTheDocument();
+    expect(within(team).getByText("2", { exact: true })).toBeInTheDocument();
+    expect(within(team).getByText("just now")).toBeInTheDocument();
+    expect(within(mine).getAllByText("0", { exact: true })).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Applied · 30d" }));
+    expect(skillRows()[0]).toHaveTextContent("team-skill");
   });
 
   it("switches scope from the title menu, which counts each scope", async () => {

@@ -8,11 +8,11 @@
         "description": "Todas las skills de este espacio de trabajo"
       },
       "used": {
-        "label": "En uso",
+        "label": "Vinculada",
         "description": "Skills asignadas al menos a un agente"
       },
       "unused": {
-        "label": "Sin uso",
+        "label": "Sin vincular",
         "description": "Skills no asignadas a ningún agente"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "search": "Buscar skills"
   },
   "table": {
+    "last_adopted": "Última aplicación",
+    "available_30d": "Disponibles · 30 d",
+    "adopted_30d": "Aplicadas · 30 d",
     "name": "Nombre",
     "created_by": "Añadida por",
-    "used_by": "Usada por",
+    "used_by": "Agentes vinculados",
     "source": "Origen",
     "updated": "Actualizada",
     "created": "Creada",
     "lock_tooltip": "Solo lectura: solo el creador o un administrador pueden editarla",
-    "unused": "- sin uso",
+    "unused": "— Sin vincular",
     "by_creator": "por {{name}}",
     "source_manual": "Creada manualmente",
     "source_runtime_named": "De {{name}}",
@@ -93,7 +96,7 @@
     "added_multi_toast_other": "Añadida a {{count}} agentes"
   },
   "toolbar": {
-    "section_usage": "Uso",
+    "section_usage": "Estado de vinculación",
     "section_labels": "Etiquetas",
     "filter_search_placeholder": "Filtrar...",
     "no_labels": "Todavía no hay etiquetas",

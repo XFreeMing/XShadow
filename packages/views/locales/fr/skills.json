@@ -9,11 +9,11 @@
         "description": "Tous les skills de cet espace de travail"
       },
       "used": {
-        "label": "Utilisés",
+        "label": "Associée",
         "description": "Skills assignés à au moins un agent"
       },
       "unused": {
-        "label": "Inutilisés",
+        "label": "Non associée",
         "description": "Skills assignés à aucun agent"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "supporting_data_warning": "Certaines données de l'espace de travail n'ont pas pu être chargées. L'attribution des créateurs, les noms de runtimes ou les droits de modification peuvent apparaître incomplets."
   },
   "table": {
+    "last_adopted": "Dernière application",
+    "available_30d": "Fournies · 30 j",
+    "adopted_30d": "Appliquées · 30 j",
     "name": "Nom",
     "created_by": "Ajouté par",
-    "used_by": "Utilisé par",
+    "used_by": "Agents associés",
     "source": "Source",
     "updated": "Mise à jour",
     "created": "Création",
     "lock_tooltip": "Lecture seule — seuls le créateur ou un administrateur peuvent modifier",
-    "unused": "— inutilisé",
+    "unused": "— Non associée",
     "by_creator": "par {{name}}",
     "source_manual": "Créé manuellement",
     "source_runtime_named": "Depuis {{name}}",
@@ -93,7 +96,7 @@
     "added_multi_toast_other": "Ajouté à {{count}} agents"
   },
   "toolbar": {
-    "section_usage": "Utilisation",
+    "section_usage": "Association",
     "section_labels": "Étiquettes",
     "filter_search_placeholder": "Filtrer...",
     "no_labels": "Aucune étiquette pour l'instant",

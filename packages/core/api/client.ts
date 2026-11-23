@@ -549,6 +549,8 @@ import {
   EMPTY_SKILL,
   SkillSummaryListSchema,
   EMPTY_SKILL_SUMMARY_LIST,
+  SkillActivitySummaryListSchema,
+  type SkillActivitySummary,
   SkillActivitySchema,
   type SkillActivity,
   type SkillActivityReview,
@@ -3932,6 +3934,13 @@ export class ApiClient {
     });
     return parseWithFallback(raw, SkillSchema, EMPTY_SKILL, {
       endpoint: "POST /api/skills/:id/refresh",
+    });
+  }
+
+  async listWorkspaceSkillActivity30d(): Promise<SkillActivitySummary[] | null> {
+    const raw = await this.fetch<unknown>("/api/skill-activity-30d");
+    return parseWithFallback<SkillActivitySummary[] | null>(raw, SkillActivitySummaryListSchema, null, {
+      endpoint: "GET /api/skill-activity-30d",
     });
   }
 

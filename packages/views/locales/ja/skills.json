@@ -9,11 +9,11 @@
         "description": "このワークスペースのすべてのスキル"
       },
       "used": {
-        "label": "使用中",
+        "label": "割り当て済み",
         "description": "1 つ以上のエージェントに割り当てられたスキル"
       },
       "unused": {
-        "label": "未使用",
+        "label": "割り当てなし",
         "description": "どのエージェントにも割り当てられていないスキル"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "supporting_data_warning": "一部のワークスペースデータを読み込めませんでした。作成者の表示、ランタイム名、編集権限が不完全に見える場合があります。"
   },
   "table": {
+    "last_adopted": "最終適用",
+    "available_30d": "提供 · 30日",
+    "adopted_30d": "適用 · 30日",
     "name": "名前",
     "created_by": "追加者",
-    "used_by": "使用中",
+    "used_by": "割り当て先",
     "source": "ソース",
     "updated": "更新日",
     "created": "作成日",
     "lock_tooltip": "読み取り専用 — 作成者または管理者のみが編集できます",
-    "unused": "— 未使用",
+    "unused": "— 割り当てなし",
     "by_creator": "{{name}}",
     "source_manual": "手動で作成",
     "source_runtime_named": "{{name}} から",
@@ -86,7 +89,7 @@
     "added_multi_toast_other": "{{count}} 件のエージェントに追加しました"
   },
   "toolbar": {
-    "section_usage": "使用状況",
+    "section_usage": "割り当て状態",
     "section_labels": "ラベル",
     "filter_search_placeholder": "フィルター...",
     "no_labels": "まだラベルがありません",

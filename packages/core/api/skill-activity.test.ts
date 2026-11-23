@@ -23,3 +23,15 @@ it("keeps a valid zero and treats a malformed activity response as unavailable",
   expect(await api.getSkillActivity("skill-1", 30)).toEqual(response);
   expect(await api.getSkillActivity("skill-1", 30)).toBeNull();
 });
+
+
+it("rejects a workspace activity response with an invalid adoption timestamp", async () => {
+  const row = { skill_id: "skill-1", available: 2, adopted: 0, last_adopted_at: null };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify([row])))
+    .mockResolvedValueOnce(new Response(JSON.stringify([{ ...row, last_adopted_at: "yesterday" }])));
+  vi.stubGlobal("fetch", fetchMock);
+  const api = new ApiClient("https://api.example.test");
+  expect(await api.listWorkspaceSkillActivity30d()).toEqual([row]);
+  expect(await api.listWorkspaceSkillActivity30d()).toBeNull();
+});

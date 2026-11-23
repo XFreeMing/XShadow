@@ -9,11 +9,11 @@
         "description": "工作区里所有 skill"
       },
       "used": {
-        "label": "使用中",
+        "label": "已绑定",
         "description": "至少分配给一个智能体的 skill"
       },
       "unused": {
-        "label": "未使用",
+        "label": "未绑定",
         "description": "未分配给任何智能体的 skill"
       },
       "mine": {
@@ -36,14 +36,17 @@
     "supporting_data_warning": "部分工作区数据加载失败。创建者归属、运行时名称、编辑权限可能显示不完整。"
   },
   "table": {
+    "last_adopted": "最近采用",
+    "available_30d": "近 30 天提供",
+    "adopted_30d": "近 30 天采用",
     "name": "名称",
     "created_by": "添加者",
-    "used_by": "被谁使用",
+    "used_by": "绑定智能体",
     "source": "来源",
     "updated": "更新时间",
     "created": "创建时间",
     "lock_tooltip": "只读——只有创建者或管理员能编辑",
-    "unused": "— 未使用",
+    "unused": "— 未绑定",
     "by_creator": "由 {{name}} 创建",
     "source_manual": "手动创建",
     "source_runtime_named": "来自 {{name}}",
@@ -86,7 +89,7 @@
     "added_multi_toast_other": "已添加到 {{count}} 个智能体"
   },
   "toolbar": {
-    "section_usage": "使用状态",
+    "section_usage": "绑定状态",
     "section_labels": "标签",
     "filter_search_placeholder": "筛选...",
     "no_labels": "还没有标签",

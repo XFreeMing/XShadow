@@ -26,6 +26,7 @@ import {
   memberListOptions,
   selectSkillAssignments,
   skillListOptions,
+  skillActivitySummaryOptions,
 } from "@multica/core/workspace/queries";
 import { runtimeDisplayLabel, runtimeListOptions } from "@multica/core/runtimes";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -244,7 +245,7 @@ function CreatorCell({ creator }: { creator: MemberWithUser | null }) {
 // Page
 
 export default function SkillsPage() {
-  const { t } = useT("skills");
+  const { t, i18n } = useT("skills");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
@@ -266,6 +267,13 @@ export default function SkillsPage() {
   const { data: runtimes = [], error: runtimesError } = useQuery(
     runtimeListOptions(wsId),
   );
+
+  const { data: summaries } = useQuery(skillActivitySummaryOptions(wsId));
+  const activityBySkill = useMemo(
+    () => summaries && new Map(summaries.map((summary) => [summary.skill_id, summary])),
+    [summaries],
+  );
+  const numberLocale = i18n.resolvedLanguage ?? i18n.language;
 
   const [createMethod, setCreateMethod] = useState<CreateSkillMethod | null>(
     null,
@@ -365,6 +373,23 @@ export default function SkillsPage() {
           a.skill.name.localeCompare(b.skill.name)
         );
       }
+      if (sortField === "available" || sortField === "adopted" || sortField === "lastAdopted") {
+        const activityA = activityBySkill?.get(a.skill.id);
+        const activityB = activityBySkill?.get(b.skill.id);
+        if (sortField === "lastAdopted") {
+          const atA = activityA?.last_adopted_at;
+          const atB = activityB?.last_adopted_at;
+          if (!!atA !== !!atB) return atA ? -1 : 1;
+          if (atA && atB) {
+            const order = (Date.parse(atA) - Date.parse(atB)) * dir;
+            if (order) return order;
+          }
+        } else {
+          const order = ((activityA?.[sortField] ?? 0) - (activityB?.[sortField] ?? 0)) * dir;
+          if (order) return order;
+        }
+        return a.skill.name.localeCompare(b.skill.name);
+      }
       if (sortField === "created") {
         return (
           (Date.parse(a.skill.created_at) - Date.parse(b.skill.created_at)) *
@@ -376,7 +401,7 @@ export default function SkillsPage() {
       );
     });
     return filtered;
-  }, [scopeRows, search, filters, sortField, sortDirection]);
+  }, [scopeRows, search, filters, sortField, sortDirection, activityBySkill]);
 
   const handleCreated = (skill: Skill) => {
     navigation.push(paths.skillDetail(skill.id));
@@ -409,6 +434,41 @@ export default function SkillsPage() {
         cell: (row) => <SourceCell skill={row.skill} runtime={row.runtime} />,
       },
       {
+        key: "lastAdopted",
+        header: t(($) => $.table.last_adopted),
+        width: 136,
+        sortKey: "lastAdopted",
+        hideable: true,
+        cell: (row) => {
+          const at = activityBySkill?.get(row.skill.id)?.last_adopted_at;
+          return at ? <time dateTime={at}>{timeAgo(at)}</time> : "—";
+        },
+      },
+      {
+        key: "available",
+        header: t(($) => $.table.available_30d),
+        width: 117,
+        align: "end",
+        sortKey: "available",
+        hideable: true,
+        className: "font-mono tabular-nums",
+        cell: (row) => activityBySkill
+          ? (activityBySkill.get(row.skill.id)?.available ?? 0).toLocaleString(numberLocale)
+          : "—",
+      },
+      {
+        key: "adopted",
+        header: t(($) => $.table.adopted_30d),
+        width: 117,
+        align: "end",
+        sortKey: "adopted",
+        hideable: true,
+        className: "font-mono tabular-nums",
+        cell: (row) => activityBySkill
+          ? (activityBySkill.get(row.skill.id)?.adopted ?? 0).toLocaleString(numberLocale)
+          : "—",
+      },
+      {
         key: "creator",
         header: t(($) => $.table.created_by),
         width: 144,
@@ -432,7 +492,7 @@ export default function SkillsPage() {
         cell: (row) => <span className="tabular-nums">{timeAgo(row.skill.created_at)}</span>,
       },
     ],
-    [t, timeAgo],
+    [t, timeAgo, activityBySkill, numberLocale],
   );
 
   const sort: CollectionSort = {
