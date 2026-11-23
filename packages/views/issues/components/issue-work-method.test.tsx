@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { ApiClient, setApiInstance } from "@multica/core/api";
 import type {
   WorkMethod,
@@ -133,7 +133,9 @@ it("shows pending review evidence without another reviewer's actions", async () 
 it("displays approvals against the checklist the reviewer signed", async () => {
   const old = structuredClone(method);
   old.revision = 1;
-  old.steps[0].checks = ["Original signed check"];
+  const originalStep = old.steps[0];
+  assert.isDefined(originalStep);
+  originalStep.checks = ["Original signed check"];
   mount({
     step: 1,
     state: "working",
