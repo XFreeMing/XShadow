@@ -912,6 +912,11 @@ type GoalIssue struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type GoalOutcomeGallery struct {
+	GoalID pgtype.UUID `json:"goal_id"`
+	Images []byte      `json:"images"`
+}
+
 type GoalPlan struct {
 	ID              pgtype.UUID        `json:"id"`
 	WorkspaceID     pgtype.UUID        `json:"workspace_id"`

@@ -48,6 +48,7 @@ import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
+import { GoalOutcomeGallery } from "./goal-outcome-gallery";
 import { GoalTaskPrototypes } from "./goal-task-prototypes";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
@@ -274,6 +275,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
 
   return shell(
     <div className={cn(OBJECT_PAGE_BODY, "space-y-8")}>
+      <GoalOutcomeGallery key={goal.id} wsId={wsId} goalId={goal.id} />
       {!issuesQuery.isError && <GoalTaskPrototypes key={`prototypes-${goal.id}`} issues={linkedIssues} />}
 
       <Section title={t(($) => $.detail.intent)}>

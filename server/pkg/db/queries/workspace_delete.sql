@@ -773,4 +773,7 @@ WHERE workspace_invitation.workspace_id = $1;
 DELETE FROM goal_issue WHERE goal_issue.workspace_id = $1;
 
 -- name: DeleteWorkspaceGoals :exec
-DELETE FROM goal WHERE goal.workspace_id = $1;
+WITH removed AS (
+    DELETE FROM goal WHERE goal.workspace_id = $1 RETURNING id
+)
+DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed);

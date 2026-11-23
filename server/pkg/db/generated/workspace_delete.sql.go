@@ -244,7 +244,10 @@ func (q *Queries) DeleteWorkspaceGoalIssues(ctx context.Context, workspaceID pgt
 }
 
 const deleteWorkspaceGoals = `-- name: DeleteWorkspaceGoals :exec
-DELETE FROM goal WHERE goal.workspace_id = $1
+WITH removed AS (
+    DELETE FROM goal WHERE goal.workspace_id = $1 RETURNING id
+)
+DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed)
 `
 
 func (q *Queries) DeleteWorkspaceGoals(ctx context.Context, workspaceID pgtype.UUID) error {

@@ -1818,6 +1818,10 @@ export const EMPTY_LIST_PROJECTS_RESPONSE: ListProjectsResponse = { projects: []
 // partially rolled-out backend still renders. `status` stays a plain string:
 // an unknown future value must survive parsing and be shown as unknown, never
 // silently read as `completed`.
+export const GoalOutcomeImagesSchema = z.array(z.object({
+  caption: z.string(), src: z.string().regex(/^data:image\/(?:jpeg|png);base64,[a-zA-Z0-9+/=]+$/),
+}));
+
 export const GoalSchema = z.object({
   id: z.string().min(1),
   workspace_id: z.string().default(""),

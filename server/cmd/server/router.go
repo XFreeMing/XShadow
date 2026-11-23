@@ -2291,6 +2291,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetGoal)
 					r.Get("/work-method", h.GetGoalWorkMethod)
+					r.Get("/outcome-images", h.GetGoalOutcomeImages)
+					r.Put("/outcome-images", h.PutGoalOutcomeImages)
 					r.Put("/", h.UpdateGoal)
 					r.Delete("/", h.DeleteGoal)
 					r.Get("/issues", h.ListGoalIssues)

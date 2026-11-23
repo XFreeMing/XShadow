@@ -3,7 +3,7 @@ import {
   type WorkMethod, type NewWorkMethod, type WorkMethodRun, type WorkMethodAction,
 } from "../types/work-method";
 import { AcceptanceTraceSchema, type AcceptanceChange, type AcceptanceTrace } from "../types/acceptance";
-import type { ZodType } from "zod";
+import type { output, ZodType } from "zod";
 import { AgentRuntimeSchema, EMPTY_RUNTIME } from "../runtimes/schema";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
@@ -396,6 +396,7 @@ import {
   EMPTY_PROJECT,
   EMPTY_LIST_PROJECTS_RESPONSE,
   GoalSchema,
+  GoalOutcomeImagesSchema,
   ListGoalsResponseSchema,
   ListGoalIssuesResponseSchema,
   EMPTY_GOAL,
@@ -4524,6 +4525,11 @@ export class ApiClient {
     return parseWithFallback(raw, ListGoalsResponseSchema, EMPTY_LIST_GOALS_RESPONSE, {
       endpoint: "GET /api/goals",
     });
+  }
+
+  async getGoalOutcomeImages(id: string) {
+    const raw = await this.fetch<unknown>(`/api/goals/${id}/outcome-images`);
+    return parseWithFallback<output<typeof GoalOutcomeImagesSchema>>(raw, GoalOutcomeImagesSchema, [], { endpoint: "GET /api/goals/:id/outcome-images" });
   }
 
   async getGoal(id: string): Promise<Goal> {

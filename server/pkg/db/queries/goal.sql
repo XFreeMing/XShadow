@@ -71,7 +71,10 @@ WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
 RETURNING *;
 
 -- name: DeleteGoal :exec
-DELETE FROM goal WHERE id = $1 AND workspace_id = $2;
+WITH removed AS (
+    DELETE FROM goal WHERE id = $1 AND workspace_id = $2 RETURNING id
+)
+DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed);
 
 -- name: DeleteGoalIssuesByGoal :exec
 DELETE FROM goal_issue WHERE workspace_id = $1 AND goal_id = $2;
@@ -103,7 +106,10 @@ WHERE workspace_id = $1 AND project_id = $2
 FOR UPDATE;
 
 -- name: DeleteGoalsByProject :exec
-DELETE FROM goal WHERE workspace_id = $1 AND project_id = $2;
+WITH removed AS (
+    DELETE FROM goal WHERE workspace_id = $1 AND project_id = $2 RETURNING id
+)
+DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed);
 
 -- name: CountGoalIssues :one
 SELECT count(*) FROM goal_issue WHERE workspace_id = $1 AND goal_id = $2;

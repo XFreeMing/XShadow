@@ -72,6 +72,7 @@ describe("GoalDetailPage", () => {
   const push = vi.fn();
   const api = {
     getGoal: vi.fn(),
+    getGoalOutcomeImages: vi.fn(),
     listGoalIssues: vi.fn(),
     updateGoal: vi.fn(),
     deleteGoal: vi.fn(),
@@ -86,6 +87,7 @@ describe("GoalDetailPage", () => {
     });
     push.mockReset();
     api.getGoal.mockResolvedValue(goal());
+    api.getGoalOutcomeImages.mockResolvedValue([]);
     api.listGoalIssues.mockResolvedValue({ issues: [], total: 0 });
     api.updateGoal.mockResolvedValue(goal({ status: "completed" }));
     api.deleteGoal.mockResolvedValue(undefined);
@@ -129,6 +131,19 @@ describe("GoalDetailPage", () => {
       </QueryClientProvider>,
     );
   }
+
+  it("opens the selected goal outcome image", async () => {
+    api.getGoalOutcomeImages.mockResolvedValue([
+      { caption: "Book graph", src: "data:image/png;base64,AAAA" },
+      { caption: "Cited answer", src: "data:image/png;base64,BBBB" },
+    ]);
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Cited answer" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("img", { name: "Cited answer" })).toHaveAttribute(
+      "src", "data:image/png;base64,BBBB",
+    );
+  });
 
   it("completes a goal only through the confirmation dialog", async () => {
     renderPage();
