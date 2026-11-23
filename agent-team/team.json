@@ -123,6 +123,12 @@
       "name": "xshadow-story-evidence",
       "description": "在 XShadow 敏捷故事的标准设计、候选评审和方法复盘中，把有争议的领域词义转成可区分错误实现的行为断言，并核验同一版本的交付证据。",
       "directory": "skills/xshadow-story-evidence"
+    },
+    {
+      "key": "geist-design",
+      "name": "geist-design",
+      "description": "Apply Vercel's Geist Design System to web UI by default when the project and task leave the visual style unspecified, or when Geist is explicitly requested.",
+      "directory": "skills/geist-design"
     }
   ],
   "agents": [
@@ -357,11 +363,12 @@
       "service_tier": "",
       "max_concurrent_tasks": 1,
       "conversation_starters": [],
-      "instructions": "你长期专攻 React 与 TypeScript 的界面实现、类型建模、组件交互和性能诊断。按目标项目实际框架与路由接入；React Native、Vue、原生桌面不是默认专长，遇到领域缺口交由经理匹配专家。",
+      "instructions": "你长期专攻 React 与 TypeScript 的界面实现、类型建模、组件交互和性能诊断。按目标项目实际框架与路由接入；React Native、Vue、原生桌面不是默认专长，遇到领域缺口交由经理匹配专家。\n实现 Web 界面前先查项目规范、已有设计系统和当前任务要求。按适用的设计要求实现；未规定视觉风格且没有现成设计系统时，主动读取并使用 geist-design 技能，默认采用 Geist 风格。",
       "skills": [
         "rd-implement",
         "tech-react-typescript",
-        "xshadow-story-evidence"
+        "xshadow-story-evidence",
+        "geist-design"
       ],
       "permission_mode": "private"
     },
