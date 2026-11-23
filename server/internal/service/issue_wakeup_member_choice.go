@@ -10,7 +10,23 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// IsMemberTodo recognizes a member request with a durable source reference.
+func IsMemberTodo(issue db.Issue) bool {
+	if issue.AssigneeType.String != "member" || !issue.AssigneeID.Valid {
+		return false
+	}
+	var metadata struct {
+		Key    string `json:"member_todo_key"`
+		Source string `json:"member_todo_source"`
+	}
+	if json.Unmarshal(issue.Metadata, &metadata) != nil {
+		return false
+	}
+	return strings.TrimSpace(metadata.Key) != "" && strings.TrimSpace(metadata.Source) != ""
+}
 
 // Bind the choice to its requesting issue in the same project. Recheck this
 // at evaluation: moving a card or changing its source invalidates the rule.

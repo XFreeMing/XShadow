@@ -128,15 +128,9 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 			}
 		}
 	}
-	if issue.AssigneeType.String == "member" {
-		var todo struct {
-			Key    string `json:"member_todo_key"`
-			Source string `json:"member_todo_source"`
-		}
-		_ = json.Unmarshal(issue.Metadata, &todo)
-		if (todo.Key != "" && todo.Source != "") || time.Since(issue.UpdatedAt.Time) < 24*time.Hour {
-			return nil
-		}
+	if issue.AssigneeType.String == "member" &&
+		(IsMemberTodo(issue) || time.Since(issue.UpdatedAt.Time) < 24*time.Hour) {
+		return nil
 	}
 
 	var method workmethod.Run

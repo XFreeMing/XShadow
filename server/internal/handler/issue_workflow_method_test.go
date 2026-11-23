@@ -97,3 +97,46 @@ func TestMethodReviewGatesManualBatchAndPullRequestCompletion(t *testing.T) {
 		t.Fatalf("merged PR failed to complete reviewed method: %s", s)
 	}
 }
+
+func TestMemberAnswerCardCanCompleteWithUnstartedRecommendation(t *testing.T) {
+	seedTestCatalog(t)
+	run := workmethod.Recommend(workmethod.Builtins(), "研发管理确认", "", "")
+	if run.State != "ready" || run.Method == nil {
+		t.Fatalf("expected unstarted method recommendation: %+v", run)
+	}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := dbfx.Issue(t, "Member decision", testutil.Cols{
+		"status": "todo", "assignee_type": "member", "assignee_id": testUserID,
+		"work_method_run": raw,
+		"metadata":        []byte(`{"member_todo_key":"implementation-choice","member_todo_source":"DEV-102"}`),
+	})
+	story := dbfx.Issue(t, "Product story", testutil.Cols{
+		"status": "todo", "assignee_type": "member", "assignee_id": testUserID, "work_method_run": raw,
+	})
+	updateIssueForTest(t, card, map[string]any{"status": "done"}).Want(http.StatusOK)
+	if status, _, _ := issueStatusAndAssignee(t, card); status != "done" {
+		t.Fatalf("answer card status = %s, want done", status)
+	}
+	completed, err := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(card))
+	if err != nil || len(completed.WorkMethodRun) > 0 {
+		t.Fatalf("answer card retained its pending recommendation: %v", err)
+	}
+	result := updateIssueForTest(t, story, map[string]any{"status": "done"}).Want(http.StatusConflict).Map()
+	if result["code"] != "work_method_review_open" {
+		t.Fatalf("expected the regular story's review gate: %+v", result)
+	}
+
+	run.State, run.Revision = "review", 2
+	raw, err = json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbfx.Exec(t, "UPDATE issue SET status='in_review', work_method_run=$1 WHERE id=$2", raw, card)
+	result = updateIssueForTest(t, card, map[string]any{"status": "done"}).Want(http.StatusConflict).Map()
+	if result["code"] != "work_method_review_open" {
+		t.Fatalf("an explicitly started review must remain protected: %+v", result)
+	}
+}

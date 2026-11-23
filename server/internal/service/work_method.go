@@ -113,6 +113,23 @@ func UpdateIssueWithWorkMethod(ctx context.Context, q *db.Queries, ws pgtype.UUI
 	if err != nil {
 		return db.UpdateIssueRow{}, err
 	}
+	if p.Status.Valid && len(current.WorkMethodRun) > 0 && IsMemberTodo(current) {
+		category, err := issuestatus.CategoryWithError(ctx, q, ws, p.Status.String)
+		if err != nil {
+			return db.UpdateIssueRow{}, err
+		}
+		if category == issuestatus.CategoryDone {
+			var run workmethod.Run
+			if err := json.Unmarshal(current.WorkMethodRun, &run); err != nil {
+				return db.UpdateIssueRow{}, err
+			}
+			if run.State == "ready" && run.Revision == 0 {
+				// Remove only the recommendation in the same status write.
+				p.ReplaceWorkMethod, p.ReadyMethod = true, nil
+				return q.UpdateIssue(ctx, p)
+			}
+		}
+	}
 	title, description := current.Title, current.Description.String
 	if p.Title.Valid {
 		title = p.Title.String

@@ -200,6 +200,11 @@ func (h *Handler) checkMethodCompletion(ctx context.Context, issue db.Issue, sta
 	if err != nil || category != issuestatus.CategoryDone {
 		return err
 	}
+	// Member requests use their recorded answer to release the source
+	// issue's wait. A suggested method on the request itself is advisory.
+	if run.State == "ready" && run.Revision == 0 && service.IsMemberTodo(issue) {
+		return nil
+	}
 	if run.State != "closed" {
 		return errMethodReviewOpen
 	}
