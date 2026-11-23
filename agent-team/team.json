@@ -77,6 +77,12 @@
       "directory": "skills/tech-react-typescript"
     },
     {
+      "key": "tech-web-graph",
+      "name": "tech-web-graph",
+      "description": "为 Web 知识图谱和依赖图选择数据解析、3D 交互或万级节点的 2D 渲染方案，验证关系溯源与大图浏览体验。",
+      "directory": "skills/tech-web-graph"
+    },
+    {
       "key": "tech-go-services",
       "name": "tech-go-services",
       "description": "Implement Go services, concurrent workers, API boundaries and SQL integration in the task target.",
@@ -367,6 +373,7 @@
       "skills": [
         "rd-implement",
         "tech-react-typescript",
+        "tech-web-graph",
         "xshadow-story-evidence",
         "geist-design"
       ],

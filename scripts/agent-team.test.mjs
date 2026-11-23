@@ -338,7 +338,7 @@ test("a truncated wakeup read leaves continuation unknown instead of calling the
 
 test("portable template contains the current roster without machine identities or credentials", () => {
   assert.equal(template.agents.length, 23);
-  assert.equal(template.skills.length, 20);
+  assert.equal(template.skills.length, 21);
   assert.equal(template.squads.length, 5);
   const serialized = JSON.stringify(template);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
