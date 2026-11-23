@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "查看全部 {{count}} 個任務的原型圖",
+    "show_fewer": "收合",
+    "title": "原型圖",
+    "goal_title": "任務原型圖",
+    "empty": "這個任務還沒有原型圖。",
+    "load_failed": "無法載入任務原型圖。",
+    "image_failed": "無法載入圖片",
+    "retry": "重試",
+    "frame": "第 {{number}} 張",
+    "frame_count": "共 {{count}} 張",
+    "open_task": "開啟任務",
+    "adjust": "用自然語言調整",
+    "review_first": "在對話中查看修改稿，確認後再更新任務。",
+    "request": "想怎麼調整？",
+    "request_example": "例如，把搜尋框移到頂部，再呈現沒有搜尋結果時的畫面。",
+    "agent": "代理程式",
+    "agents_failed": "無法載入代理程式。",
+    "no_agent": "目前沒有可用的代理程式。",
+    "chat_failed": "無法開啟對話，請重試。",
+    "continue_in_chat": "繼續到對話",
+    "chat_title": "調整原型圖 · {{issue}}",
+    "chat_draft": "請按以下要求修改任務 {{issue}}（{{id}}）的原型圖。\n\n{{request}}\n\n現有原型圖及順序\n{{originals}}\n\n先讀原任務和原圖。範圍不明確時先詢問。用 `multica attachment upload` 將替換圖發到對話，記下附件 ID，等我明確確認。用 `multica issue get` 讀取最新描述和修訂號。若原圖引用已被更動，請告知差異並等我確認。下載已確認的圖，只將對應的圖片連結改為本機相對路徑，保留其餘描述與附件。以 {{command}} 發布，多張圖重複使用 --attachment。如有修訂衝突，請重新讀取並告知我。發布後核對新引用。"
+  },
   "method": {
     "start": "啟動方法",
     "confirmed": "已核對",

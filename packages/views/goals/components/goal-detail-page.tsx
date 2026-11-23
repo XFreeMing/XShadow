@@ -48,6 +48,7 @@ import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
+import { GoalTaskPrototypes } from "./goal-task-prototypes";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
 const LAYOUT_ID = "multica_goal_detail_layout";
@@ -273,6 +274,8 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
 
   return shell(
     <div className={cn(OBJECT_PAGE_BODY, "space-y-8")}>
+      {!issuesQuery.isError && <GoalTaskPrototypes key={`prototypes-${goal.id}`} issues={linkedIssues} />}
+
       <Section title={t(($) => $.detail.intent)}>
         <p className="whitespace-pre-wrap text-body text-muted-foreground">
           {goal.intent || t(($) => $.detail.no_intent)}

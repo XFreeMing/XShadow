@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -32,6 +32,7 @@ import { PriorityIcon } from "./priority-icon";
 import { IssueActionsContextMenu } from "../actions";
 import { sortIssues } from "../utils/sort";
 import { useLocale, useT } from "../../i18n";
+import { IssuePrototypePreview } from "./issue-prototype-preview";
 
 // Date utilities — everything is UTC-day-aligned so a `due_date` ISO string
 // produced anywhere maps to exactly one column on the axis.
@@ -306,11 +307,13 @@ function ScheduledRow({
   range,
   dayPx,
   totalDays,
+  onPreview,
 }: {
   issue: Issue;
   range: Range;
   dayPx: number;
   totalDays: number;
+  onPreview: () => void;
 }) {
   const { t } = useT("issues");
   const locale = useLocale();
@@ -324,6 +327,19 @@ function ScheduledRow({
   const project = issue.project_id ? projects.find((pr) => pr.id === issue.project_id) : undefined;
   const peeked = useIsIssuePeeked(issue.id);
   const peekLinkProps = useIssuePeekLinkProps(issue.id);
+  const linkProps = {
+    ...peekLinkProps,
+    "aria-haspopup": "dialog" as const,
+    onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+      if (event.defaultPrevented) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        peekLinkProps.onClick?.(event);
+        return;
+      }
+      event.preventDefault();
+      onPreview();
+    },
+  };
 
   const start = parseDay(issue.start_date);
   const due = parseDay(issue.due_date);
@@ -376,7 +392,7 @@ function ScheduledRow({
               "bg-[color-mix(in_oklab,var(--brand)_6%,var(--background))] shadow-[inset_2px_0_0_var(--brand)]",
           )}
           style={{ width: LEFT_COL_WIDTH }}
-          {...peekLinkProps}
+          {...linkProps}
         >
           <StatusIcon
             status={issue.status}
@@ -412,7 +428,8 @@ function ScheduledRow({
                   <AppLink
                     href={p.issueDetail(issue.id)}
                     newTabTitle={issue.identifier}
-                    {...peekLinkProps}
+                    {...linkProps}
+                    aria-label={`${issue.identifier} · ${issue.title}`}
                     className={cn(
                       "absolute top-1/2 -translate-y-1/2 transition-opacity hover:opacity-90",
                       bar.isMarker
@@ -456,6 +473,7 @@ function ScheduledRow({
 
 export function GanttView({ issues }: { issues: Issue[] }) {
   const { t } = useT("issues");
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const zoom = useViewStore((s) => s.ganttZoom);
   const showCompleted = useViewStore((s) => s.ganttShowCompleted);
   const sortBy = useViewStore((s) => s.sortBy);
@@ -481,6 +499,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
     const sortField = sortBy === "position" ? "start_date" : sortBy;
     return sortIssues(issues, sortField, sortDirection, statusOrder);
   }, [issues, sortBy, sortDirection, statusOrder]);
+  const previewIssue = scheduled.find((issue) => issue.id === previewId);
 
   // Side peek steps through the rows top to bottom.
   const peek = useIssuePeekActions();
@@ -592,11 +611,15 @@ export function GanttView({ issues }: { issues: Issue[] }) {
                 range={range}
                 dayPx={dayPx}
                 totalDays={totalDays}
+                onPreview={() => setPreviewId(issue.id)}
               />
             ))}
           </div>
         </div>
       </div>}
+      {previewIssue && (
+        <IssuePrototypePreview key={previewIssue.id} issue={previewIssue} onClose={() => setPreviewId(null)} />
+      )}
     </div>
   );
 }

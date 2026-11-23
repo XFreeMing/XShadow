@@ -3867,6 +3867,7 @@ func TestRunIssueUpdateRejectsInvalidPriorityBeforeRequest(t *testing.T) {
 func newIssueUpdateTestCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "update"}
 	cmd.Flags().String("title", "", "")
+	cmd.Flags().Int64("expected-revision", 0, "")
 	cmd.Flags().String("description", "", "")
 	cmd.Flags().Bool("description-stdin", false, "")
 	cmd.Flags().String("description-file", "", "")
@@ -3974,11 +3975,15 @@ func TestRunIssueUpdateAttachmentUsesProvidedDescriptionWithoutFetching(t *testi
 	cmd := newIssueUpdateTestCmd()
 	_ = cmd.Flags().Set("attachment", path)
 	_ = cmd.Flags().Set("description", "Replacement body")
+	_ = cmd.Flags().Set("expected-revision", "12")
 	if err := runIssueUpdate(cmd, []string{issueID}); err != nil {
 		t.Fatalf("runIssueUpdate: %v", err)
 	}
 	if got := body["description"].(string); !strings.HasPrefix(got, "Replacement body\n\n") {
 		t.Fatalf("description = %q", got)
+	}
+	if got := body["expected_revision"]; got != float64(12) {
+		t.Fatalf("expected_revision = %v, want 12", got)
 	}
 	if want := []string{"POST /api/upload-file", "PUT /api/issues/" + issueID}; !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)

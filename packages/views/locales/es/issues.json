@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "Ver todos ({{count}})",
+    "show_fewer": "Ver menos",
+    "title": "Prototipo",
+    "goal_title": "Prototipos de las tareas",
+    "empty": "Esta tarea aún no tiene prototipo.",
+    "load_failed": "No se pudo cargar el prototipo.",
+    "image_failed": "Imagen no disponible",
+    "retry": "Reintentar",
+    "frame": "Imagen {{number}}",
+    "frame_count": "Imágenes: {{count}}",
+    "open_task": "Abrir tarea",
+    "adjust": "Ajustar prototipo",
+    "review_first": "Revisa las imágenes en el chat antes de actualizar la tarea.",
+    "request": "¿Qué quieres cambiar?",
+    "request_example": "Por ejemplo, mueve el buscador arriba y muestra una búsqueda sin resultados.",
+    "agent": "Agente",
+    "agents_failed": "No se pudieron cargar los agentes.",
+    "no_agent": "No hay agentes disponibles.",
+    "chat_failed": "No se pudo abrir el chat. Inténtalo de nuevo.",
+    "continue_in_chat": "Continuar en el chat",
+    "chat_title": "Ajustar prototipo · {{issue}}",
+    "chat_draft": "Modifica el prototipo de {{issue}} ({{id}}).\n\n{{request}}\n\nImágenes originales en orden\n{{originals}}\n\nLee la tarea y las imágenes. Pregúntame si el alcance no está claro. Presenta las imágenes nuevas con `multica attachment upload`, guarda sus ID y espera mi aprobación explícita. Después lee la descripción y revisión actuales con `multica issue get`. Si cambiaron las referencias originales, indícamelo. Descarga las imágenes aprobadas y sustituye solo sus referencias por rutas locales relativas. Conserva el resto del texto y los adjuntos. Publica con {{command}}, repitiendo --attachment por imagen. Si hay conflicto, vuelve a leer e infórmame. Verifica las nuevas referencias."
+  },
   "method": {
     "start": "Método iniciado",
     "confirmed": "Verificado",

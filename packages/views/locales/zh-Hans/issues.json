@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "查看全部 {{count}} 个任务的原型图",
+    "show_fewer": "收起",
+    "title": "原型图",
+    "goal_title": "任务原型图",
+    "empty": "这个任务还没有原型图。",
+    "load_failed": "未能加载任务原型图。",
+    "image_failed": "图片无法加载",
+    "retry": "重试",
+    "frame": "第 {{number}} 张",
+    "frame_count": "共 {{count}} 张",
+    "open_task": "打开任务",
+    "adjust": "用自然语言调整",
+    "review_first": "在对话中查看修改稿，确认后再更新任务。",
+    "request": "想怎么调整？",
+    "request_example": "例如，把搜索框移到顶部，再展示没有搜到结果时的页面。",
+    "agent": "智能体",
+    "agents_failed": "未能加载智能体。",
+    "no_agent": "当前没有可用的智能体。",
+    "chat_failed": "未能打开对话，请重试。",
+    "continue_in_chat": "继续到对话",
+    "chat_title": "调整原型图 · {{issue}}",
+    "chat_draft": "请按以下要求修改任务 {{issue}}（{{id}}）的原型图。\n\n{{request}}\n\n现有原型图及顺序\n{{originals}}\n\n先读原任务和原图。图的范围不明确时先问我。制作替换图，用 `multica attachment upload` 发到这次对话让我预览，保留附件 ID。等我明确确认后，用 `multica issue get` 读取最新正文和修订号。如果要换的原图引用已改动，告诉我差异并等我确认。下载已确认的图，只把最新正文中对应的图片链接换成新图的本地相对路径，保留其余正文和附件。用 {{command}} 发布，多张图重复传入 --attachment。遇到修订冲突就重新读取并告知我。发布后读回任务，核对新的图片引用。"
+  },
   "method": {
     "start": "启动方法",
     "confirmed": "已核对",

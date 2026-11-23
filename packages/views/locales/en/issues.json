@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "Show all {{count}} prototypes",
+    "show_fewer": "Show fewer",
+    "title": "Prototype",
+    "goal_title": "Task prototypes",
+    "empty": "This task has no prototype yet.",
+    "load_failed": "Could not load the task prototype.",
+    "image_failed": "Image unavailable",
+    "retry": "Retry",
+    "frame": "Frame {{number}}",
+    "frame_count": "Frames: {{count}}",
+    "open_task": "Open task",
+    "adjust": "Adjust prototype",
+    "review_first": "Review the revised images in chat before updating the task.",
+    "request": "What should change?",
+    "request_example": "For example, move search to the top and show the empty results screen.",
+    "agent": "Agent",
+    "agents_failed": "Could not load agents.",
+    "no_agent": "No agent is available.",
+    "chat_failed": "Could not open chat. Try again.",
+    "continue_in_chat": "Continue in chat",
+    "chat_title": "Adjust prototype · {{issue}}",
+    "chat_draft": "Revise the prototype for {{issue}} ({{id}}).\n\n{{request}}\n\nOriginal frames, in order\n{{originals}}\n\nRead the task and original images. Ask me if the target frame is unclear. Make replacement image files and show them here with `multica attachment upload`. Keep the attachment IDs and wait for my explicit approval. After approval, use `multica issue get` to read the latest description and revision. If the target image references changed, show me the difference and wait. Download the approved files. In the latest description replace only the selected image references with local relative paths, keeping the remaining text and attachments. Publish with {{command}}. Repeat --attachment for each approved image. If the revision conflicts, reread the task and tell me. Read back the updated task to verify the new references."
+  },
   "method": {
     "start": "Started",
     "confirmed": "Confirmed",

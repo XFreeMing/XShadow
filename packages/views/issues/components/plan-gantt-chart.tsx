@@ -7,6 +7,7 @@ import type { GoalPlan, GoalPlanEdge, Issue } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { AppLink } from "../../navigation";
+import { IssuePrototypePreview } from "./issue-prototype-preview";
 
 const ROW = 38;
 const LABEL = 296;
@@ -17,6 +18,7 @@ export function PlanGanttChart({ plan, issues }: { plan: GoalPlan; issues: Issue
   const paths = useWorkspacePaths();
   const arrow = useId().replace(/:/g, "");
   const [selected, setSelected] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const items = useMemo(() => {
     const byId = new Map(issues.map(issue => [issue.id, issue]));
     return new Map(plan.items.map(item => {
@@ -46,6 +48,11 @@ export function PlanGanttChart({ plan, issues }: { plan: GoalPlan; issues: Issue
   const current = focus ? items.get(focus) : undefined;
   const touches = (edge: GoalPlanEdge) => edge.prerequisite_item_id === focus || edge.dependent_item_id === focus;
   const relations = plan.edges.filter(touches);
+  function selectItem(id: string) {
+    const hasIssue = !!items.get(id)?.issue;
+    setSelected(hasIssue || focus !== id ? id : null);
+    setPreviewOpen(hasIssue);
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-2 text-caption">
@@ -105,7 +112,7 @@ export function PlanGanttChart({ plan, issues }: { plan: GoalPlan; issues: Issue
               return (
                 <div key={row.id} className="flex border-b border-border/50 last:border-b-0" style={{ height: ROW }}>
                   <button type="button" title={caption} aria-pressed={focus === row.id}
-                    onClick={() => setSelected(focus === row.id ? null : row.id)}
+                    onClick={() => selectItem(row.id)} aria-haspopup={item.issue ? "dialog" : undefined}
                     className={cn("sticky left-0 z-10 flex shrink-0 items-center gap-2 border-r bg-background px-4 text-left text-body hover:bg-accent",
                       focus === row.id && "bg-accent")} style={{ width: LABEL }}>
                     {identifier && <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{identifier}</span>}
@@ -113,7 +120,8 @@ export function PlanGanttChart({ plan, issues }: { plan: GoalPlan; issues: Issue
                   </button>
                   <div className="relative flex-1">
                     <button type="button" aria-label={caption + (row.critical ? " · " + t(($) => $.gantt.critical) : "")}
-                      aria-pressed={focus === row.id} title={caption} onClick={() => setSelected(focus === row.id ? null : row.id)}
+                      aria-pressed={focus === row.id} title={caption} onClick={() => selectItem(row.id)}
+                      aria-haspopup={item.issue ? "dialog" : undefined}
                       className={cn("absolute top-2 h-5 overflow-hidden rounded px-1 text-micro font-medium",
                         row.critical ? "bg-brand text-brand-foreground" : "bg-secondary text-secondary-foreground ring-1 ring-inset ring-border",
                         focus === row.id && "outline-2 outline-offset-2 outline-foreground")}
@@ -144,6 +152,9 @@ export function PlanGanttChart({ plan, issues }: { plan: GoalPlan; issues: Issue
         {current.coordination?.parallel_reason && <p>{current.coordination.parallel_reason}</p>}
         {!!current.coordination?.exclusive_resources.length && <p>{t(($) => $.gantt.exclusive)} · {current.coordination.exclusive_resources.join(", ")}</p>}
       </section>}
+      {previewOpen && current?.issue && (
+        <IssuePrototypePreview key={current.issue.id} issue={current.issue} onClose={() => setPreviewOpen(false)} />
+      )}
     </div>
   );
 }

@@ -103,6 +103,7 @@ import { LabelChip } from "../../labels/label-chip";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
 import { IssueWorkMethod } from "./issue-work-method";
 import { IssueAcceptance } from "./issue-acceptance";
+import { IssuePrototypeEdit } from "./issue-prototype-edit";
 import { SubIssuesAgentWorkingChip } from "./sub-issues-agent-working-chip";
 import { IssueProjectPicker } from "../../projects/components/issue-project-picker";
 import { IssuePropertyPills } from "./issue-property-pills";
@@ -3857,6 +3858,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           {showMemberTodoPanel ? (
             <MemberTodoCard issue={issue} todo={memberTodo!} userId={user!.id} />
           ) : null}
+
+          <IssuePrototypeEdit key={`prototype-${issue.id}`} issue={issue} />
 
           {showMemberTodoPanel ? (
             <details className="mt-5 rounded-lg border border-border/60 bg-muted/10">

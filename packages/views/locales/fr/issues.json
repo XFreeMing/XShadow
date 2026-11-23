@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "Tout afficher ({{count}})",
+    "show_fewer": "Afficher moins",
+    "title": "Prototype",
+    "goal_title": "Prototypes des tâches",
+    "empty": "Cette tâche n’a pas encore de prototype.",
+    "load_failed": "Impossible de charger le prototype.",
+    "image_failed": "Image indisponible",
+    "retry": "Réessayer",
+    "frame": "Image {{number}}",
+    "frame_count": "Images : {{count}}",
+    "open_task": "Ouvrir la tâche",
+    "adjust": "Modifier le prototype",
+    "review_first": "Examinez les images dans la conversation avant de mettre à jour la tâche.",
+    "request": "Que voulez-vous modifier ?",
+    "request_example": "Par exemple, remontez la barre de recherche et montrez l’écran sans résultats.",
+    "agent": "Agent",
+    "agents_failed": "Impossible de charger les agents.",
+    "no_agent": "Aucun agent n’est disponible.",
+    "chat_failed": "Impossible d’ouvrir la conversation. Réessayez.",
+    "continue_in_chat": "Continuer dans la conversation",
+    "chat_title": "Modifier le prototype · {{issue}}",
+    "chat_draft": "Modifie le prototype de {{issue}} ({{id}}).\n\n{{request}}\n\nImages d’origine dans l’ordre\n{{originals}}\n\nConsulte la tâche et les images. Interroge-moi si le périmètre est ambigu. Présente les révisions avec `multica attachment upload`, conserve leurs identifiants et attends mon accord explicite. Ensuite, lis la dernière description et sa révision avec `multica issue get`. Si les références d’origine ont changé, indique-moi les différences. Télécharge les images approuvées et remplace uniquement leurs références par des chemins locaux relatifs. Garde le reste de la description et les pièces jointes. Publie avec {{command}}, en répétant --attachment pour chaque image. En cas de conflit, relis la tâche et informe-moi. Vérifie les références publiées."
+  },
   "method": {
     "start": "Méthode démarrée",
     "confirmed": "Vérifié",

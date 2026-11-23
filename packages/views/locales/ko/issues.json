@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "전체 {{count}}개 보기",
+    "show_fewer": "접기",
+    "title": "프로토타입",
+    "goal_title": "작업 프로토타입",
+    "empty": "이 작업에는 아직 프로토타입이 없습니다.",
+    "load_failed": "작업 프로토타입을 불러오지 못했습니다.",
+    "image_failed": "이미지를 불러올 수 없음",
+    "retry": "다시 시도",
+    "frame": "이미지 {{number}}",
+    "frame_count": "이미지 {{count}}개",
+    "open_task": "작업 열기",
+    "adjust": "프로토타입 수정",
+    "review_first": "채팅에서 수정안을 검토한 후 작업을 업데이트합니다.",
+    "request": "무엇을 바꿀까요?",
+    "request_example": "예: 검색창을 위로 옮기고 검색 결과가 없는 화면을 보여 주세요.",
+    "agent": "에이전트",
+    "agents_failed": "에이전트를 불러오지 못했습니다.",
+    "no_agent": "사용할 수 있는 에이전트가 없습니다.",
+    "chat_failed": "채팅을 열지 못했습니다. 다시 시도해 주세요.",
+    "continue_in_chat": "채팅에서 계속",
+    "chat_title": "프로토타입 수정 · {{issue}}",
+    "chat_draft": "다음 요청에 따라 작업 {{issue}} ({{id}})의 프로토타입을 수정해 주세요.\n\n{{request}}\n\n기존 이미지와 순서\n{{originals}}\n\n작업과 원본을 확인하고 범위가 불분명하면 질문해 주세요. 수정안을 `multica attachment upload`로 첨부하고 ID를 보관한 뒤 명시적 승인을 기다려 주세요. 승인되면 `multica issue get`으로 최신 설명과 리비전을 확인해 주세요. 원본 참조가 바뀌었다면 차이를 알려 주세요. 승인된 이미지를 내려받고 해당 참조만 상대 경로로 변경하며 나머지 설명과 첨부를 보존해 주세요. {{command}}로 게시하고 이미지마다 --attachment를 사용해 주세요. 충돌 시 다시 읽고 알려 주며 게시 후 새 참조를 확인해 주세요."
+  },
   "method": {
     "start": "방법 시작",
     "confirmed": "확인됨",

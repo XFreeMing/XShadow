@@ -1,4 +1,28 @@
 {
+  "prototype": {
+    "show_all": "全 {{count}} 件を表示",
+    "show_fewer": "一部を表示",
+    "title": "プロトタイプ",
+    "goal_title": "タスクのプロトタイプ",
+    "empty": "このタスクのプロトタイプはまだありません。",
+    "load_failed": "プロトタイプを読み込めませんでした。",
+    "image_failed": "画像を読み込めません",
+    "retry": "再試行",
+    "frame": "画像 {{number}}",
+    "frame_count": "全 {{count}} 枚",
+    "open_task": "タスクを開く",
+    "adjust": "プロトタイプを調整",
+    "review_first": "チャットで修正案を確認してからタスクを更新します。",
+    "request": "何を変更しますか？",
+    "request_example": "例：検索欄を上部に移動し、検索結果がない画面を追加します。",
+    "agent": "エージェント",
+    "agents_failed": "エージェントを読み込めませんでした。",
+    "no_agent": "利用できるエージェントがいません。",
+    "chat_failed": "チャットを開けませんでした。もう一度お試しください。",
+    "continue_in_chat": "チャットで続ける",
+    "chat_title": "プロトタイプを調整 · {{issue}}",
+    "chat_draft": "タスク {{issue}}（{{id}}）のプロトタイプを次の要望に沿って修正してください。\n\n{{request}}\n\n現在の画像と順序\n{{originals}}\n\nタスクと元画像を確認し、必要なら質問してください。差し替え案を `multica attachment upload` で添付し、ID を控えて、明示的な承認を待ちます。承認後は `multica issue get` で最新の本文とリビジョンを取得します。元の参照が変わっていたら知らせてください。承認済み画像をダウンロードし、該当する参照だけローカルの相対パスに置き換えます。残りの本文と添付は保持します。{{command}} で公開し、画像ごとに --attachment を指定します。競合時は読み直して知らせ、公開後は新しい参照を確認してください。"
+  },
   "method": {
     "start": "手法を開始",
     "confirmed": "確認済み",
