@@ -73,6 +73,9 @@ func (s *IssueWakeupService) Trigger(ctx context.Context, issueID, id, member pg
 	if !active {
 		return fmt.Errorf("%w: issue is closed", ErrWakeupInput)
 	}
+	if hasMemberChoice(w.Condition) {
+		return fmt.Errorf("%w: this wakeup requires the member choice and completion", ErrWakeupInput)
+	}
 	if w.DisabledAt.Valid {
 		return fmt.Errorf("%w: turn the wakeup on first", ErrWakeupInput)
 	}

@@ -622,6 +622,23 @@ head's result, another sub-issue set). States already true at registration fire
 on the first check; finished checks from before registration are ignored. The
 watched issue's identifier is stored in the condition for display.
 
+For a choice card whose completion authorizes one specific next step, register
+the wait on the requesting issue before the member answers:
+
+```sh
+multica issue wakeup create REQUEST --until-issue CHOICE --until-member-option reuse --mode once --agent-id AGENT --instruction-file ./next-step.md
+```
+
+The member card must identify REQUEST as its source in the same project. Its
+assigned member's persisted answer must select the exact key, and the card must
+reach a done status. Either fact can arrive first. Both writes notify the rule
+in their database transaction. The handoff identifies the answer comment.
+Use one rule for this handoff. The person handling the answer can read its receipt
+on REQUEST before taking any further action. A sibling story needs its own
+authorization and independent review. An unchanged structured backlog wait and
+a pending member input do not restart coordination merely because a day passed.
+Use an explicit scheduled review for a time-dependent decision.
+
 `conflicts` reads the GitHub API snapshot (`api_mergeable`) and counts only a
 snapshot fetched for the PR's current head, so a verdict from before a push
 never fires. Its key is `pr_id@head:conflicting` (PR numbers and heads repeat

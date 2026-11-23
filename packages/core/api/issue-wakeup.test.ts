@@ -230,14 +230,14 @@ it("reads conditions, caps and pauses, and drops shapes it does not know", async
   const rows = [
     { ...base, condition: { type: "issue_field", field: "status", value: "in_review" }, max_fires: 20, fire_count: 20, paused_reason: "max_fires" },
     { ...base, id: "w2", condition: { type: "future_kind" }, paused_reason: "someday" },
-    { ...base, id: "w3", condition: { type: "other_issue", issue_id: "x", state: "done", identifier: "MUL-2" } },
+    { ...base, id: "w3", condition: { type: "other_issue", issue_id: "x", state: "done", member_option: "reuse", identifier: "MUL-2" } },
     { ...base, id: "w4", condition: { type: "other_issue", issue_id: "y", state: "blocked", identifier: "MUL-3" } },
   ];
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(rows))));
   const [known, unknown, other, blocked] = await client.listIssueWakeups("i");
   expect(known).toMatchObject({ condition: { field: "status", value: "in_review" }, max_fires: 20, fire_count: 20, paused_reason: "max_fires" });
   expect(unknown).toMatchObject({ condition: null, paused_reason: null });
-  expect(other!.condition).toEqual({ type: "other_issue", issue_id: "x", state: "done", identifier: "MUL-2" });
+  expect(other!.condition).toEqual({ type: "other_issue", issue_id: "x", state: "done", member_option: "reuse", identifier: "MUL-2" });
   expect(blocked!.condition).toEqual({ type: "other_issue", issue_id: "y", state: "blocked", identifier: "MUL-3" });
 });
 

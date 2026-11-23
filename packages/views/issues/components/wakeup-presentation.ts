@@ -243,7 +243,12 @@ export function useWakeupText() {
       case "other_issue":
         return {
           key: c.state === "ended" ? ("other_ended" as const) : c.state === "in_review" ? ("other_in_review" as const) : c.state === "blocked" ? ("other_blocked" as const) : ("other_done" as const),
-          values: { issue: c.identifier || t(($) => $.wakeups.cond.another_issue) },
+          values: {
+            issue: [
+              c.identifier || t(($) => $.wakeups.cond.another_issue),
+              c.member_option && `${t(($) => $.member_answer.kind_choice)} · ${c.member_option}`,
+            ].filter(Boolean).join(" · "),
+          },
         };
     }
     return { key: "children_all" as const, values: {} };

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,7 +40,7 @@ const continuationCandidates = `
    AND (w.condition->>'type' IS DISTINCT FROM 'other_issue' OR EXISTS (
      SELECT FROM issue dep JOIN issue_status ds ON ds.workspace_id=dep.workspace_id AND ds.key=dep.status
      WHERE dep.workspace_id=i.workspace_id AND dep.id::text=w.condition->>'issue_id'
-     AND (ds.category NOT IN ('closed','done') OR (dep.updated_at > now()-interval '2 minutes' AND
+     AND (ds.category NOT IN ('closed','done') OR (ds.category='done' AND w.condition->>'member_option' IS NOT NULL) OR (dep.updated_at > now()-interval '2 minutes' AND
           (w.condition->>'state'='ended' OR (ds.category='done' AND w.condition->>'state'='done'))))))
    AND (w.next_fire_at IS NOT NULL OR w.expires_at IS NOT NULL OR w.condition->>'type'='other_issue'
      OR w.updated_at>now()-interval '24 hours'))
@@ -105,16 +107,24 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		return err
 	}
 
-	// An existing backlog plan is reviewed by the planner. Bound unobservable
-	// scope waits; wake sooner when a recorded dependency changes or disappears.
+	// A recorded wait stays quiet until its observed facts change.
+	var dependencyChange string
 	if issue.Status == issuestatus.Backlog {
-		waiting, err := backlogPlanCurrent(ctx, tx, issue)
+		var waiting bool
+		waiting, dependencyChange, err = backlogPlanWait(ctx, tx, issue)
 		if err != nil || waiting {
 			return err
 		}
 	}
-	if issue.AssigneeType.String == "member" && time.Since(issue.UpdatedAt.Time) < 24*time.Hour {
-		return nil
+	if issue.AssigneeType.String == "member" {
+		var todo struct {
+			Key    string `json:"member_todo_key"`
+			Source string `json:"member_todo_source"`
+		}
+		_ = json.Unmarshal(issue.Metadata, &todo)
+		if (todo.Key != "" && todo.Source != "") || time.Since(issue.UpdatedAt.Time) < 24*time.Hour {
+			return nil
+		}
 	}
 
 	var method workmethod.Run
@@ -131,10 +141,14 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		return err
 	}
 	gap := fmt.Sprintf("%s/%s/%s/%d/%s/%s", issue.Status, issue.AssigneeType.String, util.UUIDToString(issue.AssigneeID), method.Revision, ordinary, transition)
+	if dependencyChange != "" {
+		gap += "/" + dependencyChange
+	}
 	var attempted, waitingForRecheck bool
 	if err = tx.QueryRow(ctx, `SELECT count(*)>0,coalesce(max(coalesce(completed_at,created_at))
  FILTER (WHERE context->>'continuation_role'='coordinator') > now()-interval '24 hours', false)
- FROM agent_task_queue WHERE issue_id=$1 AND context->>'continuation_gap'=$2`, id, gap).Scan(&attempted, &waitingForRecheck); err != nil || waitingForRecheck {
+ OR ($3 AND coalesce(bool_or(status='completed' AND context->>'continuation_role'='coordinator'),false))
+ FROM agent_task_queue WHERE issue_id=$1 AND context->>'continuation_gap'=$2`, id, gap, dependencyChange != "").Scan(&attempted, &waitingForRecheck); err != nil || waitingForRecheck {
 		return err
 	}
 	target, err := continuationOwner(ctx, q, issue, method)
@@ -181,12 +195,12 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	return s.Tasks.PublishWorkMethodHandoff(ctx, task)
 }
 
-func backlogPlanCurrent(ctx context.Context, tx pgx.Tx, issue db.Issue) (bool, error) {
+func backlogPlanWait(ctx context.Context, tx pgx.Tx, issue db.Issue) (bool, string, error) {
 	var meta struct {
 		Plan json.RawMessage `json:"backlog_plan"`
 	}
 	if len(issue.Metadata) == 0 || json.Unmarshal(issue.Metadata, &meta) != nil {
-		return false, nil
+		return false, "", nil
 	}
 	raw := meta.Plan
 	var encoded string
@@ -198,22 +212,33 @@ func backlogPlanCurrent(ctx context.Context, tx pgx.Tx, issue db.Issue) (bool, e
 		Next         string
 		Dependencies []struct{ Issue, Status string }
 	}
-	if json.Unmarshal(raw, &plan) != nil || plan.Next == "" || time.Since(issue.UpdatedAt.Time) >= 24*time.Hour {
-		return false, nil
+	if json.Unmarshal(raw, &plan) != nil || plan.Next == "" {
+		return false, "", nil
 	}
 	switch plan.State {
 	case "waiting_scope", "needs_story", "waiting_dependency":
 	default:
-		return false, nil
+		return false, "", nil
 	}
+	var changes []string
 	for _, dep := range plan.Dependencies {
-		var same bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT FROM issue i JOIN workspace w ON w.id=i.workspace_id
-   WHERE w.id=$1 AND upper(w.issue_prefix||'-'||i.number)=upper($2) AND i.status=$3)`, issue.WorkspaceID, dep.Issue, dep.Status).Scan(&same); err != nil || !same {
-			return false, err
+		if dep.Issue == "" || dep.Status == "" {
+			return false, "", nil
+		}
+		var status, transition string
+		err := tx.QueryRow(ctx, `SELECT i.status, CASE WHEN i.status=$3 THEN '' ELSE coalesce((SELECT a.id::text FROM activity_log a WHERE a.issue_id=i.id AND a.action='status_changed' ORDER BY a.created_at DESC,a.id DESC LIMIT 1),'') END
+    FROM issue i JOIN workspace w ON w.id=i.workspace_id WHERE w.id=$1 AND upper(w.issue_prefix||'-'||i.number)=upper($2)`, issue.WorkspaceID, dep.Issue, dep.Status).Scan(&status, &transition)
+		if errors.Is(err, pgx.ErrNoRows) {
+			status = "missing"
+		} else if err != nil {
+			return false, "", err
+		}
+		if status != dep.Status {
+			changes = append(changes, fmt.Sprintf("%s:%s>%s:%s", strings.ToUpper(dep.Issue), dep.Status, status, transition))
 		}
 	}
-	return true, nil
+	sort.Strings(changes)
+	return len(changes) == 0, strings.Join(changes, ","), nil
 }
 
 func continuationOwner(ctx context.Context, q *db.Queries, issue db.Issue, method workmethod.Run) (wakeTarget, error) {

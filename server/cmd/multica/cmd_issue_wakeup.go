@@ -84,6 +84,7 @@ func newIssueWakeupCommand() *cobra.Command {
 			c.Flags().String("until-pr", "", "Condition: a linked pull request's checks finish (checks), it merges (merged), or it has merge conflicts on its current head (conflicts; GitHub only)")
 			c.Flags().String("until-issue", "", "Condition: another issue in this workspace reaches --until-issue-state")
 			c.Flags().String("until-issue-state", "done", "With --until-issue: done, ended (done or cancelled), in_review or blocked")
+			c.Flags().String("until-member-option", "", "With --until-issue: require the assigned member to select this option and the choice card to be done")
 			c.Flags().Int32("max-fires", 0, "Repeating rules: stop after this many runs (1-1000; continuous event rules default to 20)")
 		}
 		wake.AddCommand(c)
@@ -297,13 +298,23 @@ func wakeupConditionFromFlags(ctx context.Context, cmd *cobra.Command, client *c
 		}
 		conditions = append(conditions, map[string]any{"type": "pull_request", "event": event})
 	}
+	option, _ := cmd.Flags().GetString("until-member-option")
 	if v, _ := cmd.Flags().GetString("until-issue"); v != "" {
 		ref, err := resolveIssueRef(ctx, client, v)
 		if err != nil {
 			return nil, err
 		}
 		state, _ := cmd.Flags().GetString("until-issue-state")
-		conditions = append(conditions, map[string]any{"type": "other_issue", "issue_id": ref.ID, "state": state})
+		c := map[string]any{"type": "other_issue", "issue_id": ref.ID, "state": state}
+		if option != "" {
+			if state != "done" {
+				return nil, fmt.Errorf("--until-member-option requires --until-issue-state done")
+			}
+			c["member_option"] = option
+		}
+		conditions = append(conditions, c)
+	} else if option != "" {
+		return nil, fmt.Errorf("--until-member-option requires --until-issue")
 	}
 	switch len(conditions) {
 	case 0:

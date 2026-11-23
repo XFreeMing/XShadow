@@ -99,6 +99,7 @@ decision_key: <验收决策键>
 3. 补写元数据 `member_todo_key`、`member_todo_kind`、`member_todo_source`（验收决策另有 `acceptance_decision_key`），值都用字符串。
 4. 登记与 `completion_signal` 一致的恢复规则，并读回确认：
    - `done`：在原事项登记 `--until-issue <待办> --until-issue-state done --mode once --agent-id <负责人 id>`，正文写明把待办标记完成。
+   - 只有指定选项才能交接时，从待办正文的选项取稳定的 key，在上面的单次规则加 `--until-member-option <key>`。登记在提出请求的原事项，读回接单人、选项和规则 ID。暂缓、自由文本和仅标记完成都继续等。幕僚长收到答复后先看原事项已有的规则及运行，同一交接只走一次。旧客户端的无选项答复由幕僚长核实后处理。另一事项仍须满足自己的资料、批次授权和独立审核。
    - `comment`：在**成员待办**上登记 `--event comment.created --filter-actor-type member --filter-actor-id <用户 id> --mode once --agent-id <项目经理 id>`；项目经理被唤醒后读取回复并接回原事项。正文写“在本事项回复”，不再写“原事项会自动继续”。
    - `manager`：同样在成员待办上登记 `done` 或 `comment.created` 规则唤醒项目经理，不能只有一句“项目经理会查看”。
    没有登记成功的规则，不要承诺“只回复就会自动继续”。

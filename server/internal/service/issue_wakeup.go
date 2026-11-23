@@ -451,6 +451,9 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 		if e != nil {
 			return out, e
 		}
+		if hasMemberChoice(normalized) && (in.Mode != "once" || in.OnTimeout == "wake") {
+			return out, badCondition("a member choice needs a one-time rule; use a separate reminder for deadlines")
+		}
 		condition, in.EventTypes = normalized, hints
 		// The scheduler evaluates the condition on its first tick.
 		next = pgtype.Timestamptz{Time: now, Valid: true}
@@ -545,6 +548,27 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 			return out, err
 		}
 		if _, err = q.CancelUnstartedWakeupTasks(ctx, util.UUIDToString(old.ID)); err != nil {
+			return out, err
+		}
+	}
+	// Registration retries for the same choice reuse the original receipt even
+	// after a successful fire. Editing the existing rule is an explicit action.
+	if !existingID.Valid && hasMemberChoice(condition) {
+		var prior pgtype.UUID
+		err = tx.QueryRow(ctx, `SELECT id FROM issue_wakeup WHERE issue_id=$1 AND condition=$2::jsonb AND disabled_at IS NULL ORDER BY created_at LIMIT 1`, issueID, condition).Scan(&prior)
+		if err == nil {
+			old, e := q.LockIssueWakeup(ctx, prior)
+			if e != nil {
+				return out, e
+			}
+			sameExpiry := old.ExpirySeconds == expirySeconds && old.ExpiresAt.Valid == expiresAt.Valid &&
+				(in.ExpiresAt == nil || old.ExpiresAt.Time.Equal(*in.ExpiresAt))
+			if old.AgentID != agent.ID || old.Instruction != in.Instruction || old.CreatedBy != member || !sameExpiry {
+				return out, ErrWakeupConflict
+			}
+			return old, tx.Commit(ctx)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return out, err
 		}
 	}
@@ -1494,6 +1518,20 @@ func (s *IssueWakeupService) CheckClaim(ctx context.Context, task db.AgentTaskQu
 	}
 	if err != nil {
 		return err
+	}
+	if hasMemberChoice(w.Condition) {
+		tx, err := s.Tasks.TxStarter.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		met, _, _, err := s.evaluateCondition(ctx, tx, s.Tasks.Queries.WithTx(tx), w)
+		if err != nil {
+			return err
+		}
+		if !met {
+			return ErrWakeupForbidden
+		}
 	}
 	return s.authorize(ctx, s.Tasks.Queries, w.WorkspaceID, w.CreatedBy, agent)
 }

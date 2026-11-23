@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/google/uuid"
 	"strings"
 	"testing"
 
@@ -874,4 +876,89 @@ func TestWakeupConditionVCSChecksKeyedByPullRequest(t *testing.T) {
 			t.Fatalf("a different PR finishing started %d runs, want 1", n)
 		}
 	})
+}
+
+func TestWakeupMemberChoiceNeedsBothFacts(t *testing.T) {
+	for _, answerFirst := range []bool{true, false} {
+		t.Run(fmt.Sprint("answerFirst=", answerFirst), func(t *testing.T) {
+			f, s, source, agent := conditionFixture(t)
+			ctx := context.Background()
+			var sourceRef string
+			if err := f.Pool.QueryRow(ctx, "SELECT w.issue_prefix||'-'||i.number FROM issue i JOIN workspace w ON w.id=i.workspace_id WHERE i.id=$1", source).Scan(&sourceRef); err != nil {
+				t.Fatal(err)
+			}
+			key := "todo-source-choice"
+			data := condition(t, map[string]any{"member_todo_key": key, "member_todo_source": sourceRef})
+			member := f.Issue(t, "choose shared sources", testutil.Cols{"assignee_type": "member", "assignee_id": f.UserID, "metadata": string(data)})
+			in := WakeupInput{AgentID: agent, Kind: "event", Mode: "once", Instruction: "Prepare the shared questions", Condition: condition(t, map[string]any{"type": "other_issue", "issue_id": member, "state": "done", "member_option": "reuse"})}
+			w := wakeCreate(t, f, s, source, in)
+			user := parseTestUUID(t, f.UserID)
+			sibling := parseTestUUID(t, f.Issue(t, "another consuming story"))
+			if _, err := s.Create(ctx, sibling, user, pgtype.UUID{}, in); !errors.Is(err, ErrWakeupInput) {
+				t.Fatalf("unrelated consumer: %v", err)
+			}
+			if err := s.Trigger(ctx, source, w.ID, user); !errors.Is(err, ErrWakeupInput) {
+				t.Fatalf("manual override: %v", err)
+			}
+			f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()+interval '1 hour' WHERE id=$1", w.ID)
+			answer := func(option, authorType, author string) {
+				// Production clients write one stable comment id for the member's answer.
+				id := uuid.NewString()
+				payload := condition(t, map[string]any{"todo_key": key, "answer_id": id, "answer": "selected", "option_key": option, "answered_by": author, "source_issue": sourceRef})
+				f.Comment(t, member, "<!-- multica-member-answer "+string(payload)+" -->", testutil.Cols{"id": id, "author_type": authorType, "author_id": author})
+			}
+			tick := func(want int) {
+				t.Helper()
+				if err := s.TickWorkspaces(ctx, parseTestUUID(t, f.WorkspaceID)); err != nil {
+					t.Fatal(err)
+				}
+				if got := wakeRuns(t, f, w.ID); got != want {
+					t.Fatalf("delivered %d want %d", got, want)
+				}
+			}
+			done := func() { f.Exec(t, "UPDATE issue SET status='done' WHERE id=$1", member) }
+			if answerFirst {
+				answer("reuse", "member", f.UserID)
+				tick(0)
+				done()
+			} else {
+				done()
+				f.Exec(t, "UPDATE issue SET updated_at=now()-interval '2 days' WHERE id IN ($1,$2)", source, member)
+				recovery := IssueContinuation{Tasks: s.Tasks, ManagerID: parseTestUUID(t, agent)}
+				if err := recovery.Tick(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if got := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1", util.UUIDToString(source)); got != 0 {
+					t.Fatal("fallback bypassed the missing member answer")
+				}
+				tick(0)
+				answer("reuse", "agent", agent)
+				tick(0)
+				answer("defer", "member", f.UserID)
+				tick(0)
+				answer("reuse", "member", f.UserID)
+			}
+			tick(1)
+			again := wakeCreate(t, f, s, source, in)
+			if again.ID != w.ID {
+				t.Fatal("repeat registration created a second rule")
+			}
+			tick(1)
+			last, err := f.q.LocklessWakeup(ctx, w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := f.q.GetAgentTask(ctx, last.LastTaskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.CheckClaim(ctx, task); err != nil {
+				t.Fatal(err)
+			}
+			f.Exec(t, "UPDATE comment SET deleted_at=now() WHERE issue_id=$1 AND author_type='member'", member)
+			if err := s.CheckClaim(ctx, task); !errors.Is(err, ErrWakeupForbidden) {
+				t.Fatalf("withdrawn answer: %v", err)
+			}
+		})
+	}
 }

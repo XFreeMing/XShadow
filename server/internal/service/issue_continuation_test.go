@@ -121,7 +121,7 @@ func TestIssueContinuationBacklogRechecksChangedPrerequisite(t *testing.T) {
 	f, w, issue, agent := wakeFixture(t)
 	ctx := context.Background()
 	pre := f.Issue(t, "upstream")
-	f.Exec(t, `UPDATE issue SET status='backlog',updated_at=now()-interval '1 hour',
+	f.Exec(t, `UPDATE issue SET status='backlog',updated_at=now()-interval '2 days',
  metadata=jsonb_build_object('backlog_plan',(SELECT jsonb_build_object('state','waiting_dependency','next','Review the prerequisite','dependencies',
  jsonb_build_array(jsonb_build_object('issue',ws.issue_prefix||'-'||p.number,'status',p.status)))::text
  FROM issue p JOIN workspace ws ON ws.id=p.workspace_id WHERE p.id=$2)) WHERE id=$1`, issue, pre)
@@ -139,6 +139,10 @@ func TestIssueContinuationBacklogRechecksChangedPrerequisite(t *testing.T) {
 	scan(0)
 	f.Exec(t, "UPDATE issue SET status='done' WHERE id=$1", pre)
 	scan(1)
+	f.Exec(t, "UPDATE agent_task_queue SET status='completed', completed_at=now()-interval '2 days' WHERE issue_id=$1", issue)
+	scan(1)
+	f.Exec(t, "UPDATE issue SET status='blocked' WHERE id=$1", pre)
+	scan(2)
 	var status string
 	if err := f.Pool.QueryRow(ctx, "SELECT status FROM issue WHERE id=$1", issue).Scan(&status); err != nil || status != "backlog" {
 		t.Fatalf("planning changed status to %q: %v", status, err)

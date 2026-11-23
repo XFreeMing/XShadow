@@ -51,9 +51,10 @@ type WakeupCondition struct {
 	Event string `json:"event,omitempty"`
 	// other_issue: the watched issue and done | ended | in_review | blocked. The
 	// identifier is recorded for display; clients never set it.
-	IssueID    string `json:"issue_id,omitempty"`
-	State      string `json:"state,omitempty"`
-	Identifier string `json:"identifier,omitempty"`
+	IssueID      string `json:"issue_id,omitempty"`
+	State        string `json:"state,omitempty"`
+	Identifier   string `json:"identifier,omitempty"`
+	MemberOption string `json:"member_option,omitempty"`
 }
 
 var errBadCondition = errors.New("invalid condition")
@@ -83,6 +84,9 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
 		return nil, nil, badCondition("unreadable condition")
+	}
+	if c.MemberOption != "" && (c.Type != "other_issue" || c.State != "done" || !memberOptionKey.MatchString(c.MemberOption)) {
+		return nil, nil, badCondition("member_option requires another issue in state done and a valid option key")
 	}
 	ws := issue.WorkspaceID
 	exists := func(sql string, args ...any) (bool, error) {
@@ -210,7 +214,16 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 		if err != nil {
 			return nil, nil, err
 		}
-		out = WakeupCondition{Type: c.Type, IssueID: util.UUIDToString(id), State: c.State, Identifier: identifier}
+		if c.MemberOption != "" {
+			_, _, _, err := memberChoiceSource(ctx, tx, issue.ID, id, ws)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, nil, badCondition("member option requires a member choice card linked to this issue in the same project")
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		out = WakeupCondition{Type: c.Type, MemberOption: c.MemberOption, IssueID: util.UUIDToString(id), State: c.State, Identifier: identifier}
 	default:
 		return nil, nil, badCondition("type must be issue_field, children_done, pull_request or other_issue")
 	}
@@ -416,6 +429,13 @@ func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx pgx.Tx, q
 			met = status == "in_review"
 		case "blocked":
 			met = status == "blocked"
+		}
+		if met && c.MemberOption != "" {
+			id, err := util.ParseUUID(c.IssueID)
+			if err != nil {
+				return false, "", nil, err
+			}
+			return evaluateMemberChoice(ctx, tx, w.IssueID, id, w.WorkspaceID, c.MemberOption)
 		}
 		return met, "issue:" + status, map[string]any{"issue_id": c.IssueID, "status": status}, nil
 	}
