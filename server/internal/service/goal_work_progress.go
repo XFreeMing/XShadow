@@ -19,6 +19,7 @@ type GoalWorkProgress struct {
 	Phase       string   `json:"phase"`
 	Total       int      `json:"total"`
 	Completed   int      `json:"completed"`
+	MethodID    string   `json:"-"`
 	ItemID      string   `json:"item_id,omitempty"`
 	IssueID     string   `json:"issue_id,omitempty"`
 	IssueStatus string   `json:"issue_status,omitempty"`
@@ -28,6 +29,9 @@ type GoalWorkProgress struct {
 }
 
 type goalWorkItem struct {
+	Delivery struct {
+		MethodID string `json:"method_id"`
+	} `json:"delivery"`
 	ID      string `json:"id"`
 	Stage   *int   `json:"stage"`
 	Binding struct {
@@ -65,7 +69,17 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		for _, issue := range rows {
 			id := util.UUIDToString(issue.ID)
 			linked[id] = issue
-			states[id] = issuestatus.Effective(ctx, q, goal.WorkspaceID, issue.Status)
+			state := issuestatus.Effective(ctx, q, goal.WorkspaceID, issue.Status)
+			if state == issuestatus.Done && len(issue.WorkMethodRun) > 0 {
+				var run workmethod.Run
+				if err := json.Unmarshal(issue.WorkMethodRun, &run); err != nil {
+					return GoalWorkProgress{}, err
+				}
+				if run.GoalExecution && run.State != "closed" {
+					state = issuestatus.Blocked
+				}
+			}
+			states[id] = state
 		}
 		if len(rows) < 100 {
 			break
@@ -112,6 +126,7 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		return progress, nil
 	}
 	progress.IssueStatus = current.Status
+	progress.MethodID = byID[progress.ItemID].Delivery.MethodID
 	for _, edge := range content.Edges {
 		if edge.Dependent == progress.ItemID && (edge.Kind == "" || edge.Kind == "required") &&
 			states[byID[edge.Prerequisite].Binding.IssueID] != issuestatus.Done {
@@ -127,7 +142,7 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		progress.Phase = "needs_replan"
 	case states[progress.IssueID] == issuestatus.Blocked:
 		progress.Phase = "blocked"
-	case states[progress.IssueID] == issuestatus.Backlog:
+	case states[progress.IssueID] == issuestatus.Backlog || states[progress.IssueID] == issuestatus.Todo:
 		progress.Phase = "planning"
 	default:
 		progress.Phase = "delivering"

@@ -18,5 +18,6 @@ export {
   useLinkGoalIssue,
   useUnlinkGoalIssue,
   useSaveGoalPlan,
+  useSetGoalExecution,
   useCreateGoalPlanGeneration,
 } from "./mutations";

@@ -124,17 +124,20 @@ type GoalPlanContent struct {
 }
 
 type GoalPlanResponse struct {
-	Progress        *service.GoalWorkProgress `json:"progress,omitempty"`
-	ID              *string                   `json:"id"`
-	GoalID          string                    `json:"goal_id"`
-	ProjectID       *string                   `json:"project_id"`
-	Revision        int32                     `json:"revision"`
-	State           string                    `json:"state"`
-	Items           []GoalPlanItem            `json:"items"`
-	Edges           []GoalPlanEdge            `json:"edges"`
-	ContextSnapshot json.RawMessage           `json:"context_snapshot"`
-	CreatedAt       *string                   `json:"created_at"`
-	UpdatedAt       *string                   `json:"updated_at"`
+	ExecutionState     string                    `json:"execution_state,omitempty"`
+	ExecutionRevision  *int32                    `json:"execution_revision,omitempty"`
+	CanManageExecution bool                      `json:"can_manage_execution,omitempty"`
+	Progress           *service.GoalWorkProgress `json:"progress,omitempty"`
+	ID                 *string                   `json:"id"`
+	GoalID             string                    `json:"goal_id"`
+	ProjectID          *string                   `json:"project_id"`
+	Revision           int32                     `json:"revision"`
+	State              string                    `json:"state"`
+	Items              []GoalPlanItem            `json:"items"`
+	Edges              []GoalPlanEdge            `json:"edges"`
+	ContextSnapshot    json.RawMessage           `json:"context_snapshot"`
+	CreatedAt          *string                   `json:"created_at"`
+	UpdatedAt          *string                   `json:"updated_at"`
 }
 
 type PutGoalPlanRequest struct {
@@ -227,18 +230,33 @@ func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 		return GoalPlanResponse{}, err
 	}
 
+	var executionState string
+	var executionRevision *int32
+	if plan.ExecutionID.Valid {
+		executionState = "stale"
+		executionRevision = &plan.ExecutionRevision.Int32
+		execution, err := service.ReadGoalExecution(ctx, q, goal, plan)
+		if err != nil {
+			return GoalPlanResponse{}, err
+		}
+		if execution.ID.Valid {
+			executionState = "active"
+		}
+	}
 	return GoalPlanResponse{
-		ID:              &id,
-		GoalID:          uuidToString(goal.ID),
-		ProjectID:       uuidToPtr(goal.ProjectID),
-		Revision:        plan.Revision,
-		State:           plan.State,
-		Items:           content.Items,
-		Edges:           content.Edges,
-		ContextSnapshot: snapshot,
-		Progress:        &progress,
-		CreatedAt:       &createdAt,
-		UpdatedAt:       &updatedAt,
+		ExecutionState:    executionState,
+		ExecutionRevision: executionRevision,
+		ID:                &id,
+		GoalID:            uuidToString(goal.ID),
+		ProjectID:         uuidToPtr(goal.ProjectID),
+		Revision:          plan.Revision,
+		State:             plan.State,
+		Items:             content.Items,
+		Edges:             content.Edges,
+		ContextSnapshot:   snapshot,
+		Progress:          &progress,
+		CreatedAt:         &createdAt,
+		UpdatedAt:         &updatedAt,
 	}, nil
 }
 
@@ -361,7 +379,9 @@ func (h *Handler) GetGoalPlan(w http.ResponseWriter, r *http.Request) {
 		GoalID:      goal.ID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, http.StatusOK, emptyGoalPlanResponse(goal))
+		resp := emptyGoalPlanResponse(goal)
+		resp.CanManageExecution = h.canManageGoalExecution(r, goal)
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	if err != nil {
@@ -379,6 +399,7 @@ func (h *Handler) GetGoalPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load plan")
 		return
 	}
+	resp.CanManageExecution = h.canManageGoalExecution(r, goal)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -552,6 +573,7 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(locked.WorkspaceID))
 	h.publishGoalChanged(uuidToString(locked.WorkspaceID), actorType, actorID)
+	resp.CanManageExecution = h.canManageGoalExecution(r, locked)
 	writeJSON(w, http.StatusOK, resp)
 }
 

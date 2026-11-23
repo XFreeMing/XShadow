@@ -160,10 +160,10 @@ func methodOwnsHandoff(run workmethod.Run) bool {
 	return false
 }
 
-// Only a frozen evidence-gated method owns the board. Recommendations and
-// older snapshots keep the project's existing status behavior.
+// Evidence-gated methods and explicitly authorized goal runs own the board.
+// Recommendations retain the project's status workflow.
 func methodBoardStatus(run workmethod.Run) string {
-	if run.EvidenceGate() == "" || run.State == "ready" {
+	if (!run.GoalExecution && run.EvidenceGate() == "") || run.State == "ready" {
 		return ""
 	}
 	switch run.State {

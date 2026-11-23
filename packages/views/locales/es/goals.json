@@ -1,4 +1,13 @@
 {
+  "plan_execution": {
+    "active": "Ejecución automática autorizada para la revisión {{revision}}",
+    "stale": "La autorización de ejecución ha caducado",
+    "off": "Ejecución automática desactivada",
+    "enable": "Autorizar la revisión {{revision}}",
+    "revoke": "Revocar la autorización",
+    "scope": "La plataforma asigna la tarea actual según su método de trabajo. Revocar la autorización impide nuevas asignaciones.",
+    "failed": "No se pudo actualizar la autorización. Actualiza el plan e inténtalo de nuevo."
+  },
   "outcome_gallery": "Cuando se completen todas las tareas",
   "list": {
     "title": "Objetivos",

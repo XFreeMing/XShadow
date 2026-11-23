@@ -97,7 +97,7 @@ func (q *Queries) CountActiveGoalPlanGenerations(ctx context.Context, arg CountA
 const createGoalPlan = `-- name: CreateGoalPlan :one
 INSERT INTO goal_plan (workspace_id, goal_id, project_id, revision, content, context_snapshot)
 VALUES ($1, $2, $3, 1, $4, $5)
-RETURNING id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at
+RETURNING id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at, execution_id, execution_revision, execution_scope, execution_by
 `
 
 type CreateGoalPlanParams struct {
@@ -131,6 +131,10 @@ func (q *Queries) CreateGoalPlan(ctx context.Context, arg CreateGoalPlanParams) 
 		&i.ContextSnapshot,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExecutionID,
+		&i.ExecutionRevision,
+		&i.ExecutionScope,
+		&i.ExecutionBy,
 	)
 	return i, err
 }
@@ -290,7 +294,7 @@ func (q *Queries) FailGoalPlanGeneration(ctx context.Context, arg FailGoalPlanGe
 
 const getGoalPlan = `-- name: GetGoalPlan :one
 
-SELECT id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at FROM goal_plan
+SELECT id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at, execution_id, execution_revision, execution_scope, execution_by FROM goal_plan
 WHERE workspace_id = $1 AND goal_id = $2
 `
 
@@ -317,6 +321,10 @@ func (q *Queries) GetGoalPlan(ctx context.Context, arg GetGoalPlanParams) (GoalP
 		&i.ContextSnapshot,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExecutionID,
+		&i.ExecutionRevision,
+		&i.ExecutionScope,
+		&i.ExecutionBy,
 	)
 	return i, err
 }
@@ -454,6 +462,21 @@ func (q *Queries) GoalPlanExists(ctx context.Context, arg GoalPlanExistsParams) 
 	return exists, err
 }
 
+const invalidateGoalPlanExecution = `-- name: InvalidateGoalPlanExecution :exec
+UPDATE goal_plan SET execution_scope = NULL
+WHERE workspace_id = $1 AND goal_id = $2 AND execution_scope IS NOT NULL
+`
+
+type InvalidateGoalPlanExecutionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GoalID      pgtype.UUID `json:"goal_id"`
+}
+
+func (q *Queries) InvalidateGoalPlanExecution(ctx context.Context, arg InvalidateGoalPlanExecutionParams) error {
+	_, err := q.db.Exec(ctx, invalidateGoalPlanExecution, arg.WorkspaceID, arg.GoalID)
+	return err
+}
+
 const lockGoalPlanAdvisory = `-- name: LockGoalPlanAdvisory :exec
 SELECT pg_advisory_xact_lock(hashtextextended('goal_plan:' || $1::text, 0))
 `
@@ -483,6 +506,58 @@ type MarkGoalPlanGenerationAppliedParams struct {
 func (q *Queries) MarkGoalPlanGenerationApplied(ctx context.Context, arg MarkGoalPlanGenerationAppliedParams) error {
 	_, err := q.db.Exec(ctx, markGoalPlanGenerationApplied, arg.ID, arg.WorkspaceID, arg.AppliedRevision)
 	return err
+}
+
+const setGoalPlanExecution = `-- name: SetGoalPlanExecution :one
+UPDATE goal_plan SET
+    execution_id = $1::uuid,
+    execution_revision = $2::integer,
+    execution_scope = $3::text,
+    execution_by = $4::uuid
+WHERE workspace_id = $5
+  AND goal_id = $6
+  AND revision = $7
+RETURNING id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at, execution_id, execution_revision, execution_scope, execution_by
+`
+
+type SetGoalPlanExecutionParams struct {
+	ExecutionID       pgtype.UUID `json:"execution_id"`
+	ExecutionRevision pgtype.Int4 `json:"execution_revision"`
+	ExecutionScope    pgtype.Text `json:"execution_scope"`
+	ExecutionBy       pgtype.UUID `json:"execution_by"`
+	WorkspaceID       pgtype.UUID `json:"workspace_id"`
+	GoalID            pgtype.UUID `json:"goal_id"`
+	ExpectedRevision  int32       `json:"expected_revision"`
+}
+
+func (q *Queries) SetGoalPlanExecution(ctx context.Context, arg SetGoalPlanExecutionParams) (GoalPlan, error) {
+	row := q.db.QueryRow(ctx, setGoalPlanExecution,
+		arg.ExecutionID,
+		arg.ExecutionRevision,
+		arg.ExecutionScope,
+		arg.ExecutionBy,
+		arg.WorkspaceID,
+		arg.GoalID,
+		arg.ExpectedRevision,
+	)
+	var i GoalPlan
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.GoalID,
+		&i.ProjectID,
+		&i.Revision,
+		&i.State,
+		&i.Content,
+		&i.ContextSnapshot,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExecutionID,
+		&i.ExecutionRevision,
+		&i.ExecutionScope,
+		&i.ExecutionBy,
+	)
+	return i, err
 }
 
 const setGoalPlanGenerationRun = `-- name: SetGoalPlanGenerationRun :one
@@ -551,7 +626,7 @@ UPDATE goal_plan SET
 WHERE workspace_id = $3
   AND goal_id = $4
   AND revision = $5
-RETURNING id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at
+RETURNING id, workspace_id, goal_id, project_id, revision, state, content, context_snapshot, created_at, updated_at, execution_id, execution_revision, execution_scope, execution_by
 `
 
 type UpdateGoalPlanContentParams struct {
@@ -584,6 +659,10 @@ func (q *Queries) UpdateGoalPlanContent(ctx context.Context, arg UpdateGoalPlanC
 		&i.ContextSnapshot,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExecutionID,
+		&i.ExecutionRevision,
+		&i.ExecutionScope,
+		&i.ExecutionBy,
 	)
 	return i, err
 }

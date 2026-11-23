@@ -1,4 +1,13 @@
 {
+  "plan_execution": {
+    "active": "Exécution automatique autorisée pour la révision {{revision}}",
+    "stale": "Autorisation expirée",
+    "off": "Exécution automatique désactivée",
+    "enable": "Autoriser la révision {{revision}}",
+    "revoke": "Révoquer l’autorisation",
+    "scope": "La plateforme transmet la tâche en cours selon sa méthode de travail. La révocation empêche les transmissions suivantes.",
+    "failed": "Impossible de modifier l’autorisation. Actualisez le plan et réessayez."
+  },
   "outcome_gallery": "Une fois toutes les tâches terminées",
   "list": {
     "title": "Objectifs",

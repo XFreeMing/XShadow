@@ -1,4 +1,13 @@
 {
+  "plan_execution": {
+    "active": "自動執行已授權至計畫第 {{revision}} 版",
+    "stale": "執行授權已失效",
+    "off": "自動執行未授權",
+    "enable": "授權執行第 {{revision}} 版",
+    "revoke": "撤銷執行授權",
+    "scope": "平台依工作方法逐項派工。撤銷授權會停止後續派工。",
+    "failed": "執行授權更新失敗。請重新整理計畫後再試。"
+  },
   "outcome_gallery": "所有任務完成後的體驗",
   "list": {
     "title": "目標",

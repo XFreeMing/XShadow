@@ -146,6 +146,30 @@ export function useSaveGoalPlan() {
   });
 }
 
+export function useSetGoalExecution() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: async ({ goalId, enabled, revision }: {
+      goalId: string;
+      enabled: boolean;
+      revision: number;
+    }) => {
+      const plan = requireConfirmedPlan(await api.setGoalExecution(goalId, {
+        enabled, expected_revision: revision,
+      }), goalId);
+      if (plan.revision !== revision || (enabled ? plan.execution_state !== "active" : !!plan.execution_state)) {
+        throw new Error("The server did not confirm the execution change.");
+      }
+      return plan;
+    },
+    onSettled: (_data, _error, { goalId }) => qc.invalidateQueries({
+      queryKey: goalKeys.plan(wsId, goalId),
+      exact: true,
+    }),
+  });
+}
+
 /**
  * Starts one planning run. A malformed reply must not be treated as a started
  * run, so a generation without its own id fails the mutation.

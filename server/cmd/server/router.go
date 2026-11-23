@@ -2303,6 +2303,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// endpoint is called by the planning run's own task token.
 					r.Get("/plan", h.GetGoalPlan)
 					r.Put("/plan", h.PutGoalPlan)
+					r.With(handler.RequireHumanActor).Put("/plan/execution", h.PutGoalExecution)
 					r.Post("/plan/generations", h.CreateGoalPlanGeneration)
 					r.Get("/plan/generations/{generationId}", h.GetGoalPlanGeneration)
 					r.Post("/plan/generations/{generationId}/result", h.SubmitGoalPlanGenerationResult)

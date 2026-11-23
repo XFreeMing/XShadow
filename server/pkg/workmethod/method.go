@@ -40,14 +40,15 @@ type Step struct {
 }
 
 type Run struct {
-	CurrentActor *Actor    `json:"current_actor,omitempty"`
-	Source       string    `json:"source,omitempty"`
-	Revision     int       `json:"revision"`
-	State        string    `json:"state"`
-	Method       *Template `json:"method"`
-	Step         int       `json:"step"`
-	Reason       string    `json:"reason"`
-	History      []Event   `json:"history"`
+	GoalExecution bool      `json:"goal_execution,omitempty"`
+	CurrentActor  *Actor    `json:"current_actor,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	Revision      int       `json:"revision"`
+	State         string    `json:"state"`
+	Method        *Template `json:"method"`
+	Step          int       `json:"step"`
+	Reason        string    `json:"reason"`
+	History       []Event   `json:"history"`
 }
 
 type Event struct {

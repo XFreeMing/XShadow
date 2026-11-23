@@ -163,6 +163,9 @@ export interface GoalPlan {
   context_snapshot: GoalPlanContextSnapshot;
   created_at: string | null;
   progress?: GoalPlanProgress;
+  execution_state?: "active" | "stale";
+  execution_revision?: number;
+  can_manage_execution?: boolean;
   updated_at: string | null;
 }
 

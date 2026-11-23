@@ -372,6 +372,10 @@ SELECT
         WHEN sqlc.narg(work_method_revision)::bigint IS NOT NULL
         THEN jsonb_build_object('work_method_revision', sqlc.narg(work_method_revision)::bigint)
         ELSE '{}'::jsonb
+    END || CASE
+        WHEN sqlc.narg(goal_execution_id)::uuid IS NOT NULL
+        THEN jsonb_build_object('goal_execution_id', sqlc.narg(goal_execution_id)::uuid)
+        ELSE '{}'::jsonb
     END, '{}'::jsonb),
     sqlc.narg(originator_user_id),
     sqlc.narg(accountable_user_id),

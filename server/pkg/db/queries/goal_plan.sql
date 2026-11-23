@@ -142,3 +142,17 @@ DELETE FROM goal_plan_generation WHERE workspace_id = $1 AND project_id = $2;
 
 -- name: DeleteWorkspaceGoalPlanGenerations :exec
 DELETE FROM goal_plan_generation WHERE workspace_id = $1;
+-- name: SetGoalPlanExecution :one
+UPDATE goal_plan SET
+    execution_id = sqlc.narg(execution_id)::uuid,
+    execution_revision = sqlc.narg(execution_revision)::integer,
+    execution_scope = sqlc.narg(execution_scope)::text,
+    execution_by = sqlc.narg(execution_by)::uuid
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND goal_id = sqlc.arg(goal_id)
+  AND revision = sqlc.arg(expected_revision)
+RETURNING *;
+
+-- name: InvalidateGoalPlanExecution :exec
+UPDATE goal_plan SET execution_scope = NULL
+WHERE workspace_id = $1 AND goal_id = $2 AND execution_scope IS NOT NULL;

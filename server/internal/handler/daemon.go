@@ -4776,7 +4776,10 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Warn("start task failed", "task_id", taskID, "error", err)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, service.ErrWakeupForbidden) {
+			h.failClaimedTaskBeforeLaunch(r.Context(), &startTask, "The goal execution approval or current step changed.", taskfailure.ReasonInvalidTaskIdentity, "goal_execution_unavailable", http.StatusConflict, "goal execution unavailable")
+			writeErrorCode(w, http.StatusConflict, "goal_execution_unavailable", "goal execution unavailable")
+		} else if errors.Is(err, pgx.ErrNoRows) {
 			status := http.StatusConflict
 			if legacy {
 				status = http.StatusBadRequest

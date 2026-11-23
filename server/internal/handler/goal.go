@@ -692,7 +692,14 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 		h.writeGoalWriteError(w, r, err, "update")
 		return
 	}
-	if goal.Title != locked.Title || goal.Intent != locked.Intent || goal.AcceptanceCriteria != locked.AcceptanceCriteria {
+	charterChanged := goal.Title != locked.Title || goal.Intent != locked.Intent || goal.AcceptanceCriteria != locked.AcceptanceCriteria
+	if charterChanged || goal.Scope != locked.Scope || goal.Status != locked.Status {
+		if err := qtx.InvalidateGoalPlanExecution(r.Context(), db.InvalidateGoalPlanExecutionParams{WorkspaceID: goal.WorkspaceID, GoalID: goal.ID}); err != nil {
+			h.writeGoalWriteError(w, r, err, "invalidate goal execution")
+			return
+		}
+	}
+	if charterChanged {
 		if err := service.RefreshGoalWorkMethods(r.Context(), tx, qtx, goal, service.WorkMethodGoalText(goal.Title, goal.Intent, goal.AcceptanceCriteria)); err != nil {
 			h.writeGoalWriteError(w, r, err, "update linked methods")
 			return

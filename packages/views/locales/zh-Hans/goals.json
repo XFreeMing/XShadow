@@ -1,4 +1,13 @@
 {
+  "plan_execution": {
+    "active": "自动执行已授权至计划第 {{revision}} 版",
+    "stale": "执行授权已失效",
+    "off": "自动执行未授权",
+    "enable": "授权执行第 {{revision}} 版",
+    "revoke": "撤销执行授权",
+    "scope": "平台按工作方法逐项派工。撤销授权会停止后续派工。",
+    "failed": "执行授权更新失败。请刷新计划后重试。"
+  },
   "outcome_gallery": "所有任务完成后的体验",
   "list": {
     "title": "目标",

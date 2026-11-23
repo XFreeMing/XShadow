@@ -1,4 +1,13 @@
 {
+  "plan_execution": {
+    "active": "Automatic execution authorized for revision {{revision}}",
+    "stale": "Execution approval expired",
+    "off": "Automatic execution off",
+    "enable": "Authorize revision {{revision}}",
+    "revoke": "Revoke execution approval",
+    "scope": "The platform hands off the current planned issue through its work method. Revoking approval prevents future handoffs.",
+    "failed": "Could not update execution approval. Refresh the plan and try again."
+  },
   "outcome_gallery": "When all tasks are complete",
   "list": {
     "title": "Goals",

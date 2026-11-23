@@ -162,6 +162,12 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid method change")
 		return
 	}
+	task, hasSource := h.taskFromRequestHeader(r)
+	binding := service.ReadGoalExecutionTask(task)
+	if binding.ID.Valid && (task.IssueID != issue.ID || (binding.Revision == 0 && change.Action != "start")) {
+		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "目标授权仅用于本事项的当前工作方法步骤")
+		return
+	}
 	if change.Action == workmethod.AdoptRevision {
 		h.adoptIssueMethod(w, r, issue, userID, change)
 		return
@@ -174,6 +180,10 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	run, delivery, err := h.issueWorkMethod(r.Context(), issue, methods)
 	if err != nil {
 		writeError(w, 500, "failed to read method run")
+		return
+	}
+	if delivery != nil && run.State == "ready" && hasSource && task.TriggerEvidenceKind.String == "issue_continuation" && !binding.ID.Valid {
+		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "目标计划需要有效授权才能自动启动工作方法")
 		return
 	}
 	if run.Revision == 0 && issuestatus.Effective(r.Context(), h.Queries, issue.WorkspaceID, issue.Status) == "done" {

@@ -144,6 +144,20 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 			return err
 		}
 	}
+	var execution GoalExecution
+	if isBacklog || method.State == "" || method.State == "ready" || method.GoalExecution {
+		execution, err = goalExecutionForIssue(ctx, q, issue, false)
+		if err != nil || (method.GoalExecution && !execution.ID.Valid) {
+			return err
+		}
+	}
+	startGoal := execution.ID.Valid && execution.Progress.Phase == "planning" && !method.GoalExecution
+	if !startGoal && !method.GoalExecution {
+		execution = GoalExecution{}
+	}
+	if execution.ID.Valid {
+		dependencyChange += "/execution/" + util.UUIDToString(execution.ID)
+	}
 	var ordinary, latestStatus, transition string
 	if err = tx.QueryRow(ctx, `SELECT coalesce((SELECT id::text FROM agent_task_queue WHERE issue_id=$1
    AND trigger_evidence_kind IS DISTINCT FROM 'issue_continuation' ORDER BY created_at DESC,id DESC LIMIT 1),''),
@@ -166,8 +180,19 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	if err != nil {
 		return err
 	}
-	coord := attempted || !target.Agent.ID.Valid || issue.Status == issuestatus.Blocked || isBacklog || latestStatus == "cancelled"
-	if !coord && !CanMemberInvokeAgent(ctx, q, target.Agent, manager.OwnerID, issue.WorkspaceID) {
+	coord := attempted || !target.Agent.ID.Valid || issue.Status == issuestatus.Blocked || isBacklog || startGoal || latestStatus == "cancelled"
+	invoker := manager.OwnerID
+	if execution.ID.Valid {
+		invoker = execution.By
+		if method.GoalExecution {
+			// Only the frozen current actor may resume a granted step.
+			if !target.Agent.ID.Valid || attempted {
+				return nil
+			}
+			coord = false
+		}
+	}
+	if !coord && !execution.ID.Valid && !CanMemberInvokeAgent(ctx, q, target.Agent, invoker, issue.WorkspaceID) {
 		coord = true
 	}
 	role, note := "owner", continuationBrief
@@ -179,17 +204,23 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	if goalGate.ready {
 		note = goalGate.note + "\n" + note
 	}
-	if err = (&IssueWakeupService{Tasks: s.Tasks}).authorize(ctx, q, issue.WorkspaceID, manager.OwnerID, target.Agent); err != nil {
+	if startGoal {
+		note = fmt.Sprintf("目标已授权启动本卡的正式工作方法。用 \"$MULTICA_CLI_PATH\" issue method <本事项编号> 读取当前步骤，再用同一命令加 --change-stdin 提交 action=start、method_id=%q、当前 base_revision。平台将自动交给方法指定角色。", execution.Progress.MethodID)
+	}
+	if err = (&IssueWakeupService{Tasks: s.Tasks}).authorize(ctx, q, issue.WorkspaceID, invoker, target.Agent); err != nil {
 		return err
 	}
 	scoped := &TaskService{Queries: q, Composio: s.Tasks.Composio, FeatureFlags: s.Tasks.FeatureFlags}
-	if err = scoped.guardRunProjectAccess(ctx, issue, target.Agent, manager.OwnerID, manager.OwnerID); err != nil {
+	if err = scoped.guardRunProjectAccess(ctx, issue, target.Agent, invoker, invoker); err != nil {
 		return err
 	}
 	attr := attribution.Unattributed("issue_continuation", issue.ID)
 	params, err := scoped.prepareMentionTask(ctx, issue, target.Agent.ID, pgtype.UUID{}, nil, target.SquadID.Valid, target.SquadID, true, note, attr, pgtype.UUID{}, OriginDerived, false)
 	if err != nil {
 		return err
+	}
+	if startGoal || (!coord && method.GoalExecution) {
+		params.GoalExecutionID = execution.ID
 	}
 	params.TriggerSummary = pgtype.Text{String: "Issue continuation (" + role + ")", Valid: true}
 	if !coord && (method.State == "working" || method.State == "review") {

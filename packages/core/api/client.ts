@@ -4588,6 +4588,19 @@ export class ApiClient {
     });
   }
 
+  async setGoalExecution(goalId: string, data: {
+    enabled: boolean;
+    expected_revision: number;
+  }): Promise<GoalPlan> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/plan/execution`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GoalPlanSchema, EMPTY_GOAL_PLAN, {
+      endpoint: "PUT /api/goals/:id/plan/execution",
+    });
+  }
+
   async createGoalPlanGeneration(
     goalId: string,
     data: CreateGoalPlanGenerationRequest,

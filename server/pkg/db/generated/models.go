@@ -918,16 +918,20 @@ type GoalOutcomeGallery struct {
 }
 
 type GoalPlan struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	GoalID          pgtype.UUID        `json:"goal_id"`
-	ProjectID       pgtype.UUID        `json:"project_id"`
-	Revision        int32              `json:"revision"`
-	State           string             `json:"state"`
-	Content         []byte             `json:"content"`
-	ContextSnapshot []byte             `json:"context_snapshot"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	GoalID            pgtype.UUID        `json:"goal_id"`
+	ProjectID         pgtype.UUID        `json:"project_id"`
+	Revision          int32              `json:"revision"`
+	State             string             `json:"state"`
+	Content           []byte             `json:"content"`
+	ContextSnapshot   []byte             `json:"context_snapshot"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ExecutionID       pgtype.UUID        `json:"execution_id"`
+	ExecutionRevision pgtype.Int4        `json:"execution_revision"`
+	ExecutionScope    pgtype.Text        `json:"execution_scope"`
+	ExecutionBy       pgtype.UUID        `json:"execution_by"`
 }
 
 type GoalPlanGeneration struct {

@@ -85,6 +85,27 @@ describe("goal plan API contract", () => {
     });
   });
 
+  it("sends execution approval for the selected plan revision", async () => {
+    const fetch = stubFetch({ ...plan, execution_state: "active", execution_revision: 2, can_manage_execution: true });
+    const client = new ApiClient("https://api.example.test");
+    const result = await client.setGoalExecution("goal-1", { enabled: true, expected_revision: 2 });
+    expect(result.execution_state).toBe("active");
+    expect(result.execution_revision).toBe(2);
+    const [url, init] = lastCall(fetch);
+    expect(url).toContain("/api/goals/goal-1/plan/execution");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ enabled: true, expected_revision: 2 });
+  });
+
+  it("ignores unrecognized execution state and malformed permission or progress", async () => {
+    stubFetch({ ...plan, execution_state: "unrecognized", can_manage_execution: "true", progress: { phase: "invalid" } });
+    const client = new ApiClient("https://api.example.test");
+    const result = await client.getGoalPlan("goal-1");
+    expect(result.execution_state).toBeUndefined();
+    expect(result.can_manage_execution).toBeUndefined();
+    expect(result.progress).toBeUndefined();
+  });
+
   it("saves with PUT, expected_revision and an optional generation_id", async () => {
     const fetch = stubFetch({ ...plan, revision: 3 });
     const client = new ApiClient("https://api.example.test");

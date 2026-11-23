@@ -1929,6 +1929,19 @@ const GoalPlanContextSnapshotSchema = z
   .catch({})
   .default({});
 
+const GoalPlanProgressSchema = z.object({
+  phase: z.enum(["planning", "delivering", "waiting_for_binding", "waiting_for_prerequisite",
+    "needs_replan", "blocked", "goal_inactive", "awaiting_goal_review", "goal_completed"]),
+  total: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  item_id: z.string().optional(),
+  issue_id: z.string().optional(),
+  issue_status: z.string().optional(),
+  method_state: z.string().optional(),
+  method_step: z.string().optional(),
+  waiting_for: z.array(z.string()).optional(),
+});
+
 export const GoalPlanSchema = z
   .object({
     id: z.string().nullable().catch(null).default(null),
@@ -1940,6 +1953,10 @@ export const GoalPlanSchema = z
     items: z.array(GoalPlanItemSchema).catch([]).default([]),
     edges: z.array(GoalPlanEdgeSchema).catch([]).default([]),
     context_snapshot: GoalPlanContextSnapshotSchema,
+    progress: GoalPlanProgressSchema.optional().catch(undefined),
+    execution_state: z.enum(["active", "stale"]).optional().catch(undefined),
+    execution_revision: z.number().int().positive().optional().catch(undefined),
+    can_manage_execution: z.boolean().optional().catch(undefined),
     created_at: z.string().nullable().catch(null).default(null),
     updated_at: z.string().nullable().catch(null).default(null),
   })

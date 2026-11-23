@@ -14,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -126,11 +127,31 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	var kind pgtype.Text
 	var id, agentID, squadID pgtype.UUID
 	ws := uuidToString(issue.WorkspaceID)
+	actorKind, actorID := h.resolveActor(r, requestUserID(r), ws)
+	source, hasSource := h.taskFromRequestHeader(r)
+	scoped := hasSource && service.ReadGoalExecutionTask(source).ID.Valid
+	if scoped && (r.Header.Get("X-Actor-Source") != "task_token" || source.Status != "running" ||
+		source.AgentID != parseUUIDOrInvalid(actorID) || source.IssueID != issue.ID) {
+		writeError(w, http.StatusForbidden, "goal execution requires its current authenticated run")
+		return db.Issue{}, false
+	}
+	if run.GoalExecution && !scoped && actorKind != "member" {
+		writeError(w, http.StatusForbidden, "goal execution requires its current authenticated run")
+		return db.Issue{}, false
+	}
+	if run.GoalExecution && !scoped && isMachineCredentialActor(r) {
+		writeError(w, http.StatusForbidden, "manual takeover requires a human")
+		return db.Issue{}, false
+	}
+	// An explicit human transition uses the ordinary private agent policy.
+	run.GoalExecution = scoped
 	if actor != nil {
 		kind, id = pgtype.Text{String: actor.Kind, Valid: true}, parseUUIDOrInvalid(actor.ID)
-		if status, msg := h.validateAssigneePair(r.Context(), r, ws, kind, id); status != 0 {
-			writeError(w, status, msg)
-			return db.Issue{}, false
+		if !scoped || kind.String == "member" {
+			if status, msg := h.validateAssigneePair(r.Context(), r, ws, kind, id); status != 0 {
+				writeError(w, status, msg)
+				return db.Issue{}, false
+			}
 		}
 		if !h.requireAssigneeCanAccessProject(w, r, issue.WorkspaceID, kind, id, issue.ProjectID) {
 			return db.Issue{}, false
@@ -152,7 +173,7 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 			agentID = id
 		case "squad":
 			squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{ID: id, WorkspaceID: issue.WorkspaceID})
-			if err != nil {
+			if err != nil || squad.ArchivedAt.Valid || !squad.LeaderID.Valid {
 				writeError(w, 409, "无法确定军团负责人")
 				return db.Issue{}, false
 			}
@@ -162,13 +183,11 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	var human pgtype.UUID
 	var parent *db.AgentTaskQueue
 	if agentID.Valid {
-		actorKind, actorID := h.resolveActor(r, requestUserID(r), ws)
 		if actorKind == "member" {
 			human = parseUUIDOrInvalid(actorID)
 		}
 		if actorKind == "agent" {
-			source, ok := h.taskFromRequestHeader(r)
-			if !ok || source.AgentID != parseUUIDOrInvalid(actorID) || isTerminalTaskStatus(source.Status) {
+			if !hasSource || source.AgentID != parseUUIDOrInvalid(actorID) || isTerminalTaskStatus(source.Status) {
 				writeError(w, 403, "智能体派工需要有效的来源运行")
 				return db.Issue{}, false
 			}
@@ -186,6 +205,38 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(ctx)
 	q := h.Queries.WithTx(tx)
+	var executionID pgtype.UUID
+	if scoped {
+		execution, err := service.CheckGoalExecutionTask(ctx, q, issue, source, true)
+		if err == nil && service.ReadGoalExecutionTask(source).Revision == 0 {
+			if run.Method == nil || run.Method.ID != execution.Progress.MethodID || run.State != "working" ||
+				len(run.History) == 0 || run.History[len(run.History)-1].Action != "start" {
+				err = service.ErrWakeupForbidden
+			}
+		}
+		if err == nil && run.State == "review" {
+			// An agent may hold several squad roles. Compare the resolved
+			// recipient with the actual submitter, not their role labels.
+			event := run.History[len(run.History)-1]
+			if actor == nil || (event.Action == "advance" &&
+				(event.Actor == "agent/"+uuidToString(agentID) || event.Actor == "member/"+uuidToString(id))) {
+				writeError(w, http.StatusConflict, "此步骤需要不同于提交人的独立审核人")
+				return db.Issue{}, false
+			}
+		}
+		if err == nil && agentID.Valid {
+			err = service.CheckGoalExecutionRecipient(ctx, q, issue, agentID, execution.By)
+		}
+		if err != nil {
+			if errors.Is(err, service.ErrWakeupForbidden) {
+				writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "目标授权已失效、当前步骤已变更，或接手角色无权被调用")
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to verify goal execution")
+			}
+			return db.Issue{}, false
+		}
+		executionID = execution.ID
+	}
 	var boardStatus pgtype.Text
 	status := methodBoardStatus(*run)
 	if status != "" && status != issue.Status {
@@ -229,7 +280,7 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	var task db.AgentTaskQueue
 	if agentID.Valid {
 		note := fmt.Sprintf("Work method %s, step %d (%s), revision %d. Read the current method before acting.", run.Method.Name, run.Step+1, run.State, run.Revision)
-		task, err = h.TaskService.CreateWorkMethodHandoff(ctx, q, updated, agentID, squadID, run.Revision, note, human, parent)
+		task, err = h.TaskService.CreateWorkMethodHandoff(ctx, q, updated, agentID, squadID, run.Revision, note, human, parent, executionID)
 		if err != nil {
 			slog.Warn("work method dispatch failed", "issue_id", uuidToString(issue.ID), "error", err)
 			writeError(w, 409, "工作方法派工未成功，请检查接收人的运行环境与访问权限")

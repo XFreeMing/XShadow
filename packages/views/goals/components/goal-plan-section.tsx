@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FocusEvent } from "react
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Goal, GoalPlanEdge, GoalPlanGeneration, Issue } from "@multica/core/types";
-import { goalKeys, goalPlanOptions, useSaveGoalPlan } from "@multica/core/goals";
+import { goalKeys, goalPlanOptions, useSaveGoalPlan, useSetGoalExecution } from "@multica/core/goals";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   agentListOptions,
@@ -84,7 +84,18 @@ export function GoalPlanSection({
   const planQuery = useQuery(goalPlanOptions(wsId, goal.id));
   const plan = planQuery.data && planQuery.data.goal_id === goal.id ? planQuery.data : null;
   const savePlan = useSaveGoalPlan();
+  const setExecution = useSetGoalExecution();
   const progress = plan?.progress;
+  const executionState = plan?.execution_state;
+  const executionAvailable = goal.status === "in_progress" && !!progress && progress.completed < progress.total;
+  async function changeExecution(enabled: boolean) {
+    if (!plan) return;
+    try {
+      await setExecution.mutateAsync({ goalId: goal.id, enabled, revision: plan.revision });
+    } catch {
+      toast.error(t(($) => $.plan_execution.failed));
+    }
+  }
   const current = plan?.items.find((item) => item.id === progress?.item_id);
   const blockers = plan?.items.filter((item) => progress?.waiting_for?.includes(item.id)) ?? [];
 
@@ -576,6 +587,39 @@ export function GoalPlanSection({
               {t(($) => $.plan_progress.waiting_for, { tasks: blockers.map((item) => item.title).join(" · ") })}
             </p>
           ) : null}
+        </div>
+      ) : null}
+
+      {plan && (executionState || (plan.can_manage_execution && executionAvailable)) ? (
+        <div className="space-y-2 rounded-md border px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-caption font-medium">
+              {executionState === "active"
+                ? t(($) => $.plan_execution.active, { revision: plan.execution_revision })
+                : executionState === "stale"
+                  ? t(($) => $.plan_execution.stale)
+                  : t(($) => $.plan_execution.off)}
+            </span>
+            {plan.can_manage_execution ? (
+              <div className="flex flex-wrap gap-2">
+                {executionAvailable && executionState !== "active" ? (
+                  <Button type="button" size="sm" variant="outline"
+                    disabled={dirty || setExecution.isPending || savePlan.isPending}
+                    onClick={() => void changeExecution(true)}>
+                    {t(($) => $.plan_execution.enable, { revision: plan.revision })}
+                  </Button>
+                ) : null}
+                {executionState ? (
+                  <Button type="button" size="sm" variant="outline"
+                    disabled={setExecution.isPending || savePlan.isPending}
+                    onClick={() => void changeExecution(false)}>
+                    {t(($) => $.plan_execution.revoke)}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <p className="text-caption text-muted-foreground">{t(($) => $.plan_execution.scope)}</p>
         </div>
       ) : null}
 

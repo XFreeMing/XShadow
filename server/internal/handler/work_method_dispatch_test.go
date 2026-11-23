@@ -193,7 +193,7 @@ func TestAgileDurableHandoffAfterLostNotification(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	task, err := testHandler.TaskService.CreateWorkMethodHandoff(ctx, db.New(tx), issue, util.MustParseUUID(agent), pgtype.UUID{}, 6, "Recover revision 6", util.MustParseUUID(testUserID), nil)
+	task, err := testHandler.TaskService.CreateWorkMethodHandoff(ctx, db.New(tx), issue, util.MustParseUUID(agent), pgtype.UUID{}, 6, "Recover revision 6", util.MustParseUUID(testUserID), nil, pgtype.UUID{})
 	if err != nil {
 		t.Fatal(err)
 	}

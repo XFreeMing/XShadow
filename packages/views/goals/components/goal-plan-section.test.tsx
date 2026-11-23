@@ -113,6 +113,7 @@ describe("GoalPlanSection", () => {
   const api = {
     getGoalPlan: vi.fn(),
     saveGoalPlan: vi.fn(),
+    setGoalExecution: vi.fn(),
     createGoalPlanGeneration: vi.fn(),
     getGoalPlanGeneration: vi.fn(),
   };
@@ -122,6 +123,7 @@ describe("GoalPlanSection", () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     api.getGoalPlan.mockReset().mockResolvedValue(plan());
+    api.setGoalExecution.mockReset();
     api.saveGoalPlan.mockReset().mockImplementation(async (_goalId, data) =>
       plan({
         revision: 3,
@@ -146,6 +148,29 @@ describe("GoalPlanSection", () => {
       </QueryClientProvider>,
     );
   }
+
+  it("authorizes and revokes the displayed saved plan", async () => {
+    const base = plan({
+      can_manage_execution: true,
+      progress: { phase: "planning", total: 1, completed: 0 },
+    });
+    api.getGoalPlan.mockResolvedValue(base);
+    api.setGoalExecution.mockImplementation(async (_goalId, { enabled }) => {
+      const result = enabled ? {
+        ...base, execution_state: "active", execution_revision: base.revision,
+      } : base;
+      api.getGoalPlan.mockResolvedValue(result);
+      return result;
+    });
+
+    const user = userEvent.setup();
+    renderSection({ ...goal, status: "in_progress" });
+    await user.click(await screen.findByRole("button", { name: "Authorize revision 2" }));
+    expect(api.setGoalExecution).toHaveBeenLastCalledWith("goal-1", { enabled: true, expected_revision: 2 });
+    await user.click(await screen.findByRole("button", { name: "Revoke execution approval" }));
+    expect(api.setGoalExecution).toHaveBeenLastCalledWith("goal-1", { enabled: false, expected_revision: 2 });
+    expect(await screen.findByRole("button", { name: "Authorize revision 2" })).toBeVisible();
+  });
 
   it("shows the current plan task and the prerequisite blocking it", async () => {
     api.getGoalPlan.mockResolvedValue(plan({
