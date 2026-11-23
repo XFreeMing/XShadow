@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -21,8 +20,8 @@ Write a UTF-8 JSON object with title, intent, scope, acceptance_criteria, option
 
 Only say the goal was saved after the command succeeds. Reply with the returned Markdown link and identify the linked tasks. If the command reports a conflict, explain it and clarify the relationship before trying again.`
 
-// OpenGoalConversation resolves the personal team's chief through the existing
-// squad leadership binding. Mika and ordinary chats with the chief are separate.
+// OpenGoalConversation uses the workspace's chief agent independently of any
+// delivery squad. Mika and ordinary chats with the chief are separate.
 func (h *Handler) OpenGoalConversation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -32,36 +31,24 @@ func (h *Handler) OpenGoalConversation(w http.ResponseWriter, r *http.Request) {
 	wsID := parseUUID(workspaceID)
 	ctx := r.Context()
 
-	squads, err := h.Queries.ListSquads(ctx, wsID)
+	agents, err := h.Queries.ListAgents(ctx, wsID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve chief of staff")
 		return
 	}
-	var chiefID pgtype.UUID
-	for _, squad := range squads {
-		if squad.Name != "军团统筹" {
+	var chief db.Agent
+	for _, agent := range agents {
+		if agent.Name != "幕僚长" {
 			continue
 		}
-		if chiefID.Valid {
+		if chief.ID.Valid {
 			writeChiefUnavailable(w)
 			return
 		}
-		chiefID = squad.LeaderID
+		chief = agent
 	}
-	if !chiefID.Valid {
+	if !chief.ID.Valid {
 		writeChiefUnavailable(w)
-		return
-	}
-
-	chief, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-		ID: chiefID, WorkspaceID: wsID,
-	})
-	if errors.Is(err, pgx.ErrNoRows) || chief.ArchivedAt.Valid {
-		writeChiefUnavailable(w)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load chief of staff")
 		return
 	}
 	if !h.canInvokeAgent(ctx, chief, "member", userID, "", workspaceID) {

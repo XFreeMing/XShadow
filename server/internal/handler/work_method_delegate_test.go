@@ -30,6 +30,40 @@ func TestGoalCandidateSelfClaimRequiresTheCandidatesOwnDecision(t *testing.T) {
 	testGoalCandidateHandoff(t, true)
 }
 
+func TestReworkUsesCurrentImplementerAfterSquadRetirement(t *testing.T) {
+	ctx := context.Background()
+	lead := dbfx.Agent(t, "Retired squad leader", testRuntimeID)
+	worker := dbfx.Agent(t, "Replacement implementer", testRuntimeID)
+	reviewer := dbfx.Agent(t, "Unchanged independent reviewer", testRuntimeID)
+	squad := dbfx.Squad(t, "Retired squad", lead)
+	issue := db.Issue{WorkspaceID: util.MustParseUUID(testWorkspaceID)}
+	step := workmethod.Step{Gate: "candidate", Name: "Implement", Output: "Tested candidate",
+		Owner: &workmethod.Actor{Kind: "squad", ID: squad}, Reviewer: &workmethod.Actor{Kind: "agent", ID: reviewer}}
+	var original workmethod.Template
+	testutil.Call(t, testHandler.CreateWorkMethod, newRequest("POST", "/api/work-methods?workspace_id="+testWorkspaceID, workmethod.Template{
+		Name: "Retire a candidate squad " + workflowTestSuffix(), Kind: "development", Review: "Independent review", Steps: []workmethod.Step{step},
+	})).Want(http.StatusCreated).JSON(&original)
+	run := workmethod.Run{State: "working", GoalExecution: true, Method: &original, History: []workmethod.Event{{Action: "rework"}}}
+	next := original
+	next.Steps = []workmethod.Step{step}
+	next.Steps[0].Owner = &workmethod.Actor{Kind: "agent", ID: worker}
+	update := struct {
+		workmethod.Template
+		BaseRevision int `json:"base_revision"`
+	}{next, original.Revision}
+	testutil.Call(t, testHandler.UpdateWorkMethod, withURLParam(newRequest("PUT", "/api/work-methods/"+original.ID+"?workspace_id="+testWorkspaceID, update), "id", original.ID)).Want(http.StatusOK)
+	if actor, err := testHandler.methodRecipient(ctx, issue, run); err != nil || actor == nil || actor.ID != squad {
+		t.Fatalf("live bound squad: actor=%+v err=%v", actor, err)
+	}
+	dbfx.Exec(t, "UPDATE squad SET archived_at=now() WHERE id=$1", squad)
+	if actor, err := testHandler.methodRecipient(ctx, issue, run); err != nil || actor == nil || actor.Kind != "agent" || actor.ID != worker {
+		t.Fatalf("archived squad must use the already reauthorized catalogue implementer: actor=%+v err=%v", actor, err)
+	}
+	if original.Steps[0].Owner.ID != squad {
+		t.Fatal("historical method snapshot was overwritten")
+	}
+}
+
 func testGoalCandidateHandoff(t *testing.T, selfClaim bool) {
 	t.Helper()
 	ctx := context.Background()

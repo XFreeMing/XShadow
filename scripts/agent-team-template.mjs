@@ -29,7 +29,7 @@ export function validateTemplateObject(template) {
   if (template.version !== 1) throw new Error("Unsupported team template version");
   for (const kind of ["agents", "skills", "squads"]) {
     const keys = new Set(), names = new Set();
-    if (!Array.isArray(template[kind]) || !template[kind].length) throw new Error(`Missing ${kind}`);
+    if (!Array.isArray(template[kind]) || (kind !== "squads" && !template[kind].length)) throw new Error(`Missing ${kind}`);
     for (const item of template[kind]) {
       if (!/^[a-z][a-z0-9-]*$/.test(item.key) || !item.name || keys.has(item.key) || names.has(item.name)) throw new Error(`Duplicate/invalid ${kind} key or name`);
       keys.add(item.key); names.add(item.name);

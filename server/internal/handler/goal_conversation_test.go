@@ -13,8 +13,7 @@ import (
 
 func TestGoalConversationReusesDedicatedSessionAndRecordsLinkedTasks(t *testing.T) {
 	ctx := context.Background()
-	chief := dbfx.Agent(t, "Test chief", testRuntimeID)
-	dbfx.Squad(t, "军团统筹", chief)
+	chief := dbfx.Agent(t, "幕僚长", testRuntimeID)
 	ordinary := dbfx.ChatSession(t, chief)
 
 	open := func() ChatSessionResponse {

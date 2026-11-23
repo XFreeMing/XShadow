@@ -11,7 +11,22 @@ import { buildContext, formatContext, readLiveContext, readTaskDiagnosis } from 
 import { applySyncPlan, formatSyncReport, prepareSync } from "./agent-team-sync.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const template = loadTemplate(join(ROOT, "agent-team/team.json"));
+const personalTemplate = loadTemplate(join(ROOT, "agent-team/team.json"));
+const squadFixtures = [
+  ["lead", "chief", ["pm"]],
+  ["delivery", "pm", ["story-judge", "acceptance-automation"]],
+  ["product", "product", ["story-judge"]],
+  ["engineering", "engineering", ["toolsmith"]],
+  ["quality", "quality", ["acceptance-automation"]],
+];
+const template = {
+  ...personalTemplate,
+  squads: squadFixtures.map(([key, leader, members]) => ({
+    key, leader, name: key, description: "",
+    instructions: squadFixtures.map(([reference]) => `{{squad:${reference}}}`).join(" "),
+    members: members.map(agent => ({ agent, role: personalTemplate.agents.find(row => row.key === agent).name })),
+  })),
+};
 
 function fixture(idPrefix = "destination") {
   let next = 1;
@@ -339,8 +354,8 @@ test("a truncated wakeup read leaves continuation unknown instead of calling the
 test("portable template contains the current roster without machine identities or credentials", () => {
   assert.equal(template.agents.length, 22);
   assert.equal(template.skills.length, 21);
-  assert.equal(template.squads.length, 5);
-  const serialized = JSON.stringify(template);
+  assert.deepEqual(personalTemplate.squads, []);
+  const serialized = JSON.stringify(personalTemplate);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   for (const a of template.agents) {
     assert.equal(a.permission_mode, "private");
@@ -411,7 +426,7 @@ test("story gate and acceptance automation are private, capacity-limited and ind
 
 test("story gate and acceptance automation initialize from the real template, read back and rerun as a no-op", async () => {
   const f = fixture();
-  const ids = await initializeTeam(f.api, template, options);
+  const ids = await initializeTeam(f.api, personalTemplate, options);
   const judge = f.state.agents.find((a) => a.id === ids.agents["story-judge"]);
   const automation = f.state.agents.find((a) => a.id === ids.agents["acceptance-automation"]);
   assert.equal(judge.model, "gpt-6.2-sol");
@@ -423,10 +438,10 @@ test("story gate and acceptance automation initialize from the real template, re
   assert.equal(automation.max_concurrent_tasks, 1);
   assert.equal(automation.permission_mode, "private");
   assert.ok(f.state.bindings[automation.id].map((id) => f.state.skills.find((s) => s.id === id).name).includes("rd-acceptance"));
-  assert.ok(f.state.members[ids.squads.product].some((m) => m.member_id === judge.id && m.role === "用户故事评判员"));
-  assert.ok(f.state.members[ids.squads.quality].some((m) => m.member_id === automation.id && m.role === "验收自动化工程师"));
+  assert.deepEqual(f.state.squads, []);
+  assert.deepEqual(ids.squads, {});
   const before = f.mutations().length;
-  await initializeTeam(f.api, template, options);
+  await initializeTeam(f.api, personalTemplate, options);
   assert.equal(f.mutations().length, before);
 });
 

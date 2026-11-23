@@ -52,6 +52,32 @@ func (h *Handler) methodRecipient(ctx context.Context, issue db.Issue, run workm
 	if recipient == nil {
 		return nil, nil
 	}
+	if run.GoalExecution && run.State == "working" && step.Gate == "candidate" &&
+		recipient.Kind == "squad" && len(run.History) > 0 && run.History[len(run.History)-1].Action == "rework" {
+		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+			ID: parseUUIDOrInvalid(recipient.ID), WorkspaceID: issue.WorkspaceID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if squad.ArchivedAt.Valid {
+			catalog, err := h.workMethodCatalog(ctx, issue.WorkspaceID)
+			if err != nil {
+				return nil, err
+			}
+			for _, method := range catalog {
+				if method.ID != run.Method.ID || run.Step >= len(method.Steps) {
+					continue
+				}
+				next := method.Steps[run.Step]
+				if next.Name == step.Name && next.Gate == step.Gate && next.Owner != nil && next.Owner.Kind == "agent" &&
+					next.Reviewer != nil && step.Reviewer != nil && *next.Reviewer == *step.Reviewer {
+					recipient = next.Owner
+				}
+				break
+			}
+		}
+	}
 	var project db.Project
 	if recipient.Kind == "project_lead" && issue.ProjectID.Valid {
 		var err error
