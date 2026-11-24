@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "Planificación con IA",
-    "jump_task": "Ir a una tarea",
     "dependency_kind": "Tipo de dependencia",
     "dependency_hard": "Obligatoria",
     "dependency_conditional": "Condicional",
@@ -233,10 +232,8 @@
     "basis_actual": "Lo que leyó la ejecución",
     "basis_actual_empty": "No se registró ninguna base.",
     "basis_read_at": "Leído el {{time}}",
-    "task_count": "Tareas: {{value}}",
     "add_task": "Añadir tarea",
     "empty": "Aún no hay tareas. Añade una o genera un plan.",
-    "task_index": "Tarea {{index}}",
     "untitled_item": "Tarea sin título",
     "parallel": "Puede ejecutarse en paralelo",
     "waits_for": "Espera a: {{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "Cambiar vista del mapa",
     "mindmap_view": "Mapa mental",
     "tree_view": "Árbol",
-    "edit_plan": "Editar plan",
     "goal_root": "Objetivo",
     "node_progress": "{{completed}}/{{total}} hechas",
     "stage_short": "Etapa {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "Contraer rama",
     "upstream": "Depende de:",
     "downstream": "Desbloquea:",
-    "edit_in_plan": "Editar en el plan",
     "close_inspector": "Cerrar detalles",
-    "click_hint": "Haz clic en una tarea para ver detalles y resaltar su cadena de dependencias.",
-    "plan_editor_title": "Editor de plan y generación con IA",
-    "expand_editor": "Expandir",
-    "collapse_editor": "Contraer"
+    "click_hint": "Haz clic en una tarea para ver detalles y resaltar su cadena de dependencias."
   }
 }

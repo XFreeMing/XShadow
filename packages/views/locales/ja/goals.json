@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "AIで計画",
-    "jump_task": "タスクに移動",
     "dependency_kind": "依存関係の種類",
     "dependency_hard": "必須",
     "dependency_conditional": "条件付き",
@@ -233,10 +232,8 @@
     "basis_actual": "実行が実際に読んだ内容",
     "basis_actual_empty": "根拠は記録されていません。",
     "basis_read_at": "{{time}} に読み取り",
-    "task_count": "タスク: {{value}}",
     "add_task": "タスクを追加",
     "empty": "タスクはまだありません。追加するか、計画を生成してください。",
-    "task_index": "タスク {{index}}",
     "untitled_item": "無題のタスク",
     "parallel": "並列実行可能",
     "waits_for": "待機: {{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "表示レイアウトを切替",
     "mindmap_view": "マインドマップ",
     "tree_view": "ツリー",
-    "edit_plan": "計画を編集",
     "goal_root": "目標",
     "node_progress": "{{completed}}/{{total}} 完了",
     "stage_short": "ステージ {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "折りたたむ",
     "upstream": "前提タスク：",
     "downstream": "後続タスク：",
-    "edit_in_plan": "計画で編集",
     "close_inspector": "詳細を閉じる",
-    "click_hint": "タスクをクリックすると詳細と依存経路を表示します。",
-    "plan_editor_title": "計画エディタ・AI生成",
-    "expand_editor": "開く",
-    "collapse_editor": "閉じる"
+    "click_hint": "タスクをクリックすると詳細と依存経路を表示します。"
   }
 }

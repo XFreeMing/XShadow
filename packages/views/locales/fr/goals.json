@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "Planification par IA",
-    "jump_task": "Aller à une tâche",
     "dependency_kind": "Type de dépendance",
     "dependency_hard": "Obligatoire",
     "dependency_conditional": "Conditionnelle",
@@ -233,10 +232,8 @@
     "basis_actual": "Ce que l'exécution a lu",
     "basis_actual_empty": "Aucune base enregistrée.",
     "basis_read_at": "Lu le {{time}}",
-    "task_count": "Tâches : {{value}}",
     "add_task": "Ajouter une tâche",
     "empty": "Aucune tâche pour l'instant. Ajoutez-en une ou générez un plan.",
-    "task_index": "Tâche {{index}}",
     "untitled_item": "Tâche sans titre",
     "parallel": "Peut s'exécuter en parallèle",
     "waits_for": "En attente de : {{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "Changer la vue",
     "mindmap_view": "Carte mentale",
     "tree_view": "Arbre",
-    "edit_plan": "Modifier le plan",
     "goal_root": "Objectif",
     "node_progress": "{{completed}}/{{total}} terminées",
     "stage_short": "Étape {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "Replier la branche",
     "upstream": "Dépend de :",
     "downstream": "Débloque :",
-    "edit_in_plan": "Modifier dans le plan",
     "close_inspector": "Fermer les détails",
-    "click_hint": "Cliquez sur une tâche pour voir les détails et mettre en évidence ses dépendances.",
-    "plan_editor_title": "Éditeur de plan et génération IA",
-    "expand_editor": "Déplier",
-    "collapse_editor": "Replier"
+    "click_hint": "Cliquez sur une tâche pour voir les détails et mettre en évidence ses dépendances."
   }
 }

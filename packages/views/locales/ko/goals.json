@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "AI 계획 생성",
-    "jump_task": "작업으로 이동",
     "dependency_kind": "종속성 유형",
     "dependency_hard": "필수",
     "dependency_conditional": "조건부",
@@ -233,10 +232,8 @@
     "basis_actual": "실행이 실제로 읽은 내용",
     "basis_actual_empty": "기록된 근거가 없습니다.",
     "basis_read_at": "{{time}}에 읽음",
-    "task_count": "작업: {{value}}",
     "add_task": "작업 추가",
     "empty": "아직 작업이 없습니다. 추가하거나 계획을 생성하세요.",
-    "task_index": "작업 {{index}}",
     "untitled_item": "제목 없는 작업",
     "parallel": "병렬 실행 가능",
     "waits_for": "대기: {{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "관계 보기 전환",
     "mindmap_view": "마인드맵",
     "tree_view": "트리",
-    "edit_plan": "계획 편집",
     "goal_root": "목표",
     "node_progress": "{{completed}}/{{total}} 완료",
     "stage_short": "단계 {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "분기 접기",
     "upstream": "선행 작업:",
     "downstream": "후속 작업:",
-    "edit_in_plan": "계획에서 편집",
     "close_inspector": "상세 닫기",
-    "click_hint": "작업을 클릭하면 상세 정보와 의존 경로가 강조됩니다.",
-    "plan_editor_title": "계획 편집기 및 AI 생성",
-    "expand_editor": "펼치기",
-    "collapse_editor": "접기"
+    "click_hint": "작업을 클릭하면 상세 정보와 의존 경로가 강조됩니다."
   }
 }

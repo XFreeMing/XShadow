@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "AI 生成",
-    "jump_task": "跳到任务",
     "dependency_kind": "依赖类型",
     "dependency_hard": "必需",
     "dependency_conditional": "有条件",
@@ -233,10 +232,8 @@
     "basis_actual": "运行实际读取",
     "basis_actual_empty": "未记录依据。",
     "basis_read_at": "读取时间 {{time}}",
-    "task_count": "任务：{{value}}",
     "add_task": "添加任务",
     "empty": "还没有任务。添加一个，或生成计划。",
-    "task_index": "任务 {{index}}",
     "untitled_item": "未命名任务",
     "parallel": "可并行执行",
     "waits_for": "等待：{{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "切换关系视图",
     "mindmap_view": "脑图",
     "tree_view": "树形",
-    "edit_plan": "编辑计划",
     "goal_root": "目标",
     "node_progress": "已完成 {{completed}}/{{total}}",
     "stage_short": "阶段 {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "收起分支",
     "upstream": "前置依赖：",
     "downstream": "后续任务：",
-    "edit_in_plan": "在计划中编辑",
     "close_inspector": "关闭详情",
-    "click_hint": "点击任务可查看详情并高亮依赖链路。",
-    "plan_editor_title": "计划编辑与 AI 生成",
-    "expand_editor": "展开",
-    "collapse_editor": "收起"
+    "click_hint": "点击任务可查看详情并高亮依赖链路。"
   }
 }

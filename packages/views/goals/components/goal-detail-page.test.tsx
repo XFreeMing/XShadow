@@ -306,7 +306,7 @@ describe("GoalDetailPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders goal and planned tasks in a mind map, switches to tree view, and opens the plan editor on demand", async () => {
+  it("shows and edits the selected task in place across the mind map and tree", async () => {
     api.getGoal.mockResolvedValue(goal({ project_id: "proj-1", status: "in_progress" }));
     api.listGoalIssues.mockResolvedValue({
       issues: [issue({ id: "issue-1", identifier: "DEV-2", title: "Upload book", status: "in_progress" })],
@@ -366,55 +366,44 @@ describe("GoalDetailPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Mind map renders by default and plan editor starts collapsed.
-    expect(await screen.findByTestId("goal-mindmap-canvas")).toBeInTheDocument();
-    expect(await screen.findByTestId("mindmap-node-item-1")).toBeInTheDocument();
-    expect(screen.getByTestId("mindmap-node-item-2")).toBeInTheDocument();
-    expect(screen.queryByTestId("goal-plan-section")).not.toBeInTheDocument();
+    const map = await screen.findByTestId("goal-task-map");
+    const firstNode = await within(map).findByTestId("mindmap-node-item-1");
+    const nextNode = await within(map).findByTestId("mindmap-node-item-2");
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      await user.click(within(nextNode).getByRole("button", { name: "Inspect personal memory" }));
+      const inspector = within(map).getByTestId("goal-task-inspector");
+      expect(within(inspector).getByRole("heading", { name: "Inspect personal memory" })).toBeVisible();
+      expect(within(map).getByRole("heading", { name: "AI planning" })).toBeVisible();
+      expect(screen.queryByTestId("plan-item-item-1")).not.toBeInTheDocument();
 
-    // Selecting a node opens the inline inspector with dependency links.
-    await user.click(screen.getByRole("button", { name: "Inspect personal memory" }));
-    const inspector = await screen.findByTestId("goal-task-inspector");
-    expect(within(inspector).getByText(/Memory shows source and lifecycle/)).toBeInTheDocument();
-    expect(
-      within(inspector).getByRole("button", { name: /DEV-2 · Upload book and resume progress/ }),
-    ).toBeInTheDocument();
+      const item = within(map).getByTestId("plan-item-item-2");
+      const title = within(item).getByRole("textbox", { name: "Title" });
+      expect(title).toHaveValue("Inspect personal memory");
+      expect(within(item).getByRole("textbox", { name: "Outcome" })).toHaveValue("Memory shows source and lifecycle");
+      expect(within(map).queryByRole("button", { name: "Edit in plan" })).not.toBeInTheDocument();
 
-    // Switching to Tree view renders the hierarchical tree with collapsible branches.
-    await user.click(screen.getByRole("button", { name: "Tree" }));
-    const tree = await screen.findByTestId("goal-tree-view");
-    expect(screen.getByRole("button", { name: "Collapse branch" })).toBeInTheDocument();
-    expect(within(tree).getByRole("link", { name: "DEV-2" }).closest("button")).toBeNull();
+      const evidence = within(item).getByText("memory-guide.md", { exact: false });
+      expect(evidence).not.toBeVisible();
+      await user.click(within(item).getByText("Evidence", { exact: false }));
+      expect(evidence).toBeVisible();
+      fireEvent.change(title, { target: { value: "Inspect personal memory draft" } });
 
-    // Editing from the graph opens the editor at the selected task on the first click.
-    await user.click(within(inspector).getByRole("button", { name: "Edit in plan" }));
-    const planEditor = await screen.findByTestId("goal-plan-section");
-    expect(within(planEditor).getByRole("heading", { name: "AI planning" })).toBeVisible();
+      await user.click(within(inspector).getByRole("button", { name: /DEV-2 · Upload book and resume progress/ }));
+      expect(within(map).getByTestId("plan-item-item-1")).toBeVisible();
+      expect(within(firstNode).getByRole("button", { name: "Upload book and resume progress" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.queryByTestId("plan-item-item-2")).not.toBeInTheDocument();
+      expect(within(map).getByRole("button", { name: /Authorize/ })).toBeDisabled();
 
-    const item = await screen.findByTestId("plan-item-item-2");
-    const title = within(item).getByRole("textbox", { name: "Title" });
-    expect(title).toHaveFocus();
-    await user.click(within(inspector).getByRole("button", { name: "Edit in plan" }));
-    expect(title).toHaveFocus();
-
-    const taskJump = within(planEditor).getByRole("combobox", { name: "Jump to task" });
-    await user.selectOptions(taskJump, within(taskJump).getByRole("option", { name: "Inspect personal memory" }));
-    expect(title).toHaveFocus();
-
-    const evidence = within(item).getByText("memory-guide.md", { exact: false });
-    expect(evidence).not.toBeVisible();
-    await user.click(within(item).getByText("Evidence", { exact: false }));
-    expect(evidence).toBeVisible();
-
-    fireEvent.change(title, { target: { value: "Inspect personal memory draft" } });
-    expect(title).toHaveValue("Inspect personal memory draft");
-    const editorToggle = screen.getByRole("button", { name: /Plan editor & AI generation/ });
-    await user.click(editorToggle);
-    expect(item).not.toBeVisible();
-    expect(within(screen.getByTestId("goal-task-map")).getByRole("button", { name: /Authorize/ })).toBeDisabled();
-    await user.click(editorToggle);
-    expect(title).toBeVisible();
-    expect(title).toHaveValue("Inspect personal memory draft");
+      await user.click(within(map).getByRole("button", { name: "Tree" }));
+      const tree = await within(map).findByTestId("goal-tree-view");
+      expect(within(tree).getByRole("link", { name: "DEV-2" }).closest("button")).toBeNull();
+      await user.click(within(tree).getByRole("button", { name: /Inspect personal memory draft/ }));
+      expect(within(map).getByRole("textbox", { name: "Title" })).toHaveValue("Inspect personal memory draft");
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      scrollIntoView.mockRestore();
+    }
 
     api.getGoalPlan.mockRejectedValue(new ApiError("Forbidden", 403, "Forbidden"));
     await act(async () => {
@@ -422,6 +411,7 @@ describe("GoalDetailPage", () => {
     });
     expect(await screen.findByTestId("plan-section-unavailable")).toBeVisible();
     expect(screen.queryByTestId("goal-task-inspector")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Inspect personal memory" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Inspect personal memory/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Title" })).not.toBeInTheDocument();
   });
 });

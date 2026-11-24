@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "AI 產生",
-    "jump_task": "跳到任務",
     "dependency_kind": "相依類型",
     "dependency_hard": "必須",
     "dependency_conditional": "有條件",
@@ -233,10 +232,8 @@
     "basis_actual": "執行實際讀取",
     "basis_actual_empty": "未記錄依據。",
     "basis_read_at": "讀取時間 {{time}}",
-    "task_count": "任務：{{value}}",
     "add_task": "新增任務",
     "empty": "還沒有任務。新增一個，或產生計畫。",
-    "task_index": "任務 {{index}}",
     "untitled_item": "未命名任務",
     "parallel": "可平行執行",
     "waits_for": "等待：{{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "切換關係檢視",
     "mindmap_view": "心智圖",
     "tree_view": "樹狀",
-    "edit_plan": "編輯計畫",
     "goal_root": "目標",
     "node_progress": "已完成 {{completed}}/{{total}}",
     "stage_short": "階段 {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "收合分支",
     "upstream": "前置依賴：",
     "downstream": "後續任務：",
-    "edit_in_plan": "在計畫中編輯",
     "close_inspector": "關閉詳情",
-    "click_hint": "點擊任務可檢視詳情並反白依賴路徑。",
-    "plan_editor_title": "計畫編輯與 AI 生成",
-    "expand_editor": "展開",
-    "collapse_editor": "收合"
+    "click_hint": "點擊任務可檢視詳情並反白依賴路徑。"
   }
 }

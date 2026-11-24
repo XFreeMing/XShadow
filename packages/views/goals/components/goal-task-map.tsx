@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import type { Goal, GoalPlan, Issue } from "@multica/core/types";
 import {
   ArrowUpRight,
@@ -11,7 +11,6 @@ import {
   Link2,
   ListTree,
   Network,
-  Pencil,
   Target,
   Unlink,
   X,
@@ -34,9 +33,7 @@ import {
 
 export type GoalTaskMapView = "mindmap" | "tree";
 
-interface GoalTaskMapProps {
-  goal: Goal;
-  plan: GoalPlan | null;
+export interface GoalTaskMapIssues {
   linkedIssues: Issue[];
   issuesLoading: boolean;
   issuesError: boolean;
@@ -49,7 +46,15 @@ interface GoalTaskMapProps {
   onFetchNextPage: () => void;
   onOpenLinkDialog: () => void;
   onUnlinkIssue: (issueId: string) => void;
-  onEditPlan: (itemId?: string) => void;
+}
+
+interface GoalTaskMapProps extends GoalTaskMapIssues {
+  goal: Goal;
+  plan: GoalPlan | null;
+  selectedId: string | null;
+  onSelectTask: (id: string | null) => void;
+  toolbar: ReactNode;
+  children: ReactNode;
   onToggleExecution?: (enabled: boolean) => void;
   executionPending?: boolean;
   executionEnableBlocked: boolean;
@@ -70,7 +75,10 @@ export function GoalTaskMap({
   onFetchNextPage,
   onOpenLinkDialog,
   onUnlinkIssue,
-  onEditPlan,
+  selectedId,
+  onSelectTask,
+  toolbar,
+  children,
   onToggleExecution,
   executionPending = false,
   executionEnableBlocked,
@@ -78,7 +86,6 @@ export function GoalTaskMap({
   const { t } = useT("goals");
   const arrowId = useId().replace(/:/g, "");
   const [view, setView] = useState<GoalTaskMapView>("mindmap");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(new Set());
 
@@ -86,6 +93,10 @@ export function GoalTaskMap({
   const executionState = plan?.execution_state ?? null;
   const executionAvailable =
     goal.status === "in_progress" && !!progress && progress.completed < progress.total;
+
+  const showExecution = plan && (executionState || (plan.can_manage_execution && executionAvailable));
+  const current = plan?.items.find((item) => item.id === progress?.item_id);
+  const blockers = plan?.items.filter((item) => progress?.waiting_for?.includes(item.id)) ?? [];
 
   const graph = useMemo(
     () =>
@@ -122,10 +133,6 @@ export function GoalTaskMap({
     });
   };
 
-  const toggleSelect = (id: string) => {
-    setSelectedId((prev) => (prev === id ? null : id));
-  };
-
   const renderUnlinkButton = (issue: Issue) => {
     const busy = unlinkingIssueId === issue.id;
     return (
@@ -159,7 +166,7 @@ export function GoalTaskMap({
           className={cn(
             "group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 transition-colors",
             isSelected
-              ? "border-brand/50 bg-brand/[0.06]"
+              ? "border-brand bg-brand/[0.08]"
               : node.isCurrent
                 ? "border-brand/30 bg-brand/[0.03] hover:bg-accent/60"
                 : "hover:bg-accent/50",
@@ -200,7 +207,7 @@ export function GoalTaskMap({
 
           <button
             type="button"
-            onClick={() => toggleSelect(node.id)}
+            onClick={() => onSelectTask(node.id)}
             aria-pressed={isSelected}
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
           >
@@ -259,7 +266,7 @@ export function GoalTaskMap({
 
   return (
     <section
-      className="overflow-hidden rounded-xl border bg-card"
+      className="@container overflow-clip rounded-xl border bg-card [overflow-anchor:none]"
       data-testid="goal-task-map"
     >
       {/* Toolbar */}
@@ -267,9 +274,9 @@ export function GoalTaskMap({
         <div className="flex flex-wrap items-center gap-2.5">
           <h2 className="text-body font-semibold text-foreground">{t(($) => $.map.title)}</h2>
           {totalCount > 0 ? (
-            <div className="flex items-center gap-2 text-caption text-muted-foreground">
+            <div role="status" className="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
               <span className="tabular-nums font-medium text-foreground">
-                {completedCount}/{totalCount}
+                {t(($) => $.plan_progress.count, { completed: completedCount, total: totalCount })}
               </span>
               <div
                 className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"
@@ -285,10 +292,19 @@ export function GoalTaskMap({
                   {t(($) => $.plan_progress.phase[progress.phase])}
                 </Badge>
               ) : null}
+              {current ? (
+                <span className="sr-only">
+                  {current.title}
+                  {progress?.method_step ? ` · ${progress.method_step}` : ""}
+                </span>
+              ) : null}
+              {blockers.length > 0 ? (
+                <span>{t(($) => $.plan_progress.waiting_for, { tasks: blockers.map((item) => item.title).join(" · ") })}</span>
+              ) : null}
             </div>
           ) : null}
-          {plan && (executionState || (plan.can_manage_execution && executionAvailable)) && onToggleExecution ? (
-            <div className="flex items-center gap-1.5 border-l pl-2.5">
+          {showExecution && onToggleExecution ? (
+            <div className="flex flex-wrap items-center gap-1.5 @3xl:border-l @3xl:pl-2.5">
               <span className="text-caption text-muted-foreground">
                 {executionState === "active"
                   ? t(($) => $.plan_execution.active, { revision: plan.execution_revision })
@@ -358,14 +374,15 @@ export function GoalTaskMap({
             <Link2 className="size-3.5" />
             {t(($) => $.detail.link_task)}
           </Button>
-          {goal.project_id ? (
-            <Button type="button" size="xs" variant="outline" onClick={() => onEditPlan()}>
-              <Pencil className="size-3.5" />
-              {t(($) => $.map.edit_plan)}
-            </Button>
-          ) : null}
+          {toolbar}
         </div>
       </div>
+
+      {showExecution ? (
+        <p className="border-b px-4 py-1.5 text-caption text-muted-foreground">
+          {t(($) => $.plan_execution.scope)}
+        </p>
+      ) : null}
 
       {issuesError && !isFetchNextPageError && graph.nodes.length > 0 ? (
         <div role="alert" className="flex items-center gap-2 border-t px-4 py-2 text-caption text-muted-foreground">
@@ -389,24 +406,12 @@ export function GoalTaskMap({
           </Button>
         </div>
       ) : graph.nodes.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-center">
-          <p className="text-body text-muted-foreground">{t(($) => $.detail.no_linked_tasks)}</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={onOpenLinkDialog}>
-              <Link2 className="size-3.5" />
-              {t(($) => $.detail.link_task)}
-            </Button>
-            {goal.project_id ? (
-              <Button type="button" size="sm" onClick={() => onEditPlan()}>
-                <Pencil className="size-3.5" />
-                {t(($) => $.map.edit_plan)}
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <p className="px-4 py-5 text-center text-body text-muted-foreground">
+          {plan ? t(($) => $.plan.empty) : t(($) => $.detail.no_linked_tasks)}
+        </p>
       ) : view === "mindmap" ? (
         /* Horizontal Mind Map Canvas */
-        <div className="overflow-x-auto bg-surface/25" data-testid="goal-mindmap-canvas">
+        <div className="max-h-48 overflow-auto bg-surface/25" data-testid="goal-mindmap-canvas">
           <div
             className="relative"
             style={{ width: graph.canvasWidth, height: graph.canvasHeight }}
@@ -501,9 +506,6 @@ export function GoalTaskMap({
                 <span className="tabular-nums">
                   {t(($) => $.map.node_progress, { completed: completedCount, total: totalCount })}
                 </span>
-                {plan ? (
-                  <span>{t(($) => $.plan.revision, { revision: plan.revision })}</span>
-                ) : null}
               </div>
             </div>
 
@@ -530,7 +532,7 @@ export function GoalTaskMap({
                   className={cn(
                     "absolute flex flex-col justify-between rounded-lg border bg-card px-2.5 py-2 shadow-2xs transition-all",
                     isSelected
-                      ? "border-brand ring-2 ring-brand/25"
+                      ? "border-brand ring-2 ring-brand/45"
                       : node.isCurrent
                         ? "border-brand/70 bg-brand/[0.04]"
                         : node.isWaiting
@@ -555,11 +557,15 @@ export function GoalTaskMap({
                         >
                           {node.issue.identifier}
                         </AppLink>
-                      ) : (
+                      ) : node.item ? (
                         <span className="truncate text-micro text-muted-foreground">
-                          {t(($) => $.plan.binding_new)}
+                          {node.item.binding.type === "new"
+                            ? t(($) => $.plan.binding_new)
+                            : node.item.binding.type === "existing"
+                              ? t(($) => $.plan.binding_existing)
+                              : t(($) => $.plan.binding_unknown, { type: node.item.binding.type || "?" })}
                         </span>
-                      )}
+                      ) : null}
                       {node.stage !== null ? (
                         <span className="shrink-0 rounded bg-muted px-1 py-0.2 text-micro text-muted-foreground">
                           S{node.stage}
@@ -584,7 +590,7 @@ export function GoalTaskMap({
                     type="button"
                     title={title}
                     aria-pressed={isSelected}
-                    onClick={() => toggleSelect(node.id)}
+                    onClick={() => onSelectTask(node.id)}
                     className="line-clamp-2 text-left text-caption font-medium text-foreground focus-visible:outline-none"
                   >
                     {title}
@@ -616,7 +622,7 @@ export function GoalTaskMap({
         </div>
       ) : (
         /* Hierarchical Tree View */
-        <div className="p-3" data-testid="goal-tree-view">
+        <div className="max-h-48 overflow-auto p-3" data-testid="goal-tree-view">
           <div className="mb-2 flex items-center gap-2 rounded-md bg-surface/60 px-2.5 py-2">
             <Target className="size-4 shrink-0 text-brand" />
             <span className="min-w-0 flex-1 truncate text-body font-semibold text-foreground">
@@ -651,128 +657,6 @@ export function GoalTaskMap({
         </div>
       )}
 
-      {/* Selected Node Inspector */}
-      {selectedNode ? (
-        <div
-          className="border-t bg-surface/40 px-4 py-3"
-          data-testid="goal-task-inspector"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                {selectedNode.issue ? (
-                  <StatusIcon status={selectedNode.issue.status} className="size-4 shrink-0" />
-                ) : (
-                  <CircleDashed className="size-4 shrink-0 text-muted-foreground" />
-                )}
-                {selectedNode.issue ? (
-                  <AppLink
-                    href={issueHref(selectedNode.issue)}
-                    className="inline-flex items-center gap-1 font-mono text-caption font-medium text-brand hover:underline"
-                  >
-                    {selectedNode.issue.identifier}
-                    <ArrowUpRight className="size-3" />
-                  </AppLink>
-                ) : null}
-                <h3 className="text-body font-semibold text-foreground">
-                  {selectedNode.title || t(($) => $.plan.untitled_item)}
-                </h3>
-                {selectedNode.stage !== null ? (
-                  <Badge variant="outline" className="text-micro">
-                    {t(($) => $.map.stage_short, { stage: selectedNode.stage })}
-                  </Badge>
-                ) : null}
-              </div>
-
-              {selectedNode.item?.outcome ? (
-                <p className="text-label text-muted-foreground">
-                  <span className="font-medium text-foreground">{t(($) => $.plan.outcome)}: </span>
-                  {selectedNode.item.outcome}
-                </p>
-              ) : null}
-
-              {selectedNode.item?.acceptance_criteria ? (
-                <p className="text-label text-muted-foreground">
-                  <span className="font-medium text-foreground">
-                    {t(($) => $.plan.acceptance_criteria)}:{" "}
-                  </span>
-                  {selectedNode.item.acceptance_criteria}
-                </p>
-              ) : null}
-
-              {selectedNode.prerequisiteIds.length > 0 || selectedNode.dependentIds.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-caption">
-                  {selectedNode.prerequisiteIds.length > 0 ? (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-muted-foreground">{t(($) => $.map.upstream)}</span>
-                      {selectedNode.prerequisiteIds.map((preId) => {
-                        const pre = graph.nodeById.get(preId);
-                        if (!pre) return null;
-                        return (
-                          <button
-                            key={preId}
-                            type="button"
-                            onClick={() => setSelectedId(preId)}
-                            className="rounded border bg-background px-1.5 py-0.5 text-caption hover:border-brand hover:text-brand"
-                          >
-                            {pre.issue?.identifier ? `${pre.issue.identifier} · ` : ""}
-                            {pre.title || t(($) => $.plan.untitled_item)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                  {selectedNode.dependentIds.length > 0 ? (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-muted-foreground">{t(($) => $.map.downstream)}</span>
-                      {selectedNode.dependentIds.map((depId) => {
-                        const dep = graph.nodeById.get(depId);
-                        if (!dep) return null;
-                        return (
-                          <button
-                            key={depId}
-                            type="button"
-                            onClick={() => setSelectedId(depId)}
-                            className="rounded border bg-background px-1.5 py-0.5 text-caption hover:border-brand hover:text-brand"
-                          >
-                            {dep.issue?.identifier ? `${dep.issue.identifier} · ` : ""}
-                            {dep.title || t(($) => $.plan.untitled_item)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="flex shrink-0 items-center gap-1">
-              {selectedNode.item ? (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  onClick={() => onEditPlan(selectedNode.id)}
-                >
-                  <Pencil className="size-3" />
-                  {t(($) => $.map.edit_in_plan)}
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                aria-label={t(($) => $.map.close_inspector)}
-                onClick={() => setSelectedId(null)}
-              >
-                <X className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Footer legend / load more */}
       {graph.nodes.length > 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-micro text-muted-foreground">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -811,6 +695,100 @@ export function GoalTaskMap({
           </div>
         </div>
       ) : null}
+      {selectedNode ? (
+        <div
+          className="space-y-3 border-t px-4 py-3"
+          data-testid="goal-task-inspector"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedNode.issue ? (
+                  <StatusIcon status={selectedNode.issue.status} className="size-4 shrink-0" />
+                ) : (
+                  <CircleDashed className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                {selectedNode.issue ? (
+                  <AppLink
+                    href={issueHref(selectedNode.issue)}
+                    className="inline-flex items-center gap-1 font-mono text-caption font-medium text-brand hover:underline"
+                  >
+                    {selectedNode.issue.identifier}
+                    <ArrowUpRight className="size-3" />
+                  </AppLink>
+                ) : null}
+                <h3 className="text-body font-semibold text-foreground">
+                  {selectedNode.title || t(($) => $.plan.untitled_item)}
+                </h3>
+                {selectedNode.stage !== null ? (
+                  <Badge variant="outline" className="text-micro">
+                    {t(($) => $.map.stage_short, { stage: selectedNode.stage })}
+                  </Badge>
+                ) : null}
+              </div>
+
+              {selectedNode.prerequisiteIds.length > 0 || selectedNode.dependentIds.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-caption">
+                  {selectedNode.prerequisiteIds.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-muted-foreground">{t(($) => $.map.upstream)}</span>
+                      {selectedNode.prerequisiteIds.map((preId) => {
+                        const pre = graph.nodeById.get(preId);
+                        if (!pre) return null;
+                        return (
+                          <button
+                            key={preId}
+                            type="button"
+                            onClick={() => onSelectTask(preId)}
+                            className="rounded border bg-background px-1.5 py-0.5 text-caption hover:border-brand hover:text-brand"
+                          >
+                            {pre.issue?.identifier ? `${pre.issue.identifier} · ` : ""}
+                            {pre.title || t(($) => $.plan.untitled_item)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {selectedNode.dependentIds.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-muted-foreground">{t(($) => $.map.downstream)}</span>
+                      {selectedNode.dependentIds.map((depId) => {
+                        const dep = graph.nodeById.get(depId);
+                        if (!dep) return null;
+                        return (
+                          <button
+                            key={depId}
+                            type="button"
+                            onClick={() => onSelectTask(depId)}
+                            className="rounded border bg-background px-1.5 py-0.5 text-caption hover:border-brand hover:text-brand"
+                          >
+                            {dep.issue?.identifier ? `${dep.issue.identifier} · ` : ""}
+                            {dep.title || t(($) => $.plan.untitled_item)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label={t(($) => $.map.close_inspector)}
+                onClick={() => onSelectTask(null)}
+              >
+                <X className="size-3.5" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {children}
     </section>
   );
 }

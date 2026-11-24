@@ -108,6 +108,21 @@ function generation(overrides: Partial<GoalPlanGeneration> = {}): GoalPlanGenera
   };
 }
 
+const emptyIssues = {
+  linkedIssues: [],
+  issuesLoading: false,
+  issuesError: false,
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  isFetchNextPageError: false,
+  unlinkingIssueId: null,
+  issueHref: () => "/issue",
+  onRetryIssues: () => {},
+  onFetchNextPage: () => {},
+  onOpenLinkDialog: () => {},
+  onUnlinkIssue: () => {},
+};
+
 describe("GoalPlanSection", () => {
   let qc: QueryClient;
   const api = {
@@ -144,7 +159,7 @@ describe("GoalPlanSection", () => {
   function renderSection(goalOverride: Goal = goal) {
     return renderWithI18n(
       <QueryClientProvider client={qc}>
-        <GoalPlanSection goal={goalOverride} />
+        <GoalPlanSection issues={emptyIssues} goal={goalOverride} />
       </QueryClientProvider>,
     );
   }
@@ -196,10 +211,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    expect(await screen.findByTestId("goal-plan-section")).toBeInTheDocument();
-    expect(
-      screen.getByText("No tasks yet. Add one, or generate a plan."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("No tasks yet. Add one, or generate a plan.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Deliver the first increment");
@@ -239,8 +251,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.type(title, "My local plan");
     await user.click(screen.getByRole("button", { name: "Save plan" }));
@@ -297,7 +308,7 @@ describe("GoalPlanSection", () => {
     const title = await screen.findByLabelText("Title");
     await user.clear(title);
     await user.type(title, "User title");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -334,7 +345,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("plan-item-node-2");
+    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
     await user.click(
       screen.getByRole("button", { name: "Remove dependency on First" }),
     );
@@ -344,6 +355,7 @@ describe("GoalPlanSection", () => {
 
     // A deleted node takes its edges with it.
     api.saveGoalPlan.mockClear();
+    await user.click(within(screen.getByTestId("mindmap-node-node-1")).getByRole("button", { name: "First" }));
     await user.click(screen.getByRole("button", { name: "Delete First" }));
     await user.click(screen.getByRole("button", { name: "Save plan" }));
     await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(1));
@@ -383,8 +395,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -409,8 +420,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -441,8 +451,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -472,8 +481,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -506,8 +514,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -543,8 +550,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     expect(await screen.findByTestId("plan-candidate")).toBeInTheDocument();
@@ -568,15 +574,14 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     const view = renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Only in project A");
 
     // The goal moves to project B while both plans are still revision 0.
     api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-2", revision: 0 }));
     view.rerender(
       <QueryClientProvider client={qc}>
-        <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+        <GoalPlanSection issues={emptyIssues} goal={{ ...goal, project_id: "project-2" }} />
       </QueryClientProvider>,
     );
 
@@ -621,8 +626,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -672,13 +676,13 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("plan-item-node-2");
+    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
     // The user removes the dependency and the second node while the run is
     // still in flight; applying its candidate must not bring them back.
     await user.click(screen.getByRole("button", { name: "Remove dependency on First" }));
     await user.click(screen.getByRole("button", { name: "Delete Second" }));
 
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -732,8 +736,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     await screen.findByTestId("plan-candidate");
@@ -775,9 +778,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const intent = screen.getByLabelText("What should the plan deliver?");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const intent = await screen.findByLabelText("What should the plan deliver?");
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.clear(intent);
     await user.type(intent, "First intent");
@@ -811,9 +813,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const intent = screen.getByLabelText("What should the plan deliver?");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const intent = await screen.findByLabelText("What should the plan deliver?");
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.clear(intent);
     await user.type(intent, "First intent");
@@ -862,9 +863,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const intent = screen.getByLabelText("What should the plan deliver?");
-    const top = screen.getByRole("button", { name: "Generate plan" });
+    const intent = await screen.findByLabelText("What should the plan deliver?");
+    const top = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(top).toBeEnabled());
     await user.click(top);
     await waitFor(() => expect(api.createGoalPlanGeneration).toHaveBeenCalledTimes(1));
@@ -916,9 +916,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const intent = screen.getByLabelText("What should the plan deliver?");
-    const top = screen.getByRole("button", { name: "Generate plan" });
+    const intent = await screen.findByLabelText("What should the plan deliver?");
+    const top = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(top).toBeEnabled());
     await user.click(top);
     const status = await screen.findByTestId("plan-generation-status");
@@ -982,14 +981,13 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const top = screen.getByRole("button", { name: "Generate plan" });
+    const top = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(top).toBeEnabled());
     await user.click(top);
     const status = await screen.findByTestId("plan-generation-status");
     expect(await within(status).findByText("Planner broke")).toBeInTheDocument();
 
-    const intent = screen.getByLabelText("What should the plan deliver?");
+    const intent = await screen.findByLabelText("What should the plan deliver?");
     await user.clear(intent);
     await user.type(intent, "Second intent");
     await user.click(within(status).getByRole("button", { name: "Generate again" }));
@@ -1061,9 +1059,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const intent = screen.getByLabelText("What should the plan deliver?");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const intent = await screen.findByLabelText("What should the plan deliver?");
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -1099,8 +1096,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     const candidate = await screen.findByTestId("plan-candidate");
@@ -1125,7 +1121,9 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    expect(await screen.findByText("Other task link (external)")).toBeInTheDocument();
+    const taskEditor = await screen.findByTestId("plan-item-node-1");
+    expect(within(taskEditor).getByText("Other task link (external)")).toBeInTheDocument();
+    expect(within(screen.getByTestId("mindmap-node-node-1")).getByText("Other task link (external)")).toBeInTheDocument();
     expect(screen.queryByText("New task")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Save plan" }));
@@ -1146,8 +1144,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -1198,8 +1195,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("plan-item-node-2");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     await screen.findByTestId("plan-generation-status");
@@ -1207,8 +1204,8 @@ describe("GoalPlanSection", () => {
     // While the run is in flight: a local addition and a deletion, saved into
     // revision 3. The deletion decision is still valid for the revision-2 run.
     await user.click(screen.getByRole("button", { name: "Add task" }));
-    const titles = screen.getAllByLabelText("Title");
-    await user.type(titles[titles.length - 1]!, "Local addition");
+    await user.type(screen.getByLabelText("Title"), "Local addition");
+    await user.click(within(screen.getByTestId("mindmap-node-node-2")).getByRole("button", { name: "Second" }));
     await user.click(screen.getByRole("button", { name: "Delete Second" }));
     api.saveGoalPlan.mockImplementationOnce(async (_goalId, data) =>
       plan({
@@ -1280,8 +1277,8 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("plan-item-node-2");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     await screen.findByTestId("plan-generation-status");
@@ -1362,7 +1359,7 @@ describe("GoalPlanSection", () => {
     // replaced silently by the refetched plan.
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Unsaved edit");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
 
@@ -1375,7 +1372,7 @@ describe("GoalPlanSection", () => {
       expect(screen.queryByTestId("plan-revision-conflict")).not.toBeInTheDocument(),
     );
 
-    const intent = screen.getByLabelText("What should the plan deliver?");
+    const intent = await screen.findByLabelText("What should the plan deliver?");
     await user.clear(intent);
     await user.type(intent, "Recovered intent");
     await user.click(screen.getByRole("button", { name: "Start a new run" }));
@@ -1415,7 +1412,7 @@ describe("GoalPlanSection", () => {
 
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Unsaved edit");
-    const generate = screen.getByRole("button", { name: "Generate plan" });
+    const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
@@ -1482,7 +1479,7 @@ describe("GoalPlanSection", () => {
     expect(await screen.findByText("You can't use this planning agent.")).toBeInTheDocument();
     expect(screen.getByTestId("plan-start-refused")).toBeInTheDocument();
 
-    const intent = screen.getByLabelText("What should the plan deliver?");
+    const intent = await screen.findByLabelText("What should the plan deliver?");
     await user.clear(intent);
     await user.type(intent, "After agent refusal");
     await user.click(screen.getByRole("button", { name: "Start a new run" }));
@@ -1501,8 +1498,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     const view = renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
     await user.type(title, "Only in project A");
@@ -1511,7 +1507,7 @@ describe("GoalPlanSection", () => {
     api.getGoalPlan.mockResolvedValue(plan({ project_id: "project-2", revision: 0 }));
     view.rerender(
       <QueryClientProvider client={qc}>
-        <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+        <GoalPlanSection issues={emptyIssues} goal={{ ...goal, project_id: "project-2" }} />
       </QueryClientProvider>,
     );
 
@@ -1528,7 +1524,7 @@ describe("GoalPlanSection", () => {
     return renderWithI18n(
       <QueryClientProvider client={qc}>
         <div>
-          <GoalPlanSection goal={goalOverride} />
+          <GoalPlanSection issues={emptyIssues} goal={goalOverride} />
           <button type="button">Outside control</button>
         </div>
       </QueryClientProvider>,
@@ -1540,8 +1536,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
     expect(document.activeElement).toBe(title);
@@ -1562,8 +1557,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderWithOutsideControl();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
     const outside = screen.getByRole("button", { name: "Outside control" });
@@ -1582,8 +1576,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     const view = renderWithOutsideControl();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
     const outside = screen.getByRole("button", { name: "Outside control" });
@@ -1594,7 +1587,7 @@ describe("GoalPlanSection", () => {
     view.rerender(
       <QueryClientProvider client={qc}>
         <div>
-          <GoalPlanSection goal={{ ...goal, project_id: "project-2" }} />
+          <GoalPlanSection issues={emptyIssues} goal={{ ...goal, project_id: "project-2" }} />
           <button type="button">Outside control</button>
         </div>
       </QueryClientProvider>,
@@ -1608,8 +1601,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByTestId("goal-plan-section");
-    await user.click(screen.getByRole("button", { name: "Add task" }));
+    await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
     await user.type(title, "Unsaved edit");
@@ -1618,7 +1610,7 @@ describe("GoalPlanSection", () => {
 
     expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
     expect(document.activeElement).toBe(
-      within(screen.getByTestId("goal-plan-editor")).getByLabelText("Title"),
+      screen.getByLabelText("Title"),
     );
   });
 });

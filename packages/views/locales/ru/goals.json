@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "Планирование с ИИ",
-    "jump_task": "Перейти к задаче",
     "dependency_kind": "Тип зависимости",
     "dependency_hard": "Обязательная",
     "dependency_conditional": "Условная",
@@ -233,10 +232,8 @@
     "basis_actual": "Что прочитал запуск",
     "basis_actual_empty": "Основание не записано.",
     "basis_read_at": "Прочитано {{time}}",
-    "task_count": "Задачи: {{value}}",
     "add_task": "Добавить задачу",
     "empty": "Задач пока нет. Добавьте одну или сгенерируйте план.",
-    "task_index": "Задача {{index}}",
     "untitled_item": "Задача без названия",
     "parallel": "Может выполняться параллельно",
     "waits_for": "Ожидает: {{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "Переключить вид карты",
     "mindmap_view": "Ментальная карта",
     "tree_view": "Дерево",
-    "edit_plan": "Редактировать план",
     "goal_root": "Цель",
     "node_progress": "{{completed}}/{{total}} готово",
     "stage_short": "Этап {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "Свернуть ветку",
     "upstream": "Зависит от:",
     "downstream": "Открывает:",
-    "edit_in_plan": "Изменить в плане",
     "close_inspector": "Закрыть детали",
-    "click_hint": "Нажмите на задачу, чтобы открыть детали и подсветить цепочку зависимостей.",
-    "plan_editor_title": "Редактор плана и AI-генерация",
-    "expand_editor": "Развернуть",
-    "collapse_editor": "Свернуть"
+    "click_hint": "Нажмите на задачу, чтобы открыть детали и подсветить цепочку зависимостей."
   }
 }

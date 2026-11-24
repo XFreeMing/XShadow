@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueWorkMethodOptions, workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
@@ -9,10 +9,8 @@ import type { Goal, GoalPlanEdge, GoalPlanItem, Issue } from "@multica/core/type
 import {
   GitBranch,
   Link2,
-  ListChecks,
   Plus,
   Trash2,
-  Workflow,
   X,
 } from "@multica/ui/icons";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -38,15 +36,6 @@ export interface PlanContent {
   edges: GoalPlanEdge[];
 }
 
-export interface PlanTaskFocusRequest {
-  readonly itemId: string;
-}
-
-function focusPlanTask(title: HTMLElement | null) {
-  title?.closest("li")?.scrollIntoView({ block: "start", inline: "nearest" });
-  title?.focus({ preventScroll: true });
-}
-
 type ItemPatch = Partial<Omit<GoalPlanItem, "id">>;
 
 function newId(): string {
@@ -56,7 +45,7 @@ function newId(): string {
   return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
-function emptyItem(): GoalPlanItem {
+export function newPlanItem(): GoalPlanItem {
   return {
     id: newId(),
     title: "",
@@ -77,11 +66,11 @@ function emptyItem(): GoalPlanItem {
  */
 export function GoalPlanEditor({
   goal,
+  item,
   items,
   edges,
   linkedIssues = [],
   issueHref,
-  taskFocus,
   disabled = false,
   onChange,
   onItemEdited,
@@ -90,11 +79,11 @@ export function GoalPlanEditor({
   ownerLabel,
 }: {
   goal: Goal;
+  item: GoalPlanItem;
   items: GoalPlanItem[];
   edges: GoalPlanEdge[];
   linkedIssues?: Issue[];
   issueHref?: (issue: Issue) => string;
-  taskFocus?: PlanTaskFocusRequest;
   disabled?: boolean;
   onChange: (next: PlanContent) => void;
   onItemEdited: (itemId: string) => void;
@@ -111,9 +100,6 @@ export function GoalPlanEditor({
   const issuesById = new Map(linkedIssues.map((issue) => [issue.id, issue]));
   const [pickingFor, setPickingFor] = useState<string | null>(null);
   const [issueLabels, setIssueLabels] = useState<Record<string, string>>({});
-  const focusRequestedTask = useCallback((title: HTMLInputElement | null) => {
-    if (taskFocus) focusPlanTask(title);
-  }, [taskFocus]);
 
   // A binding type this client does not know must never read as "new task":
   // its value stays intact in the draft, and the user only changes it by
@@ -127,10 +113,6 @@ export function GoalPlanEditor({
   const updateItem = (id: string, patch: ItemPatch) => {
     onChange({ items: items.map((item) => (item.id === id ? { ...item, ...patch } : item)), edges });
     onItemEdited(id);
-  };
-
-  const addItem = () => {
-    onChange({ items: [...items, emptyItem()], edges });
   };
 
   const removeItem = (id: string) => {
@@ -177,291 +159,223 @@ export function GoalPlanEditor({
     return issue ? `${issue.identifier} · ${title}` : title;
   };
 
+  const issue = item.binding.issue_id ? issuesById.get(item.binding.issue_id) : undefined;
+  const boundLabel = item.binding.issue_id
+    ? (issue?.identifier || issueLabels[item.binding.issue_id] || `#${item.binding.issue_id.slice(0, 8)}`)
+    : null;
+  const bindingKnown = item.binding.type === "new" || item.binding.type === "existing";
+
   return (
-    <div className="space-y-3" data-testid="goal-plan-editor">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h3 className="flex items-center gap-2 text-title-sm font-semibold">
-          {t(($) => $.tab.tasks)}
-          <span className="text-label font-normal tabular-nums text-muted-foreground">
-            {items.length}
-          </span>
-        </h3>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {items.length > 1 ? (
-            <select
-              aria-label={t(($) => $.plan.jump_task)}
-              defaultValue=""
+    <div className="space-y-4" data-testid={`plan-item-${item.id}`}>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor={`plan-title-${item.id}`}>{t(($) => $.plan.task_title)}</Label>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label={t(($) => $.plan.remove_task, { title: item.title || t(($) => $.plan.untitled_item) })}
+            className="text-muted-foreground"
+            onClick={() => removeItem(item.id)}
+            disabled={disabled}
+          >
+            <Trash2 />
+          </Button>
+        </div>
+        <Input
+          id={`plan-title-${item.id}`}
+          value={item.title}
+          disabled={disabled}
+          onChange={(event) => updateItem(item.id, { title: event.target.value })}
+        />
+      </div>
+
+      <div className={item.delivery ? "space-y-1" : "grid gap-3 @4xl:grid-cols-2"}>
+        <div className="space-y-1">
+          <Label htmlFor={`plan-outcome-${item.id}`}>{t(($) => $.plan.outcome)}</Label>
+          <Textarea
+            id={`plan-outcome-${item.id}`}
+            value={item.outcome}
+            disabled={disabled}
+            className="min-h-20 max-h-56 overflow-y-auto"
+            onChange={(event) => updateItem(item.id, { outcome: event.target.value })}
+          />
+        </div>
+        {!item.delivery && <div className="space-y-1">
+          <Label htmlFor={`plan-acceptance-${item.id}`}>
+            {t(($) => $.plan.acceptance_criteria)}
+          </Label>
+          <Textarea
+            id={`plan-acceptance-${item.id}`}
+            value={item.acceptance_criteria}
+            disabled={disabled}
+            className="min-h-20 max-h-56 overflow-y-auto"
+            onChange={(event) =>
+              updateItem(item.id, { acceptance_criteria: event.target.value })
+            }
+          />
+        </div>}
+      </div>
+
+      <PlanMethodStatus
+        wsId={wsId}
+        issue={issue}
+        planned={methods.find(({ id }) => id === item.delivery?.method_id)}
+      />
+      <PlanDeliveryEditor
+        delivery={item.delivery}
+        methods={methods}
+        disabled={disabled}
+        onChange={(delivery) => updateItem(item.id, { delivery })}
+      />
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1">
+          <Label>{t(($) => $.plan.stage)}</Label>
+          <Input
+            type="number"
+            min={0}
+            aria-label={t(($) => $.plan.stage)}
+            className="w-24"
+            value={item.stage ?? ""}
+            disabled={disabled}
+            onChange={(event) => {
+              const raw = event.target.value.trim();
+              const parsed = raw === "" ? null : Number.parseInt(raw, 10);
+              updateItem(item.id, {
+                stage: parsed === null || Number.isNaN(parsed) ? null : Math.max(0, parsed),
+              });
+            }}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>{t(($) => $.plan.binding)}</Label>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Select
+              items={[
+                { value: "new", label: t(($) => $.plan.binding_new) },
+                { value: "existing", label: t(($) => $.plan.binding_existing) },
+                ...(bindingKnown
+                  ? []
+                  : [{ value: "unknown", label: bindingLabel(item.binding) }]),
+              ]}
+              value={bindingKnown ? item.binding.type : "unknown"}
               disabled={disabled}
-              className="h-7 max-w-36 rounded-md border bg-background px-2 text-label focus-visible:ring-2 focus-visible:ring-ring/50"
-              onChange={(event) => {
-                const title = document.getElementById(`plan-title-${event.currentTarget.value}`);
-                event.currentTarget.value = "";
-                focusPlanTask(title);
+              onValueChange={(next) => {
+                if (next === "existing") {
+                  if (!item.binding.issue_id) setPickingFor(item.id);
+                } else if (next === "new") {
+                  updateItem(item.id, { binding: { type: "new", issue_id: null } });
+                }
               }}
             >
-              <option value="" disabled>{t(($) => $.plan.jump_task)}</option>
-              {items.map(({ id }) => <option key={id} value={id}>{itemTitle(id)}</option>)}
-            </select>
-          ) : null}
-          <Button type="button" size="sm" variant="outline" onClick={addItem} disabled={disabled}>
-            <Plus className="size-3.5" />
-            {t(($) => $.plan.add_task)}
-          </Button>
+              <SelectTrigger size="sm" className="w-40">
+                <SelectValue>{bindingLabel(item.binding)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectItem value="new">{t(($) => $.plan.binding_new)}</SelectItem>
+                <SelectItem value="existing">
+                  {t(($) => $.plan.binding_existing)}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            {boundLabel ? (
+              <span className="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
+                <Link2 className="size-3 shrink-0" />
+                {issue && issueHref
+                  ? <AppLink href={issueHref(issue)}>{boundLabel}</AppLink>
+                  : <span className="truncate">{boundLabel}</span>}
+              </span>
+            ) : null}
+            {item.binding.type === "existing" ? (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setPickingFor(item.id)}
+                  disabled={disabled}
+                >
+                  {t(($) => $.plan.binding_choose)}
+                </Button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={t(($) => $.plan.binding_clear)}
+                  onClick={() =>
+                    updateItem(item.id, { binding: { type: "new", issue_id: null } })
+                  }
+                  disabled={disabled}
+                >
+                  <X />
+                </Button>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
 
-      {items.length === 0 ? (
-        <div className="rounded-md border border-dashed px-3 py-6 text-center">
-          <ListChecks className="mx-auto mb-2 size-5 text-muted-foreground" />
-          <p className="text-caption text-muted-foreground">{t(($) => $.plan.empty)}</p>
+      {ownerLabel(item) ? (
+        <p className="text-caption text-muted-foreground">
+          {t(($) => $.plan.proposed_owner)}: {ownerLabel(item)}
+        </p>
+      ) : null}
+
+      {item.evidence_refs.length > 0 ? (
+        <details className="rounded-md border bg-surface/60 px-3 py-2">
+          <summary className="cursor-pointer text-label font-medium">
+            {t(($) => $.plan.evidence)}
+            <span className="ms-2 font-normal tabular-nums text-muted-foreground">{item.evidence_refs.length}</span>
+          </summary>
+          <ul className="mt-2 space-y-2 text-label text-muted-foreground">
+            {item.evidence_refs.map((ref, refIndex) => (
+              <li key={`${ref.kind}-${ref.ref}-${refIndex}`} className="break-all">
+                <span className="font-medium">{ref.kind}</span> {ref.ref}
+                {ref.version ? ` @ ${ref.version}` : ""}
+                {ref.note ? ` — ${ref.note}` : ""}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      {item.coordination ? (
+        <div className="space-y-0.5 text-caption text-muted-foreground">
+          {item.coordination.parallel_reason ? (
+            <p>
+              {t(($) => $.plan.parallel_reason)}: {item.coordination.parallel_reason}
+            </p>
+          ) : null}
+          {item.coordination.integration_owner ? (
+            <p>
+              {t(($) => $.plan.integration_owner)}: {item.coordination.integration_owner}
+            </p>
+          ) : null}
+          {item.coordination.write_scope.length > 0 ? (
+            <p>
+              {t(($) => $.plan.write_scope)}:{" "}
+              {item.coordination.write_scope.join(", ")}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
-      <ol className="space-y-3">
-        {items.map((item, index) => {
-          const incoming = prerequisitesOf(item.id, edges);
-          const issue = item.binding.issue_id ? issuesById.get(item.binding.issue_id) : undefined;
-          const boundLabel = item.binding.issue_id
-            ? (issue?.identifier || issueLabels[item.binding.issue_id] || `#${item.binding.issue_id.slice(0, 8)}`)
-            : null;
-          const bindingKnown =
-            item.binding.type === "new" || item.binding.type === "existing";
-          return (
-            <li
-              key={item.id}
-              className="scroll-mt-20 space-y-4 rounded-lg border px-4 py-3 focus-within:border-ring"
-              data-testid={`plan-item-${item.id}`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-body font-semibold">
-                  {t(($) => $.plan.task_index, { index: index + 1 })}
-                </span>
-                <div className="flex items-center gap-1">
-                  {incoming.length === 0 ? (
-                    <Badge variant="outline" className="gap-1">
-                      <Workflow className="size-3" />
-                      {t(($) => $.plan.dependency_unrecorded)}
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="gap-1">
-                      <GitBranch className="size-3" />
-                      {t(($) => $.plan.dependencies_count, { value: incoming.length })}
-                    </Badge>
-                  )}
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={t(($) => $.plan.remove_task, { title: item.title || t(($) => $.plan.untitled_item) })}
-                    className="text-muted-foreground"
-                    onClick={() => removeItem(item.id)}
-                    disabled={disabled}
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-              </div>
+      <DependencyEditor
+        key={`${item.id}-deps`}
+        itemId={item.id}
+        items={items}
+        edges={edges}
+        disabled={disabled}
+        itemTitle={itemTitle}
+        isSatisfied={(id) => {
+          const prerequisite = prerequisiteIssue(id);
+          return prerequisite?.status_category === "done" || prerequisite?.status === "done";
+        }}
+        onAdd={addEdge}
+        onRemove={removeEdge}
+      />
 
-              <div className="space-y-1">
-                <Label htmlFor={`plan-title-${item.id}`}>{t(($) => $.plan.task_title)}</Label>
-                <Input
-                  ref={taskFocus?.itemId === item.id ? focusRequestedTask : undefined}
-                  id={`plan-title-${item.id}`}
-                  value={item.title}
-                  disabled={disabled}
-                  onChange={(event) => updateItem(item.id, { title: event.target.value })}
-                />
-              </div>
-
-              <div className={item.delivery ? "space-y-1" : "grid gap-3 @2xl:grid-cols-2"}>
-                <div className="space-y-1">
-                  <Label htmlFor={`plan-outcome-${item.id}`}>{t(($) => $.plan.outcome)}</Label>
-                  <Textarea
-                    id={`plan-outcome-${item.id}`}
-                    value={item.outcome}
-                    disabled={disabled}
-                    className="min-h-20"
-                    onChange={(event) => updateItem(item.id, { outcome: event.target.value })}
-                  />
-                </div>
-                {!item.delivery && <div className="space-y-1">
-                  <Label htmlFor={`plan-acceptance-${item.id}`}>
-                    {t(($) => $.plan.acceptance_criteria)}
-                  </Label>
-                  <Textarea
-                    id={`plan-acceptance-${item.id}`}
-                    value={item.acceptance_criteria}
-                    disabled={disabled}
-                    className="min-h-20"
-                    onChange={(event) =>
-                      updateItem(item.id, { acceptance_criteria: event.target.value })
-                    }
-                  />
-                </div>}
-              </div>
-
-              <PlanMethodStatus
-                wsId={wsId}
-                issue={issue}
-                planned={methods.find(({ id }) => id === item.delivery?.method_id)}
-              />
-              <PlanDeliveryEditor
-                delivery={item.delivery}
-                methods={methods}
-                disabled={disabled}
-                onChange={(delivery) => updateItem(item.id, { delivery })}
-              />
-
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="space-y-1">
-                  <Label>{t(($) => $.plan.stage)}</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    aria-label={t(($) => $.plan.stage)}
-                    className="w-24"
-                    value={item.stage ?? ""}
-                    disabled={disabled}
-                    onChange={(event) => {
-                      const raw = event.target.value.trim();
-                      const parsed = raw === "" ? null : Number.parseInt(raw, 10);
-                      updateItem(item.id, {
-                        stage: parsed === null || Number.isNaN(parsed) ? null : Math.max(0, parsed),
-                      });
-                    }}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>{t(($) => $.plan.binding)}</Label>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Select
-                      items={[
-                        { value: "new", label: t(($) => $.plan.binding_new) },
-                        { value: "existing", label: t(($) => $.plan.binding_existing) },
-                        ...(bindingKnown
-                          ? []
-                          : [{ value: "unknown", label: bindingLabel(item.binding) }]),
-                      ]}
-                      value={bindingKnown ? item.binding.type : "unknown"}
-                      disabled={disabled}
-                      onValueChange={(next) => {
-                        if (next === "existing") {
-                          if (!item.binding.issue_id) setPickingFor(item.id);
-                        } else if (next === "new") {
-                          updateItem(item.id, { binding: { type: "new", issue_id: null } });
-                        }
-                      }}
-                    >
-                      <SelectTrigger size="sm" className="w-40">
-                        <SelectValue>{bindingLabel(item.binding)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent align="start">
-                        <SelectItem value="new">{t(($) => $.plan.binding_new)}</SelectItem>
-                        <SelectItem value="existing">
-                          {t(($) => $.plan.binding_existing)}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {boundLabel ? (
-                      <span className="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
-                        <Link2 className="size-3 shrink-0" />
-                        {issue && issueHref
-                          ? <AppLink href={issueHref(issue)}>{boundLabel}</AppLink>
-                          : <span className="truncate">{boundLabel}</span>}
-                      </span>
-                    ) : null}
-                    {item.binding.type === "existing" ? (
-                      <>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setPickingFor(item.id)}
-                          disabled={disabled}
-                        >
-                          {t(($) => $.plan.binding_choose)}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          aria-label={t(($) => $.plan.binding_clear)}
-                          onClick={() =>
-                            updateItem(item.id, { binding: { type: "new", issue_id: null } })
-                          }
-                          disabled={disabled}
-                        >
-                          <X />
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-
-              {ownerLabel(item) ? (
-                <p className="text-caption text-muted-foreground">
-                  {t(($) => $.plan.proposed_owner)}: {ownerLabel(item)}
-                </p>
-              ) : null}
-
-              {item.evidence_refs.length > 0 ? (
-                <details className="rounded-md border bg-surface/60 px-3 py-2">
-                  <summary className="cursor-pointer text-label font-medium">
-                    {t(($) => $.plan.evidence)}
-                    <span className="ms-2 font-normal tabular-nums text-muted-foreground">{item.evidence_refs.length}</span>
-                  </summary>
-                  <ul className="mt-2 space-y-2 text-label text-muted-foreground">
-                    {item.evidence_refs.map((ref, refIndex) => (
-                      <li key={`${ref.kind}-${ref.ref}-${refIndex}`} className="break-all">
-                        <span className="font-medium">{ref.kind}</span> {ref.ref}
-                        {ref.version ? ` @ ${ref.version}` : ""}
-                        {ref.note ? ` — ${ref.note}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
-
-              {item.coordination ? (
-                <div className="space-y-0.5 text-caption text-muted-foreground">
-                  {item.coordination.parallel_reason ? (
-                    <p>
-                      {t(($) => $.plan.parallel_reason)}: {item.coordination.parallel_reason}
-                    </p>
-                  ) : null}
-                  {item.coordination.integration_owner ? (
-                    <p>
-                      {t(($) => $.plan.integration_owner)}: {item.coordination.integration_owner}
-                    </p>
-                  ) : null}
-                  {item.coordination.write_scope.length > 0 ? (
-                    <p>
-                      {t(($) => $.plan.write_scope)}:{" "}
-                      {item.coordination.write_scope.join(", ")}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <DependencyEditor
-                key={`${item.id}-deps`}
-                itemId={item.id}
-                items={items}
-                edges={edges}
-                disabled={disabled}
-                itemTitle={itemTitle}
-                isSatisfied={(id) => {
-                  const prerequisite = prerequisiteIssue(id);
-                  return prerequisite?.status_category === "done" || prerequisite?.status === "done";
-                }}
-                onAdd={addEdge}
-                onRemove={removeEdge}
-              />
-            </li>
-          );
-        })}
-      </ol>
 
       <IssuePickerModal
         open={pickingFor !== null}

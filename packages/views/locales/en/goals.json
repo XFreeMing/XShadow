@@ -135,7 +135,6 @@
   },
   "plan": {
     "generation_title": "AI planning",
-    "jump_task": "Jump to task",
     "dependency_kind": "Dependency type",
     "dependency_hard": "Required",
     "dependency_conditional": "Conditional",
@@ -233,10 +232,8 @@
     "basis_actual": "What the run read",
     "basis_actual_empty": "No basis was recorded.",
     "basis_read_at": "Read at {{time}}",
-    "task_count": "Tasks: {{value}}",
     "add_task": "Add task",
     "empty": "No tasks yet. Add one, or generate a plan.",
-    "task_index": "Task {{index}}",
     "untitled_item": "Untitled task",
     "parallel": "Can run in parallel",
     "waits_for": "Waits for: {{value}}",
@@ -280,7 +277,6 @@
     "view_switch": "Switch task map layout",
     "mindmap_view": "Mind map",
     "tree_view": "Tree",
-    "edit_plan": "Edit plan",
     "goal_root": "Goal",
     "node_progress": "{{completed}}/{{total}} done",
     "stage_short": "Stage {{stage}}",
@@ -294,11 +290,7 @@
     "collapse_branch": "Collapse branch",
     "upstream": "Depends on:",
     "downstream": "Unlocks:",
-    "edit_in_plan": "Edit in plan",
     "close_inspector": "Close details",
-    "click_hint": "Click a task to inspect details and highlight its dependency path.",
-    "plan_editor_title": "Plan editor & AI generation",
-    "expand_editor": "Expand",
-    "collapse_editor": "Collapse"
+    "click_hint": "Click a task to inspect details and highlight its dependency path."
   }
 }

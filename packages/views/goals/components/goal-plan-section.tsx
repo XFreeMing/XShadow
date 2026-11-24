@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FocusEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Goal, GoalPlanEdge, GoalPlanGeneration, Issue } from "@multica/core/types";
+import type { Goal, GoalPlanEdge, GoalPlanGeneration } from "@multica/core/types";
 import { goalKeys, goalPlanOptions, useSaveGoalPlan, useSetGoalExecution } from "@multica/core/goals";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -12,7 +12,7 @@ import {
   squadListOptions,
 } from "@multica/core/workspace/queries";
 import { ApiError, errorCode } from "@multica/core/api";
-import { CircleAlert, Sparkles } from "@multica/ui/icons";
+import { CircleAlert, Plus, Sparkles } from "@multica/ui/icons";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -31,7 +31,8 @@ import {
   type PlanDraftContent,
   type PlanValidationIssue,
 } from "../plan";
-import { GoalPlanEditor, type PlanContent, type PlanTaskFocusRequest } from "./goal-plan-editor";
+import { GoalPlanEditor, newPlanItem, type PlanContent } from "./goal-plan-editor";
+import { GoalTaskMap, type GoalTaskMapIssues } from "./goal-task-map";
 import {
   GoalPlanGenerationPanel,
   type ApplyCandidateOutcome,
@@ -69,30 +70,18 @@ function saveFailureMessage(error: unknown, fallback: string): string {
  * workspace data, so this section is only rendered for a goal the viewer can
  * still see; losing that access hides the whole area, including cached content.
  */
-export function GoalPlanSection({
-  goal,
-  linkedIssues,
-  issueHref,
-  taskFocus,
-  onExecutionBlockedChange,
-}: {
-  goal: Goal;
-  linkedIssues?: Issue[];
-  issueHref?: (issue: Issue) => string;
-  taskFocus?: PlanTaskFocusRequest;
-  onExecutionBlockedChange?: (blocked: boolean) => void;
-}) {
+export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTaskMapIssues }) {
   const { t } = useT("goals");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
 
-  const planQuery = useQuery(goalPlanOptions(wsId, goal.id));
+  const planQuery = useQuery({
+    ...goalPlanOptions(wsId, goal.id),
+    enabled: !!wsId && !!goal.id && !!goal.project_id,
+  });
   const plan = planQuery.data && planQuery.data.goal_id === goal.id ? planQuery.data : null;
   const savePlan = useSaveGoalPlan();
   const setExecution = useSetGoalExecution();
-  const progress = plan?.progress;
-  const executionState = plan?.execution_state;
-  const executionAvailable = goal.status === "in_progress" && !!progress && progress.completed < progress.total;
   async function changeExecution(enabled: boolean) {
     if (!plan) return;
     try {
@@ -101,14 +90,11 @@ export function GoalPlanSection({
       toast.error(t(($) => $.plan_execution.failed));
     }
   }
-  const current = plan?.items.find((item) => item.id === progress?.item_id);
-  const blockers = plan?.items.filter((item) => progress?.waiting_for?.includes(item.id)) ?? [];
-
-
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
+  const [selectedId, setSelectedId] = useState<string | null>();
   const [draft, setDraft] = useState<PlanDraft | null>(null);
   // Which project the local draft was read from and edited against. A goal can
   // move projects; its old draft must never be submitted as the new project's
@@ -131,16 +117,12 @@ export function GoalPlanSection({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [validationIssue, setValidationIssue] = useState<PlanValidationIssue | null>(null);
   const [generationNonce, setGenerationNonce] = useState(0);
-  const sectionRef = useRef<HTMLElement | null>(null);
+  const sectionRef = useRef<HTMLDivElement | null>(null);
   const focusedInsideRef = useRef<HTMLElement | null>(null);
   const conflictReloadRef = useRef<HTMLButtonElement | null>(null);
   const planRetryRef = useRef<HTMLButtonElement | null>(null);
-  const generationHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const executionBlocked = dirty || setExecution.isPending || savePlan.isPending;
-  useEffect(() => {
-    onExecutionBlockedChange?.(executionBlocked);
-  }, [executionBlocked, onExecutionBlockedChange]);
 
   // Remember where focus is inside the plan area, but forget it as soon as the
   // reader moves focus to a control outside. The memory must describe the
@@ -473,309 +455,216 @@ export function GoalPlanSection({
         : null;
     if (!target) return;
     focusedInsideRef.current = null;
-    target.focus();
+    target.focus({ preventScroll: true });
   }, [projectConflictNotice, planUnavailable]);
 
-  if (planUnavailable) {
-    return (
-      <section
-        ref={sectionRef}
-        onFocusCapture={handleFocusIn}
-        onBlurCapture={handleFocusOut}
-        className="space-y-2"
-        data-testid="goal-plan-section"
-      >
-        <h2 className="text-title-sm font-semibold">{t(($) => $.plan.title)}</h2>
-        <div
-          className="flex items-center gap-2 text-caption text-destructive"
-          role="alert"
-          data-testid="plan-section-unavailable"
-        >
-          <span>{t(($) => $.plan.plan_unavailable)}</span>
-          <Button
-            ref={planRetryRef}
-            size="sm"
-            variant="outline"
-            onClick={() => void planQuery.refetch()}
-          >
-            {t(($) => $.plan.retry)}
-          </Button>
-        </div>
-      </section>
-    );
-  }
+  const visiblePlan = !planUnavailable && !projectConflictNotice && goal.project_id &&
+    plan?.project_id === goal.project_id ? plan : null;
+  const canEditDraft = !planUnavailable && !projectConflictNotice && draftIsCurrentProject;
+  const visibleDraft = canEditDraft ? draft : null;
+  const mapPlan = visiblePlan && visibleDraft
+    ? { ...visiblePlan, items: visibleDraft.items, edges: visibleDraft.edges }
+    : visiblePlan;
+  const mapItems = mapPlan?.items ?? [];
+  const activeId = selectedId === null
+    ? null
+    : selectedId && (
+        mapItems.some((item) => item.id === selectedId) ||
+        issues.linkedIssues.some((issue) => `issue:${issue.id}` === selectedId)
+      )
+      ? selectedId
+      : mapItems[0]?.id ?? null;
+  const selectedItem = visibleDraft?.items.find((item) => item.id === activeId);
+  const canShowGeneration = !!goal.project_id && !planUnavailable && (!!plan || !!draft);
 
-  const header = (
-    <div className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-card px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-        <h2 className="text-title-sm font-semibold">{t(($) => $.plan.title)}</h2>
-        {plan ? (
-          <span className="text-caption text-muted-foreground">
-            {t(($) => $.plan.revision, { revision: plan.revision })}
-          </span>
-        ) : null}
-        {dirty ? <Badge variant="outline">{t(($) => $.plan.unsaved)}</Badge> : null}
-      </div>
-      <div className="flex items-center gap-2">
-        {draft ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="@4xl:hidden"
-            onClick={() => {
-              generationHeadingRef.current?.focus({ preventScroll: true });
-              generationHeadingRef.current?.scrollIntoView({ block: "start" });
-            }}
-          >
-            <Sparkles className="size-3.5" />
-            {t(($) => $.plan.generation_title)}
-          </Button>
-        ) : null}
+  const toolbar = canShowGeneration ? (
+    <>
+      {visiblePlan ? (
+        <span className="text-caption text-muted-foreground">
+          {t(($) => $.plan.revision, { revision: visiblePlan.revision })}
+        </span>
+      ) : null}
+      {dirty ? <Badge variant="outline">{t(($) => $.plan.unsaved)}</Badge> : null}
+      {visibleDraft ? (
         <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={
-            !draft ||
-            !draftIsCurrentProject ||
-            savePlan.isPending ||
-            conflictRevision !== null ||
-            projectConflictNotice
-          }
+          type="button"
+          size="xs"
+          variant="outline"
+          onClick={() => {
+            const item = newPlanItem();
+            handleContentChange({ items: [...visibleDraft.items, item], edges: visibleDraft.edges });
+            setSelectedId(item.id);
+          }}
         >
-          {savePlan.isPending ? <Spinner className="size-3.5" /> : null}
-          {savePlan.isPending ? t(($) => $.plan.saving) : t(($) => $.plan.save)}
+          <Plus className="size-3.5" />
+          {t(($) => $.plan.add_task)}
         </Button>
-      </div>
-    </div>
-  );
-
-  if (!goal.project_id) {
-    return (
-      <section className="space-y-2">
-        <h2 className="text-title-sm font-semibold">{t(($) => $.plan.title)}</h2>
-        <p className="rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">
-          {t(($) => $.plan.project_required)}
-        </p>
-      </section>
-    );
-  }
-
-  if (planQuery.isLoading && !draft) {
-    return (
-      <section className="space-y-2">
-        {header}
-        <Skeleton className="h-24 w-full" />
-      </section>
-    );
-  }
-
-  if (planQuery.isError && !plan && !draft) {
-    return (
-      <section className="space-y-2">
-        <h2 className="text-title-sm font-semibold">{t(($) => $.plan.title)}</h2>
-        <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
-          <span>{t(($) => $.plan.load_failed)}</span>
-          <Button size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
-            {t(($) => $.plan.retry)}
-          </Button>
-        </div>
-      </section>
-    );
-  }
-
-  const showProgress = !!progress && progress.total > 0;
-  const showExecution = plan && (executionState || (plan.can_manage_execution && executionAvailable));
-  const showEditor = draft && draftIsCurrentProject && !projectConflictNotice;
+      ) : null}
+      <Button
+        type="button"
+        size="xs"
+        onClick={handleSave}
+        disabled={!visibleDraft || savePlan.isPending || conflictRevision !== null}
+      >
+        {savePlan.isPending ? <Spinner className="size-3.5" /> : null}
+        {savePlan.isPending ? t(($) => $.plan.saving) : t(($) => $.plan.save)}
+      </Button>
+    </>
+  ) : null;
 
   return (
-    <section
+    <div
       ref={sectionRef}
       onFocusCapture={handleFocusIn}
       onBlurCapture={handleFocusOut}
-      className="@container min-w-0 space-y-5"
       data-testid="goal-plan-section"
     >
-      {header}
+      <GoalTaskMap
+        {...issues}
+        goal={goal}
+        plan={mapPlan}
+        selectedId={activeId}
+        onSelectTask={setSelectedId}
+        toolbar={toolbar}
+        onToggleExecution={visiblePlan ? (enabled) => void changeExecution(enabled) : undefined}
+        executionPending={setExecution.isPending || savePlan.isPending}
+        executionEnableBlocked={executionBlocked}
+      >
+        {goal.project_id ? (
+          <div className="space-y-3 px-4 pb-4">
+            {planUnavailable ? (
+              <div className="flex items-center gap-2 text-label text-destructive" role="alert" data-testid="plan-section-unavailable">
+                <span>{t(($) => $.plan.plan_unavailable)}</span>
+                <Button ref={planRetryRef} size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
+                  {t(($) => $.plan.retry)}
+                </Button>
+              </div>
+            ) : planQuery.isLoading && !draft ? (
+              <Skeleton className="h-24 w-full" />
+            ) : planQuery.isError && !plan && !draft ? (
+              <div className="flex items-center gap-2 text-label text-destructive" role="alert">
+                <span>{t(($) => $.plan.load_failed)}</span>
+                <Button size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
+                  {t(($) => $.plan.retry)}
+                </Button>
+              </div>
+            ) : null}
+            {canShowGeneration && planQuery.isError && plan ? (
+              <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
+                <span>{t(($) => $.plan.refresh_failed)}</span>
+                <Button size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
+                  {t(($) => $.plan.retry)}
+                </Button>
+              </div>
+            ) : null}
 
-      {showProgress || showExecution ? (
-        <div className="rounded-lg border bg-surface/60 px-4 py-3">
-          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-            {showProgress ? (
-              <div role="status" className="min-w-0 flex-1 basis-72 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <span className="text-body font-semibold tabular-nums">
-                    {t(($) => $.plan_progress.count, { completed: progress.completed, total: progress.total })}
-                  </span>
-                  <div aria-hidden="true" className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full bg-brand" style={{ width: `${(progress.completed / progress.total) * 100}%` }} />
+            {canShowGeneration && projectConflictNotice ? (
+              <div
+                className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-3"
+                role="alert"
+                data-testid="plan-section-project-conflict"
+              >
+                <p className="flex items-center gap-1.5 text-body font-medium">
+                  <CircleAlert className="size-4 text-destructive" />
+                  {t(($) => $.plan.project_conflict_title)}
+                </p>
+                <p className="text-caption text-muted-foreground">
+                  {t(($) => $.plan.section_project_conflict)}
+                </p>
+                <Button
+                  ref={conflictReloadRef}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleLoadLatest()}
+                >
+                  {t(($) => $.plan.project_conflict_reload)}
+                </Button>
+              </div>
+            ) : null}
+
+            {canShowGeneration && conflictRevision !== null ? (
+              <div
+                className="space-y-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-3"
+                role="alert"
+                data-testid="plan-revision-conflict"
+              >
+                <p className="text-body font-medium">{t(($) => $.plan.conflict_title)}</p>
+                <p className="text-caption text-muted-foreground">
+                  {t(($) => $.plan.conflict_description, { revision: conflictRevision })}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => void handleLoadLatest()}>
+                    {t(($) => $.plan.conflict_reload)}
+                  </Button>
+                  <Button size="sm" onClick={handleSaveMine} disabled={savePlan.isPending}>
+                    {t(($) => $.plan.conflict_save_mine)}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {canShowGeneration && validationIssue ? (
+              <p className="text-caption text-destructive" role="alert">
+                {validationMessage(validationIssue)}
+              </p>
+            ) : null}
+
+            {canShowGeneration && saveError ? (
+              <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
+                <span>{saveError}</span>
+                <Button size="sm" variant="outline" onClick={handleSave} disabled={savePlan.isPending}>
+                  {t(($) => $.plan.retry)}
+                </Button>
+              </div>
+            ) : null}
+
+            {canShowGeneration ? (
+              <div className={cn("grid min-w-0 items-start gap-5", selectedItem && "@4xl:grid-cols-[minmax(0,1fr)_minmax(17rem,30%)]")}>
+                {visibleDraft && selectedItem ? (
+                  <div className="min-w-0 space-y-4">
+                    <GoalPlanEditor
+                      goal={goal}
+                      item={selectedItem}
+                      items={visibleDraft.items}
+                      linkedIssues={issues.linkedIssues}
+                      issueHref={issues.issueHref}
+                      edges={visibleDraft.edges}
+                      onChange={handleContentChange}
+                      onItemEdited={handleItemEdited}
+                      onItemRemoved={handleItemRemoved}
+                      onEdgeRemoved={handleEdgeRemoved}
+                      ownerLabel={ownerLabel}
+                    />
+                    {Object.keys(visibleDraft.context_snapshot).length > 0 ? (
+                      <PlanActualBasis snapshot={visibleDraft.context_snapshot} />
+                    ) : null}
                   </div>
-                  <Badge variant="outline">{t(($) => $.plan_progress.phase[progress.phase])}</Badge>
-                </div>
-                {current ? (
-                  <p className="break-words text-body">
-                    {current.title}
-                    {progress.method_step ? <span className="text-muted-foreground"> · {progress.method_step}</span> : null}
-                  </p>
                 ) : null}
-                {blockers.length > 0 ? (
-                  <p className="break-words text-label text-muted-foreground">
-                    {t(($) => $.plan_progress.waiting_for, { tasks: blockers.map((item) => item.title).join(" · ") })}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-            {showExecution ? (
-              <div className="min-w-0 flex-1 basis-72 space-y-1.5">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1.5">
-                  <span className="text-body font-medium">
-                    {executionState === "active"
-                      ? t(($) => $.plan_execution.active, { revision: plan.execution_revision })
-                      : executionState === "stale"
-                        ? t(($) => $.plan_execution.stale)
-                        : t(($) => $.plan_execution.off)}
-                  </span>
-                  {plan.can_manage_execution ? (
-                    <div className="flex flex-wrap gap-2">
-                      {executionAvailable && executionState !== "active" ? (
-                        <Button type="button" size="sm" variant="outline"
-                          disabled={executionBlocked}
-                          onClick={() => void changeExecution(true)}>
-                          {t(($) => $.plan_execution.enable, { revision: plan.revision })}
-                        </Button>
-                      ) : null}
-                      {executionState ? (
-                        <Button type="button" size="sm" variant="outline"
-                          disabled={setExecution.isPending || savePlan.isPending}
-                          onClick={() => void changeExecution(false)}>
-                          {t(($) => $.plan_execution.revoke)}
-                        </Button>
-                      ) : null}
-                    </div>
-                  ) : null}
+                <div className={cn("min-w-0 space-y-3", selectedItem ? "border-t pt-4 @4xl:border-s @4xl:border-t-0 @4xl:ps-5 @4xl:pt-0" : "max-w-[38rem]")}>
+                  <h3 className="flex items-center gap-2 text-body font-semibold">
+                    <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+                    {t(($) => $.plan.generation_title)}
+                  </h3>
+                  <GoalPlanGenerationPanel
+                    key={goal.id}
+                    goal={goal}
+                    planRevision={planRevision}
+                    dirty={dirty}
+                    generationNonce={generationNonce}
+                    applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
+                    onApplyCandidate={handleApplyCandidate}
+                    onProjectConflict={handleProjectConflict}
+                    onRevisionConflict={handleStartRevisionConflict}
+                    onUnavailable={handleRunUnavailable}
+                    onReloadPlan={handleLoadLatest}
+                    onStartNewGeneration={handleStartNewGeneration}
+                  />
                 </div>
-                <p className="text-label text-muted-foreground">{t(($) => $.plan_execution.scope)}</p>
               </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {planQuery.isError && plan ? (
-        <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
-          <span>{t(($) => $.plan.refresh_failed)}</span>
-          <Button size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
-            {t(($) => $.plan.retry)}
-          </Button>
-        </div>
-      ) : null}
-
-      {projectConflictNotice ? (
-        <div
-          className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-3"
-          role="alert"
-          data-testid="plan-section-project-conflict"
-        >
-          <p className="flex items-center gap-1.5 text-body font-medium">
-            <CircleAlert className="size-4 text-destructive" />
-            {t(($) => $.plan.project_conflict_title)}
-          </p>
-          <p className="text-caption text-muted-foreground">
-            {t(($) => $.plan.section_project_conflict)}
-          </p>
-          <Button
-            ref={conflictReloadRef}
-            size="sm"
-            variant="outline"
-            onClick={() => void handleLoadLatest()}
-          >
-            {t(($) => $.plan.project_conflict_reload)}
-          </Button>
-        </div>
-      ) : null}
-
-      {conflictRevision !== null ? (
-        <div
-          className="space-y-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-3"
-          role="alert"
-          data-testid="plan-revision-conflict"
-        >
-          <p className="text-body font-medium">{t(($) => $.plan.conflict_title)}</p>
-          <p className="text-caption text-muted-foreground">
-            {t(($) => $.plan.conflict_description, { revision: conflictRevision })}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => void handleLoadLatest()}>
-              {t(($) => $.plan.conflict_reload)}
-            </Button>
-            <Button size="sm" onClick={handleSaveMine} disabled={savePlan.isPending}>
-              {t(($) => $.plan.conflict_save_mine)}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {validationIssue ? (
-        <p className="text-caption text-destructive" role="alert">
-          {validationMessage(validationIssue)}
-        </p>
-      ) : null}
-
-      {saveError ? (
-        <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
-          <span>{saveError}</span>
-          <Button size="sm" variant="outline" onClick={handleSave} disabled={savePlan.isPending}>
-            {t(($) => $.plan.retry)}
-          </Button>
-        </div>
-      ) : null}
-
-      <div className={cn("grid items-start gap-6", showEditor && "@4xl:grid-cols-[minmax(0,1fr)_minmax(17rem,31%)]")}>
-        {showEditor ? (
-          <div className="min-w-0 space-y-4">
-            <GoalPlanEditor
-              goal={goal}
-              items={draft.items}
-              linkedIssues={linkedIssues}
-              issueHref={issueHref}
-              taskFocus={taskFocus}
-              edges={draft.edges}
-              onChange={handleContentChange}
-              onItemEdited={handleItemEdited}
-              onItemRemoved={handleItemRemoved}
-              onEdgeRemoved={handleEdgeRemoved}
-              ownerLabel={ownerLabel}
-            />
-            {Object.keys(draft.context_snapshot).length > 0 ? (
-              <PlanActualBasis snapshot={draft.context_snapshot} />
             ) : null}
           </div>
         ) : null}
-        <section className="min-w-0 space-y-4 rounded-lg border bg-surface/60 p-4">
-          <h3
-            ref={generationHeadingRef}
-            tabIndex={-1}
-            className="flex scroll-mt-20 items-center gap-2 text-title-sm font-semibold"
-          >
-            <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-            {t(($) => $.plan.generation_title)}
-          </h3>
-          <GoalPlanGenerationPanel
-            key={goal.id}
-            goal={goal}
-            planRevision={planRevision}
-            dirty={dirty}
-            generationNonce={generationNonce}
-            applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
-            onApplyCandidate={handleApplyCandidate}
-            onProjectConflict={handleProjectConflict}
-            onRevisionConflict={handleStartRevisionConflict}
-            onUnavailable={handleRunUnavailable}
-            onReloadPlan={handleLoadLatest}
-            onStartNewGeneration={handleStartNewGeneration}
-          />
-        </section>
-      </div>
-    </section>
+      </GoalTaskMap>
+    </div>
   );
 }

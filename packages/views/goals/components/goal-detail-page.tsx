@@ -1,11 +1,9 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Check,
-  ChevronDown,
-  ChevronRight,
   FileQuestion,
   Pencil,
   RotateCcw,
@@ -15,9 +13,7 @@ import { toast } from "sonner";
 import {
   goalDetailOptions,
   goalIssuesPagesOptions,
-  goalPlanOptions,
   useDeleteGoal,
-  useSetGoalExecution,
   useUnlinkGoalIssue,
   useUpdateGoal,
 } from "@multica/core/goals";
@@ -49,10 +45,8 @@ import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
-import type { PlanTaskFocusRequest } from "./goal-plan-editor";
 import { GoalOutcomeGallery } from "./goal-outcome-gallery";
 import { GoalTaskPrototypes } from "./goal-task-prototypes";
-import { GoalTaskMap } from "./goal-task-map";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
 const LAYOUT_ID = "multica_goal_detail_layout";
@@ -141,34 +135,13 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   const updateGoal = useUpdateGoal();
   const deleteGoal = useDeleteGoal();
   const unlinkIssue = useUnlinkGoalIssue();
-  const setExecution = useSetGoalExecution();
 
   const [editOpen, setEditOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [planEditor, setPlanEditor] = useState<{
-    goalId: string;
-    open: boolean;
-    taskFocus?: PlanTaskFocusRequest;
-  } | null>(null);
-  const [planExecutionBlocked, setPlanExecutionBlocked] = useState(false);
-  const planEditorVisited = planEditor?.goalId === goalId;
-  const planEditorOpen = planEditorVisited && planEditor.open;
-  const planEditorRef = useRef<HTMLDivElement | null>(null);
-
   const goal = goalQuery.data && goalQuery.data.id ? goalQuery.data : null;
-  const planQuery = useQuery({
-    ...goalPlanOptions(wsId, goalId),
-    enabled: !!wsId && !!goalId && !!goal?.project_id,
-  });
-  const planUnavailable = planQuery.isError && isGoalUnavailableError(planQuery.error);
-  const plan =
-    goal?.project_id && !planUnavailable && planQuery.data?.goal_id === goalId &&
-    planQuery.data.project_id === goal.project_id
-      ? planQuery.data
-      : null;
   // React Query keeps the last successful payload after a refetch fails. A
   // terminal 4xx means this viewer can no longer see the goal, so the cached
   // title must stop appearing in the breadcrumb; offline/5xx keep it.
@@ -280,24 +253,6 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
     );
   };
 
-  const handleToggleExecution = async (enabled: boolean) => {
-    if (!plan) return;
-    try {
-      await setExecution.mutateAsync({ goalId: goal.id, enabled, revision: plan.revision });
-    } catch {
-      toast.error(t(($) => $.plan_execution.failed));
-    }
-  };
-
-  const handleOpenPlanEditor = (itemId?: string) => {
-    setPlanEditor({ goalId, open: true, taskFocus: itemId ? { itemId } : undefined });
-    if (!itemId) {
-      window.requestAnimationFrame(() => {
-        planEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    }
-  };
-
   const actions = (
     <>
       <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
@@ -369,39 +324,24 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
         </BriefCard>
       </div>
 
-      {/* Hero Mind Map / Tree of Goal & Tasks */}
-      <GoalTaskMap
-        key={`task-map-${goal.id}`}
+      <GoalPlanSection
+        key={`goal-plan-${goal.id}`}
         goal={goal}
-        plan={plan}
-        linkedIssues={linkedIssues}
-        issuesLoading={issuesQuery.isLoading}
-        issuesError={issuesQuery.isError}
-        hasNextPage={!issuesUnavailable && Boolean(issuesQuery.hasNextPage)}
-        isFetchingNextPage={issuesQuery.isFetchingNextPage}
-        isFetchNextPageError={issuesQuery.isFetchNextPageError}
-        unlinkingIssueId={
-          unlinkIssue.isPending ? (unlinkIssue.variables?.issueId ?? null) : null
-        }
-        issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
-        onRetryIssues={() => void issuesQuery.refetch()}
-        onFetchNextPage={() => void issuesQuery.fetchNextPage()}
-        onOpenLinkDialog={() => setLinkOpen(true)}
-        onUnlinkIssue={handleUnlink}
-        onEditPlan={handleOpenPlanEditor}
-        onToggleExecution={plan ? (enabled) => void handleToggleExecution(enabled) : undefined}
-        executionPending={setExecution.isPending}
-        executionEnableBlocked={planEditorVisited && planExecutionBlocked}
+        issues={{
+          linkedIssues,
+          issuesLoading: issuesQuery.isLoading,
+          issuesError: issuesQuery.isError,
+          hasNextPage: !issuesUnavailable && Boolean(issuesQuery.hasNextPage),
+          isFetchingNextPage: issuesQuery.isFetchingNextPage,
+          isFetchNextPageError: issuesQuery.isFetchNextPageError,
+          unlinkingIssueId: unlinkIssue.isPending ? (unlinkIssue.variables?.issueId ?? null) : null,
+          issueHref: (issue) => wsPaths.issueDetail(issue.identifier || issue.id),
+          onRetryIssues: () => void issuesQuery.refetch(),
+          onFetchNextPage: () => void issuesQuery.fetchNextPage(),
+          onOpenLinkDialog: () => setLinkOpen(true),
+          onUnlinkIssue: handleUnlink,
+        }}
       />
-
-      {planQuery.isError && goal.project_id && !planEditorOpen ? (
-        <div role="alert" className="flex items-center gap-2 text-caption text-destructive">
-          <span>{planUnavailable ? t(($) => $.plan.plan_unavailable) : t(($) => $.plan.load_failed)}</span>
-          <Button size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
-            {t(($) => $.list.retry)}
-          </Button>
-        </div>
-      ) : null}
 
       <GoalMethodRecommendation wsId={wsId} goalId={goal.id} updatedAt={goal.updated_at} />
 
@@ -412,53 +352,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
         <p className="rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">
           {t(($) => $.detail.workspace_goal_visible)}
         </p>
-      ) : (
-        <div
-          ref={planEditorRef}
-          className="overflow-clip rounded-xl border bg-card"
-          data-testid="goal-plan-collapsible"
-        >
-          <button
-            type="button"
-            aria-expanded={planEditorOpen}
-            onClick={() => setPlanEditor({ goalId, open: !planEditorOpen })}
-            className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-accent/50"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              {planEditorOpen ? (
-                <ChevronDown className="size-4 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="size-4 text-muted-foreground" />
-              )}
-              <span className="text-body font-semibold text-foreground">
-                {t(($) => $.map.plan_editor_title)}
-              </span>
-              {plan && !planEditorOpen ? (
-                <span className="text-caption text-muted-foreground">
-                  {t(($) => $.plan.revision, { revision: plan.revision })} ·{" "}
-                  {t(($) => $.plan.task_count, { value: plan.items.length })}
-                </span>
-              ) : null}
-            </div>
-            <span className="text-caption text-muted-foreground">
-              {planEditorOpen ? t(($) => $.map.collapse_editor) : t(($) => $.map.expand_editor)}
-            </span>
-          </button>
-
-          {planEditorVisited ? (
-            <div hidden={!planEditorOpen} className="border-t px-4 py-4">
-              <GoalPlanSection
-                key={goal.id}
-                goal={goal}
-                linkedIssues={linkedIssues}
-                issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
-                taskFocus={planEditorOpen ? planEditor.taskFocus : undefined}
-                onExecutionBlockedChange={setPlanExecutionBlocked}
-              />
-            </div>
-          ) : null}
-        </div>
-      )}
+      ) : null}
 
       <GoalFormDialog
         open={editOpen}
