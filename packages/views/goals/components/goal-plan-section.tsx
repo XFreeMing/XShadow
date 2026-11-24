@@ -12,7 +12,7 @@ import {
   squadListOptions,
 } from "@multica/core/workspace/queries";
 import { ApiError, errorCode } from "@multica/core/api";
-import { CircleAlert, Plus, Sparkles } from "@multica/ui/icons";
+import { CircleAlert, Plus } from "@multica/ui/icons";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -30,6 +30,7 @@ import {
   type PlanDraftContent,
   type PlanValidationIssue,
 } from "../plan";
+import { GoalMethodRecommendation } from "./goal-method-recommendation";
 import { GoalPlanReviewPanel } from "./goal-plan-review-panel";
 import { GoalPlanEditor, newPlanItem, type PlanContent } from "./goal-plan-editor";
 import { GoalTaskMap, type GoalTaskMapIssues } from "./goal-task-map";
@@ -98,6 +99,7 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
+  const [openTool, setOpenTool] = useState<"review" | "generation" | "method" | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PlanDraft | null>(null);
   // Which project the local draft was read from and edited against. A goal can
@@ -474,6 +476,9 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
     issues.linkedIssues.some((issue) => `issue:${issue.id}` === selectedId)
   ) ? selectedId : null;
   const selectedItem = visibleDraft?.items.find((item) => item.id === activeId);
+  const toggleTool = (tool: NonNullable<typeof openTool>) => {
+    setOpenTool((active) => active === tool ? null : tool);
+  };
   const canShowGeneration = !!goal.project_id && !planUnavailable && (!!plan || !!draft);
 
   const saveButton = (
@@ -602,11 +607,44 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
         executionPending={setExecution.isPending || savePlan.isPending}
         executionEnableBlocked={executionBlocked}
       >
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-b bg-surface/25 px-4 py-1.5 empty:hidden" data-testid="goal-plan-tools">
+          {visiblePlan && visiblePlan.revision > 0 && goal.status === "in_progress" ? (
+            <GoalPlanReviewPanel
+              plan={visiblePlan}
+              agents={agents}
+              blocked={dirty || savePlan.isPending}
+              open={openTool === "review"}
+              onToggle={() => toggleTool("review")}
+            />
+          ) : null}
+          {canShowGeneration ? (
+            <GoalPlanGenerationPanel
+              key={goal.id}
+              goal={goal}
+              planRevision={planRevision}
+              dirty={dirty}
+              generationNonce={generationNonce}
+              applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
+              onApplyCandidate={handleApplyCandidate}
+              onProjectConflict={handleProjectConflict}
+              onRevisionConflict={handleStartRevisionConflict}
+              onUnavailable={handleRunUnavailable}
+              onReloadPlan={handleLoadLatest}
+              onStartNewGeneration={handleStartNewGeneration}
+              open={openTool === "generation"}
+              onToggle={() => toggleTool("generation")}
+            />
+          ) : null}
+          <GoalMethodRecommendation
+            wsId={wsId}
+            goalId={goal.id}
+            updatedAt={goal.updated_at}
+            open={openTool === "method"}
+            onToggle={() => toggleTool("method")}
+          />
+        </div>
         {goal.project_id ? (
-          <div className="space-y-3 px-4 pb-4">
-            {visiblePlan && visiblePlan.revision > 0 && goal.status === "in_progress" ? (
-              <GoalPlanReviewPanel plan={visiblePlan} agents={agents} blocked={dirty || savePlan.isPending} />
-            ) : null}
+          <div className="space-y-3 px-4 py-2 empty:hidden">
             {planUnavailable ? (
               <div className="flex items-center gap-2 text-label text-destructive" role="alert" data-testid="plan-section-unavailable">
                 <span>{t(($) => $.plan.plan_unavailable)}</span>
@@ -659,28 +697,6 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
 
             {selectedItem ? null : saveFeedback}
 
-            {canShowGeneration ? (
-              <div className="max-w-[38rem] space-y-3">
-                <h3 className="flex items-center gap-2 text-body font-semibold">
-                  <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-                  {t(($) => $.plan.generation_title)}
-                </h3>
-                <GoalPlanGenerationPanel
-                  key={goal.id}
-                  goal={goal}
-                  planRevision={planRevision}
-                  dirty={dirty}
-                  generationNonce={generationNonce}
-                  applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
-                  onApplyCandidate={handleApplyCandidate}
-                  onProjectConflict={handleProjectConflict}
-                  onRevisionConflict={handleStartRevisionConflict}
-                  onUnavailable={handleRunUnavailable}
-                  onReloadPlan={handleLoadLatest}
-                  onStartNewGeneration={handleStartNewGeneration}
-                />
-              </div>
-            ) : null}
           </div>
         ) : null}
       </GoalTaskMap>

@@ -72,6 +72,7 @@ describe("GoalDetailPage", () => {
   const push = vi.fn();
   const api = {
     getGoal: vi.fn(),
+    getGoalWorkMethod: vi.fn(),
     getGoalOutcomeImages: vi.fn(),
     listGoalIssues: vi.fn(),
     updateGoal: vi.fn(),
@@ -87,6 +88,7 @@ describe("GoalDetailPage", () => {
     });
     push.mockReset();
     api.getGoal.mockResolvedValue(goal());
+    api.getGoalWorkMethod.mockResolvedValue({ method: null, reason: "" });
     api.getGoalOutcomeImages.mockResolvedValue([]);
     api.listGoalIssues.mockResolvedValue({ issues: [], total: 0 });
     api.updateGoal.mockResolvedValue(goal({ status: "completed" }));
