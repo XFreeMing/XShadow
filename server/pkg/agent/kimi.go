@@ -811,13 +811,15 @@ func kimiWireRecordInTurn(recordTimeMillis int64, startTime time.Time, resumed b
 // terminates, with its own verdict in `outcome`.
 const kimiTurnEndedRecordType = "agent.turn.ended"
 
-// kimiWireTurnEnd is the parsed shape of one `agent.turn.ended` record.
-// Turn ids alternate between number and string across kimi builds, so they
-// are deliberately not modeled — only the outcome and diagnostic matter.
+// Kimi records the main verdict in agent.turn.ended. Some builds put the
+// structured diagnostic on the matching turn.ended record instead.
 type kimiWireTurnEnd struct {
 	Type         string          `json:"type"`
 	Outcome      string          `json:"outcome"`
+	Reason       string          `json:"reason"`
+	TurnID       json.RawMessage `json:"turnId"`
 	ErrorMessage json.RawMessage `json:"errorMessage"`
+	Error        json.RawMessage `json:"error"`
 	Time         int64           `json:"time"`
 }
 
@@ -889,6 +891,7 @@ func kimiWireTurnFailure(path string, scan kimiUsageScan) (string, bool) {
 
 	detail := ""
 	found := false
+	var failedTurnID json.RawMessage
 	reader := bufio.NewReaderSize(file, agentStreamInitialBufferBytes)
 	for {
 		line, err := readAgentStreamLine(reader)
@@ -898,22 +901,24 @@ func kimiWireTurnFailure(path string, scan kimiUsageScan) (string, bool) {
 			// tail above).
 			break
 		}
-		if line != nil && bytes.Contains(line, []byte(kimiTurnEndedRecordType)) {
+		if line != nil && bytes.Contains(line, []byte("turn.ended")) {
 			var record kimiWireTurnEnd
-			if err := json.Unmarshal(line, &record); err != nil || record.Type != kimiTurnEndedRecordType {
-				continue
-			}
-			if !kimiWireRecordInTurn(record.Time, scan.startTime, scan.resumed) {
-				continue
-			}
-			if record.Outcome == "failed" {
-				// kimi's diagnostic is provider-authored text: a JSON
-				// credential in it (request={"api_key":...}) survives both
-				// the raw string and the shared redact.Text, so it takes
-				// the same sanitize pass as every child-process diagnostic
-				// before this reaches Result.Error (review on #9057).
-				detail = kimiWireErrorMessage(record.ErrorMessage)
-				found = true
+			if json.Unmarshal(line, &record) == nil && kimiWireRecordInTurn(record.Time, scan.startTime, scan.resumed) {
+				switch {
+				case record.Type == kimiTurnEndedRecordType && record.Outcome == "failed":
+					// kimi's diagnostic is provider-authored text: a JSON
+					// credential in it (request={"api_key":...}) survives both
+					// the raw string and the shared redact.Text, so it takes
+					// the same sanitize pass as every child-process diagnostic
+					// before this reaches Result.Error (review on #9057).
+					detail = kimiWireErrorMessage(record.ErrorMessage)
+					failedTurnID = record.TurnID
+					found = true
+				case record.Type == "turn.ended" && record.Reason == "failed" &&
+					detail == "" && len(failedTurnID) > 0 && !bytes.Equal(failedTurnID, []byte("null")) &&
+					bytes.Equal(record.TurnID, failedTurnID):
+					detail = kimiWireErrorMessage(record.Error)
+				}
 			}
 		}
 		if errors.Is(err, io.EOF) {

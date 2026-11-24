@@ -242,6 +242,28 @@ func TestGoalExecutionPrivateHandoffsAndRevocation(t *testing.T) {
 		t.Fatalf("resumed review lost its scoped authority: %v", err)
 	}
 	running(recovered)
+	quotaFailure, err := testHandler.TaskService.FailTask(ctx, recovered.ID,
+		"kimi turn failed: You've reached your 5-hour usage limit.",
+		"", "", "", "", false, "", "")
+	if err != nil || quotaFailure.FailureReason.String != "agent_error.provider_quota_limit" {
+		t.Fatalf("expected classified quota failure: %v", err)
+	}
+	dbfx.Exec(t, "UPDATE agent_task_queue SET completed_at=now()-interval '2 minutes' WHERE id=$1", quotaFailure.ID)
+	dbfx.Exec(t, "UPDATE issue SET updated_at=now()-interval '2 minutes' WHERE id=$1", first)
+	tick()
+	if latest := load(first, reviewer); latest.ID != quotaFailure.ID {
+		t.Fatal("the reviewer was retried before the quota window could reset")
+	}
+	dbfx.Exec(t, "UPDATE agent_task_queue SET completed_at=now()-interval '6 hours' WHERE id=$1", quotaFailure.ID)
+	tick()
+	recovered = load(first, reviewer)
+	if recovered.ID == quotaFailure.ID || recovered.RuntimeID != util.MustParseUUID(replacementRuntime) {
+		t.Fatal("the elapsed quota window did not resume the original reviewer")
+	}
+	if err := wakeup.CheckClaim(ctx, recovered); err != nil {
+		t.Fatalf("quota recovery lost the original review authority: %v", err)
+	}
+	running(recovered)
 	postMethod(first, implementation, "approve", "", 2, 403)
 	postMethod(first, recovered, "approve", "", 2, 200)
 	finish(recovered)

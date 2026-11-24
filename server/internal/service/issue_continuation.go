@@ -208,20 +208,33 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		// An unavailable provider must not be retried through the same runtime.
 		// A different runtime or a new explicit grant starts a fresh attempt
 		// for the same frozen role, preserving the independent reviewer.
-		var status string
+		var status, priorGap string
 		var reason, detail pgtype.Text
+		var ended pgtype.Timestamptz
 		err := tx.QueryRow(ctx, `
-SELECT status, failure_reason, error FROM agent_task_queue
+SELECT status, failure_reason, error, coalesce(completed_at,created_at), coalesce(context->>'continuation_gap','')
+FROM agent_task_queue
 WHERE issue_id=$1 AND agent_id=$2 AND runtime_id=$3
   AND context->>'goal_execution_id'=$4 AND context->>'work_method_revision'=$5
 ORDER BY created_at DESC, id DESC LIMIT 1`,
 			id, target.Agent.ID, recoveryRuntime, util.UUIDToString(execution.ID), fmt.Sprint(method.Revision),
-		).Scan(&status, &reason, &detail)
+		).Scan(&status, &reason, &detail, &ended, &priorGap)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if status == "failed" && taskfailure.NormalizeDaemonReason(reason.String, detail.String) == taskfailure.ReasonAgentProviderAuthOrAccess {
-			return nil
+		if status == "failed" {
+			switch taskfailure.NormalizeDaemonReason(reason.String, detail.String) {
+			case taskfailure.ReasonAgentProviderAuthOrAccess:
+				return nil
+			case taskfailure.ReasonAgentProviderQuotaLimit:
+				// Kimi reports a five-hour window without a reset timestamp.
+				// Replay this slot once after the full window can have elapsed.
+				gap += "/quota-reset"
+				if !strings.Contains(strings.ToLower(detail.String), "5-hour usage limit") ||
+					!ended.Valid || time.Since(ended.Time) < 5*time.Hour || priorGap == gap {
+					return nil
+				}
+			}
 		}
 	}
 	var attempted, waitingForRecheck bool
