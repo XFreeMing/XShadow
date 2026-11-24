@@ -386,13 +386,17 @@ describe("GoalDetailPage", () => {
     expect(screen.getByRole("button", { name: "Collapse branch" })).toBeInTheDocument();
     expect(within(tree).getByRole("link", { name: "DEV-2" }).closest("button")).toBeNull();
 
-    // Clicking "Edit in plan" expands the collapsible plan editor section.
+    // Editing from the graph opens the editor at the selected task on the first click.
     await user.click(within(inspector).getByRole("button", { name: "Edit in plan" }));
     const planEditor = await screen.findByTestId("goal-plan-section");
     expect(within(planEditor).getByRole("heading", { name: "AI planning" })).toBeVisible();
 
     const item = await screen.findByTestId("plan-item-item-2");
     const title = within(item).getByRole("textbox", { name: "Title" });
+    expect(title).toHaveFocus();
+    await user.click(within(inspector).getByRole("button", { name: "Edit in plan" }));
+    expect(title).toHaveFocus();
+
     const taskJump = within(planEditor).getByRole("combobox", { name: "Jump to task" });
     await user.selectOptions(taskJump, within(taskJump).getByRole("option", { name: "Inspect personal memory" }));
     expect(title).toHaveFocus();

@@ -31,7 +31,7 @@ import {
   type PlanDraftContent,
   type PlanValidationIssue,
 } from "../plan";
-import { GoalPlanEditor, type PlanContent } from "./goal-plan-editor";
+import { GoalPlanEditor, type PlanContent, type PlanTaskFocusRequest } from "./goal-plan-editor";
 import {
   GoalPlanGenerationPanel,
   type ApplyCandidateOutcome,
@@ -73,11 +73,13 @@ export function GoalPlanSection({
   goal,
   linkedIssues,
   issueHref,
+  taskFocus,
   onExecutionBlockedChange,
 }: {
   goal: Goal;
   linkedIssues?: Issue[];
   issueHref?: (issue: Issue) => string;
+  taskFocus?: PlanTaskFocusRequest;
   onExecutionBlockedChange?: (blocked: boolean) => void;
 }) {
   const { t } = useT("goals");
@@ -736,6 +738,7 @@ export function GoalPlanSection({
               items={draft.items}
               linkedIssues={linkedIssues}
               issueHref={issueHref}
+              taskFocus={taskFocus}
               edges={draft.edges}
               onChange={handleContentChange}
               onItemEdited={handleItemEdited}

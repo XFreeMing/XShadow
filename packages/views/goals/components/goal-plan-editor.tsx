@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueWorkMethodOptions, workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
@@ -38,6 +38,15 @@ export interface PlanContent {
   edges: GoalPlanEdge[];
 }
 
+export interface PlanTaskFocusRequest {
+  readonly itemId: string;
+}
+
+function focusPlanTask(title: HTMLElement | null) {
+  title?.closest("li")?.scrollIntoView({ block: "start", inline: "nearest" });
+  title?.focus({ preventScroll: true });
+}
+
 type ItemPatch = Partial<Omit<GoalPlanItem, "id">>;
 
 function newId(): string {
@@ -72,6 +81,7 @@ export function GoalPlanEditor({
   edges,
   linkedIssues = [],
   issueHref,
+  taskFocus,
   disabled = false,
   onChange,
   onItemEdited,
@@ -84,6 +94,7 @@ export function GoalPlanEditor({
   edges: GoalPlanEdge[];
   linkedIssues?: Issue[];
   issueHref?: (issue: Issue) => string;
+  taskFocus?: PlanTaskFocusRequest;
   disabled?: boolean;
   onChange: (next: PlanContent) => void;
   onItemEdited: (itemId: string) => void;
@@ -100,6 +111,9 @@ export function GoalPlanEditor({
   const issuesById = new Map(linkedIssues.map((issue) => [issue.id, issue]));
   const [pickingFor, setPickingFor] = useState<string | null>(null);
   const [issueLabels, setIssueLabels] = useState<Record<string, string>>({});
+  const focusRequestedTask = useCallback((title: HTMLInputElement | null) => {
+    if (taskFocus) focusPlanTask(title);
+  }, [taskFocus]);
 
   // A binding type this client does not know must never read as "new task":
   // its value stays intact in the draft, and the user only changes it by
@@ -182,8 +196,7 @@ export function GoalPlanEditor({
               onChange={(event) => {
                 const title = document.getElementById(`plan-title-${event.currentTarget.value}`);
                 event.currentTarget.value = "";
-                title?.closest("li")?.scrollIntoView({ block: "start" });
-                title?.focus({ preventScroll: true });
+                focusPlanTask(title);
               }}
             >
               <option value="" disabled>{t(($) => $.plan.jump_task)}</option>
@@ -252,6 +265,7 @@ export function GoalPlanEditor({
               <div className="space-y-1">
                 <Label htmlFor={`plan-title-${item.id}`}>{t(($) => $.plan.task_title)}</Label>
                 <Input
+                  ref={taskFocus?.itemId === item.id ? focusRequestedTask : undefined}
                   id={`plan-title-${item.id}`}
                   value={item.title}
                   disabled={disabled}

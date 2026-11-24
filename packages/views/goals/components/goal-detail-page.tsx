@@ -49,6 +49,7 @@ import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
+import type { PlanTaskFocusRequest } from "./goal-plan-editor";
 import { GoalOutcomeGallery } from "./goal-outcome-gallery";
 import { GoalTaskPrototypes } from "./goal-task-prototypes";
 import { GoalTaskMap } from "./goal-task-map";
@@ -147,7 +148,11 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   const [completeOpen, setCompleteOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [planEditor, setPlanEditor] = useState<{ goalId: string; open: boolean } | null>(null);
+  const [planEditor, setPlanEditor] = useState<{
+    goalId: string;
+    open: boolean;
+    taskFocus?: PlanTaskFocusRequest;
+  } | null>(null);
   const [planExecutionBlocked, setPlanExecutionBlocked] = useState(false);
   const planEditorVisited = planEditor?.goalId === goalId;
   const planEditorOpen = planEditorVisited && planEditor.open;
@@ -285,17 +290,12 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   };
 
   const handleOpenPlanEditor = (itemId?: string) => {
-    setPlanEditor({ goalId, open: true });
-    window.requestAnimationFrame(() => {
-      if (itemId) {
-        const item = document.getElementById(`plan-title-${itemId}`)?.closest("li");
-        if (item && planEditorRef.current?.contains(item)) {
-          item.scrollIntoView({ behavior: "smooth", block: "center" });
-          return;
-        }
-      }
-      planEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    setPlanEditor({ goalId, open: true, taskFocus: itemId ? { itemId } : undefined });
+    if (!itemId) {
+      window.requestAnimationFrame(() => {
+        planEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
   };
 
   const actions = (
@@ -452,6 +452,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
                 goal={goal}
                 linkedIssues={linkedIssues}
                 issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
+                taskFocus={planEditorOpen ? planEditor.taskFocus : undefined}
                 onExecutionBlockedChange={setPlanExecutionBlocked}
               />
             </div>
