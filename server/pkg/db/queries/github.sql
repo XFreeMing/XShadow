@@ -128,11 +128,20 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     changed_files = EXCLUDED.changed_files,
     updated_at = now()
 WHERE EXCLUDED.pr_updated_at >= github_pull_request.pr_updated_at
+  AND (github_pull_request.state <> 'merged' OR EXCLUDED.state = 'merged')
 RETURNING *;
 
 -- name: GetGitHubPullRequest :one
 SELECT * FROM github_pull_request
 WHERE workspace_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4;
+
+-- name: ListGitHubHeadsForIssueGC :many
+SELECT link.issue_id, pr.repo_owner, pr.repo_name, pr.branch, pr.head_sha, pr.state, pr.merged_at
+FROM issue_pull_request link
+JOIN github_pull_request pr ON pr.id = link.pull_request_id
+JOIN issue i ON i.id = link.issue_id AND i.workspace_id = pr.workspace_id
+WHERE pr.workspace_id = sqlc.arg(workspace_id)
+  AND link.issue_id = ANY(sqlc.arg(issue_ids)::uuid[]);
 
 -- name: ListPullRequestsByIssue :many
 -- Returns the issue's linked PRs with the GitHub API snapshot (MUL-5265): the

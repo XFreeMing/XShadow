@@ -96,7 +96,7 @@ export function AuthInitializer({
         // is exactly when the client must not offer the mode (#7113).
         configStore
           .getState()
-          .setLocalWorktreeSupported(cfg.local_worktree_supported === true);
+          .setLocalWorktreeSupported(cfg.local_worktree_supported, cfg.local_auto_worktree_supported);
         // Older agent handlers returned success while silently dropping this
         // additive field, so writes stay disabled unless the server declares
         // the persistence contract explicitly.

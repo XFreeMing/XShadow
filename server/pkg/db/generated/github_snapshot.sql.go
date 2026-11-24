@@ -11,6 +11,37 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const confirmGitHubPRMerged = `-- name: ConfirmGitHubPRMerged :execrows
+UPDATE github_pull_request
+SET state = 'merged', merged_at = $1,
+    closed_at = $1, head_sha = $2,
+    branch = $3, pr_updated_at = $4, updated_at = now()
+WHERE id = $5 AND state <> 'merged'
+  AND pr_updated_at <= $4
+`
+
+type ConfirmGitHubPRMergedParams struct {
+	MergedAt    pgtype.Timestamptz `json:"merged_at"`
+	HeadSha     string             `json:"head_sha"`
+	HeadRef     pgtype.Text        `json:"head_ref"`
+	PrUpdatedAt pgtype.Timestamptz `json:"pr_updated_at"`
+	PrID        pgtype.UUID        `json:"pr_id"`
+}
+
+func (q *Queries) ConfirmGitHubPRMerged(ctx context.Context, arg ConfirmGitHubPRMergedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmGitHubPRMerged,
+		arg.MergedAt,
+		arg.HeadSha,
+		arg.HeadRef,
+		arg.PrUpdatedAt,
+		arg.PrID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteGitHubPRCheckRuns = `-- name: DeleteGitHubPRCheckRuns :exec
 DELETE FROM github_pull_request_check_run WHERE pr_id = $1
 `
@@ -346,6 +377,9 @@ WITH candidates AS (
           OR api_mergeable IS NULL
           OR api_mergeable = 'UNKNOWN'
           OR checks_rollup_state IN ('PENDING', 'EXPECTED')
+          OR EXISTS (
+              SELECT 1 FROM issue_pull_request link WHERE link.pull_request_id = pr.id
+          )
           OR EXISTS (
               SELECT 1
               FROM github_pull_request_check_run AS cr

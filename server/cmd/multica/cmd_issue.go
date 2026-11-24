@@ -260,6 +260,13 @@ var issuePullRequestsCmd = &cobra.Command{
 	RunE:    runIssuePullRequests,
 }
 
+var issueAutoMergeCmd = &cobra.Command{
+	Use:   "auto-merge <issue> <pull-request-id>",
+	Short: "Request GitHub squash auto-merge for a reviewed head and target branch",
+	Args:  exactArgs(2),
+	RunE:  runIssueAutoMerge,
+}
+
 var issueChildrenCmd = &cobra.Command{
 	Use:     "children <id>",
 	Aliases: []string{"subissues"},
@@ -606,6 +613,11 @@ func init() {
 	issueCmd.AddCommand(issueListCmd)
 	issueCmd.AddCommand(issueGetCmd)
 	issueCmd.AddCommand(issuePullRequestsCmd)
+	issueCmd.AddCommand(issueAutoMergeCmd)
+	issueAutoMergeCmd.Flags().String("head", "", "Full reviewed head SHA")
+	issueAutoMergeCmd.Flags().String("base", "", "Target GitHub branch")
+	_ = issueAutoMergeCmd.MarkFlagRequired("head")
+	_ = issueAutoMergeCmd.MarkFlagRequired("base")
 	issueCmd.AddCommand(issueChildrenCmd)
 	issueCmd.AddCommand(issueCreateCmd)
 	issueCmd.AddCommand(issueUpdateCmd)
@@ -1125,6 +1137,27 @@ func runIssuePullRequests(cmd *cobra.Command, args []string) error {
 		printIssuePRAutoComplete(autoComplete)
 	}
 	return nil
+}
+
+func runIssueAutoMerge(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(cmd.Context())
+	defer cancel()
+	issue, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return err
+	}
+	path := "/api/issues/" + url.PathEscape(issue.ID) + "/pull-requests/" + url.PathEscape(args[1]) + "/auto-merge"
+	var result map[string]any
+	if err := client.PostJSON(ctx, path, map[string]string{
+		"head_sha": mustString(cmd, "head"), "base_ref": mustString(cmd, "base"),
+	}, &result); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, result)
 }
 
 func normalizePullRequestList(raw []any) []map[string]any {

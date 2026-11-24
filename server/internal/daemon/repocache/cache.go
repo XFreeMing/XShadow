@@ -1291,12 +1291,17 @@ func isIsolatedCheckout(path string) bool {
 	return isIsolatedCheckoutContext(context.Background(), path)
 }
 
+// IsManagedClone identifies a standalone checkout created by the repo cache.
+func IsManagedClone(ctx context.Context, path string) bool {
+	return isIsolatedCheckoutContext(ctx, path)
+}
+
 func isIsolatedCheckoutContext(ctx context.Context, path string) bool {
 	info, err := os.Stat(filepath.Join(path, ".git"))
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	out, err := runGitOutputContext(ctx, "-C", path, "config", "--get", isolatedCheckoutConfigKey)
+	out, err := runGitOutputContext(ctx, "-C", path, "config", "--local", "--get", isolatedCheckoutConfigKey)
 	return err == nil && strings.TrimSpace(string(out)) == isolatedCheckoutConfigValue
 }
 

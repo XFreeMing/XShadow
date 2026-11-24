@@ -5809,7 +5809,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// fires only after execenv.Prepare/Reuse has put env.WorkDir on disk,
 	// so consumers that read status==running can resolve the workdir path
 	// without racing the daemon's os.MkdirAll.
-	localRelease, abort := d.acquireLocalDirectoryLockIfNeeded(ctx, task, taskLog)
+	localRelease, abort := d.acquireLocalDirectoryLockIfNeeded(ctx, &task, taskLog)
 	if abort {
 		return
 	}
@@ -6000,6 +6000,11 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			if assignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID); assignment != nil && !assignment.UsesWorktree() {
 				meta.LocalDirectory = true
 			}
+			if task.localDirectoryConcurrent && result.DurableWorkDir != "" && result.BranchName != "" {
+				meta.LocalDelivery = &execenv.LocalBranchDelivery{
+					Directory: result.DurableWorkDir, Branch: result.BranchName, AgentID: task.AgentID,
+				}
+			}
 			if err := execenv.WriteGCMeta(result.EnvRoot, meta, taskLog); err != nil {
 				taskLog.Warn("write gc meta failed (non-fatal)", "error", err)
 			}
@@ -6165,11 +6170,11 @@ func withoutWorktreePreserved(err error) error {
 //     lock, then return the release callback once we win.
 //  4. The blocking wait is cancelled (daemon shutdown, server-side cancel)
 //     — fail the task with the ctx error.
-func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Task, taskLog *slog.Logger) (release func(), abort bool) {
+func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task *Task, taskLog *slog.Logger) (release func(), abort bool) {
 	if len(task.ProjectResources) == 0 || d.cfg.DaemonID == "" {
 		return nil, false
 	}
-	assignment, err := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+	assignment, err := localDirectoryAssignmentForTask(*task, d.cfg.DaemonID)
 	if err != nil {
 		taskLog.Error("local_directory: resolve resource failed", "error", err)
 		if failErr := d.reportTerminalTask(ctx, terminalTaskReport{
@@ -6232,8 +6237,26 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	// behind a 20-minute build with nothing to contribute to it (issue #7344).
 	// See localDirectoryLockExempt for why the mutex does not owe this task a
 	// slot.
-	if localDirectoryLockExempt(task) {
+	if localDirectoryLockExempt(*task) {
 		taskLog.Info("local_directory: chat task, skipping path mutex")
+		return nil, false
+	}
+	if assignment.Ref.ExecutionMode == localDirectoryModeAuto && assignment.GitRoot != "" && task.IssueID != "" {
+		agentName := "agent"
+		if task.Agent != nil {
+			agentName = task.Agent.Name
+		}
+		if !execenv.HasUnmergedLocalWorktree(execenv.LocalWorktreeParams{
+			LocalPath: assignment.AbsPath, AgentName: agentName, TaskID: task.ID,
+			WorkspaceID: task.WorkspaceID, AgentID: task.AgentID,
+			ConversationID: task.IssueID, ConversationKey: task.IssueIdentifier,
+		}) {
+			entry := d.localPathLocks.entry(assignment.RealPath)
+			if release := d.localPathLocks.tryAcquire(assignment.RealPath, task.ID, entry); release != nil {
+				return release, false
+			}
+		}
+		task.localDirectoryConcurrent = true
 		return nil, false
 	}
 
@@ -6295,7 +6318,7 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 			taskLog.Warn("local_directory: mark waiting status failed", "error", waitErr)
 		}
 		prepareLeaseOnce.Do(func() {
-			stopPrepareLease = d.startTaskPrepareLeaseExtender(waitCtx, task, taskLog)
+			stopPrepareLease = d.startTaskPrepareLeaseExtender(waitCtx, *task, taskLog)
 		})
 		// Start polling once we actually park. shouldInterruptAgent inside
 		// watchTaskCancellation already handles both server-side terminal
@@ -8423,7 +8446,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
-			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath}
+			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath, CommittedOnly: localAssignment.CommittedOnly}
+		}
+		if localAssignment != nil && localAssignment.CommittedOnly {
+			env, err = d.prepareExecutionEnvironment(prepareCtx, prepParams)
+			if err != nil {
+				return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("prepare execution environment: %w", err))
+			}
+		} else if prepParams.LocalWorktree != nil {
 			// Take the per-path mutex for the snapshot alone, then hand it
 			// straight back — long enough to read a consistent tree, short
 			// enough that worktree tasks still overlap for the run itself.

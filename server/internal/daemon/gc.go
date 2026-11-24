@@ -51,6 +51,8 @@ func (d *Daemon) gcLoop(ctx context.Context) {
 
 	ticker := time.NewTicker(d.cfg.GCInterval)
 	defer ticker.Stop()
+	mergeTicker := time.NewTicker(30 * time.Second)
+	defer mergeTicker.Stop()
 
 	for {
 		select {
@@ -58,6 +60,8 @@ func (d *Daemon) gcLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			d.runGC(ctx)
+		case <-mergeTicker.C:
+			d.runMergedCheckoutGC(ctx)
 		}
 	}
 }
@@ -196,6 +200,10 @@ func (d *Daemon) runGC(ctx context.Context) {
 
 // gcWorkspace scans task directories inside a single workspace directory.
 func (d *Daemon) gcWorkspace(ctx context.Context, wsDir string, stats *gcStats) {
+	d.gcWorkspaceWithPolicy(ctx, wsDir, stats, false)
+}
+
+func (d *Daemon) gcWorkspaceWithPolicy(ctx context.Context, wsDir string, stats *gcStats, mergesOnly bool) {
 	taskEntries, err := os.ReadDir(wsDir)
 	if err != nil {
 		d.logger.Warn("gc: read workspace dir failed", "dir", wsDir, "error", err)
@@ -219,12 +227,18 @@ func (d *Daemon) gcWorkspace(ctx context.Context, wsDir string, stats *gcStats) 
 		meta, metaErr := execenv.ReadGCMeta(taskDir)
 		if metaErr == nil && meta.Kind == execenv.GCKindIssue && strings.TrimSpace(meta.IssueID) != "" {
 			if workspaceID := strings.TrimSpace(meta.WorkspaceID); workspaceID != "" {
+				if mergesOnly && (meta.LocalDirectory || (meta.LocalDelivery == nil && !hasManagedCheckout(taskDir))) {
+					continue
+				}
 				issueCandidatesByWorkspace[workspaceID] = append(
 					issueCandidatesByWorkspace[workspaceID],
 					issueGCCandidate{taskDir: taskDir, meta: meta},
 				)
 				continue
 			}
+		}
+		if mergesOnly {
+			continue
 		}
 		action, chatMeta := d.taskDirGCDecision(ctx, taskDir)
 		cleanedHere += d.applyGCActionWithChatMeta(ctx, taskDir, action, stats, chatMeta)
@@ -235,7 +249,7 @@ func (d *Daemon) gcWorkspace(ctx context.Context, wsDir string, stats *gcStats) 
 	}
 	sort.Strings(workspaceIDs)
 	for _, workspaceID := range workspaceIDs {
-		cleanedHere += d.gcWorkspaceIssues(ctx, workspaceID, issueCandidatesByWorkspace[workspaceID], stats)
+		cleanedHere += d.gcWorkspaceIssuesWithPolicy(ctx, workspaceID, issueCandidatesByWorkspace[workspaceID], stats, mergesOnly)
 	}
 
 	// Remove the workspace directory itself if it's now empty.
@@ -259,6 +273,10 @@ type issueGCCandidate struct {
 // result. The client transparently falls back to the legacy per-issue endpoint
 // when it is connected to an older server.
 func (d *Daemon) gcWorkspaceIssues(ctx context.Context, workspaceID string, candidates []issueGCCandidate, stats *gcStats) int {
+	return d.gcWorkspaceIssuesWithPolicy(ctx, workspaceID, candidates, stats, false)
+}
+
+func (d *Daemon) gcWorkspaceIssuesWithPolicy(ctx context.Context, workspaceID string, candidates []issueGCCandidate, stats *gcStats, mergesOnly bool) int {
 	if len(candidates) == 0 {
 		return 0
 	}
@@ -302,6 +320,12 @@ func (d *Daemon) gcWorkspaceIssues(ctx context.Context, workspaceID string, cand
 		}
 		issueID := strings.TrimSpace(candidate.meta.IssueID)
 		result, ok := results[issueID]
+		if mergesOnly {
+			if ok && result.Err == nil && len(result.MergedHeads) > 0 {
+				d.reclaimMergedCheckouts(ctx, candidate, result.MergedHeads)
+			}
+			continue
+		}
 		if !ok || result.Err != nil {
 			// No usable answer about the parent issue this cycle, so the task
 			// data stays. The regenerable Codex cache is still fair game —
@@ -310,7 +334,14 @@ func (d *Daemon) gcWorkspaceIssues(ctx context.Context, workspaceID string, cand
 			cleaned += d.applyGCAction(ctx, candidate.taskDir, action, stats)
 			continue
 		}
+		if len(result.MergedHeads) > 0 && !candidate.meta.LocalDirectory {
+			d.reclaimMergedCheckouts(ctx, candidate, result.MergedHeads)
+		}
 		action := d.gcDecisionIssueResult(candidate.taskDir, candidate.meta, result)
+		if (result.PendingMerge || len(result.MergedHeads) > 0) && !candidate.meta.LocalDirectory &&
+			action == gcActionClean && hasManagedCheckout(candidate.taskDir) {
+			action = gcActionSkip
+		}
 		action = d.applyLocalDirectoryGCOverride(candidate.meta, action)
 		action = d.applyManagedArtifactFallback(candidate.taskDir, candidate.meta, action)
 		cleaned += d.applyGCAction(ctx, candidate.taskDir, action, stats)
@@ -594,12 +625,15 @@ func (d *Daemon) gcDecisionIssue(ctx context.Context, taskDir string, meta *exec
 
 func (d *Daemon) gcDecisionIssueResult(taskDir string, meta *execenv.GCMeta, result IssueGCCheckResult) gcAction {
 	if !result.Found {
+		if meta.LocalDelivery != nil {
+			return gcActionSkip
+		}
 		return d.orphanByMTime(taskDir, "issue not accessible")
 	}
 
 	terminal, recognized := issueGCLifecycle(result)
 
-	if terminal && time.Since(result.UpdatedAt) > d.cfg.GCTTL {
+	if terminal && meta.LocalDelivery == nil && time.Since(result.UpdatedAt) > d.cfg.GCTTL {
 		d.logger.Info("gc: eligible for cleanup",
 			"dir", filepath.Base(taskDir),
 			"kind", "issue",
@@ -620,6 +654,7 @@ func (d *Daemon) gcDecisionIssueResult(taskDir string, meta *execenv.GCMeta, res
 	// completed-task TTL cannot make artifact cleanup happen early.
 	if d.cfg.GCCompletedTaskTTL > 0 &&
 		!meta.LocalDirectory &&
+		meta.LocalDelivery == nil &&
 		!meta.CompletedAt.IsZero() &&
 		recognized &&
 		time.Since(meta.CompletedAt) > d.cfg.GCCompletedTaskTTL {

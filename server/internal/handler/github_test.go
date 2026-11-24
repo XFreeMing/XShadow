@@ -473,7 +473,7 @@ func TestWebhook_MergedPR_AdvancesLinkedIssueToDone(t *testing.T) {
 			"closed_at":  "2026-04-29T00:00:00Z",
 			"created_at": "2026-04-28T00:00:00Z",
 			"updated_at": "2026-04-29T00:00:00Z",
-			"head":       map[string]any{"ref": "fix/login"},
+			"head":       map[string]any{"ref": "fix/login", "sha": "c000000000000000000000000000000000000000"},
 			"user":       map[string]any{"login": "octocat", "avatar_url": ""},
 		},
 		"repository": map[string]any{
@@ -520,6 +520,22 @@ func TestWebhook_MergedPR_AdvancesLinkedIssueToDone(t *testing.T) {
 	}
 	if updated.Status != "done" {
 		t.Errorf("expected issue status 'done', got %q", updated.Status)
+	}
+
+	gcRequest := newDaemonTokenRequest("POST", "/api/daemon/workspaces/"+testWorkspaceID+"/issues/gc-check", map[string]any{
+		"issue_ids": []string{created.ID},
+	}, testWorkspaceID, "legit-daemon")
+	gcRequest = withURLParam(gcRequest, "workspaceId", testWorkspaceID)
+	var gc struct {
+		Issues []batchIssueGCCheckItem `json:"issues"`
+	}
+	testutil.Call(t, testHandler.BatchIssueGCCheck, gcRequest).Want(http.StatusOK).JSON(&gc)
+	if len(gc.Issues) != 1 || len(gc.Issues[0].MergedHeads) != 1 || gc.Issues[0].PendingMerge {
+		t.Fatalf("daemon received no confirmed merge: %+v", gc)
+	}
+	head := gc.Issues[0].MergedHeads[0]
+	if head.Repository != "acme/widget" || head.Branch != "fix/login" || head.SHA != pr.HeadSha {
+		t.Fatalf("daemon received the wrong merge identity: %+v", head)
 	}
 }
 

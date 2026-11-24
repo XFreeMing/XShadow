@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { configStore } from "@multica/core/config";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { LocalDirectoryExecutionMode } from "@multica/core/types";
 import enProjects from "../../locales/en/projects.json";
@@ -37,6 +38,18 @@ function worktreeOption(): HTMLElement {
 }
 
 describe("LocalDirectoryModeOptions", () => {
+  it("offers on-demand isolation when the server supports it", () => {
+    configStore.setState({ localAutoWorktreeSupported: true });
+    try {
+      const { onChange } = renderOptions();
+      const option = screen.getByRole("radio", { name: /isolate overlapping work/i });
+      fireEvent.click(option);
+      expect(onChange).toHaveBeenCalledWith("auto");
+    } finally {
+      act(() => configStore.setState({ localAutoWorktreeSupported: false }));
+    }
+  });
+
   it("marks the current mode as selected", () => {
     renderOptions({ value: "worktree" });
     expect(worktreeOption().getAttribute("aria-checked")).toBe("true");

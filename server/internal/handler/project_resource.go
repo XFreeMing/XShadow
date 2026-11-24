@@ -129,6 +129,7 @@ const (
 	// Only valid when the directory is a git working tree — the daemon
 	// verifies that at task time, since the server can't see the filesystem.
 	localDirectoryModeWorktree = "worktree"
+	localDirectoryModeAuto     = "auto"
 )
 
 // localDirectoryRef is the JSONB shape stored for resource_type=local_directory.
@@ -175,7 +176,8 @@ func requireWorktreeCapableDaemon(w http.ResponseWriter, r *http.Request, q *db.
 		return true
 	}
 	var ref localDirectoryRef
-	if err := json.Unmarshal(normalizedRef, &ref); err != nil || ref.ExecutionMode != localDirectoryModeWorktree {
+	if err := json.Unmarshal(normalizedRef, &ref); err != nil ||
+		(ref.ExecutionMode != localDirectoryModeWorktree && ref.ExecutionMode != localDirectoryModeAuto) {
 		return true
 	}
 
@@ -191,7 +193,11 @@ func requireWorktreeCapableDaemon(w http.ResponseWriter, r *http.Request, q *db.
 	// its runtime row at registration. Version numbers cannot answer this — a
 	// dev-built daemon reports a git-describe string that the version floor
 	// deliberately exempts (MUL-5707).
-	if daemonAdvertisesWorktree(runtimes, ref.DaemonID) {
+	capability := protocol.DaemonCapabilityLocalWorktreeV1
+	if ref.ExecutionMode == localDirectoryModeAuto {
+		capability = protocol.DaemonCapabilityLocalAutoWorktreeV1
+	}
+	if daemonAdvertisesCapability(runtimes, ref.DaemonID, capability) {
 		return true
 	}
 	// Fail closed when no runtime for this daemon advertises it — including a
@@ -199,8 +205,8 @@ func requireWorktreeCapableDaemon(w http.ResponseWriter, r *http.Request, q *db.
 	// never dispatch correctly is worse than a save-time error.
 	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
 		"error": fmt.Sprintf(
-			"local_directory: %q is set to parallel (worktree) mode, but the Multica runtime on that machine does not support it. Update the Multica app on that machine to the latest version, or keep the resource on in_place.",
-			ref.LocalPath),
+			"local_directory: %q is set to %s mode, but the Multica runtime on that machine does not support it. Update the Multica app on that machine to the latest version, or keep the resource on in_place.",
+			ref.LocalPath, ref.ExecutionMode),
 		"code":            "daemon_version_unsupported",
 		"current_version": latestDaemonCLIVersion(runtimes, ref.DaemonID),
 		"min_version":     agentpkg.MinLocalWorktreeCLIVersion,
@@ -222,6 +228,10 @@ func requireWorktreeCapableDaemon(w http.ResponseWriter, r *http.Request, q *db.
 // A row missing the capability is never skipped: being the newest is what makes
 // it authoritative, not whether its answer is convenient.
 func daemonAdvertisesWorktree(runtimes []db.AgentRuntime, daemonID string) bool {
+	return daemonAdvertisesCapability(runtimes, daemonID, protocol.DaemonCapabilityLocalWorktreeV1)
+}
+
+func daemonAdvertisesCapability(runtimes []db.AgentRuntime, daemonID, capability string) bool {
 	if strings.TrimSpace(daemonID) == "" {
 		return false
 	}
@@ -238,7 +248,7 @@ func daemonAdvertisesWorktree(runtimes []db.AgentRuntime, daemonID string) bool 
 	if newest == nil {
 		return false
 	}
-	return runtimeHasCapability(newest.Metadata, protocol.DaemonCapabilityLocalWorktreeV1)
+	return runtimeHasCapability(newest.Metadata, capability)
 }
 
 // runtimeSeenAfter orders two rows of the same daemon by last_seen_at. A row
@@ -297,10 +307,9 @@ func validateLocalDirectoryRef(ref json.RawMessage) (json.RawMessage, error) {
 	payload.Label = strings.TrimSpace(payload.Label)
 	payload.ExecutionMode = strings.TrimSpace(payload.ExecutionMode)
 	switch payload.ExecutionMode {
-	case "", localDirectoryModeInPlace, localDirectoryModeWorktree:
+	case "", localDirectoryModeInPlace, localDirectoryModeWorktree, localDirectoryModeAuto:
 	default:
-		return nil, fmt.Errorf("local_directory: execution_mode must be %q or %q, got %q",
-			localDirectoryModeInPlace, localDirectoryModeWorktree, payload.ExecutionMode)
+		return nil, fmt.Errorf("local_directory: unsupported execution_mode %q (expected in_place, worktree, or auto)", payload.ExecutionMode)
 	}
 	out, err := json.Marshal(payload)
 	if err != nil {

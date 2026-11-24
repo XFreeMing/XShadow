@@ -4213,6 +4213,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.ProjectResources,
 		runtime,
 		requestHasClientCapability(r, protocol.DaemonCapabilityLocalWorktreeV1),
+		requestHasClientCapability(r, protocol.DaemonCapabilityLocalAutoWorktreeV1),
 	); reason != "" {
 		slog.Error("task claim: runtime too old for worktree mode; cancelling rather than running in place",
 			"task_id", uuidToString(task.ID),
@@ -4321,11 +4322,8 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 // Only resources bound to the claiming runtime's own daemon are considered: a
 // project may carry one local_directory per machine, and another machine's
 // worktree resource says nothing about this one's ability to run the task.
-func worktreeClaimBlockReason(resources []ProjectResourceData, runtime db.AgentRuntime, hasWorktreeCapability bool) string {
+func worktreeClaimBlockReason(resources []ProjectResourceData, runtime db.AgentRuntime, hasWorktreeCapability bool, autoWorktreeCapability ...bool) string {
 	if !runtime.DaemonID.Valid || runtime.DaemonID.String == "" {
-		return ""
-	}
-	if hasWorktreeCapability {
 		return ""
 	}
 	for _, res := range resources {
@@ -4336,7 +4334,13 @@ func worktreeClaimBlockReason(resources []ProjectResourceData, runtime db.AgentR
 		if err := json.Unmarshal(res.ResourceRef, &ref); err != nil {
 			continue
 		}
-		if ref.ExecutionMode != localDirectoryModeWorktree || ref.DaemonID != runtime.DaemonID.String {
+		if ref.DaemonID != runtime.DaemonID.String {
+			continue
+		}
+		explicitBlocked := ref.ExecutionMode == localDirectoryModeWorktree && !hasWorktreeCapability
+		autoBlocked := ref.ExecutionMode == localDirectoryModeAuto &&
+			(len(autoWorktreeCapability) == 0 || !autoWorktreeCapability[0])
+		if !explicitBlocked && !autoBlocked {
 			continue
 		}
 		return fmt.Sprintf(
@@ -6810,11 +6814,13 @@ type batchIssueGCCheckRequest struct {
 }
 
 type batchIssueGCCheckItem struct {
-	ID        string     `json:"id"`
-	Found     bool       `json:"found"`
-	Status    string     `json:"status,omitempty"`
-	Category  string     `json:"category,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	ID           string                           `json:"id"`
+	Found        bool                             `json:"found"`
+	Status       string                           `json:"status,omitempty"`
+	Category     string                           `json:"category,omitempty"`
+	UpdatedAt    *time.Time                       `json:"updated_at,omitempty"`
+	MergedHeads  []protocol.MergedPullRequestHead `json:"merged_heads,omitempty"`
+	PendingMerge bool                             `json:"pending_merge,omitempty"`
 }
 
 // issueGCWire encodes an issue's lifecycle for both GC check endpoints: the
@@ -6882,6 +6888,8 @@ func (h *Handler) BatchIssueGCCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows := make(map[string]db.ListIssueGCStatusesRow, len(parsedIDs))
+	mergedHeads := make(map[pgtype.UUID][]protocol.MergedPullRequestHead)
+	pendingMerges := make(map[pgtype.UUID]bool)
 	if len(parsedIDs) > 0 {
 		result, err := h.Queries.ListIssueGCStatuses(r.Context(), db.ListIssueGCStatusesParams{
 			WorkspaceID: workspaceUUID,
@@ -6894,6 +6902,34 @@ func (h *Handler) BatchIssueGCCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, row := range result {
 			rows[uuidToString(row.ID)] = row
+		}
+		heads, err := h.Queries.ListGitHubHeadsForIssueGC(r.Context(), db.ListGitHubHeadsForIssueGCParams{
+			WorkspaceID: workspaceUUID, IssueIds: parsedIDs,
+		})
+		if err != nil {
+			slog.Warn("list PRs for issue GC failed", "workspace_id", workspaceID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to check pull requests")
+			return
+		}
+		var githubEnabled bool
+		if len(heads) > 0 {
+			ws, err := h.Queries.GetWorkspace(r.Context(), workspaceUUID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to check GitHub configuration")
+				return
+			}
+			githubEnabled = githubFeaturesEnabled(ws)
+		}
+		for _, head := range heads {
+			if !githubEnabled || head.State != "merged" || !head.MergedAt.Valid || !head.Branch.Valid || head.HeadSha == "" {
+				pendingMerges[head.IssueID] = true
+				continue
+			}
+			mergedHeads[head.IssueID] = append(mergedHeads[head.IssueID], protocol.MergedPullRequestHead{
+				Repository: head.RepoOwner + "/" + head.RepoName,
+				Branch:     head.Branch.String,
+				SHA:        head.HeadSha,
+			})
 		}
 	}
 
@@ -6910,6 +6946,8 @@ func (h *Handler) BatchIssueGCCheck(w http.ResponseWriter, r *http.Request) {
 		row, found := rows[canonicalIDs[i]]
 		item := batchIssueGCCheckItem{ID: issueID, Found: found}
 		if found {
+			item.MergedHeads = mergedHeads[row.ID]
+			item.PendingMerge = pendingMerges[row.ID]
 			// The daemon consumes this purely as a machine signal ("is this
 			// issue terminal, so its workdir can be reclaimed?") and has no
 			// database of its own, so the lifecycle is resolved here.

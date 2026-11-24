@@ -76,6 +76,7 @@ import {
 } from "../platform/local-directory";
 import { useLocalDaemonStatus } from "../platform/use-local-daemon-status";
 import {
+  LOCAL_AUTO_WORKTREE_CAPABILITY,
   runtimeAdvertisesLocalWorktree,
   runtimeListOptions,
 } from "@multica/core/runtimes";
@@ -244,26 +245,19 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   // save gate drop execution_mode and answer 201, so "the backend will check"
   // is only true once the backend says it checks (#7113).
   const serverValidatesWorktree = useConfigStore((state) => state.localWorktreeSupported);
+  const serverSupportsAuto = useConfigStore((state) => state.localAutoWorktreeSupported);
+  const daemonSupportsAuto = runtimeAdvertisesLocalWorktree(runtimes, daemonStatus.daemonId, LOCAL_AUTO_WORKTREE_CAPABILITY);
   const worktreeUnavailableReason =
     localIsGitRepo === false
       ? ("not_git" as const)
       : !serverValidatesWorktree
         ? ("server_outdated" as const)
         : undefined;
-  // Preselection, not a default behavior change: when the folder is a git repo
-  // and the machine has advertised that it can run worktree mode, parallel is
-  // the better fit, so it starts selected — visibly, in a control the user can
-  // flip in one click before creating anything. A plain folder starts on
-  // direct, and so does a machine that has not advertised: it may still be able
-  // to (an old row proves nothing), but choosing it FOR the user is how a
-  // rejected save would turn into a failed project creation.
-  //
-  // `localIsGitRepo === undefined` (an older desktop build that doesn't report
-  // it) preselects direct. The asymmetry is deliberate: permissive about what
-  // the user MAY choose, conservative about what we choose FOR them.
   const preselectedLocalMode: LocalDirectoryExecutionMode =
     localIsGitRepo === true && localAdvertisesWorktree && worktreeUnavailableReason === undefined
-      ? "worktree"
+      ? serverSupportsAuto && daemonSupportsAuto
+        ? "auto"
+        : "worktree"
       : "in_place";
   // Never submit a mode the picker would have blocked — the folder can change
   // after a mode was chosen (pick a git repo, choose worktree, then pick a
@@ -1032,7 +1026,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                                 // "Change folder..." beside it fits whole.
                                 className="h-6 shrink-0 text-caption"
                               >
-                                {effectiveLocalMode === "worktree" ? (
+                                {effectiveLocalMode !== "in_place" ? (
                                   <GitBranch className="size-3 shrink-0" />
                                 ) : (
                                   <Pencil className="size-3 shrink-0" />
@@ -1042,9 +1036,11 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                                     titles truncate to uselessness. The picker
                                     below carries the full wording. */}
                                 <span className="truncate">
-                                  {effectiveLocalMode === "worktree"
-                                    ? tProjects(($) => $.resources.mode_badge_worktree)
-                                    : tProjects(($) => $.resources.mode_badge_in_place)}
+                                  {effectiveLocalMode === "auto"
+                                    ? tProjects(($) => $.resources.mode_badge_auto)
+                                    : effectiveLocalMode === "worktree"
+                                      ? tProjects(($) => $.resources.mode_badge_worktree)
+                                      : tProjects(($) => $.resources.mode_badge_in_place)}
                                 </span>
                               </Button>
                             }

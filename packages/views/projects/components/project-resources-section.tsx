@@ -34,6 +34,7 @@ import type {
   ProjectResource,
 } from "@multica/core/types";
 import {
+  LOCAL_AUTO_WORKTREE_CAPABILITY,
   runtimeAdvertisesLocalWorktree,
   runtimeListOptions,
 } from "@multica/core/runtimes";
@@ -101,7 +102,9 @@ function isLocalDirectoryRef(r: ProjectResource): r is LocalDirectoryResource {
 function executionModeOf(
   ref: LocalDirectoryResourceRef,
 ): LocalDirectoryExecutionMode {
-  return ref.execution_mode === "worktree" ? "worktree" : "in_place";
+  return ref.execution_mode === "worktree" || ref.execution_mode === "auto"
+    ? ref.execution_mode
+    : "in_place";
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -900,14 +903,16 @@ function ExecutionModeChip({
         <PopoverTrigger
           render={
             <button type="button" className={cn(chipClassName, "text-foreground")}>
-              {mode === "worktree" ? (
+              {mode !== "in_place" ? (
                 <GitBranch className="size-3 shrink-0" />
               ) : (
                 <Pencil className="size-3 shrink-0" />
               )}
-              {mode === "worktree"
-                ? t(($) => $.resources.mode_badge_worktree)
-                : t(($) => $.resources.mode_badge_in_place)}
+              {mode === "auto"
+                ? t(($) => $.resources.mode_badge_auto)
+                : mode === "worktree"
+                  ? t(($) => $.resources.mode_badge_worktree)
+                  : t(($) => $.resources.mode_badge_in_place)}
             </button>
           }
         />
@@ -961,6 +966,7 @@ function LocalFolderSlot({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const daemonId = daemonStatus.daemonId;
+  const serverSupportsAuto = useConfigStore((state) => state.localAutoWorktreeSupported);
   const ready = daemonStatus.running && daemonId !== null;
 
   const pick = async () => {
@@ -994,14 +1000,13 @@ function LocalFolderSlot({
       setPending({
         path,
         label: picked.basename ?? path,
-        // Same preselection rule as the create-project flow: a git repo this
-        // daemon can actually run worktree mode on starts on parallel,
-        // anything else starts on direct. The user still confirms.
         mode:
           validation.is_git_repo === true &&
           serverValidatesWorktree &&
           runtimeAdvertisesLocalWorktree(runtimes, daemonId)
-            ? "worktree"
+            ? serverSupportsAuto && runtimeAdvertisesLocalWorktree(runtimes, daemonId, LOCAL_AUTO_WORKTREE_CAPABILITY)
+              ? "auto"
+              : "worktree"
             : "in_place",
         isGitRepo: validation.is_git_repo,
       });

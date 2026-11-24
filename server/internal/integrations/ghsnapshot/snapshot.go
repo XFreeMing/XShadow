@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // CheckContext is one normalized check for a PR head. Both check runs and commit
@@ -29,6 +30,7 @@ type CheckContext struct {
 // API returned — no incremental inference from webhook events.
 type PRSnapshot struct {
 	HeadSHA          string
+	Merge            *ConfirmedMerge
 	Mergeable        string // MERGEABLE / CONFLICTING / UNKNOWN (raw enum)
 	MergeStateStatus string // CLEAN / DIRTY / BLOCKED / BEHIND / UNSTABLE / ... (raw enum)
 	// RollupState aggregates the current head's check runs and commit statuses.
@@ -38,6 +40,12 @@ type PRSnapshot struct {
 	// as passed (acceptance criterion 5).
 	HasChecks bool
 	Contexts  []CheckContext
+}
+
+type ConfirmedMerge struct {
+	HeadRef   string
+	MergedAt  time.Time
+	UpdatedAt time.Time
 }
 
 // Decided reports whether the snapshot has settled: no check is still running
@@ -69,9 +77,20 @@ const (
 type restPullRequest struct {
 	Head struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
-	Mergeable      *bool  `json:"mergeable"`
-	MergeableState string `json:"mergeable_state"`
+	Mergeable      *bool     `json:"mergeable"`
+	MergeableState string    `json:"mergeable_state"`
+	Merged         bool      `json:"merged"`
+	MergedAt       time.Time `json:"merged_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (pr restPullRequest) confirmedMerge() *ConfirmedMerge {
+	if !pr.Merged || pr.MergedAt.IsZero() || pr.UpdatedAt.Before(pr.MergedAt) || pr.Head.Ref == "" {
+		return nil
+	}
+	return &ConfirmedMerge{HeadRef: pr.Head.Ref, MergedAt: pr.MergedAt, UpdatedAt: pr.UpdatedAt}
 }
 
 type restCheckRun struct {
@@ -119,6 +138,9 @@ func FetchPRSnapshot(ctx context.Context, c *Client, installationID int64, owner
 	pr, err := fetchSnapshotPR(ctx, c, installationID, prPath)
 	if err != nil {
 		return nil, err
+	}
+	if merge := pr.confirmedMerge(); merge != nil {
+		return &PRSnapshot{HeadSHA: pr.Head.SHA, Merge: merge}, nil
 	}
 	commitPath := base + "/commits/" + url.PathEscape(pr.Head.SHA)
 	runs, err := fetchSnapshotPages[restCheckRun](ctx, c, installationID, commitPath+"/check-runs?filter=latest", "check_runs")
@@ -176,6 +198,9 @@ func FetchPRSnapshot(ctx context.Context, c *Client, installationID int64, owner
 	latest, err := fetchSnapshotPR(ctx, c, installationID, prPath)
 	if err != nil {
 		return nil, err
+	}
+	if merge := latest.confirmedMerge(); merge != nil {
+		return &PRSnapshot{HeadSHA: latest.Head.SHA, Merge: merge}, nil
 	}
 	if latest.Head.SHA != snap.HeadSHA {
 		return nil, errors.New("ghsnapshot: pull request head changed during fetch")

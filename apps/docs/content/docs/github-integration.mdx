@@ -94,6 +94,18 @@ Under the list, one line says what happens next: for example *Moves to Done when
 
 Click an entry to open the PR on GitHub. Turning off the **PR sidebar** only hides this block; it doesn't disconnect anything.
 
+## Request a GitHub squash merge
+
+A workspace owner or admin can request a squash merge for a linked GitHub pull request. Find its ID with `multica issue pull-requests <issue> --output json`.
+
+```sh
+multica issue auto-merge <issue> <pull-request-id> --head <reviewed-sha> --base <target-branch>
+```
+
+For a development story, the head must match its accepted candidate. If GitHub can merge immediately, the command returns the merge SHA. If GitHub must wait, the branch ruleset must require `XShadow Quality Review` or dismiss stale required GitHub approvals. The command reports `waiting_for_github` once GitHub confirms the request.
+
+After GitHub confirms a merge, the runtime reclaims managed checkouts that match the merged source repository, branch, and SHA. It retains checkouts with local work or additional Git references.
+
 ## When merged PRs move an issue
 
 A merged PR doesn't necessarily mean the issue is finished, so the workspace decides what a merge does: **Settings → Code → After PRs merge, move the issue to**. Pick `Done` (the default for new workspaces), another started or done status (a custom one such as *Awaiting regression* works too), or **Don't change**. Workspaces that existed before this setting keep their behavior: if merging didn't always complete their issues, they start on **Don't change**.
