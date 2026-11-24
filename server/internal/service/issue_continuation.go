@@ -173,7 +173,7 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	var execution GoalExecution
 	if isBacklog || method.State == "" || method.State == "ready" || method.GoalExecution {
 		execution, err = goalExecutionForIssue(ctx, q, issue, false)
-		if err != nil || (method.GoalExecution && !execution.ID.Valid) {
+		if err != nil || (execution.ReviewHold && !goalGate.planning) || (method.GoalExecution && !execution.ID.Valid) {
 			return err
 		}
 	}

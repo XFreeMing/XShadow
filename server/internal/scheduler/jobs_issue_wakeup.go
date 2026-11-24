@@ -17,6 +17,14 @@ func IssueContinuationJob(dispatcher IssueWakeupDispatcher) JobSpec {
 	return issueDispatchJob("issue_continuation", dispatcher)
 }
 
+type goalPlanReviewTick func(context.Context) error
+
+func (tick goalPlanReviewTick) Tick(ctx context.Context) error { return tick(ctx) }
+
+func GoalPlanReviewJob(tick func(context.Context) error) JobSpec {
+	return issueDispatchJob("goal_plan_review", goalPlanReviewTick(tick))
+}
+
 func issueDispatchJob(name string, dispatcher IssueWakeupDispatcher) JobSpec {
 	return JobSpec{
 		Name: name, Cadence: 30 * time.Second, CatchUpMode: CatchUpLatestOnly, CatchUpWindow: time.Hour,

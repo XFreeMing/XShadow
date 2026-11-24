@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "目标复审",
+    "running": "复审中",
+    "stale": "等待当前计划复审",
+    "failed": "复审暂不可用",
+    "covered": "覆盖通过",
+    "gap": "发现规划缺口",
+    "execution_issue": "执行问题",
+    "unverified": "待补证据",
+    "checks": "逐项目标判断",
+    "preparation": "可并行只读准备",
+    "reviewer": "选择评审人",
+    "start": "开始持续复审",
+    "apply": "应用候选调整"
+  },
   "plan_execution": {
     "active": "自动执行已授权至计划第 {{revision}} 版",
     "stale": "执行授权已失效",

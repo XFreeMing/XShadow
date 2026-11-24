@@ -156,3 +156,22 @@ RETURNING *;
 -- name: InvalidateGoalPlanExecution :exec
 UPDATE goal_plan SET execution_scope = NULL
 WHERE workspace_id = $1 AND goal_id = $2 AND execution_scope IS NOT NULL;
+
+-- name: GetLatestGoalPlanReview :one
+SELECT * FROM goal_plan_generation
+WHERE workspace_id = $1 AND goal_id = $2 AND input_context ? 'goal_review'
+ORDER BY created_at DESC, id DESC LIMIT 1;
+
+-- name: ListGoalsWithPlanReview :many
+SELECT g.* FROM goal g
+WHERE g.status = 'in_progress' AND g.project_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM goal_plan_generation r
+    WHERE r.workspace_id = g.workspace_id AND r.goal_id = g.id AND r.input_context ? 'goal_review'
+  )
+ORDER BY g.id;
+
+-- name: LatestGoalReviewIssueTask :one
+SELECT id, status, failure_reason FROM agent_task_queue
+WHERE issue_id = $1
+ORDER BY created_at DESC, id DESC LIMIT 1;

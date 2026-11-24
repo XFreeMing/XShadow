@@ -443,6 +443,44 @@ func (q *Queries) GetGoalPlanGenerationByTask(ctx context.Context, arg GetGoalPl
 	return i, err
 }
 
+const getLatestGoalPlanReview = `-- name: GetLatestGoalPlanReview :one
+SELECT id, workspace_id, goal_id, project_id, request_key, intent, agent_id, base_revision, state, chat_session_id, task_id, input_context, candidate, applied, applied_revision, observed_revision, error, created_at, updated_at FROM goal_plan_generation
+WHERE workspace_id = $1 AND goal_id = $2 AND input_context ? 'goal_review'
+ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+type GetLatestGoalPlanReviewParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GoalID      pgtype.UUID `json:"goal_id"`
+}
+
+func (q *Queries) GetLatestGoalPlanReview(ctx context.Context, arg GetLatestGoalPlanReviewParams) (GoalPlanGeneration, error) {
+	row := q.db.QueryRow(ctx, getLatestGoalPlanReview, arg.WorkspaceID, arg.GoalID)
+	var i GoalPlanGeneration
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.GoalID,
+		&i.ProjectID,
+		&i.RequestKey,
+		&i.Intent,
+		&i.AgentID,
+		&i.BaseRevision,
+		&i.State,
+		&i.ChatSessionID,
+		&i.TaskID,
+		&i.InputContext,
+		&i.Candidate,
+		&i.Applied,
+		&i.AppliedRevision,
+		&i.ObservedRevision,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const goalPlanExists = `-- name: GoalPlanExists :one
 SELECT EXISTS (
     SELECT 1 FROM goal_plan
@@ -475,6 +513,71 @@ type InvalidateGoalPlanExecutionParams struct {
 func (q *Queries) InvalidateGoalPlanExecution(ctx context.Context, arg InvalidateGoalPlanExecutionParams) error {
 	_, err := q.db.Exec(ctx, invalidateGoalPlanExecution, arg.WorkspaceID, arg.GoalID)
 	return err
+}
+
+const latestGoalReviewIssueTask = `-- name: LatestGoalReviewIssueTask :one
+SELECT id, status, failure_reason FROM agent_task_queue
+WHERE issue_id = $1
+ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+type LatestGoalReviewIssueTaskRow struct {
+	ID            pgtype.UUID `json:"id"`
+	Status        string      `json:"status"`
+	FailureReason pgtype.Text `json:"failure_reason"`
+}
+
+func (q *Queries) LatestGoalReviewIssueTask(ctx context.Context, issueID pgtype.UUID) (LatestGoalReviewIssueTaskRow, error) {
+	row := q.db.QueryRow(ctx, latestGoalReviewIssueTask, issueID)
+	var i LatestGoalReviewIssueTaskRow
+	err := row.Scan(&i.ID, &i.Status, &i.FailureReason)
+	return i, err
+}
+
+const listGoalsWithPlanReview = `-- name: ListGoalsWithPlanReview :many
+SELECT g.id, g.workspace_id, g.project_id, g.title, g.intent, g.scope, g.acceptance_criteria, g.owner_type, g.owner_id, g.status, g.creator_type, g.creator_id, g.created_at, g.updated_at, g.source_chat_input_id FROM goal g
+WHERE g.status = 'in_progress' AND g.project_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM goal_plan_generation r
+    WHERE r.workspace_id = g.workspace_id AND r.goal_id = g.id AND r.input_context ? 'goal_review'
+  )
+ORDER BY g.id
+`
+
+func (q *Queries) ListGoalsWithPlanReview(ctx context.Context) ([]Goal, error) {
+	rows, err := q.db.Query(ctx, listGoalsWithPlanReview)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Goal{}
+	for rows.Next() {
+		var i Goal
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Intent,
+			&i.Scope,
+			&i.AcceptanceCriteria,
+			&i.OwnerType,
+			&i.OwnerID,
+			&i.Status,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SourceChatInputID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockGoalPlanAdvisory = `-- name: LockGoalPlanAdvisory :exec

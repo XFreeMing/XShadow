@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "Revue de l’objectif",
+    "running": "Revue en cours",
+    "stale": "En attente de revue du plan actuel",
+    "failed": "Revue indisponible",
+    "covered": "Couverture vérifiée",
+    "gap": "Lacune de planification",
+    "execution_issue": "Problème d’exécution",
+    "unverified": "Preuves manquantes",
+    "checks": "Vérification des résultats",
+    "preparation": "Prêt pour une préparation en lecture seule",
+    "reviewer": "Responsable de la revue",
+    "start": "Lancer la revue continue",
+    "apply": "Appliquer l’ajustement validé"
+  },
   "plan_execution": {
     "active": "Exécution automatique autorisée pour la révision {{revision}}",
     "stale": "Autorisation expirée",

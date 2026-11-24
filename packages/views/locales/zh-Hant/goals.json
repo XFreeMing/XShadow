@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "目標複審",
+    "running": "複審中",
+    "stale": "等待目前計畫複審",
+    "failed": "暫時無法複審",
+    "covered": "覆蓋通過",
+    "gap": "發現規劃缺口",
+    "execution_issue": "執行問題",
+    "unverified": "等待補充證據",
+    "checks": "逐項目標判斷",
+    "preparation": "可並行唯讀準備",
+    "reviewer": "選擇評審人",
+    "start": "開始持續複審",
+    "apply": "套用候選調整"
+  },
   "plan_execution": {
     "active": "自動執行已授權至計畫第 {{revision}} 版",
     "stale": "執行授權已失效",

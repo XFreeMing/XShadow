@@ -85,6 +85,12 @@ describe("GoalPlanSchema", () => {
     expect(GoalPlanSchema.parse(plan)).toEqual(plan);
   });
 
+  it("keeps editable plan data when a review response is malformed", () => {
+    const parsed = GoalPlanSchema.parse({ ...plan, review: { generation_id: "review", phase: "unknown" } });
+    expect(parsed.review).toBeUndefined();
+    expect(parsed.items).toEqual(plan.items);
+  });
+
   it("accepts the synthetic empty draft at revision zero", () => {
     const empty = {
       id: null,

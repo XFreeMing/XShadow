@@ -683,6 +683,28 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if params.Status.String == "completed" && locked.Status != "completed" {
+		plan, err := qtx.GetGoalPlan(r.Context(), db.GetGoalPlanParams{WorkspaceID: locked.WorkspaceID, GoalID: locked.ID})
+		if err == nil {
+			if params.IntentSet || params.ScopeSet || params.AcceptanceCriteriaSet || (params.Title.Valid && params.Title.String != locked.Title) {
+				// A changed charter must be considered by the goal review below.
+				if review, reviewErr := goalPlanReviewView(r.Context(), qtx, plan); reviewErr != nil || review != nil {
+					writeErrorCode(w, 409, "goal_review_required", "save the revised goal before reviewing its completion")
+					return
+				}
+			}
+			if ok, err := h.goalReviewAllows(r.Context(), qtx, locked, plan, true); err != nil {
+				writeError(w, 500, "failed to verify goal review")
+				return
+			} else if !ok {
+				writeErrorCode(w, 409, "goal_review_required", "the goal needs a current closeout review before completion")
+				return
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, 500, "failed to read goal plan")
+			return
+		}
+	}
 	goal, err := qtx.UpdateGoal(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

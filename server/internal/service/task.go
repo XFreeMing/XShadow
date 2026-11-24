@@ -2377,6 +2377,11 @@ func (s *TaskService) PrepareDirectChatSend(
 	return s.prepareChatSend(ctx, agent, attribution.DirectHumanRun(initiatorUserID, attribution.EvidenceChat, sessionID))
 }
 
+// PrepareGoalReviewSend runs a review under its own automation attribution.
+func (s *TaskService) PrepareGoalReviewSend(ctx context.Context, agent db.Agent, goalID pgtype.UUID) (DirectChatSendPreparation, error) {
+	return s.prepareChatSend(ctx, agent, attribution.Unattributed("goal_review", goalID))
+}
+
 // PrepareDelegatedEvidenceSend preserves the source issue run's authorizing human and lineage.
 func (s *TaskService) PrepareDelegatedEvidenceSend(ctx context.Context, issue db.Issue, agent db.Agent, source db.AgentTaskQueue) (DirectChatSendPreparation, error) {
 	attr := attribution.DelegatedIssueRun(source.IssueID, source.ID, source.OriginatorUserID, source.AccountableUserID)

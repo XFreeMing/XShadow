@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "Revisión del objetivo",
+    "running": "Revisión en curso",
+    "stale": "En espera de revisión del plan actual",
+    "failed": "Revisión no disponible",
+    "covered": "Cobertura verificada",
+    "gap": "Fallo de planificación",
+    "execution_issue": "Problema de ejecución",
+    "unverified": "Faltan pruebas",
+    "checks": "Comprobaciones de resultados",
+    "preparation": "Listos para preparación de solo lectura",
+    "reviewer": "Revisor",
+    "start": "Iniciar revisión continua",
+    "apply": "Aplicar el ajuste revisado"
+  },
   "plan_execution": {
     "active": "Ejecución automática autorizada para la revisión {{revision}}",
     "stale": "La autorización de ejecución ha caducado",

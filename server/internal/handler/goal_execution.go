@@ -85,6 +85,13 @@ func (h *Handler) PutGoalExecution(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: goal.WorkspaceID, GoalID: goal.ID, ExpectedRevision: plan.Revision,
 	}
 	if *mutation.Enabled {
+		if ok, err := h.goalReviewAllows(r.Context(), q, goal, plan, false); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify goal review")
+			return
+		} else if !ok {
+			writeErrorCode(w, http.StatusConflict, "goal_review_required", "the current goal plan needs a verified coverage review before execution")
+			return
+		}
 		progress, err := service.ReadGoalWorkProgress(ctx, q, goal, plan)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read goal progress")

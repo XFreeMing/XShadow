@@ -4629,6 +4629,19 @@ export class ApiClient {
     });
   }
 
+  async startGoalPlanReview(goalId: string, data: {
+    expected_revision: number;
+    agent_id: string;
+  }): Promise<GoalPlanGeneration> {
+    const raw = await this.fetch<unknown>(`/api/goals/${goalId}/plan/review`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, GoalPlanGenerationSchema, EMPTY_GOAL_PLAN_GENERATION, {
+      endpoint: "POST /api/goals/:id/plan/review",
+    });
+  }
+
   async createGoalPlanGeneration(
     goalId: string,
     data: CreateGoalPlanGenerationRequest,

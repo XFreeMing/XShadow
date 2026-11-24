@@ -1940,6 +1940,9 @@ const GoalPlanProgressSchema = z.object({
   method_state: z.string().optional(),
   method_step: z.string().optional(),
   waiting_for: z.array(z.string()).optional(),
+  ready_to_prepare: z.array(z.object({
+    item_id: z.string(), title: z.string(), issue_id: z.string().optional(),
+  })).optional().catch(undefined),
 });
 
 export const GoalPlanSchema = z
@@ -1954,6 +1957,22 @@ export const GoalPlanSchema = z
     edges: z.array(GoalPlanEdgeSchema).catch([]).default([]),
     context_snapshot: GoalPlanContextSnapshotSchema,
     progress: GoalPlanProgressSchema.optional().catch(undefined),
+    review: z.object({
+      generation_id: z.string(),
+      base_revision: z.number().int(),
+      phase: z.enum(["preflight", "execution", "closeout"]),
+      state: z.string(),
+      assessment: z.object({
+        decision: z.enum(["covered", "planning_gap", "execution_issue", "insufficient_evidence"]),
+        summary: z.string(),
+        checks: z.array(z.object({
+          outcome: z.string(),
+          result: z.enum(["sufficient", "gap", "unverified"]),
+          item_ids: z.array(z.string()),
+          reason: z.string(),
+        })),
+      }).optional(),
+    }).optional().catch(undefined),
     execution_state: z.enum(["active", "stale"]).optional().catch(undefined),
     execution_revision: z.number().int().positive().optional().catch(undefined),
     can_manage_execution: z.boolean().optional().catch(undefined),

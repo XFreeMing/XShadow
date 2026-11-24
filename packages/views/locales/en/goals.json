@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "Goal review",
+    "running": "Review in progress",
+    "stale": "Awaiting review of the current plan",
+    "failed": "Review unavailable",
+    "covered": "Coverage verified",
+    "gap": "Planning gap",
+    "execution_issue": "Execution issue",
+    "unverified": "Needs evidence",
+    "checks": "Outcome checks",
+    "preparation": "Ready for read-only preparation",
+    "reviewer": "Reviewer",
+    "start": "Start continuous review",
+    "apply": "Apply proposed adjustment"
+  },
   "plan_execution": {
     "active": "Automatic execution authorized for revision {{revision}}",
     "stale": "Execution approval expired",

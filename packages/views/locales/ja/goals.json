@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "目標レビュー",
+    "running": "レビュー中",
+    "stale": "現行計画のレビュー待ち",
+    "failed": "レビューできません",
+    "covered": "網羅性を確認済み",
+    "gap": "計画に不足あり",
+    "execution_issue": "実行上の問題",
+    "unverified": "証拠待ち",
+    "checks": "成果ごとの確認",
+    "preparation": "読み取り専用で準備可能",
+    "reviewer": "レビュアー",
+    "start": "継続レビューを開始",
+    "apply": "確認済みの変更を適用"
+  },
   "plan_execution": {
     "active": "第 {{revision}} 版の自動実行を許可済み",
     "stale": "実行許可が失効しました",

@@ -149,6 +149,19 @@ export interface GoalPlanProgress {
   method_state?: string;
   method_step?: string;
   waiting_for?: string[];
+  ready_to_prepare?: { item_id: string; title: string; issue_id?: string }[];
+}
+
+export interface GoalPlanReview {
+  generation_id: string;
+  base_revision: number;
+  phase: "preflight" | "execution" | "closeout";
+  state: string;
+  assessment?: {
+    decision: "covered" | "planning_gap" | "execution_issue" | "insufficient_evidence";
+    summary: string;
+    checks: { outcome: string; result: "sufficient" | "gap" | "unverified"; item_ids: string[]; reason: string }[];
+  };
 }
 
 export interface GoalPlan {
@@ -163,6 +176,7 @@ export interface GoalPlan {
   context_snapshot: GoalPlanContextSnapshot;
   created_at: string | null;
   progress?: GoalPlanProgress;
+  review?: GoalPlanReview;
   execution_state?: "active" | "stale";
   execution_revision?: number;
   can_manage_execution?: boolean;

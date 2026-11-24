@@ -16,19 +16,27 @@ import (
 )
 
 type GoalWorkProgress struct {
-	Phase       string   `json:"phase"`
-	Total       int      `json:"total"`
-	Completed   int      `json:"completed"`
-	MethodID    string   `json:"-"`
-	ItemID      string   `json:"item_id,omitempty"`
-	IssueID     string   `json:"issue_id,omitempty"`
-	IssueStatus string   `json:"issue_status,omitempty"`
-	MethodState string   `json:"method_state,omitempty"`
-	MethodStep  string   `json:"method_step,omitempty"`
-	WaitingFor  []string `json:"waiting_for,omitempty"`
+	Phase          string            `json:"phase"`
+	Total          int               `json:"total"`
+	Completed      int               `json:"completed"`
+	MethodID       string            `json:"-"`
+	ItemID         string            `json:"item_id,omitempty"`
+	IssueID        string            `json:"issue_id,omitempty"`
+	IssueStatus    string            `json:"issue_status,omitempty"`
+	MethodState    string            `json:"method_state,omitempty"`
+	MethodStep     string            `json:"method_step,omitempty"`
+	WaitingFor     []string          `json:"waiting_for,omitempty"`
+	ReadyToPrepare []GoalPreparation `json:"ready_to_prepare"`
+}
+
+type GoalPreparation struct {
+	ItemID  string `json:"item_id"`
+	Title   string `json:"title"`
+	IssueID string `json:"issue_id,omitempty"`
 }
 
 type goalWorkItem struct {
+	Title    string `json:"title"`
 	Delivery struct {
 		MethodID string `json:"method_id"`
 	} `json:"delivery"`
@@ -53,7 +61,7 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 	if err := json.Unmarshal(plan.Content, &content); err != nil {
 		return GoalWorkProgress{}, err
 	}
-	progress := GoalWorkProgress{Total: len(content.Items), Phase: "planning"}
+	progress := GoalWorkProgress{Total: len(content.Items), Phase: "planning", ReadyToPrepare: []GoalPreparation{}}
 	if progress.Total == 0 {
 		return progress, nil
 	}
@@ -108,6 +116,21 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 			progress.IssueID = item.Binding.IssueID
 		}
 	}
+	if goal.Status == "in_progress" {
+		waiting := make(map[string]bool)
+		for _, edge := range content.Edges {
+			if states[byID[edge.Prerequisite].Binding.IssueID] != issuestatus.Done {
+				waiting[edge.Dependent] = true
+			}
+		}
+		for _, item := range content.Items {
+			state := states[item.Binding.IssueID]
+			if !waiting[item.ID] && (item.Binding.IssueID == "" || state == issuestatus.Todo || state == issuestatus.Backlog) {
+				progress.ReadyToPrepare = append(progress.ReadyToPrepare, GoalPreparation{ItemID: item.ID, Title: item.Title, IssueID: item.Binding.IssueID})
+			}
+		}
+	}
+
 	// A reordered draft must still follow the story that is in delivery.
 	if activeItem.ID != "" {
 		progress.ItemID = activeItem.ID

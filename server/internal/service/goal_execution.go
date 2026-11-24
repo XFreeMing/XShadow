@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/attribution"
+	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -17,9 +18,10 @@ import (
 )
 
 type GoalExecution struct {
-	ID       pgtype.UUID
-	By       pgtype.UUID
-	Progress GoalWorkProgress
+	ReviewHold bool
+	ID         pgtype.UUID
+	By         pgtype.UUID
+	Progress   GoalWorkProgress
 }
 
 func CanManageGoalExecution(member db.Member, goal db.Goal) bool {
@@ -115,6 +117,13 @@ func goalExecutionForIssue(ctx context.Context, q *db.Queries, issue db.Issue, l
 	if err != nil {
 		return GoalExecution{}, err
 	}
+	if goal.Status == "in_progress" && (issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == issuestatus.Todo ||
+		issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == issuestatus.Backlog) {
+		hold, err := goalReviewHoldsNewWork(ctx, q, plan)
+		if err != nil || hold {
+			return GoalExecution{ReviewHold: hold}, err
+		}
+	}
 	execution, err := ReadGoalExecution(ctx, q, goal, plan)
 	if err != nil || !execution.ID.Valid {
 		return execution, err
@@ -126,6 +135,39 @@ func goalExecutionForIssue(ctx context.Context, q *db.Queries, issue db.Issue, l
 	}
 	execution.Progress = progress
 	return execution, nil
+}
+
+func goalReviewHoldsNewWork(ctx context.Context, q *db.Queries, plan db.GoalPlan) (bool, error) {
+	review, err := q.GetLatestGoalPlanReview(ctx, db.GetLatestGoalPlanReviewParams{WorkspaceID: plan.WorkspaceID, GoalID: plan.GoalID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if review.BaseRevision != plan.Revision || review.State != "succeeded" {
+		return true, nil
+	}
+	var candidate struct {
+		Review struct {
+			Decision string `json:"decision"`
+		} `json:"review"`
+	}
+	if err := json.Unmarshal(review.Candidate, &candidate); err != nil {
+		return false, err
+	}
+	if candidate.Review.Decision == "execution_issue" {
+		var input struct {
+			Review struct {
+				Phase string `json:"phase"`
+			} `json:"goal_review"`
+		}
+		if err := json.Unmarshal(review.InputContext, &input); err != nil {
+			return false, err
+		}
+		return input.Review.Phase != "execution", nil
+	}
+	return candidate.Review.Decision != "covered", nil
 }
 
 type GoalExecutionTask struct {

@@ -517,12 +517,16 @@ func runGoalPlanResult(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("read plan file: %w", err)
 		}
 		var plan struct {
+			Review          json.RawMessage `json:"review"`
 			Items           json.RawMessage `json:"items"`
 			Edges           json.RawMessage `json:"edges"`
 			ContextSnapshot json.RawMessage `json:"context_snapshot"`
 		}
 		if err := json.Unmarshal(raw, &plan); err != nil {
 			return fmt.Errorf("parse plan file as JSON: %w", err)
+		}
+		if len(plan.Review) > 0 {
+			body["review"] = plan.Review
 		}
 		body["items"] = plan.Items
 		body["edges"] = plan.Edges

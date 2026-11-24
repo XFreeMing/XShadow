@@ -1,4 +1,19 @@
 {
+  "plan_review": {
+    "title": "목표 검토",
+    "running": "검토 중",
+    "stale": "현재 계획 검토 대기",
+    "failed": "검토할 수 없음",
+    "covered": "목표 범위 확인",
+    "gap": "계획 누락",
+    "execution_issue": "실행 문제",
+    "unverified": "증거 필요",
+    "checks": "성과별 검토",
+    "preparation": "읽기 전용 준비 가능",
+    "reviewer": "검토자",
+    "start": "지속 검토 시작",
+    "apply": "검토한 조정 적용"
+  },
   "plan_execution": {
     "active": "계획 {{revision}} 버전의 자동 실행 승인됨",
     "stale": "실행 승인이 만료되었습니다",

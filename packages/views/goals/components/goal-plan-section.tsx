@@ -31,6 +31,7 @@ import {
   type PlanDraftContent,
   type PlanValidationIssue,
 } from "../plan";
+import { GoalPlanReviewPanel } from "./goal-plan-review-panel";
 import { GoalPlanEditor, newPlanItem, type PlanContent } from "./goal-plan-editor";
 import { GoalTaskMap, type GoalTaskMapIssues } from "./goal-task-map";
 import {
@@ -78,6 +79,10 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
   const planQuery = useQuery({
     ...goalPlanOptions(wsId, goal.id),
     enabled: !!wsId && !!goal.id && !!goal.project_id,
+    refetchInterval: (query) => {
+      const state = query.state.data?.review?.state;
+      return state === "queued" || state === "running" || state === "stale" ? 5000 : false;
+    },
   });
   const plan = planQuery.data && planQuery.data.goal_id === goal.id ? planQuery.data : null;
   const savePlan = useSaveGoalPlan();
@@ -532,6 +537,9 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
       >
         {goal.project_id ? (
           <div className="space-y-3 px-4 pb-4">
+            {plan && plan.revision > 0 && goal.status === "in_progress" ? (
+              <GoalPlanReviewPanel plan={plan} agents={agents} blocked={dirty || savePlan.isPending} />
+            ) : null}
             {planUnavailable ? (
               <div className="flex items-center gap-2 text-label text-destructive" role="alert" data-testid="plan-section-unavailable">
                 <span>{t(($) => $.plan.plan_unavailable)}</span>

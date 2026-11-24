@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -124,6 +125,7 @@ type GoalPlanContent struct {
 }
 
 type GoalPlanResponse struct {
+	Review             *GoalPlanReviewView       `json:"review,omitempty"`
 	ExecutionState     string                    `json:"execution_state,omitempty"`
 	ExecutionRevision  *int32                    `json:"execution_revision,omitempty"`
 	CanManageExecution bool                      `json:"can_manage_execution,omitempty"`
@@ -179,18 +181,20 @@ type GoalPlanGenerationResponse struct {
 }
 
 type GoalPlanResultRequest struct {
-	Items           []GoalPlanItem  `json:"items"`
-	Edges           []GoalPlanEdge  `json:"edges"`
-	ContextSnapshot json.RawMessage `json:"context_snapshot"`
-	Error           string          `json:"error"`
+	Review          *GoalReviewAssessment `json:"review,omitempty"`
+	Items           []GoalPlanItem        `json:"items"`
+	Edges           []GoalPlanEdge        `json:"edges"`
+	ContextSnapshot json.RawMessage       `json:"context_snapshot"`
+	Error           string                `json:"error"`
 }
 
 // GoalPlanCandidate is the stored generation result: a complete draft plus the
 // evidence the run actually read. It is a candidate, not a saved revision.
 type GoalPlanCandidate struct {
-	Items           []GoalPlanItem  `json:"items"`
-	Edges           []GoalPlanEdge  `json:"edges"`
-	ContextSnapshot json.RawMessage `json:"context_snapshot"`
+	Review          *GoalReviewAssessment `json:"review,omitempty"`
+	Items           []GoalPlanItem        `json:"items"`
+	Edges           []GoalPlanEdge        `json:"edges"`
+	ContextSnapshot json.RawMessage       `json:"context_snapshot"`
 }
 
 func emptyGoalPlanResponse(goal db.Goal) GoalPlanResponse {
@@ -243,7 +247,12 @@ func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 			executionState = "active"
 		}
 	}
+	review, err := goalPlanReviewView(ctx, q, plan)
+	if err != nil {
+		return GoalPlanResponse{}, err
+	}
 	return GoalPlanResponse{
+		Review:            review,
 		ExecutionState:    executionState,
 		ExecutionRevision: executionRevision,
 		ID:                &id,
@@ -487,6 +496,14 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var prior db.GoalPlan
+	if req.GenerationID != nil && exists {
+		prior, err = qtx.GetGoalPlan(r.Context(), db.GetGoalPlanParams{WorkspaceID: locked.WorkspaceID, GoalID: locked.ID})
+		if err != nil {
+			writeError(w, 500, "failed to read current plan")
+			return
+		}
+	}
 	var saved db.GoalPlan
 	if exists {
 		saved, err = qtx.UpdateGoalPlanContent(r.Context(), db.UpdateGoalPlanContentParams{
@@ -554,6 +571,25 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 			writeErrorCode(w, http.StatusConflict, "generation_already_applied",
 				"this generation has already been applied to a saved revision")
 			return
+		}
+		review, err := readGoalReviewInput(generation.InputContext)
+		if err != nil {
+			writeError(w, 500, "failed to read review input")
+			return
+		}
+		if review != nil {
+			facts, err := buildGoalReviewInput(r.Context(), qtx, locked, prior, review.OwnerID)
+			if err != nil || facts.Fingerprint != review.Fingerprint {
+				writeErrorCode(w, 409, "goal_review_candidate_stale", "the goal or issue facts changed; wait for a refreshed adjustment")
+				return
+			}
+			var approved GoalPlanCandidate
+			if err := json.Unmarshal(generation.Candidate, &approved); err != nil ||
+				generation.BaseRevision != current || approved.Review == nil || approved.Review.Decision != "planning_gap" ||
+				!reflect.DeepEqual(content.Items, approved.Items) || !reflect.DeepEqual(content.Edges, approved.Edges) {
+				writeErrorCode(w, 409, "goal_review_candidate_changed", "apply the exact reviewed adjustment against its original revision")
+				return
+			}
 		}
 		if err := qtx.MarkGoalPlanGenerationApplied(r.Context(), db.MarkGoalPlanGenerationAppliedParams{
 			ID:              generation.ID,
@@ -823,83 +859,22 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	generation, err := qtx.CreateGoalPlanGeneration(r.Context(), db.CreateGoalPlanGenerationParams{
-		WorkspaceID:  lockedGoal.WorkspaceID,
-		GoalID:       lockedGoal.ID,
-		ProjectID:    input.Project.ID,
-		RequestKey:   requestKey,
-		Intent:       intent,
-		AgentID:      agentID,
-		BaseRevision: input.PlanRevision,
-		InputContext: input.Snapshot,
+	generation, session, sent, err := h.enqueueGoalPlanRun(r.Context(), tx, lockedGoal, input, goalPlanLaunch{
+		Key: requestKey, Intent: intent, SessionID: sessionID, AgentID: agentID, OwnerID: parseUUID(userID),
+		ActorType: actorType, ActorID: parseUUID(actorID), Prepared: prepared,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
-		return
-	}
-
-	// The session id was preallocated before the transaction so the attribution
-	// evidence ref written with the task names the session this transaction
-	// creates.
-	session, err := qtx.CreateChatSession(r.Context(), db.CreateChatSessionParams{
-		ID:          sessionID,
-		WorkspaceID: lockedGoal.WorkspaceID,
-		AgentID:     agentID,
-		CreatorID:   parseUUID(userID),
-		Title:       lockedGoal.Title,
-		ProjectID:   input.Project.ID,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
-		return
-	}
-	if _, err := qtx.MarkChatSessionExplicitlyCreated(r.Context(), session.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start planning run")
-		return
-	}
-
-	// The prompt is built from the same in-memory read that produced the stored
-	// input; it performs no database access. The task, its self-owned input
-	// batch and the prompt message are written into this transaction, not a
-	// nested one.
-	prompt := buildGoalPlanPrompt(lockedGoal, generation, input)
-	sent, sendErr := h.TaskService.SendPreparedDirectChatMessageInTx(
-		r.Context(), tx, session, parseUUID(userID), prompt, nil,
-		actorType, parseUUID(actorID), prepared,
-	)
-	if sendErr != nil {
-		// The whole transaction rolls back: a preparation or enqueue failure
-		// leaves no accepted request, so a retry with the same request_key may
-		// start a fresh run.
 		switch {
-		case errors.Is(sendErr, service.ErrChatTaskAgentArchived):
+		case errors.Is(err, service.ErrChatTaskAgentArchived):
 			writeError(w, http.StatusConflict, "agent is archived")
-		case errors.Is(sendErr, service.ErrChatTaskAgentNoRuntime):
+		case errors.Is(err, service.ErrChatTaskAgentNoRuntime):
 			writeError(w, http.StatusConflict, "agent has no runtime")
-		case errors.Is(sendErr, service.ErrChatSessionArchived):
+		case errors.Is(err, service.ErrChatSessionArchived):
 			writeError(w, http.StatusConflict, "chat session is archived")
 		default:
-			slog.Warn("enqueue goal plan run failed",
-				append(logger.RequestAttrs(r), "generation_id", uuidToString(generation.ID), "error", sendErr)...)
+			slog.Warn("enqueue goal plan run failed", append(logger.RequestAttrs(r), "goal_id", uuidToString(lockedGoal.ID), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to start planning run")
 		}
-		return
-	}
-
-	started, err := qtx.SetGoalPlanGenerationRun(r.Context(), db.SetGoalPlanGenerationRunParams{
-		ChatSessionID: session.ID,
-		TaskID:        sent.Task.ID,
-		ID:            generation.ID,
-		WorkspaceID:   generation.WorkspaceID,
-	})
-	if err != nil {
-		// Zero rows means the row left 'preparing' (or was already bound) while
-		// this transaction held the goal lock. Never commit a task no generation
-		// points at, and never revive a finished run: the whole transaction
-		// fails.
-		slog.Warn("bind goal plan generation failed",
-			append(logger.RequestAttrs(r), "generation_id", uuidToString(generation.ID), "error", err)...)
-		writeError(w, http.StatusInternalServerError, "failed to record the planning run")
 		return
 	}
 
@@ -922,7 +897,46 @@ func (h *Handler) CreateGoalPlanGeneration(w http.ResponseWriter, r *http.Reques
 	// Only after the single commit: the run is durable, so the queued task can
 	// be announced.
 	h.TaskService.FinalizeDirectChatSend(r.Context(), session, sent)
-	writeJSON(w, http.StatusAccepted, goalPlanGenerationToResponse(started, "queued", generation.BaseRevision))
+	writeJSON(w, http.StatusAccepted, goalPlanGenerationToResponse(generation, "queued", generation.BaseRevision))
+}
+
+type goalPlanLaunch struct {
+	Key, Intent, ActorType               string
+	SessionID, AgentID, OwnerID, ActorID pgtype.UUID
+	Prepared                             service.DirectChatSendPreparation
+}
+
+func (h *Handler) enqueueGoalPlanRun(ctx context.Context, tx pgx.Tx, goal db.Goal, input goalPlanGenerationInput, launch goalPlanLaunch) (db.GoalPlanGeneration, db.ChatSession, *service.DirectChatSendResult, error) {
+	q := h.Queries.WithTx(tx)
+	generation, err := q.CreateGoalPlanGeneration(ctx, db.CreateGoalPlanGenerationParams{
+		WorkspaceID: goal.WorkspaceID, GoalID: goal.ID, ProjectID: input.Project.ID,
+		RequestKey: launch.Key, Intent: launch.Intent, AgentID: launch.AgentID, BaseRevision: input.PlanRevision, InputContext: input.Snapshot,
+	})
+	if err != nil {
+		return generation, db.ChatSession{}, nil, fmt.Errorf("create goal plan generation: %w", err)
+	}
+	session, err := q.CreateChatSession(ctx, db.CreateChatSessionParams{
+		ID: launch.SessionID, WorkspaceID: goal.WorkspaceID, AgentID: launch.AgentID,
+		CreatorID: launch.OwnerID, Title: goal.Title, ProjectID: input.Project.ID,
+	})
+	if err != nil {
+		return generation, session, nil, fmt.Errorf("create goal plan chat: %w", err)
+	}
+	if _, err := q.MarkChatSessionExplicitlyCreated(ctx, session.ID); err != nil {
+		return generation, session, nil, err
+	}
+	prompt := buildGoalPlanPrompt(goal, generation, input)
+	if input.Review != nil {
+		prompt = buildGoalReviewPrompt(generation, input, prompt)
+	}
+	sent, err := h.TaskService.SendPreparedDirectChatMessageInTx(ctx, tx, session, launch.OwnerID, prompt, nil, launch.ActorType, launch.ActorID, launch.Prepared)
+	if err != nil {
+		return generation, session, nil, err
+	}
+	generation, err = q.SetGoalPlanGenerationRun(ctx, db.SetGoalPlanGenerationRunParams{
+		ChatSessionID: session.ID, TaskID: sent.Task.ID, ID: generation.ID, WorkspaceID: generation.WorkspaceID,
+	})
+	return generation, session, sent, err
 }
 
 // writeGoalPlanGenerationReplay answers a request whose generation already
@@ -1123,13 +1137,33 @@ func (h *Handler) SubmitGoalPlanGenerationResult(w http.ResponseWriter, r *http.
 	}
 
 	var candidateJSON []byte
+	reviewInput, err := readGoalReviewInput(generation.InputContext)
+	if err != nil {
+		writeError(w, 500, "failed to read review input")
+		return
+	}
 	errorText := strings.TrimSpace(req.Error)
 	if errorText != "" {
 		if utf8.RuneCountInString(errorText) > goalPlanTextFieldRunes {
 			writeError(w, http.StatusBadRequest, "error is too long")
 			return
 		}
+	} else if reviewInput != nil {
+		if current != generation.BaseRevision {
+			writeGoalPlanRevisionConflict(w, current)
+			return
+		}
+		candidate, err := h.goalReviewResult(r.Context(), qtx, goal, generation, *reviewInput, req)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		candidateJSON = candidate
 	} else {
+		if req.Review != nil {
+			writeError(w, 400, "review requires a goal review run")
+			return
+		}
 		content, err := h.validateGoalPlanContent(r.Context(), qtx, goal.WorkspaceID, generation.ProjectID, req.Items, req.Edges, true)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -1564,6 +1598,7 @@ func detectGoalPlanCycle(edges []GoalPlanEdge) error {
 // revision, the chat session's project and the prompt all describe the same
 // project and the same draft revision. Nothing re-reads the draft afterwards.
 type goalPlanGenerationInput struct {
+	Review       *goalReviewInput
 	Project      db.Project
 	Resources    []db.ProjectResource
 	PlanRevision int32
