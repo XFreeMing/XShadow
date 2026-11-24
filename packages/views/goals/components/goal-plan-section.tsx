@@ -17,7 +17,6 @@ import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Spinner } from "@multica/ui/components/ui/spinner";
-import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { isGoalUnavailableError } from "../status";
 import {
@@ -99,7 +98,7 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
-  const [selectedId, setSelectedId] = useState<string | null>();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PlanDraft | null>(null);
   // Which project the local draft was read from and edited against. A goal can
   // move projects; its old draft must never be submitted as the new project's
@@ -470,17 +469,64 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
   const mapPlan = visiblePlan && visibleDraft
     ? { ...visiblePlan, items: visibleDraft.items, edges: visibleDraft.edges }
     : visiblePlan;
-  const mapItems = mapPlan?.items ?? [];
-  const activeId = selectedId === null
-    ? null
-    : selectedId && (
-        mapItems.some((item) => item.id === selectedId) ||
-        issues.linkedIssues.some((issue) => `issue:${issue.id}` === selectedId)
-      )
-      ? selectedId
-      : mapItems[0]?.id ?? null;
+  const activeId = selectedId && (
+    mapPlan?.items.some((item) => item.id === selectedId) ||
+    issues.linkedIssues.some((issue) => `issue:${issue.id}` === selectedId)
+  ) ? selectedId : null;
   const selectedItem = visibleDraft?.items.find((item) => item.id === activeId);
   const canShowGeneration = !!goal.project_id && !planUnavailable && (!!plan || !!draft);
+
+  const saveButton = (
+    <Button
+      type="button"
+      size="sm"
+      onClick={handleSave}
+      disabled={!visibleDraft || savePlan.isPending || conflictRevision !== null}
+    >
+      {savePlan.isPending ? <Spinner className="size-3.5" /> : null}
+      {savePlan.isPending ? t(($) => $.plan.saving) : t(($) => $.plan.save)}
+    </Button>
+  );
+
+  const saveFeedback = canShowGeneration ? (
+    <>
+      {conflictRevision !== null ? (
+        <div
+          className="space-y-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-3"
+          role="alert"
+          data-testid="plan-revision-conflict"
+        >
+          <p className="text-body font-medium">{t(($) => $.plan.conflict_title)}</p>
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.plan.conflict_description, { revision: conflictRevision })}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => void handleLoadLatest()}>
+              {t(($) => $.plan.conflict_reload)}
+            </Button>
+            <Button size="sm" onClick={handleSaveMine} disabled={savePlan.isPending}>
+              {t(($) => $.plan.conflict_save_mine)}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {validationIssue ? (
+        <p className="text-caption text-destructive" role="alert">
+          {validationMessage(validationIssue)}
+        </p>
+      ) : null}
+
+      {saveError ? (
+        <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
+          <span>{saveError}</span>
+          <Button size="sm" variant="outline" onClick={handleSave} disabled={savePlan.isPending}>
+            {t(($) => $.plan.retry)}
+          </Button>
+        </div>
+      ) : null}
+    </>
+  ) : null;
 
   const toolbar = canShowGeneration ? (
     <>
@@ -505,15 +551,7 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
           {t(($) => $.plan.add_task)}
         </Button>
       ) : null}
-      <Button
-        type="button"
-        size="xs"
-        onClick={handleSave}
-        disabled={!visibleDraft || savePlan.isPending || conflictRevision !== null}
-      >
-        {savePlan.isPending ? <Spinner className="size-3.5" /> : null}
-        {savePlan.isPending ? t(($) => $.plan.saving) : t(($) => $.plan.save)}
-      </Button>
+      {saveButton}
     </>
   ) : null;
 
@@ -531,14 +569,43 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
         selectedId={activeId}
         onSelectTask={setSelectedId}
         toolbar={toolbar}
+        taskDetails={visibleDraft && selectedItem ? (
+          <div className="space-y-4">
+            <GoalPlanEditor
+              goal={goal}
+              item={selectedItem}
+              items={visibleDraft.items}
+              linkedIssues={issues.linkedIssues}
+              issueHref={issues.issueHref}
+              edges={visibleDraft.edges}
+              onChange={handleContentChange}
+              onItemEdited={handleItemEdited}
+              onItemRemoved={handleItemRemoved}
+              onEdgeRemoved={handleEdgeRemoved}
+              ownerLabel={ownerLabel}
+            />
+            {Object.keys(visibleDraft.context_snapshot).length > 0 ? (
+              <PlanActualBasis snapshot={visibleDraft.context_snapshot} />
+            ) : null}
+          </div>
+        ) : null}
+        taskFooter={selectedItem ? (
+          <>
+            {saveFeedback}
+            <div className="flex items-center justify-end gap-2">
+              {dirty ? <Badge variant="outline">{t(($) => $.plan.unsaved)}</Badge> : null}
+              {saveButton}
+            </div>
+          </>
+        ) : null}
         onToggleExecution={visiblePlan ? (enabled) => void changeExecution(enabled) : undefined}
         executionPending={setExecution.isPending || savePlan.isPending}
         executionEnableBlocked={executionBlocked}
       >
         {goal.project_id ? (
           <div className="space-y-3 px-4 pb-4">
-            {plan && plan.revision > 0 && goal.status === "in_progress" ? (
-              <GoalPlanReviewPanel plan={plan} agents={agents} blocked={dirty || savePlan.isPending} />
+            {visiblePlan && visiblePlan.revision > 0 && goal.status === "in_progress" ? (
+              <GoalPlanReviewPanel plan={visiblePlan} agents={agents} blocked={dirty || savePlan.isPending} />
             ) : null}
             {planUnavailable ? (
               <div className="flex items-center gap-2 text-label text-destructive" role="alert" data-testid="plan-section-unavailable">
@@ -590,84 +657,28 @@ export function GoalPlanSection({ goal, issues }: { goal: Goal; issues: GoalTask
               </div>
             ) : null}
 
-            {canShowGeneration && conflictRevision !== null ? (
-              <div
-                className="space-y-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-3"
-                role="alert"
-                data-testid="plan-revision-conflict"
-              >
-                <p className="text-body font-medium">{t(($) => $.plan.conflict_title)}</p>
-                <p className="text-caption text-muted-foreground">
-                  {t(($) => $.plan.conflict_description, { revision: conflictRevision })}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => void handleLoadLatest()}>
-                    {t(($) => $.plan.conflict_reload)}
-                  </Button>
-                  <Button size="sm" onClick={handleSaveMine} disabled={savePlan.isPending}>
-                    {t(($) => $.plan.conflict_save_mine)}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            {canShowGeneration && validationIssue ? (
-              <p className="text-caption text-destructive" role="alert">
-                {validationMessage(validationIssue)}
-              </p>
-            ) : null}
-
-            {canShowGeneration && saveError ? (
-              <div className="flex items-center gap-2 text-caption text-destructive" role="alert">
-                <span>{saveError}</span>
-                <Button size="sm" variant="outline" onClick={handleSave} disabled={savePlan.isPending}>
-                  {t(($) => $.plan.retry)}
-                </Button>
-              </div>
-            ) : null}
+            {selectedItem ? null : saveFeedback}
 
             {canShowGeneration ? (
-              <div className={cn("grid min-w-0 items-start gap-5", selectedItem && "@4xl:grid-cols-[minmax(0,1fr)_minmax(17rem,30%)]")}>
-                {visibleDraft && selectedItem ? (
-                  <div className="min-w-0 space-y-4">
-                    <GoalPlanEditor
-                      goal={goal}
-                      item={selectedItem}
-                      items={visibleDraft.items}
-                      linkedIssues={issues.linkedIssues}
-                      issueHref={issues.issueHref}
-                      edges={visibleDraft.edges}
-                      onChange={handleContentChange}
-                      onItemEdited={handleItemEdited}
-                      onItemRemoved={handleItemRemoved}
-                      onEdgeRemoved={handleEdgeRemoved}
-                      ownerLabel={ownerLabel}
-                    />
-                    {Object.keys(visibleDraft.context_snapshot).length > 0 ? (
-                      <PlanActualBasis snapshot={visibleDraft.context_snapshot} />
-                    ) : null}
-                  </div>
-                ) : null}
-                <div className={cn("min-w-0 space-y-3", selectedItem ? "border-t pt-4 @4xl:border-s @4xl:border-t-0 @4xl:ps-5 @4xl:pt-0" : "max-w-[38rem]")}>
-                  <h3 className="flex items-center gap-2 text-body font-semibold">
-                    <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-                    {t(($) => $.plan.generation_title)}
-                  </h3>
-                  <GoalPlanGenerationPanel
-                    key={goal.id}
-                    goal={goal}
-                    planRevision={planRevision}
-                    dirty={dirty}
-                    generationNonce={generationNonce}
-                    applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
-                    onApplyCandidate={handleApplyCandidate}
-                    onProjectConflict={handleProjectConflict}
-                    onRevisionConflict={handleStartRevisionConflict}
-                    onUnavailable={handleRunUnavailable}
-                    onReloadPlan={handleLoadLatest}
-                    onStartNewGeneration={handleStartNewGeneration}
-                  />
-                </div>
+              <div className="max-w-[38rem] space-y-3">
+                <h3 className="flex items-center gap-2 text-body font-semibold">
+                  <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+                  {t(($) => $.plan.generation_title)}
+                </h3>
+                <GoalPlanGenerationPanel
+                  key={goal.id}
+                  goal={goal}
+                  planRevision={planRevision}
+                  dirty={dirty}
+                  generationNonce={generationNonce}
+                  applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
+                  onApplyCandidate={handleApplyCandidate}
+                  onProjectConflict={handleProjectConflict}
+                  onRevisionConflict={handleStartRevisionConflict}
+                  onUnavailable={handleRunUnavailable}
+                  onReloadPlan={handleLoadLatest}
+                  onStartNewGeneration={handleStartNewGeneration}
+                />
               </div>
             ) : null}
           </div>

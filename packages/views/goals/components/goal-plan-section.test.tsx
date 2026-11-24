@@ -164,6 +164,16 @@ describe("GoalPlanSection", () => {
     );
   }
 
+  async function openTask(user: ReturnType<typeof userEvent.setup>, id: string, title: string) {
+    const node = await screen.findByTestId(`mindmap-node-${id}`);
+    await user.click(within(node).getByRole("button", { name: title }));
+  }
+
+  async function closeTask(user: ReturnType<typeof userEvent.setup>) {
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
   it("authorizes and revokes the displayed saved plan", async () => {
     const base = plan({
       can_manage_execution: true,
@@ -305,9 +315,11 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openTask(user, "node-1", "Local title");
     const title = await screen.findByLabelText("Title");
     await user.clear(title);
     await user.type(title, "User title");
+    await closeTask(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -345,7 +357,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
+    await openTask(user, "node-2", "Second");
     await user.click(
       screen.getByRole("button", { name: "Remove dependency on First" }),
     );
@@ -355,7 +367,8 @@ describe("GoalPlanSection", () => {
 
     // A deleted node takes its edges with it.
     api.saveGoalPlan.mockClear();
-    await user.click(within(screen.getByTestId("mindmap-node-node-1")).getByRole("button", { name: "First" }));
+    await closeTask(user);
+    await openTask(user, "node-1", "First");
     await user.click(screen.getByRole("button", { name: "Delete First" }));
     await user.click(screen.getByRole("button", { name: "Save plan" }));
     await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(1));
@@ -676,7 +689,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
+    await openTask(user, "node-2", "Second");
     // The user removes the dependency and the second node while the run is
     // still in flight; applying its candidate must not bring them back.
     await user.click(screen.getByRole("button", { name: "Remove dependency on First" }));
@@ -746,6 +759,7 @@ describe("GoalPlanSection", () => {
     await user.click(screen.getByRole("button", { name: "Save plan" }));
     expect(await screen.findByTestId("plan-revision-conflict")).toBeInTheDocument();
 
+    await closeTask(user);
     // Reading the newer revision is not permission to overwrite it: the
     // candidate's apply action stays disabled until the user chooses.
     expect(
@@ -1121,6 +1135,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openTask(user, "node-1", "External task");
     const taskEditor = await screen.findByTestId("plan-item-node-1");
     expect(within(taskEditor).getByText("Other task link (external)")).toBeInTheDocument();
     expect(within(screen.getByTestId("mindmap-node-node-1")).getByText("Other task link (external)")).toBeInTheDocument();
@@ -1195,7 +1210,6 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1205,7 +1219,8 @@ describe("GoalPlanSection", () => {
     // revision 3. The deletion decision is still valid for the revision-2 run.
     await user.click(screen.getByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Local addition");
-    await user.click(within(screen.getByTestId("mindmap-node-node-2")).getByRole("button", { name: "Second" }));
+    await closeTask(user);
+    await openTask(user, "node-2", "Second");
     await user.click(screen.getByRole("button", { name: "Delete Second" }));
     api.saveGoalPlan.mockImplementationOnce(async (_goalId, data) =>
       plan({
@@ -1277,12 +1292,12 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await within(await screen.findByTestId("mindmap-node-node-2")).findByRole("button", { name: "Second" }));
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
     await screen.findByTestId("plan-generation-status");
 
+    await openTask(user, "node-2", "Second");
     await user.click(screen.getByRole("button", { name: "Remove dependency on First" }));
     api.saveGoalPlan.mockImplementationOnce(async (_goalId, data) =>
       plan({
@@ -1295,6 +1310,7 @@ describe("GoalPlanSection", () => {
     await user.click(screen.getByRole("button", { name: "Save plan" }));
     await waitFor(() => expect(api.saveGoalPlan).toHaveBeenCalledTimes(1));
 
+    await closeTask(user);
     api.getGoalPlanGeneration.mockResolvedValue(
       generation({
         state: "succeeded",
@@ -1359,6 +1375,7 @@ describe("GoalPlanSection", () => {
     // replaced silently by the refetched plan.
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Unsaved edit");
+    await closeTask(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1412,6 +1429,7 @@ describe("GoalPlanSection", () => {
 
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Unsaved edit");
+    await closeTask(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1560,6 +1578,7 @@ describe("GoalPlanSection", () => {
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
+    await closeTask(user);
     const outside = screen.getByRole("button", { name: "Outside control" });
     await user.click(outside);
     expect(document.activeElement).toBe(outside);
@@ -1579,6 +1598,7 @@ describe("GoalPlanSection", () => {
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     const title = screen.getByLabelText("Title");
     await user.click(title);
+    await closeTask(user);
     const outside = screen.getByRole("button", { name: "Outside control" });
     await user.click(outside);
     expect(document.activeElement).toBe(outside);

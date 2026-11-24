@@ -17,6 +17,15 @@ import {
 } from "@multica/ui/icons";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@multica/ui/components/ui/sheet";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Spinner } from "@multica/ui/components/ui/spinner";
 import { cn } from "@multica/ui/lib/utils";
@@ -54,6 +63,8 @@ interface GoalTaskMapProps extends GoalTaskMapIssues {
   selectedId: string | null;
   onSelectTask: (id: string | null) => void;
   toolbar: ReactNode;
+  taskDetails?: ReactNode;
+  taskFooter?: ReactNode;
   children: ReactNode;
   onToggleExecution?: (enabled: boolean) => void;
   executionPending?: boolean;
@@ -78,6 +89,8 @@ export function GoalTaskMap({
   selectedId,
   onSelectTask,
   toolbar,
+  taskDetails,
+  taskFooter,
   children,
   onToggleExecution,
   executionPending = false,
@@ -140,7 +153,7 @@ export function GoalTaskMap({
         type="button"
         size="icon-xs"
         variant="ghost"
-        className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
+        className="relative z-10 size-6 shrink-0 text-muted-foreground hover:text-destructive"
         aria-label={t(($) => $.detail.unlink)}
         disabled={busy}
         onClick={(event) => {
@@ -205,8 +218,7 @@ export function GoalTaskMap({
             </AppLink>
           ) : null}
 
-          <button
-            type="button"
+          <SheetTrigger
             onClick={() => onSelectTask(node.id)}
             aria-pressed={isSelected}
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -245,7 +257,7 @@ export function GoalTaskMap({
                 +{children.length}
               </span>
             ) : null}
-          </button>
+          </SheetTrigger>
 
           {node.issue ? renderUnlinkButton(node.issue) : null}
         </div>
@@ -264,7 +276,7 @@ export function GoalTaskMap({
     );
   };
 
-  return (
+  const chart = (
     <section
       className="@container overflow-clip rounded-xl border bg-card [overflow-anchor:none]"
       data-testid="goal-task-map"
@@ -411,7 +423,7 @@ export function GoalTaskMap({
         </p>
       ) : view === "mindmap" ? (
         /* Horizontal Mind Map Canvas */
-        <div className="max-h-48 overflow-auto bg-surface/25" data-testid="goal-mindmap-canvas">
+        <div className="overflow-x-auto overflow-y-hidden bg-surface/25" data-testid="goal-mindmap-canvas">
           <div
             className="relative"
             style={{ width: graph.canvasWidth, height: graph.canvasHeight }}
@@ -553,7 +565,7 @@ export function GoalTaskMap({
                       {node.issue ? (
                         <AppLink
                           href={issueHref(node.issue)}
-                          className="truncate font-mono text-micro font-medium text-muted-foreground hover:text-foreground hover:underline"
+                          className="relative z-10 truncate font-mono text-micro font-medium text-muted-foreground hover:text-foreground hover:underline"
                         >
                           {node.issue.identifier}
                         </AppLink>
@@ -586,15 +598,14 @@ export function GoalTaskMap({
                     </div>
                   </div>
 
-                  <button
-                    type="button"
+                  <SheetTrigger
                     title={title}
                     aria-pressed={isSelected}
                     onClick={() => onSelectTask(node.id)}
-                    className="line-clamp-2 text-left text-caption font-medium text-foreground focus-visible:outline-none"
+                    className="text-left text-caption font-medium text-foreground outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring"
                   >
-                    {title}
-                  </button>
+                    <span className="line-clamp-2">{title}</span>
+                  </SheetTrigger>
 
                   <div className="flex items-center justify-between gap-1 text-micro text-muted-foreground">
                     <span className="truncate">
@@ -622,7 +633,7 @@ export function GoalTaskMap({
         </div>
       ) : (
         /* Hierarchical Tree View */
-        <div className="max-h-48 overflow-auto p-3" data-testid="goal-tree-view">
+        <div className="p-3" data-testid="goal-tree-view">
           <div className="mb-2 flex items-center gap-2 rounded-md bg-surface/60 px-2.5 py-2">
             <Target className="size-4 shrink-0 text-brand" />
             <span className="min-w-0 flex-1 truncate text-body font-semibold text-foreground">
@@ -695,13 +706,26 @@ export function GoalTaskMap({
           </div>
         </div>
       ) : null}
-      {selectedNode ? (
-        <div
-          className="space-y-3 border-t px-4 py-3"
-          data-testid="goal-task-inspector"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0 flex-1 space-y-1">
+      {children}
+    </section>
+  );
+
+  return (
+    <Sheet
+      open={!!selectedNode}
+      onOpenChange={(open) => { if (!open) onSelectTask(null); }}
+    >
+      {chart}
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        aria-describedby={undefined}
+        className="@container gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[42rem] motion-reduce:transition-none"
+        data-testid="goal-task-inspector"
+      >
+        {selectedNode ? (
+          <>
+            <SheetHeader className="relative shrink-0 gap-2 border-b px-5 py-4 pe-14">
               <div className="flex flex-wrap items-center gap-2">
                 {selectedNode.issue ? (
                   <StatusIcon status={selectedNode.issue.status} className="size-4 shrink-0" />
@@ -717,9 +741,9 @@ export function GoalTaskMap({
                     <ArrowUpRight className="size-3" />
                   </AppLink>
                 ) : null}
-                <h3 className="text-body font-semibold text-foreground">
+                <SheetTitle className="min-w-0 break-words font-semibold">
                   {selectedNode.title || t(($) => $.plan.untitled_item)}
-                </h3>
+                </SheetTitle>
                 {selectedNode.stage !== null ? (
                   <Badge variant="outline" className="text-micro">
                     {t(($) => $.map.stage_short, { stage: selectedNode.stage })}
@@ -771,24 +795,18 @@ export function GoalTaskMap({
                   ) : null}
                 </div>
               ) : null}
-            </div>
-
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
+              <SheetClose
+                render={<Button variant="ghost" size="icon-sm" className="absolute end-3 top-3" />}
                 aria-label={t(($) => $.map.close_inspector)}
-                onClick={() => onSelectTask(null)}
               >
-                <X className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {children}
-    </section>
+                <X aria-hidden="true" className="size-4" />
+              </SheetClose>
+            </SheetHeader>
+            {taskDetails ? <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{taskDetails}</div> : null}
+            {taskFooter ? <SheetFooter className="shrink-0 border-t px-5 py-3">{taskFooter}</SheetFooter> : null}
+          </>
+        ) : null}
+      </SheetContent>
+    </Sheet>
   );
 }
