@@ -128,8 +128,9 @@ func goalExecutionForIssue(ctx context.Context, q *db.Queries, issue db.Issue, l
 	if err != nil || !execution.ID.Valid {
 		return execution, err
 	}
-	progress, err := ReadGoalWorkProgress(ctx, q, goal, plan)
-	if err != nil || progress.IssueID != util.UUIDToString(issue.ID) || progress.MethodID == "" ||
+	issueID := util.UUIDToString(issue.ID)
+	progress, err := readGoalWorkProgress(ctx, q, goal, plan, issueID)
+	if err != nil || progress.IssueID != issueID || progress.MethodID == "" ||
 		(progress.Phase != "planning" && progress.Phase != "delivering") {
 		return GoalExecution{}, err
 	}

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,8 +51,13 @@ type goalWorkItem struct {
 	Delivery struct {
 		MethodID string `json:"method_id"`
 	} `json:"delivery"`
-	ID      string `json:"id"`
-	Stage   *int   `json:"stage"`
+	ID           string `json:"id"`
+	Stage        *int   `json:"stage"`
+	Coordination struct {
+		ParallelReason     string   `json:"parallel_reason"`
+		WriteScope         []string `json:"write_scope"`
+		ExclusiveResources []string `json:"exclusive_resources"`
+	} `json:"coordination"`
 	Binding struct {
 		Type    string `json:"type"`
 		IssueID string `json:"issue_id"`
@@ -60,6 +67,10 @@ type goalWorkItem struct {
 // ReadGoalWorkProgress projects the saved delivery sequence onto linked issue
 // state. It does not advance work or interpret a plan as implementation approval.
 func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan) (GoalWorkProgress, error) {
+	return readGoalWorkProgress(ctx, q, goal, plan, "")
+}
+
+func readGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan, issueID string) (GoalWorkProgress, error) {
 	var content struct {
 		Items []goalWorkItem `json:"items"`
 		Edges []struct {
@@ -157,6 +168,12 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		progress.ItemID = activeItem.ID
 		progress.IssueID = activeItem.Binding.IssueID
 	}
+	if issueID != "" && issueID != progress.IssueID {
+		if itemID := parallelGoalItem(content.Items, states, byID[progress.ItemID].Stage, issueID); itemID != "" {
+			progress.ItemID = itemID
+			progress.IssueID = issueID
+		}
+	}
 	if progress.ItemID == "" {
 		progress.Phase = "awaiting_goal_review"
 		if goal.Status == "completed" {
@@ -204,6 +221,53 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 	return progress, nil
 }
 
+// A stage remains serial unless all outstanding stories at that stage declare
+// compatible write boundaries. Recompute from the same approved plan at claim.
+func parallelGoalItem(items []goalWorkItem, states map[string]string, stage *int, issueID string) string {
+	if stage == nil {
+		return ""
+	}
+	var target string
+	var writes []string
+	reserved := make(map[string]bool)
+	for _, item := range items {
+		if item.Stage == nil || *item.Stage != *stage || states[item.Binding.IssueID] == issuestatus.Done {
+			continue
+		}
+		scope := item.Coordination
+		if strings.TrimSpace(scope.ParallelReason) == "" || len(scope.WriteScope) == 0 {
+			return ""
+		}
+		paths := make([]string, 0, len(scope.WriteScope))
+		for _, raw := range scope.WriteScope {
+			file := path.Clean(strings.TrimSpace(raw))
+			if file == "." || file == ".." || path.IsAbs(file) ||
+				strings.HasPrefix(file, "../") || strings.ContainsAny(file, "*?[]\\") {
+				return ""
+			}
+			for _, other := range writes {
+				if file == other || strings.HasPrefix(file, other+"/") || strings.HasPrefix(other, file+"/") {
+					return ""
+				}
+			}
+			paths = append(paths, file)
+		}
+		writes = append(writes, paths...)
+		for _, resource := range scope.ExclusiveResources {
+			if reserved[strings.ToLower(strings.TrimSpace(resource))] {
+				return ""
+			}
+		}
+		for _, resource := range scope.ExclusiveResources {
+			reserved[strings.ToLower(strings.TrimSpace(resource))] = true
+		}
+		if item.Binding.IssueID == issueID {
+			target = item.ID
+		}
+	}
+	return target
+}
+
 type goalBacklogGate struct {
 	managed  bool
 	ready    bool
@@ -231,14 +295,25 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 	if err != nil {
 		return goalBacklogGate{}, err
 	}
-	progress, err := ReadGoalWorkProgress(ctx, q, goal, plan)
+	issueID := util.UUIDToString(issue.ID)
+	progress, err := readGoalWorkProgress(ctx, q, goal, plan, issueID)
 	if err != nil {
 		return goalBacklogGate{}, err
 	}
 	gate := goalBacklogGate{managed: progress.Total > 0}
-	for itemID, issueID := range progress.PreparationBindings {
-		if issueID != util.UUIDToString(issue.ID) {
+	ready := progress.Phase == "planning" && progress.IssueID == issueID
+	for itemID, preparedIssueID := range progress.PreparationBindings {
+		if preparedIssueID != issueID {
 			continue
+		}
+		if ready {
+			execution, err := ReadGoalExecution(ctx, q, goal, plan)
+			if err != nil {
+				return gate, err
+			}
+			if execution.ID.Valid {
+				break
+			}
 		}
 		for _, node := range progress.ReadyToPrepare {
 			if node.ItemID == itemID {
@@ -253,7 +328,7 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 		}
 		return gate, nil
 	}
-	if progress.Phase != "planning" || progress.IssueID != util.UUIDToString(issue.ID) {
+	if !ready {
 		if gate.managed && goal.Status == "in_progress" && hasBacklogPlanning(issue, plan.Content) {
 			facts, err := json.Marshal([]any{goal.ID, goal.Intent, goal.Scope, goal.AcceptanceCriteria, json.RawMessage(plan.Content)})
 			if err != nil {
@@ -266,14 +341,14 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 	}
 	// Deduplicate by delivery facts, excluding incidental context snapshot
 	// refreshes and revision increments that do not change the plan.
-	facts, err := json.Marshal([]any{goal.ID, goal.Intent, goal.Scope, goal.AcceptanceCriteria, json.RawMessage(plan.Content), progress})
+	facts, err := json.Marshal([]any{goal.ID, goal.Intent, goal.Scope, goal.AcceptanceCriteria, json.RawMessage(plan.Content), progress.ItemID})
 	if err != nil {
 		return gate, err
 	}
 	gate.ready = true
 	gate.key = fmt.Sprintf("goal/%x", sha256.Sum256(facts))
 	gate.note = fmt.Sprintf(
-		"目标 %s 的当前计划第 %d 版已验收 %d/%d 项。本卡是当前顺序中的下一项。请按现行目标、原事项和必需前置核对验收范围及接手人。只记录新增的可验收结果、阻塞和接续条件；计划调整提出带依据的候选，保留已验收证据；实施须有有效授权并沿原工作方法独立验收。",
+		"目标 %s 的当前计划第 %d 版已验收 %d/%d 项。本卡已满足当前计划的交付条件。请按现行目标、原事项和必需前置核对验收范围及接手人。只记录新增的可验收结果、阻塞和接续条件。计划调整须有证据，并保留已验收结果。实施须有有效授权并沿原工作方法独立验收。",
 		util.UUIDToString(goal.ID), plan.Revision, progress.Completed, progress.Total,
 	)
 	return gate, nil

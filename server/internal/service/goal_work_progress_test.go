@@ -2,13 +2,116 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
 )
+
+func TestIssueContinuationAuthorizesParallelPreparedStories(t *testing.T) {
+	ctx := context.Background()
+	f, wakes, _, manager := wakeFixture(t)
+	project := f.Project(t, "Parallel delivery")
+	goalID := f.Insert(t, "goal", testutil.Cols{
+		"workspace_id": f.WorkspaceID, "project_id": project, "title": "Use books and memories",
+		"intent": "Inspect book jobs and private memories", "status": "in_progress",
+		"creator_type": "member", "creator_id": f.UserID,
+	})
+	workspace := parseTestUUID(t, f.WorkspaceID)
+	goal, err := f.q.GetGoalInWorkspace(ctx, db.GetGoalInWorkspaceParams{ID: parseTestUUID(t, goalID), WorkspaceID: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type story struct{ name, scope, id string }
+	stories := []story{{name: "Book status", scope: "rust/books"}, {name: "Memory history", scope: "rust/memory"}, {name: "Integrated reader", scope: "rust/app"}}
+	items := make([]map[string]any, 0, len(stories))
+	for i := range stories {
+		s := &stories[i]
+		node := dbid.NewV7()
+		id := GoalPreparationIssueID(goal.ID, util.UUIDToString(node))
+		s.id = f.Issue(t, s.name, testutil.Cols{"id": id, "project_id": project, "status": "backlog"})
+		f.Exec(t, "UPDATE issue SET updated_at=now()-interval '2 minutes' WHERE id=$1", s.id)
+		f.Exec(t, "INSERT INTO goal_issue (workspace_id,goal_id,issue_id) VALUES ($1,$2,$3)", f.WorkspaceID, goalID, s.id)
+		f.Cleanup(t, "DELETE FROM agent_task_queue WHERE issue_id=$1", s.id)
+		items = append(items, map[string]any{
+			"id": util.UUIDToString(node), "title": s.name, "stage": 1,
+			"binding": map[string]any{"type": "new"}, "delivery": map[string]any{"method_id": "agile"},
+			"coordination": map[string]any{"parallel_reason": "Separate repository surfaces", "write_scope": []string{s.scope}},
+		})
+	}
+	content, err := json.Marshal(map[string]any{"items": items, "edges": []map[string]any{{
+		"dependent_item_id": items[2]["id"], "prerequisite_item_id": items[0]["id"], "kind": "required",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Exec(t, "INSERT INTO goal_plan (workspace_id,goal_id,project_id,revision,content) VALUES ($1,$2,$3,1,$4)", f.WorkspaceID, goalID, project, content)
+	plan, err := f.q.GetGoalPlan(ctx, db.GetGoalPlanParams{WorkspaceID: workspace, GoalID: goal.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := GoalExecutionScope(ctx, f.q, goal, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := dbid.NewV7()
+	f.Exec(t, "UPDATE goal_plan SET execution_id=$2,execution_revision=1,execution_scope=$3,execution_by=$4 WHERE goal_id=$1", goalID, grant, scope, f.UserID)
+	svc := IssueContinuation{Tasks: wakes.Tasks, ManagerID: parseTestUUID(t, manager)}
+	if err := svc.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i, story := range stories[:2] {
+		var taskID string
+		if err := f.Pool.QueryRow(ctx, "SELECT id::text FROM agent_task_queue WHERE issue_id=$1", story.id).Scan(&taskID); err != nil {
+			t.Fatalf("missing dispatch for %s: %v", story.name, err)
+		}
+		task, err := f.q.GetAgentTask(ctx, parseTestUUID(t, taskID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binding := ReadGoalExecutionTask(task); binding.ID != grant || IsBacklogPlanningTask(task) {
+			t.Fatalf("%s must receive delivery authorization, got %s (%+v)", story.name, task.TriggerSummary.String, binding)
+		}
+		if err := wakes.CheckClaim(ctx, task); err != nil {
+			t.Fatalf("claim parallel dispatch for %s: %v", story.name, err)
+		}
+		if i == 0 {
+			f.Exec(t, "UPDATE issue SET status='in_progress' WHERE id=$1", story.id)
+		}
+	}
+	if n := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1 AND context ? 'goal_execution_id'", stories[2].id); n != 0 {
+		t.Fatalf("dependent story got %d authorized runs before its prerequisite", n)
+	}
+}
+
+func TestParallelGoalStageRequiresDistinctWriteBoundaries(t *testing.T) {
+	stage := 1
+	load := func(scope, resource string) goalWorkItem {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"id": scope, "stage": stage, "binding": map[string]string{"issue_id": scope},
+			"coordination": map[string]any{"parallel_reason": "Different feature", "write_scope": []string{scope}, "exclusive_resources": []string{resource}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var item goalWorkItem
+		if err := json.Unmarshal(data, &item); err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	first := load("rust/books", "book-fixture")
+	for _, other := range []goalWorkItem{load("rust/books/src/lib.rs", "another-fixture"), load("rust/memory", "book-fixture")} {
+		if got := parallelGoalItem([]goalWorkItem{first, other}, nil, &stage, other.Binding.IssueID); got != "" {
+			t.Fatalf("conflicting story %s is eligible alongside %s", got, first.ID)
+		}
+	}
+}
 
 func TestIssueContinuationUsesGoalPlanOrderAndCurrentVersion(t *testing.T) {
 	f, wakes, firstID, manager := wakeFixture(t)
