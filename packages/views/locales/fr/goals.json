@@ -272,5 +272,31 @@
     "binding_unknown": "Autre liaison de tâche ({{type}})",
     "start_refused": "La demande a été refusée avant le démarrage de l'exécution. Rien n'a été créé ; lancez une nouvelle exécution quand vous êtes prêt.",
     "plan_unavailable": "Ce plan ne peut pas être lu ici. Rechargez-le pour continuer."
+  },
+  "map": {
+    "title": "Carte objectif et tâches",
+    "view_switch": "Changer la vue",
+    "mindmap_view": "Carte mentale",
+    "tree_view": "Arbre",
+    "edit_plan": "Modifier le plan",
+    "goal_root": "Objectif",
+    "node_progress": "{{completed}}/{{total}} terminées",
+    "stage_short": "Étape {{stage}}",
+    "current_badge": "Active",
+    "waiting_badge": "En attente",
+    "extra_prereqs": "+{{count}} préreq.",
+    "unplanned_badge": "Tâche liée",
+    "root_branch": "Directement lié",
+    "unplanned_section": "Autres tâches liées",
+    "expand_branch": "Déplier la branche",
+    "collapse_branch": "Replier la branche",
+    "upstream": "Dépend de :",
+    "downstream": "Débloque :",
+    "edit_in_plan": "Modifier dans le plan",
+    "close_inspector": "Fermer les détails",
+    "click_hint": "Cliquez sur une tâche pour voir les détails et mettre en évidence ses dépendances.",
+    "plan_editor_title": "Éditeur de plan et génération IA",
+    "expand_editor": "Déplier",
+    "collapse_editor": "Replier"
   }
 }

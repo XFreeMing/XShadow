@@ -272,5 +272,31 @@
     "binding_unknown": "Other task link ({{type}})",
     "start_refused": "This request was refused before a run started. Nothing was created; start a new run when you're ready.",
     "plan_unavailable": "This plan can't be read here. Reload it to continue."
+  },
+  "map": {
+    "title": "Goal & task map",
+    "view_switch": "Switch task map layout",
+    "mindmap_view": "Mind map",
+    "tree_view": "Tree",
+    "edit_plan": "Edit plan",
+    "goal_root": "Goal",
+    "node_progress": "{{completed}}/{{total}} done",
+    "stage_short": "Stage {{stage}}",
+    "current_badge": "Active",
+    "waiting_badge": "Waiting",
+    "extra_prereqs": "+{{count}} prereq",
+    "unplanned_badge": "Linked task",
+    "root_branch": "Starts from goal",
+    "unplanned_section": "Other linked tasks",
+    "expand_branch": "Expand branch",
+    "collapse_branch": "Collapse branch",
+    "upstream": "Depends on:",
+    "downstream": "Unlocks:",
+    "edit_in_plan": "Edit in plan",
+    "close_inspector": "Close details",
+    "click_hint": "Click a task to inspect details and highlight its dependency path.",
+    "plan_editor_title": "Plan editor & AI generation",
+    "expand_editor": "Expand",
+    "collapse_editor": "Collapse"
   }
 }

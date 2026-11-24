@@ -272,5 +272,31 @@
     "binding_unknown": "Otro vínculo de tarea ({{type}})",
     "start_refused": "La solicitud se rechazó antes de iniciar la ejecución. No se creó nada; inicia una nueva ejecución cuando quieras.",
     "plan_unavailable": "Este plan no se puede leer aquí. Recárgalo para continuar."
+  },
+  "map": {
+    "title": "Mapa de objetivo y tareas",
+    "view_switch": "Cambiar vista del mapa",
+    "mindmap_view": "Mapa mental",
+    "tree_view": "Árbol",
+    "edit_plan": "Editar plan",
+    "goal_root": "Objetivo",
+    "node_progress": "{{completed}}/{{total}} hechas",
+    "stage_short": "Etapa {{stage}}",
+    "current_badge": "Activa",
+    "waiting_badge": "En espera",
+    "extra_prereqs": "+{{count}} prev.",
+    "unplanned_badge": "Tarea vinculada",
+    "root_branch": "Desde el objetivo",
+    "unplanned_section": "Otras tareas vinculadas",
+    "expand_branch": "Expandir rama",
+    "collapse_branch": "Contraer rama",
+    "upstream": "Depende de:",
+    "downstream": "Desbloquea:",
+    "edit_in_plan": "Editar en el plan",
+    "close_inspector": "Cerrar detalles",
+    "click_hint": "Haz clic en una tarea para ver detalles y resaltar su cadena de dependencias.",
+    "plan_editor_title": "Editor de plan y generación con IA",
+    "expand_editor": "Expandir",
+    "collapse_editor": "Contraer"
   }
 }

@@ -1,21 +1,23 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   FileQuestion,
-  Link2,
   Pencil,
   RotateCcw,
   Trash2,
-  Unlink,
 } from "@multica/ui/icons";
 import { toast } from "sonner";
 import {
   goalDetailOptions,
   goalIssuesPagesOptions,
+  goalPlanOptions,
   useDeleteGoal,
+  useSetGoalExecution,
   useUnlinkGoalIssue,
   useUpdateGoal,
 } from "@multica/core/goals";
@@ -40,7 +42,6 @@ import {
 import { AppLink, useNavigation } from "../../navigation";
 import { CollectionPageState } from "../../layout/collection-page";
 import { OBJECT_PAGE_BODY, ObjectPage } from "../../layout/object-page";
-import { StatusIcon } from "../../issues/components/status-icon";
 import { useT } from "../../i18n";
 import { WorkMethodSteps } from "../../workflows/work-method-step";
 import { GoalStatusBadge } from "./goal-status-badge";
@@ -50,9 +51,11 @@ import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
 import { GoalOutcomeGallery } from "./goal-outcome-gallery";
 import { GoalTaskPrototypes } from "./goal-task-prototypes";
+import { GoalTaskMap } from "./goal-task-map";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
 
 const LAYOUT_ID = "multica_goal_detail_layout";
+const GOAL_PAGE_BODY = "mx-auto w-full max-w-[1280px] px-6 py-5";
 
 function PropRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -65,10 +68,10 @@ function PropRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function BriefCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-2">
-      <h2 className="text-title-sm font-semibold">{title}</h2>
+    <section className="space-y-1 rounded-lg border bg-card px-3.5 py-2.5">
+      <h2 className="text-caption font-medium text-muted-foreground">{title}</h2>
       {children}
     </section>
   );
@@ -83,15 +86,44 @@ function GoalMethodRecommendation({ wsId, goalId, updatedAt }: { wsId: string; g
     retry: false,
   });
   if (query.error instanceof ApiError && query.error.status === 404) return null;
-  if (query.isError) return <Section title={t(($) => $.method.recommended)}>
-    <p role="alert" className="text-label text-destructive">{t(($) => $.method.load_error)} <Button size="xs" variant="link" onClick={() => void query.refetch()}>{t(($) => $.method.retry)}</Button></p>
-  </Section>;
+  if (query.isError) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive"
+      >
+        <span className="font-medium">{t(($) => $.method.recommended)}</span>
+        <span>{t(($) => $.method.load_error)}</span>
+        <Button size="xs" variant="link" onClick={() => void query.refetch()}>
+          {t(($) => $.method.retry)}
+        </Button>
+      </div>
+    );
+  }
   if (!query.data) return null;
-  return <Section title={t(($) => $.method.recommended)}>
-    <p className="text-body font-medium">{query.data.method?.name ?? t(($) => $.method.no_match)}</p>
-    {query.data.reason && <p className="text-label text-muted-foreground">{query.data.reason}</p>}
-    {query.data.method && <details className="mt-2 text-label"><summary className="cursor-pointer">{t(($)=>$.method.steps)}</summary><WorkMethodSteps steps={query.data.method.steps}/></details>}
-  </Section>;
+  return (
+    <div className="rounded-lg border bg-surface/40 px-3.5 py-2 text-caption">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium text-muted-foreground">{t(($) => $.method.recommended)}</span>
+        <span className="font-medium text-foreground">
+          {query.data.method?.name ?? t(($) => $.method.no_match)}
+        </span>
+        {query.data.reason ? (
+          <span className="text-muted-foreground">· {query.data.reason}</span>
+        ) : null}
+      </div>
+      {query.data.method ? (
+        <details className="mt-1.5 text-caption">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            {t(($) => $.method.steps)}
+          </summary>
+          <div className="mt-1.5">
+            <WorkMethodSteps steps={query.data.method.steps} />
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
 }
 
 export function GoalDetailPage({ goalId }: { goalId: string }) {
@@ -108,20 +140,38 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   const updateGoal = useUpdateGoal();
   const deleteGoal = useDeleteGoal();
   const unlinkIssue = useUnlinkGoalIssue();
+  const setExecution = useSetGoalExecution();
 
   const [editOpen, setEditOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [planEditor, setPlanEditor] = useState<{ goalId: string; open: boolean } | null>(null);
+  const [planExecutionBlocked, setPlanExecutionBlocked] = useState(false);
+  const planEditorVisited = planEditor?.goalId === goalId;
+  const planEditorOpen = planEditorVisited && planEditor.open;
+  const planEditorRef = useRef<HTMLDivElement | null>(null);
 
   const goal = goalQuery.data && goalQuery.data.id ? goalQuery.data : null;
+  const planQuery = useQuery({
+    ...goalPlanOptions(wsId, goalId),
+    enabled: !!wsId && !!goalId && !!goal?.project_id,
+  });
+  const planUnavailable = planQuery.isError && isGoalUnavailableError(planQuery.error);
+  const plan =
+    goal?.project_id && !planUnavailable && planQuery.data?.goal_id === goalId &&
+    planQuery.data.project_id === goal.project_id
+      ? planQuery.data
+      : null;
   // React Query keeps the last successful payload after a refetch fails. A
   // terminal 4xx means this viewer can no longer see the goal, so the cached
   // title must stop appearing in the breadcrumb; offline/5xx keep it.
   const unavailable = goalQuery.isError && isGoalUnavailableError(goalQuery.error);
-  const linkedIssues = issuesQuery.data?.pages.flatMap((page) => page.issues) ?? [];
-  const linkedIssueCount = issuesQuery.data?.pages[0]?.total ?? 0;
+  const issuesUnavailable = issuesQuery.isError && isGoalUnavailableError(issuesQuery.error);
+  const issuePages = issuesUnavailable ? undefined : issuesQuery.data?.pages;
+  const linkedIssues = issuePages?.flatMap((page) => page.issues) ?? [];
+  const linkedIssueCount = issuePages?.[0]?.total ?? 0;
   const project = goal?.project_id
     ? (projects.find((candidate) => candidate.id === goal.project_id) ?? null)
     : null;
@@ -225,6 +275,29 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
     );
   };
 
+  const handleToggleExecution = async (enabled: boolean) => {
+    if (!plan) return;
+    try {
+      await setExecution.mutateAsync({ goalId: goal.id, enabled, revision: plan.revision });
+    } catch {
+      toast.error(t(($) => $.plan_execution.failed));
+    }
+  };
+
+  const handleOpenPlanEditor = (itemId?: string) => {
+    setPlanEditor({ goalId, open: true });
+    window.requestAnimationFrame(() => {
+      if (itemId) {
+        const item = document.getElementById(`plan-title-${itemId}`)?.closest("li");
+        if (item && planEditorRef.current?.contains(item)) {
+          item.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+      }
+      planEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
   const actions = (
     <>
       <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
@@ -274,117 +347,117 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
   );
 
   return shell(
-    <div className={cn(OBJECT_PAGE_BODY, "space-y-8")}>
-      <GoalOutcomeGallery key={goal.id} wsId={wsId} goalId={goal.id} />
-      {!issuesQuery.isError && <GoalTaskPrototypes key={`prototypes-${goal.id}`} issues={linkedIssues} />}
+    <div className={cn(GOAL_PAGE_BODY, "space-y-5")}>
+      {/* Compact 3-column Goal Brief */}
+      <div className="grid gap-3 md:grid-cols-3">
+        <BriefCard title={t(($) => $.detail.intent)}>
+          <p className="whitespace-pre-wrap text-label text-foreground">
+            {goal.intent || t(($) => $.detail.no_intent)}
+          </p>
+        </BriefCard>
 
-      <Section title={t(($) => $.detail.intent)}>
-        <p className="whitespace-pre-wrap text-body text-muted-foreground">
-          {goal.intent || t(($) => $.detail.no_intent)}
-        </p>
-      </Section>
+        <BriefCard title={t(($) => $.detail.scope)}>
+          <p className="whitespace-pre-wrap text-label text-muted-foreground">
+            {goal.scope || t(($) => $.detail.no_scope)}
+          </p>
+        </BriefCard>
 
-      <Section title={t(($) => $.detail.scope)}>
-        <p className="whitespace-pre-wrap text-body text-muted-foreground">
-          {goal.scope || t(($) => $.detail.no_scope)}
-        </p>
-      </Section>
+        <BriefCard title={t(($) => $.detail.acceptance_criteria)}>
+          <p className="whitespace-pre-wrap text-label text-muted-foreground">
+            {goal.acceptance_criteria || t(($) => $.detail.no_criteria)}
+          </p>
+        </BriefCard>
+      </div>
 
-      <Section title={t(($) => $.detail.acceptance_criteria)}>
-        <p className="whitespace-pre-wrap text-body text-muted-foreground">
-          {goal.acceptance_criteria || t(($) => $.detail.no_criteria)}
-        </p>
-      </Section>
+      {/* Hero Mind Map / Tree of Goal & Tasks */}
+      <GoalTaskMap
+        key={`task-map-${goal.id}`}
+        goal={goal}
+        plan={plan}
+        linkedIssues={linkedIssues}
+        issuesLoading={issuesQuery.isLoading}
+        issuesError={issuesQuery.isError}
+        hasNextPage={!issuesUnavailable && Boolean(issuesQuery.hasNextPage)}
+        isFetchingNextPage={issuesQuery.isFetchingNextPage}
+        isFetchNextPageError={issuesQuery.isFetchNextPageError}
+        unlinkingIssueId={
+          unlinkIssue.isPending ? (unlinkIssue.variables?.issueId ?? null) : null
+        }
+        issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
+        onRetryIssues={() => void issuesQuery.refetch()}
+        onFetchNextPage={() => void issuesQuery.fetchNextPage()}
+        onOpenLinkDialog={() => setLinkOpen(true)}
+        onUnlinkIssue={handleUnlink}
+        onEditPlan={handleOpenPlanEditor}
+        onToggleExecution={plan ? (enabled) => void handleToggleExecution(enabled) : undefined}
+        executionPending={setExecution.isPending}
+        executionEnableBlocked={planEditorVisited && planExecutionBlocked}
+      />
+
+      {planQuery.isError && goal.project_id && !planEditorOpen ? (
+        <div role="alert" className="flex items-center gap-2 text-caption text-destructive">
+          <span>{planUnavailable ? t(($) => $.plan.plan_unavailable) : t(($) => $.plan.load_failed)}</span>
+          <Button size="sm" variant="outline" onClick={() => void planQuery.refetch()}>
+            {t(($) => $.list.retry)}
+          </Button>
+        </div>
+      ) : null}
 
       <GoalMethodRecommendation wsId={wsId} goalId={goal.id} updatedAt={goal.updated_at} />
 
-      <GoalPlanSection
-        key={goal.id}
-        goal={goal}
-        linkedIssues={linkedIssues}
-        issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
-      />
+      <GoalOutcomeGallery key={goal.id} wsId={wsId} goalId={goal.id} />
+      {!issuesQuery.isError && <GoalTaskPrototypes key={`prototypes-${goal.id}`} issues={linkedIssues} />}
 
-      {!goal.project_id && (
+      {!goal.project_id ? (
         <p className="rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">
           {t(($) => $.detail.workspace_goal_visible)}
         </p>
-      )}
+      ) : (
+        <div
+          ref={planEditorRef}
+          className="overflow-hidden rounded-xl border bg-card"
+          data-testid="goal-plan-collapsible"
+        >
+          <button
+            type="button"
+            aria-expanded={planEditorOpen}
+            onClick={() => setPlanEditor({ goalId, open: !planEditorOpen })}
+            className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-accent/50"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {planEditorOpen ? (
+                <ChevronDown className="size-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="size-4 text-muted-foreground" />
+              )}
+              <span className="text-body font-semibold text-foreground">
+                {t(($) => $.map.plan_editor_title)}
+              </span>
+              {plan ? (
+                <span className="text-caption text-muted-foreground">
+                  {t(($) => $.plan.revision, { revision: plan.revision })} ·{" "}
+                  {t(($) => $.plan.task_count, { value: plan.items.length })}
+                </span>
+              ) : null}
+            </div>
+            <span className="text-caption text-muted-foreground">
+              {planEditorOpen ? t(($) => $.map.collapse_editor) : t(($) => $.map.expand_editor)}
+            </span>
+          </button>
 
-      <section className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-title-sm font-semibold">{t(($) => $.detail.linked_tasks)}</h2>
-          <Button size="sm" variant="outline" onClick={() => setLinkOpen(true)}>
-            <Link2 className="size-3.5" />
-            {t(($) => $.detail.link_task)}
-          </Button>
+          {planEditorVisited ? (
+            <div hidden={!planEditorOpen} className="border-t px-4 py-4">
+              <GoalPlanSection
+                key={goal.id}
+                goal={goal}
+                linkedIssues={linkedIssues}
+                issueHref={(issue) => wsPaths.issueDetail(issue.identifier || issue.id)}
+                onExecutionBlockedChange={setPlanExecutionBlocked}
+              />
+            </div>
+          ) : null}
         </div>
-
-        {issuesQuery.isLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 3 }, (_, index) => (
-              <Skeleton key={index} className="h-9 w-full" />
-            ))}
-          </div>
-        ) : issuesQuery.isError ? (
-          <div className="flex items-center gap-2 text-body text-muted-foreground">
-            <span>{t(($) => $.detail.tasks_load_failed)}</span>
-            <Button variant="ghost" size="sm" onClick={() => void issuesQuery.refetch()}>
-              {t(($) => $.list.retry)}
-            </Button>
-          </div>
-        ) : linkedIssues.length === 0 ? (
-          <p className="text-body text-muted-foreground">{t(($) => $.detail.no_linked_tasks)}</p>
-        ) : (
-          <>
-            <ul className="divide-y divide-border/60 rounded-md border">
-              {linkedIssues.map((issue) => (
-                <li key={issue.id} className="flex items-center gap-2 px-3 py-2">
-                  <AppLink
-                    href={wsPaths.issueDetail(issue.identifier || issue.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2"
-                  >
-                    <StatusIcon status={issue.status} className="h-3.5 w-3.5 shrink-0" />
-                    <span className="shrink-0 text-caption text-muted-foreground">
-                      {issue.identifier}
-                    </span>
-                    <span className="truncate text-body">{issue.title}</span>
-                  </AppLink>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="text-muted-foreground"
-                    aria-label={t(($) => $.detail.unlink)}
-                    disabled={unlinkIssue.isPending && unlinkIssue.variables?.issueId === issue.id}
-                    onClick={() => handleUnlink(issue.id)}
-                  >
-                    {unlinkIssue.isPending && unlinkIssue.variables?.issueId === issue.id ? (
-                      <Spinner className="size-3.5" aria-hidden="true" />
-                    ) : (
-                      <Unlink />
-                    )}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-            {issuesQuery.hasNextPage && (
-              <div className="flex justify-center">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={issuesQuery.isFetchingNextPage}
-                  aria-busy={issuesQuery.isFetchingNextPage}
-                  onClick={() => void issuesQuery.fetchNextPage()}
-                >
-                  {issuesQuery.isFetchNextPageError
-                    ? t(($) => $.list.retry)
-                    : t(($) => $.detail.load_more_tasks)}
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
+      )}
 
       <GoalFormDialog
         open={editOpen}

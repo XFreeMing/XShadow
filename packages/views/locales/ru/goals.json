@@ -272,5 +272,31 @@
     "binding_unknown": "Другая привязка задачи ({{type}})",
     "start_refused": "Запрос отклонён до запуска. Ничего не создано; начните новый запуск, когда будете готовы.",
     "plan_unavailable": "Этот план здесь недоступен для чтения. Перезагрузите его, чтобы продолжить."
+  },
+  "map": {
+    "title": "Карта цели и задач",
+    "view_switch": "Переключить вид карты",
+    "mindmap_view": "Ментальная карта",
+    "tree_view": "Дерево",
+    "edit_plan": "Редактировать план",
+    "goal_root": "Цель",
+    "node_progress": "{{completed}}/{{total}} готово",
+    "stage_short": "Этап {{stage}}",
+    "current_badge": "Текущая",
+    "waiting_badge": "Ожидание",
+    "extra_prereqs": "+{{count}} завис.",
+    "unplanned_badge": "Связанная задача",
+    "root_branch": "От цели",
+    "unplanned_section": "Другие связанные задачи",
+    "expand_branch": "Развернуть ветку",
+    "collapse_branch": "Свернуть ветку",
+    "upstream": "Зависит от:",
+    "downstream": "Открывает:",
+    "edit_in_plan": "Изменить в плане",
+    "close_inspector": "Закрыть детали",
+    "click_hint": "Нажмите на задачу, чтобы открыть детали и подсветить цепочку зависимостей.",
+    "plan_editor_title": "Редактор плана и AI-генерация",
+    "expand_editor": "Развернуть",
+    "collapse_editor": "Свернуть"
   }
 }

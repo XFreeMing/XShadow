@@ -272,5 +272,31 @@
     "binding_unknown": "その他のタスク紐付け（{{type}}）",
     "start_refused": "実行が始まる前にリクエストが拒否されました。何も作成されていないため、準備ができたら新しい実行を開始してください。",
     "plan_unavailable": "この計画はここでは読み取れません。再読み込みして続行してください。"
+  },
+  "map": {
+    "title": "目標とタスクの関係",
+    "view_switch": "表示レイアウトを切替",
+    "mindmap_view": "マインドマップ",
+    "tree_view": "ツリー",
+    "edit_plan": "計画を編集",
+    "goal_root": "目標",
+    "node_progress": "{{completed}}/{{total}} 完了",
+    "stage_short": "ステージ {{stage}}",
+    "current_badge": "進行中",
+    "waiting_badge": "前提待ち",
+    "extra_prereqs": "+{{count}} 前提",
+    "unplanned_badge": "関連タスク",
+    "root_branch": "目標直結",
+    "unplanned_section": "その他の関連タスク",
+    "expand_branch": "展開",
+    "collapse_branch": "折りたたむ",
+    "upstream": "前提タスク：",
+    "downstream": "後続タスク：",
+    "edit_in_plan": "計画で編集",
+    "close_inspector": "詳細を閉じる",
+    "click_hint": "タスクをクリックすると詳細と依存経路を表示します。",
+    "plan_editor_title": "計画エディタ・AI生成",
+    "expand_editor": "開く",
+    "collapse_editor": "閉じる"
   }
 }

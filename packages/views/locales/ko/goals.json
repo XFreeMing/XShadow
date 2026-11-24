@@ -272,5 +272,31 @@
     "binding_unknown": "기타 작업 연결({{type}})",
     "start_refused": "실행이 시작되기 전에 요청이 거부되었습니다. 아무것도 생성되지 않았으니 준비되면 새 실행을 시작하세요.",
     "plan_unavailable": "이 계획은 여기에서 읽을 수 없습니다. 다시 불러온 뒤 계속하세요."
+  },
+  "map": {
+    "title": "목표와 작업 관계",
+    "view_switch": "관계 보기 전환",
+    "mindmap_view": "마인드맵",
+    "tree_view": "트리",
+    "edit_plan": "계획 편집",
+    "goal_root": "목표",
+    "node_progress": "{{completed}}/{{total}} 완료",
+    "stage_short": "단계 {{stage}}",
+    "current_badge": "진행 중",
+    "waiting_badge": "선행 대기",
+    "extra_prereqs": "+{{count}} 선행",
+    "unplanned_badge": "연결된 작업",
+    "root_branch": "목표 직결",
+    "unplanned_section": "기타 연결된 작업",
+    "expand_branch": "분기 펼치기",
+    "collapse_branch": "분기 접기",
+    "upstream": "선행 작업:",
+    "downstream": "후속 작업:",
+    "edit_in_plan": "계획에서 편집",
+    "close_inspector": "상세 닫기",
+    "click_hint": "작업을 클릭하면 상세 정보와 의존 경로가 강조됩니다.",
+    "plan_editor_title": "계획 편집기 및 AI 생성",
+    "expand_editor": "펼치기",
+    "collapse_editor": "접기"
   }
 }

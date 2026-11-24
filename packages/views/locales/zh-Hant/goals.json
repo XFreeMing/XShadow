@@ -272,5 +272,31 @@
     "binding_unknown": "其他任務關聯（{{type}}）",
     "start_refused": "本次請求在執行開始前遭到拒絕，沒有建立任何執行；準備好後請開始新的執行。",
     "plan_unavailable": "目前無法讀取此計畫，請重新載入後繼續。"
+  },
+  "map": {
+    "title": "目標與任務關係",
+    "view_switch": "切換關係檢視",
+    "mindmap_view": "心智圖",
+    "tree_view": "樹狀",
+    "edit_plan": "編輯計畫",
+    "goal_root": "目標",
+    "node_progress": "已完成 {{completed}}/{{total}}",
+    "stage_short": "階段 {{stage}}",
+    "current_badge": "目前",
+    "waiting_badge": "等待前置",
+    "extra_prereqs": "+{{count}} 前置",
+    "unplanned_badge": "關聯任務",
+    "root_branch": "目標直連",
+    "unplanned_section": "其他關聯任務",
+    "expand_branch": "展開分支",
+    "collapse_branch": "收合分支",
+    "upstream": "前置依賴：",
+    "downstream": "後續任務：",
+    "edit_in_plan": "在計畫中編輯",
+    "close_inspector": "關閉詳情",
+    "click_hint": "點擊任務可檢視詳情並反白依賴路徑。",
+    "plan_editor_title": "計畫編輯與 AI 生成",
+    "expand_editor": "展開",
+    "collapse_editor": "收合"
   }
 }

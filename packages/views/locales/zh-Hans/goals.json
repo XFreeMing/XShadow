@@ -272,5 +272,31 @@
     "binding_unknown": "其他任务关联（{{type}}）",
     "start_refused": "本次请求在运行开始前被拒绝，没有创建任何运行；准备好后请开始新运行。",
     "plan_unavailable": "当前无法读取此计划，请重新加载后继续。"
+  },
+  "map": {
+    "title": "目标与任务关系",
+    "view_switch": "切换关系视图",
+    "mindmap_view": "脑图",
+    "tree_view": "树形",
+    "edit_plan": "编辑计划",
+    "goal_root": "目标",
+    "node_progress": "已完成 {{completed}}/{{total}}",
+    "stage_short": "阶段 {{stage}}",
+    "current_badge": "当前",
+    "waiting_badge": "等待前置",
+    "extra_prereqs": "+{{count}} 前置",
+    "unplanned_badge": "关联任务",
+    "root_branch": "目标直连",
+    "unplanned_section": "其他关联任务",
+    "expand_branch": "展开分支",
+    "collapse_branch": "收起分支",
+    "upstream": "前置依赖：",
+    "downstream": "后续任务：",
+    "edit_in_plan": "在计划中编辑",
+    "close_inspector": "关闭详情",
+    "click_hint": "点击任务可查看详情并高亮依赖链路。",
+    "plan_editor_title": "计划编辑与 AI 生成",
+    "expand_editor": "展开",
+    "collapse_editor": "收起"
   }
 }

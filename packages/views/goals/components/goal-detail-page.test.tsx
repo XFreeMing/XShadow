@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
@@ -304,5 +304,110 @@ describe("GoalDetailPage", () => {
     expect(
       await screen.findByText("This goal has no project, so everyone in the workspace can see it."),
     ).toBeInTheDocument();
+  });
+
+  it("renders goal and planned tasks in a mind map, switches to tree view, and opens the plan editor on demand", async () => {
+    api.getGoal.mockResolvedValue(goal({ project_id: "proj-1", status: "in_progress" }));
+    api.listGoalIssues.mockResolvedValue({
+      issues: [issue({ id: "issue-1", identifier: "DEV-2", title: "Upload book", status: "in_progress" })],
+      total: 1,
+    });
+    api.getGoalPlan.mockResolvedValue({
+      id: "plan-1",
+      goal_id: "goal-1",
+      project_id: "proj-1",
+      revision: 2,
+      state: "draft",
+      can_manage_execution: true,
+      items: [
+        {
+          id: "item-1",
+          title: "Upload book and resume progress",
+          outcome: "User returns to the same task",
+          acceptance_criteria: "Reopen shows live progress",
+          evidence_refs: [],
+          binding: { type: "existing", issue_id: "issue-1" },
+          proposed_owner: null,
+          stage: 1,
+          coordination: null,
+        },
+        {
+          id: "item-2",
+          title: "Inspect personal memory",
+          outcome: "Memory shows source and lifecycle",
+          acceptance_criteria: "Can revoke memory",
+          evidence_refs: [],
+          binding: { type: "new", issue_id: null },
+          proposed_owner: null,
+          stage: 2,
+          coordination: null,
+        },
+      ],
+      edges: [
+        {
+          prerequisite_item_id: "item-1",
+          dependent_item_id: "item-2",
+          reason: "Needs ingested book first",
+          kind: "required",
+        },
+      ],
+      context_snapshot: {},
+      progress: {
+        phase: "delivering",
+        total: 2,
+        completed: 0,
+        item_id: "item-1",
+        method_step: "Design test cases",
+      },
+      created_at: null,
+      updated_at: null,
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    // Mind map renders by default and plan editor starts collapsed.
+    expect(await screen.findByTestId("goal-mindmap-canvas")).toBeInTheDocument();
+    expect(await screen.findByTestId("mindmap-node-item-1")).toBeInTheDocument();
+    expect(screen.getByTestId("mindmap-node-item-2")).toBeInTheDocument();
+    expect(screen.queryByTestId("goal-plan-section")).not.toBeInTheDocument();
+
+    // Selecting a node opens the inline inspector with dependency links.
+    await user.click(screen.getByRole("button", { name: "Inspect personal memory" }));
+    const inspector = await screen.findByTestId("goal-task-inspector");
+    expect(within(inspector).getByText(/Memory shows source and lifecycle/)).toBeInTheDocument();
+    expect(
+      within(inspector).getByRole("button", { name: /DEV-2 · Upload book and resume progress/ }),
+    ).toBeInTheDocument();
+
+    // Switching to Tree view renders the hierarchical tree with collapsible branches.
+    await user.click(screen.getByRole("button", { name: "Tree" }));
+    const tree = await screen.findByTestId("goal-tree-view");
+    expect(screen.getByRole("button", { name: "Collapse branch" })).toBeInTheDocument();
+    expect(within(tree).getByRole("link", { name: "DEV-2" }).closest("button")).toBeNull();
+
+    // Clicking "Edit in plan" expands the collapsible plan editor section.
+    await user.click(within(inspector).getByRole("button", { name: "Edit in plan" }));
+    expect(await screen.findByTestId("goal-plan-section")).toBeInTheDocument();
+
+    const item = await screen.findByTestId("plan-item-item-2");
+    const title = within(item).getByRole("textbox", { name: "Title" });
+    fireEvent.change(title, { target: { value: "Inspect personal memory draft" } });
+    expect(title).toHaveValue("Inspect personal memory draft");
+    const editorToggle = screen.getByRole("button", { name: /Plan editor & AI generation/ });
+    await user.click(editorToggle);
+    expect(item).not.toBeVisible();
+    expect(within(screen.getByTestId("goal-task-map")).getByRole("button", { name: /Authorize/ })).toBeDisabled();
+    await user.click(editorToggle);
+    expect(title).toBeVisible();
+    expect(title).toHaveValue("Inspect personal memory draft");
+
+    api.getGoalPlan.mockRejectedValue(new ApiError("Forbidden", 403, "Forbidden"));
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: goalKeys.plan("ws-1", "goal-1") });
+    });
+    expect(await screen.findByTestId("plan-section-unavailable")).toBeVisible();
+    expect(screen.queryByTestId("goal-task-inspector")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Inspect personal memory" })).not.toBeInTheDocument();
   });
 });

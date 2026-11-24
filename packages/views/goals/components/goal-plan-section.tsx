@@ -72,10 +72,12 @@ export function GoalPlanSection({
   goal,
   linkedIssues,
   issueHref,
+  onExecutionBlockedChange,
 }: {
   goal: Goal;
   linkedIssues?: Issue[];
   issueHref?: (issue: Issue) => string;
+  onExecutionBlockedChange?: (blocked: boolean) => void;
 }) {
   const { t } = useT("goals");
   const wsId = useWorkspaceId();
@@ -130,6 +132,11 @@ export function GoalPlanSection({
   const focusedInsideRef = useRef<HTMLElement | null>(null);
   const conflictReloadRef = useRef<HTMLButtonElement | null>(null);
   const planRetryRef = useRef<HTMLButtonElement | null>(null);
+
+  const executionBlocked = dirty || setExecution.isPending || savePlan.isPending;
+  useEffect(() => {
+    onExecutionBlockedChange?.(executionBlocked);
+  }, [executionBlocked, onExecutionBlockedChange]);
 
   // Remember where focus is inside the plan area, but forget it as soon as the
   // reader moves focus to a control outside. The memory must describe the
@@ -604,7 +611,7 @@ export function GoalPlanSection({
               <div className="flex flex-wrap gap-2">
                 {executionAvailable && executionState !== "active" ? (
                   <Button type="button" size="sm" variant="outline"
-                    disabled={dirty || setExecution.isPending || savePlan.isPending}
+                    disabled={executionBlocked}
                     onClick={() => void changeExecution(true)}>
                     {t(($) => $.plan_execution.enable, { revision: plan.revision })}
                   </Button>
