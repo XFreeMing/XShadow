@@ -346,7 +346,7 @@ func TestAgileUpgradesRoleBoundDomainTemplateWithTestFirstPreparation(t *testing
 	previous.Steps[1].Reviewer = &Actor{Kind: "project_lead"}
 	updated := Catalog([]Template{previous})[0]
 	design := updated.Steps[1]
-	if updated.Revision != previous.Revision+1 || design.Gate != "coverage" ||
+	if updated.Revision != previous.Revision+agileTemplate().Revision-domainDrivenAgile().Revision || design.Gate != "coverage" ||
 		!reflect.DeepEqual(design.Owner, previous.Steps[1].Owner) || !reflect.DeepEqual(design.Reviewer, previous.Steps[1].Reviewer) {
 		t.Fatalf("wrong method revision or design roles: %+v", updated)
 	}
@@ -354,5 +354,31 @@ func TestAgileUpgradesRoleBoundDomainTemplateWithTestFirstPreparation(t *testing
 		if !strings.Contains(design.Output, term) {
 			t.Errorf("design output lacks %q: %s", term, design.Output)
 		}
+	}
+}
+
+func TestNewAgileStoriesLocateProjectAndStoryArtifacts(t *testing.T) {
+	previous := testFirstAgile()
+	previous.Steps[1].Owner = &Actor{Kind: "creator"}
+	previous.Steps[1].Reviewer = &Actor{Kind: "project_lead"}
+	frozen := snapshot(previous)
+	run := Recommend(Catalog([]Template{previous}), "开发功能", "", "")
+	if run.Method == nil || run.Method.Revision <= previous.Revision || !reflect.DeepEqual(run.Method.Steps[1].Owner, frozen.Steps[1].Owner) {
+		t.Fatal("new story did not adopt artifact guidance with the configured owner")
+	}
+	for i, terms := range [][]string{
+		{"US-01.md", "统一语言表", "领域接口"},
+		{"US-01-tdd/", "测试用例代码", "测试数据准备代码"},
+		{"候选提交", "领域接口"},
+		{"US 编号", "独立复验"},
+	} {
+		for _, term := range terms {
+			if !strings.Contains(run.Method.Steps[i].Output, term) {
+				t.Errorf("step %d output omits %q", i+1, term)
+			}
+		}
+	}
+	if !reflect.DeepEqual(snapshot(previous), frozen) {
+		t.Fatal("changed the previous story contract")
 	}
 }

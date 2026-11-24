@@ -89,7 +89,7 @@ func domainDrivenAgile() Template {
 	return m
 }
 
-func agileTemplate() Template {
+func testFirstAgile() Template {
 	m := domainDrivenAgile()
 	m.Revision++
 	criteria, coverage, candidate := &m.Steps[0], &m.Steps[1], &m.Steps[2]
@@ -103,9 +103,28 @@ func agileTemplate() Template {
 	return m
 }
 
+func agileTemplate() Template {
+	m := testFirstAgile()
+	m.Revision++
+	criteria, coverage, candidate, delivery := &m.Steps[0], &m.Steps[1], &m.Steps[2], &m.Steps[3]
+	criteria.Instructions += " 每个史诗使用一个 epics/<史诗>/ 目录。为故事分配项目内唯一且稳定的短编号，如 US-01，在该目录维护唯一的 US-01.md，原事项链接到它。故事引用项目统一语言表及领域源码。表中逐项对应限界上下文、业务词、定义和代码标识符。全项目的 DDD 模型由项目语言的接口和数据结构表达，聚合根控制聚合的一致性边界，实体有身份，值对象按值判断相等。复用现有领域包，新增术语先更新对应表。"
+	criteria.Output = "原卡链接 epics/<史诗>/US-01.md。故事列出带编号和修订的验收标准、可观察结果，并链接项目统一语言表和表达相应规则的领域接口与数据结构。"
+	criteria.Checks[0] += "。从原事项可打开唯一的故事文件，按表中词汇和标识找到对应领域类型"
+	coverage.Instructions += " 在故事旁创建与之唯一对应的 US-01-tdd/，存放可运行的测试用例代码、测试数据准备代码及获准的固定样本。每条用例标明验收标准编号。故事文件链接该目录并给出从仓库复跑的命令。用例调用项目领域接口，预期独立于实现。"
+	coverage.Output = "与故事同目录的 US-01-tdd/，含测试用例代码、测试数据准备代码、固定测试数据。故事给出复跑命令、标准与用例的对应关系、红灯断言及绿灯条件。"
+	coverage.Checks[0] += "。故事中的命令能加载对应目录的测试数据并运行关联断言"
+	candidate.Instructions += " 从故事文件运行对应 TDD 目录的用例。实现依赖项目领域接口，逐项核对需求、类型、字段、行为和测试使用统一语言表约定的标识与含义。领域规则改变时同步更新领域类型、术语映射和受影响的故事用例。"
+	candidate.Output = "故事关联使用项目领域接口的候选提交、完整 SHA、同一用例的红绿或既有行为基线及回归实测。"
+	candidate.Checks[1] += "。候选中的业务命名、对象身份和行为符合统一语言表及领域接口"
+	delivery.Instructions += " 从原事项打开故事文件，沿链接核对同一候选上的统一语言表、领域接口与数据结构、数据准备及测试用例。独立运行故事中的命令，并从真实交付入口复验。"
+	delivery.Output = "按 US 编号可查的实际交付入口、同一候选的独立复验结果、逐项结论和遗留事项负责人。"
+	delivery.Checks[0] += "。从故事可定位候选上的数据准备和用例代码，独立复验结论可回查"
+	return m
+}
+
 func upgradeAgile(m Template) Template {
 	current := agileTemplate()
-	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile()} {
+	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile()} {
 		if m.Kind != previous.Kind || len(m.Steps) != len(previous.Steps) {
 			continue
 		}
