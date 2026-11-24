@@ -219,8 +219,20 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		// handshake/network failures below must leave it false.
 		var resumeRejected bool
 
+		setupTimeout := opts.ThreadHandshakeTimeout
+		if setupTimeout <= 0 {
+			setupTimeout = time.Minute
+		}
+		setupCtx, cancelSetup := context.WithTimeout(runCtx, setupTimeout)
+		defer func() {
+			if errors.Is(setupCtx.Err(), context.DeadlineExceeded) {
+				cancel()
+			}
+			cancelSetup()
+		}()
+
 		// 1. Initialize handshake.
-		initResult, err := c.request(runCtx, "initialize", map[string]any{
+		initResult, err := c.request(setupCtx, "initialize", map[string]any{
 			"protocolVersion": 1,
 			"clientInfo": map[string]any{
 				"name":    "multica-agent-sdk",
@@ -254,7 +266,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			// the runtime re-connects them as part of the resume. Without
 			// this, a resumed Kimi task lost access to MCP tools that a
 			// fresh task on the same agent would have.
-			result, err := c.request(runCtx, "session/resume", map[string]any{
+			result, err := c.request(setupCtx, "session/resume", map[string]any{
 				"cwd":        cwd,
 				"sessionId":  opts.ResumeSessionID,
 				"mcpServers": mcpServers,
@@ -279,7 +291,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				)
 			}
 		} else {
-			result, err := c.request(runCtx, "session/new", map[string]any{
+			result, err := c.request(setupCtx, "session/new", map[string]any{
 				"cwd":        cwd,
 				"mcpServers": mcpServers,
 			})
@@ -312,7 +324,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		// believe their pick was honoured while the task actually
 		// ran on something else.
 		if opts.Model != "" {
-			if _, err := c.request(runCtx, "session/set_model", map[string]any{
+			if _, err := c.request(setupCtx, "session/set_model", map[string]any{
 				"sessionId": sessionID,
 				"modelId":   opts.Model,
 			}); err != nil {
@@ -356,7 +368,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		// value, the session sits at that value. If it answers without a `thinking`
 		// currentValue at all, we cannot tell which level is in effect.
 		if opts.ThinkingLevel != "" {
-			configResult, err := c.request(runCtx, "session/set_config_option", map[string]any{
+			configResult, err := c.request(setupCtx, "session/set_config_option", map[string]any{
 				"sessionId": sessionID,
 				"configId":  "thinking",
 				"value":     opts.ThinkingLevel,
@@ -382,6 +394,15 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				}
 			}
 		}
+
+		if err := setupCtx.Err(); err != nil {
+			resCh <- Result{
+				Status: "failed", Error: fmt.Sprintf("kimi session setup failed: %v", err),
+				DurationMs: time.Since(startTime).Milliseconds(),
+			}
+			return
+		}
+		cancelSetup()
 
 		// 4. Build the prompt content. If we have a system prompt, prepend it.
 		userText := prompt

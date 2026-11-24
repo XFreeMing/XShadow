@@ -1950,3 +1950,35 @@ func TestKimiBackendWireTurnFailurePastOversizedRecord(t *testing.T) {
 		t.Fatal("timeout waiting for result")
 	}
 }
+
+func TestKimiStartupSilenceReturnsFailureBeforeRunDeadline(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "silent-kimi")
+	writeTestExecutable(t, path, []byte("#!/bin/sh\nwhile IFS= read -r line; do :; done\n"))
+	backend, err := New("kimi", Config{ExecutablePath: path, Logger: slog.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "assess readiness", ExecOptions{ThreadHandshakeTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-session.Result:
+		if result.Status != "failed" || !strings.Contains(result.Error, "initialize") || !strings.Contains(result.Error, "deadline exceeded") {
+			t.Fatalf("expected an actionable initialize failure, got %+v", result)
+		}
+	case <-ctx.Done():
+		t.Fatal("silent startup consumed the entire run deadline")
+	}
+	select {
+	case _, open := <-session.Messages:
+		if open {
+			t.Fatal("timed-out startup emitted an unexpected message")
+		}
+	case <-ctx.Done():
+		t.Fatal("timed-out startup did not terminate its process")
+	}
+}
