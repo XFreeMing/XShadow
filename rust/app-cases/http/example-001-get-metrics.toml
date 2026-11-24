@@ -1,0 +1,12 @@
+[request]
+method = "GET"
+path = "/metrics"
+
+[response]
+status = 404
+
+[response.headers]
+content-security-policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+content-type = "text/plain; charset=utf-8"
+vary = "Origin"
+x-content-type-options = "nosniff"

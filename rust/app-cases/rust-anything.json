@@ -1,0 +1,18 @@
+{
+  "schema": "rust-anything/app-cases@1",
+  "name": "xshadow-server",
+  "run": [
+    "bash",
+    "-c",
+    "cd \"$XSHADOW_MIGRATION_SANDBOX\" && exec env -i PATH=\"$PATH\" PORT=\"$PORT\" DATABASE_URL=\"$DATABASE_URL\" \"$XSHADOW_GO_REFERENCE\""
+  ],
+  "normalize": [
+    "timestamps"
+  ],
+  "normalizers": {
+    "commit": "\"[a-f0-9]{7,40}\"",
+    "pid": "\"pid\":[0-9]+"
+  },
+  "timeout_secs": 20,
+  "http": {}
+}
