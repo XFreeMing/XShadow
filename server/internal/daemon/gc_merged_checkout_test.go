@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -104,6 +105,14 @@ func TestReclaimMergedGitHubCheckout(t *testing.T) {
 			git(repo, "config", "commit.gpgsign", "false")
 			git(repo, "commit", "--allow-empty", "-m", "base")
 			git(repo, "remote", "add", "origin", "git@github.com:acme/app.git")
+			globalConfig := filepath.Join(root, "gitconfig")
+			if err := os.WriteFile(globalConfig, []byte("[multica]\n\tcheckout-mode = isolated\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+			if repocache.IsManagedClone(t.Context(), repo) {
+				t.Fatal("a global Git setting must not establish checkout ownership")
+			}
 			git(repo, "config", "multica.checkout-mode", "isolated")
 			checkout := repo
 			branch := "agent/coder/dev-1"

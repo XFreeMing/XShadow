@@ -1301,7 +1301,7 @@ func isIsolatedCheckoutContext(ctx context.Context, path string) bool {
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	out, err := runGitOutputContext(ctx, "-C", path, "config", "--get", isolatedCheckoutConfigKey)
+	out, err := runGitOutputContext(ctx, "-C", path, "config", "--local", "--get", isolatedCheckoutConfigKey)
 	return err == nil && strings.TrimSpace(string(out)) == isolatedCheckoutConfigValue
 }
 
