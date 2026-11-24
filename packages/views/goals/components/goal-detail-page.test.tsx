@@ -306,7 +306,7 @@ describe("GoalDetailPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows and edits the selected task in place across the mind map and tree", async () => {
+  it("opens task details in a drawer from the mind map and tree without scrolling", async () => {
     api.getGoal.mockResolvedValue(goal({ project_id: "proj-1", status: "in_progress" }));
     api.listGoalIssues.mockResolvedValue({
       issues: [issue({ id: "issue-1", identifier: "DEV-2", title: "Upload book", status: "in_progress" })],
@@ -367,21 +367,20 @@ describe("GoalDetailPage", () => {
     renderPage();
 
     const map = await screen.findByTestId("goal-task-map");
-    const firstNode = await within(map).findByTestId("mindmap-node-item-1");
     const nextNode = await within(map).findByTestId("mindmap-node-item-2");
+    expect(screen.queryByTestId("plan-item-item-1")).not.toBeInTheDocument();
     const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
     try {
       await user.click(within(nextNode).getByRole("button", { name: "Inspect personal memory" }));
-      const inspector = within(map).getByTestId("goal-task-inspector");
-      expect(within(inspector).getByRole("heading", { name: "Inspect personal memory" })).toBeVisible();
-      expect(within(map).getByRole("heading", { name: "AI planning" })).toBeVisible();
+      const inspector = await screen.findByRole("dialog", { name: "Inspect personal memory" });
+      expect(within(inspector).getByRole("button", { name: "Save plan" })).toBeVisible();
       expect(screen.queryByTestId("plan-item-item-1")).not.toBeInTheDocument();
 
-      const item = within(map).getByTestId("plan-item-item-2");
+      const item = within(inspector).getByTestId("plan-item-item-2");
       const title = within(item).getByRole("textbox", { name: "Title" });
       expect(title).toHaveValue("Inspect personal memory");
       expect(within(item).getByRole("textbox", { name: "Outcome" })).toHaveValue("Memory shows source and lifecycle");
-      expect(within(map).queryByRole("button", { name: "Edit in plan" })).not.toBeInTheDocument();
+      expect(within(inspector).queryByRole("button", { name: "Edit in plan" })).not.toBeInTheDocument();
 
       const evidence = within(item).getByText("memory-guide.md", { exact: false });
       expect(evidence).not.toBeVisible();
@@ -389,17 +388,19 @@ describe("GoalDetailPage", () => {
       expect(evidence).toBeVisible();
       fireEvent.change(title, { target: { value: "Inspect personal memory draft" } });
 
-      await user.click(within(inspector).getByRole("button", { name: /DEV-2 · Upload book and resume progress/ }));
-      expect(within(map).getByTestId("plan-item-item-1")).toBeVisible();
-      expect(within(firstNode).getByRole("button", { name: "Upload book and resume progress" })).toHaveAttribute("aria-pressed", "true");
+      await user.click(within(inspector).getByRole("button", { name: "DEV-2 · Upload book and resume progress" }));
+      expect(within(inspector).getByTestId("plan-item-item-1")).toBeVisible();
       expect(screen.queryByTestId("plan-item-item-2")).not.toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(within(nextNode).getByRole("button", { name: "Inspect personal memory draft" })).toHaveFocus();
       expect(within(map).getByRole("button", { name: /Authorize/ })).toBeDisabled();
 
       await user.click(within(map).getByRole("button", { name: "Tree" }));
       const tree = await within(map).findByTestId("goal-tree-view");
       expect(within(tree).getByRole("link", { name: "DEV-2" }).closest("button")).toBeNull();
       await user.click(within(tree).getByRole("button", { name: /Inspect personal memory draft/ }));
-      expect(within(map).getByRole("textbox", { name: "Title" })).toHaveValue("Inspect personal memory draft");
+      expect(within(await screen.findByRole("dialog", { name: "Inspect personal memory draft" })).getByRole("textbox", { name: "Title" })).toHaveValue("Inspect personal memory draft");
       expect(scrollIntoView).not.toHaveBeenCalled();
     } finally {
       scrollIntoView.mockRestore();
