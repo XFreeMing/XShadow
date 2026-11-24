@@ -2209,6 +2209,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/environment-commands/{commandId}", h.GetIssueEnvironmentCommand)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
 					r.Post("/pull-requests", h.LinkIssuePullRequest)
+					r.With(handler.RequireHumanActor, middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/pull-requests/{prId}/auto-merge", h.RequestIssueGitHubAutoMerge)
 					r.Delete("/pull-requests/{prId}", h.UnlinkIssuePullRequest)
 					r.Put("/pr-auto-complete", h.SetIssuePRAutoComplete)
 				})

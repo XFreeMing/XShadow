@@ -2,6 +2,7 @@
 
 import { GitBranch, Pencil, TriangleAlert } from "@multica/ui/icons";
 import type { LocalDirectoryExecutionMode } from "@multica/core/types";
+import { useConfigStore } from "@multica/core/config";
 import { useT } from "../../i18n/use-t";
 
 /**
@@ -30,7 +31,7 @@ interface LocalDirectoryModeOptionsProps {
 }
 
 /**
- * The two-option choice for how runs use a local_directory resource.
+ * The choice for how runs use a local_directory resource.
  *
  * Shared by the create-project modal, the resources section's add flow and its
  * mode chip, so the same decision offers literally the same options, copy and
@@ -49,6 +50,7 @@ export function LocalDirectoryModeOptions({
 }: LocalDirectoryModeOptionsProps) {
   const { t } = useT("projects");
   const worktreeDisabled = unavailableReason !== undefined;
+  const supportsAuto = useConfigStore((state) => state.localAutoWorktreeSupported);
 
   return (
     <div className="flex flex-col gap-2">
@@ -60,6 +62,17 @@ export function LocalDirectoryModeOptions({
         selected={value === "in_place"}
         onSelect={() => onChange("in_place")}
       />
+      {supportsAuto && (
+        <ModeOption
+          icon={<GitBranch className="size-4" />}
+          title={t(($) => $.resources.mode_auto_title)}
+          description={t(($) => $.resources.mode_auto_description)}
+          identifier="auto"
+          selected={value === "auto"}
+          disabled={worktreeDisabled}
+          onSelect={() => onChange("auto")}
+        />
+      )}
       <ModeOption
         icon={<GitBranch className="size-4" />}
         title={t(($) => $.resources.mode_worktree_title)}

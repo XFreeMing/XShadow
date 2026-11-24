@@ -207,6 +207,7 @@ func daemonCommonCapabilities() []string {
 		protocol.DaemonCapabilitySkillBundlesV1,
 		protocol.DaemonCapabilityCoalescedCommentsV1,
 		protocol.DaemonCapabilityLocalWorktreeV1,
+		protocol.DaemonCapabilityLocalAutoWorktreeV1,
 		protocol.DaemonCapabilitySourceContextQuickCreateV1,
 		protocol.DaemonCapabilityRPCV1,
 		protocol.DaemonCapabilityPlatformSkillV1,
@@ -997,12 +998,14 @@ type IssueGCStatus struct {
 // outside the requested workspace, preserving the server's anti-enumeration
 // contract. Err is only populated by the legacy per-issue fallback.
 type IssueGCCheckResult struct {
-	ID        string    `json:"id"`
-	Found     bool      `json:"found"`
-	Status    string    `json:"status,omitempty"`
-	Category  string    `json:"category,omitempty"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
-	Err       error     `json:"-"`
+	ID           string                           `json:"id"`
+	Found        bool                             `json:"found"`
+	Status       string                           `json:"status,omitempty"`
+	Category     string                           `json:"category,omitempty"`
+	UpdatedAt    time.Time                        `json:"updated_at,omitempty"`
+	MergedHeads  []protocol.MergedPullRequestHead `json:"merged_heads,omitempty"`
+	PendingMerge bool                             `json:"pending_merge,omitempty"`
+	Err          error                            `json:"-"`
 }
 
 type issueGCBatchResponse struct {

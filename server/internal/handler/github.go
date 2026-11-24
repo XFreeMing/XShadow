@@ -1158,6 +1158,27 @@ func (h *Handler) broadcastPRSnapshotApplied(ctx context.Context, prID pgtype.UU
 	})
 }
 
+func (h *Handler) reconcileGitHubMerge(ctx context.Context, prID pgtype.UUID) {
+	pr, err := h.Queries.GetGitHubPullRequestByID(ctx, prID)
+	if err != nil || pr.State != "merged" {
+		return
+	}
+	ws, err := h.Queries.GetWorkspace(ctx, pr.WorkspaceID)
+	if err != nil || !githubFeaturesEnabled(ws) {
+		return
+	}
+	issues, err := h.Queries.ListIssueIDsForPullRequest(ctx, prID)
+	if err != nil {
+		slog.Warn("github: reconcile merged pull request links failed", "err", err)
+		return
+	}
+	resolver := issuestatus.NewResolver(pr.WorkspaceID)
+	for _, issueID := range issues {
+		h.maybeAutoCompleteIssue(ctx, pr.WorkspaceID, issueID, resolver)
+	}
+	h.broadcastPRSnapshotApplied(ctx, prID)
+}
+
 // ── Webhook ─────────────────────────────────────────────────────────────────
 
 // identifierRe extracts identifiers like "MUL-1510" from text. Case-insensitive

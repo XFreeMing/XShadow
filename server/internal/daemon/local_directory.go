@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 // localDirectoryResourceType is the project_resource discriminator the daemon
@@ -26,6 +28,7 @@ const localDirectoryResourceType = "local_directory"
 const (
 	localDirectoryModeInPlace  = "in_place"
 	localDirectoryModeWorktree = "worktree"
+	localDirectoryModeAuto     = "auto"
 )
 
 // localDirectoryRef mirrors the server-side ref shape for local_directory
@@ -45,9 +48,11 @@ type localDirectoryRef struct {
 // absolute path; the path mutex keys on it so two different routes to the
 // same directory are serialised.
 type localDirectoryAssignment struct {
-	Ref      localDirectoryRef
-	AbsPath  string // user-provided path, cleaned but not symlink-resolved
-	RealPath string // canonical key for the path mutex
+	Ref           localDirectoryRef
+	AbsPath       string // user-provided path, cleaned but not symlink-resolved
+	RealPath      string // canonical key for the path mutex
+	GitRoot       string
+	CommittedOnly bool
 }
 
 // UsesWorktree reports whether this assignment runs each task in its own git
@@ -56,7 +61,7 @@ type localDirectoryAssignment struct {
 // serialises, cleans up sidecars, or exempts the env root from GC must branch
 // on this rather than on "is there a local_directory assignment at all".
 func (a *localDirectoryAssignment) UsesWorktree() bool {
-	return a != nil && strings.TrimSpace(a.Ref.ExecutionMode) == localDirectoryModeWorktree
+	return a != nil && (strings.TrimSpace(a.Ref.ExecutionMode) == localDirectoryModeWorktree || a.CommittedOnly)
 }
 
 // DisplayName is the human-facing name for this directory, safe to render in
@@ -93,7 +98,7 @@ func (a *localDirectoryAssignment) ValidateExecutionMode() error {
 		return nil
 	}
 	switch strings.TrimSpace(a.Ref.ExecutionMode) {
-	case "", localDirectoryModeInPlace, localDirectoryModeWorktree:
+	case "", localDirectoryModeInPlace, localDirectoryModeWorktree, localDirectoryModeAuto:
 		return nil
 	default:
 		return fmt.Errorf(
@@ -122,7 +127,15 @@ func localDirectoryAssignmentForTask(task Task, daemonID string) (*localDirector
 	if task.IsLeaderTask {
 		return nil, nil
 	}
-	return findLocalDirectoryAssignment(task.ProjectResources, daemonID)
+	assignment, err := findLocalDirectoryAssignment(task.ProjectResources, daemonID)
+	if assignment != nil {
+		assignment.CommittedOnly = assignment.Ref.ExecutionMode == localDirectoryModeAuto && task.localDirectoryConcurrent
+		assignment.GitRoot = execenv.LocalCheckoutRoot(assignment.RealPath)
+		if assignment.GitRoot != "" {
+			assignment.RealPath = assignment.GitRoot
+		}
+	}
+	return assignment, err
 }
 
 // localDirectoryLockExempt reports whether a task may run inside an in_place
@@ -519,20 +532,11 @@ func (l *LocalPathLocker) Acquire(ctx context.Context, realPath, taskID string, 
 		return nil, errors.New("local_directory: taskID required for lock")
 	}
 
-	l.mu.Lock()
-	entry, ok := l.locks[realPath]
-	if !ok {
-		entry = &pathLockEntry{}
-		l.locks[realPath] = entry
-	}
-	l.mu.Unlock()
+	entry := l.entry(realPath)
 
 	// Try the fast path first — no allocation, no waiter goroutine.
-	if entry.mu.TryLock() {
-		entry.mu2.Lock()
-		entry.holderID = taskID
-		entry.mu2.Unlock()
-		return l.releaser(realPath, entry), nil
+	if release := l.tryAcquire(realPath, taskID, entry); release != nil {
+		return release, nil
 	}
 
 	// Slow path: somebody else holds the lock. Fire onWait once with the
@@ -569,6 +573,27 @@ func (l *LocalPathLocker) Acquire(ctx context.Context, realPath, taskID string, 
 		}()
 		return nil, ctx.Err()
 	}
+}
+
+func (l *LocalPathLocker) entry(realPath string) *pathLockEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry := l.locks[realPath]
+	if entry == nil {
+		entry = &pathLockEntry{}
+		l.locks[realPath] = entry
+	}
+	return entry
+}
+
+func (l *LocalPathLocker) tryAcquire(realPath, taskID string, entry *pathLockEntry) func() {
+	if !entry.mu.TryLock() {
+		return nil
+	}
+	entry.mu2.Lock()
+	entry.holderID = taskID
+	entry.mu2.Unlock()
+	return l.releaser(realPath, entry)
 }
 
 // releaser returns the unlock callback. Idempotent via a once flag so a

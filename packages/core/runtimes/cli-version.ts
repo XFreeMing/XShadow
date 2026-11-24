@@ -125,6 +125,7 @@ function meetsMinCliVersion(detected: string | undefined | null, minimum: string
  * `server/pkg/protocol/messages.go`.
  */
 export const LOCAL_WORKTREE_CAPABILITY = "local-worktree-v1";
+export const LOCAL_AUTO_WORKTREE_CAPABILITY = "local-auto-worktree-v1";
 
 /** Minimal runtime shape this module needs; keeps callers from importing types. */
 type RuntimeCapabilityRow = {
@@ -159,6 +160,7 @@ type RuntimeCapabilityRow = {
 export function runtimeAdvertisesLocalWorktree(
   runtimes: RuntimeCapabilityRow[],
   daemonId: string | null | undefined,
+  capability = LOCAL_WORKTREE_CAPABILITY,
 ): boolean {
   if (!daemonId) return false;
   let newest: RuntimeCapabilityRow | undefined;
@@ -176,5 +178,5 @@ export function runtimeAdvertisesLocalWorktree(
   const metadata = newest?.metadata;
   if (!metadata || typeof metadata !== "object") return false;
   const caps = (metadata as { capabilities?: unknown }).capabilities;
-  return Array.isArray(caps) && caps.includes(LOCAL_WORKTREE_CAPABILITY);
+  return Array.isArray(caps) && caps.includes(capability);
 }

@@ -83,7 +83,11 @@ In the default `in_place` mode a local directory is not an isolated environment:
 
 ## How runs share the directory
 
-A local directory has two execution modes, set per resource with `execution_mode`. Desktop labels them **Direct** and **Parallel**; the API, the CLI and the rest of this page use the identifiers.
+Set `execution_mode` for each local directory resource.
+
+### Isolate overlapping work
+
+In `auto` mode, the first writing task uses the project's current checkout and branch. An overlapping issue run on the same checkout gets a worktree based on committed code. Follow-up runs continue the delivery branch until GitHub confirms the merge. The runtime then stops continuing that branch.
 
 <LocalDirModeDemo />
 

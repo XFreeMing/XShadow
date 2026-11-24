@@ -94,6 +94,9 @@ type LocalWorktreeParams struct {
 	// or any subdirectory of it; the worktree always covers the whole repo,
 	// and the agent's cwd is the matching subdirectory inside it.
 	LocalPath string
+	// CommittedOnly isolates an overlapping writer from the in-place run's
+	// uncommitted changes.
+	CommittedOnly bool
 	// EnvRoot is the daemon-owned task env root. The worktree is created
 	// inside it so the ordinary env-root GC reclaims it.
 	EnvRoot string
@@ -387,22 +390,19 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	// the snapshot writes every one of those bytes into the user's own object
 	// database, which is not something to do by accident on a directory full of
 	// un-ignored build output.
-	if err := checkUntrackedReplayable(gitRoot, logger); err != nil {
-		return nil, err
-	}
-
 	// The commit describing the user's directory as this task sees it — their
 	// tracked edits and their untracked files in one tree. Everything below
 	// reasons about the user's state through this single object.
-	userState, err := captureUserSnapshot(gitRoot, params.EnvRoot, headSHA, logger)
-	if err != nil {
-		// Fail closed. The promise of this mode is that the agent reasons about
-		// the code the user actually has; silently starting from HEAD instead
-		// would have it review a tree the user never saw and report confidently
-		// on it. A task that does not start is recoverable — one that answers
-		// from the wrong sources is not.
-		return nil, fmt.Errorf("execenv: could not capture the uncommitted changes in %q, "+
-			"so the worktree would not match what you have on disk: %w", gitRoot, err)
+	userState := headSHA
+	if !params.CommittedOnly {
+		if err := checkUntrackedReplayable(gitRoot, logger); err != nil {
+			return nil, err
+		}
+		userState, err = captureUserSnapshot(gitRoot, params.EnvRoot, headSHA, logger)
+		if err != nil {
+			return nil, fmt.Errorf("execenv: could not capture the uncommitted changes in %q, "+
+				"so the worktree would not match what you have on disk: %w", gitRoot, err)
+		}
 	}
 
 	plan := resolveTaskBranch(gitRoot, params, headSHA, logger)
@@ -448,10 +448,14 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	// in. A continued branch already carries the snapshot the previous turn
 	// recorded, and the agent's commits sit on top of it, so only what the user
 	// changed after that is new information there.
-	replay, replayErr := replayUserState(worktreePath, plan, userState, logger)
-	if replayErr != nil {
-		rollback()
-		return nil, replayErr
+	var replay replayResult
+	if !params.CommittedOnly {
+		var replayErr error
+		replay, replayErr = replayUserState(worktreePath, plan, userState, logger)
+		if replayErr != nil {
+			rollback()
+			return nil, replayErr
+		}
 	}
 	wt.ReplayConflicts = replay.conflicts
 	// An unresolved merge means the branch does not carry this turn's snapshot
@@ -1440,6 +1444,61 @@ func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA strin
 	return taskScoped
 }
 
+// HasUnmergedLocalWorktree keeps follow-up runs on their existing delivery
+// branch even after the overlap that originally created it has ended.
+func HasUnmergedLocalWorktree(params LocalWorktreeParams) bool {
+	if params.ConversationKey == "" && params.ConversationID != "" {
+		params.ConversationKey = taskKey(params.ConversationID)
+	}
+	gitRoot, err := resolveGitRoot(params.LocalPath)
+	if err != nil {
+		return false
+	}
+	head, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "HEAD")
+	return err == nil && resolveTaskBranch(gitRoot, params, head, nil).continues
+}
+
+// ConfirmDeliveredLocalBranch ends continuation of a branch in a user-owned
+// repository. Keep the branch itself so a user checkout or hidden leftovers
+// cannot be invalidated by a daemon cleanup.
+func ConfirmDeliveredLocalBranch(directory, branch, sha, workspaceID, agentID, issueID string, logger *slog.Logger) (bool, error) {
+	if !strings.HasPrefix(branch, "agent/") {
+		return false, nil
+	}
+	root, err := resolveGitRoot(directory)
+	if err != nil {
+		return false, err
+	}
+	unlock, err := lockGitRoot(root, logger)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	owner := branchOwner{WorkspaceID: workspaceID, AgentID: agentID, ConversationID: issueID}
+	if _, ok := branchOwnedBy(root, branch, owner, logger); !ok {
+		return false, nil
+	}
+	ref := "refs/heads/" + branch
+	tip, err := runGitTrimmed(root, "rev-parse", "--verify", "--quiet", ref)
+	if err != nil || tip != sha {
+		return false, nil
+	}
+	_, err = runGit(root, "update-ref", mergedLocalBranchRef(branch), sha)
+	return err == nil, err
+}
+
+func mergedLocalBranchRef(branch string) string {
+	return mergedLocalBranchRefPrefix + branch
+}
+
+const mergedLocalBranchRefPrefix = "refs/multica/merged-local-branches/"
+
+// LocalCheckoutRoot returns the shared checkout boundary for path locking.
+func LocalCheckoutRoot(directory string) string {
+	root, _ := resolveGitRoot(directory)
+	return root
+}
+
 // planForConversationBranch reports how this task would use one candidate
 // branch name, and whether it may use it at all.
 func planForConversationBranch(gitRoot, name, headSHA string, owner branchOwner, logger *slog.Logger) (taskBranchPlan, bool) {
@@ -1457,6 +1516,9 @@ func planForConversationBranch(gitRoot, name, headSHA string, owner branchOwner,
 	}
 	record, owned := branchOwnedBy(gitRoot, name, owner, logger)
 	if !owned {
+		return taskBranchPlan{}, false
+	}
+	if merged, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", mergedLocalBranchRef(name)); err == nil && merged == tip {
 		return taskBranchPlan{}, false
 	}
 	// The user merged it: the branch tip carries nothing HEAD does not, so
@@ -2312,7 +2374,7 @@ func dropBranch(gitRoot, branch string, logger *slog.Logger) {
 // Best-effort and non-fatal: this is housekeeping in the user's repository, not
 // a precondition for the task.
 func pruneOrphanedStateRefs(gitRoot string, logger *slog.Logger) {
-	out, err := runGitTrimmed(gitRoot, "for-each-ref", "--format=%(refname)", localStateRefPrefix)
+	out, err := runGitTrimmed(gitRoot, "for-each-ref", "--format=%(refname)", localStateRefPrefix, mergedLocalBranchRefPrefix)
 	if err != nil {
 		if logger != nil {
 			logger.Debug("execenv: could not list local-directory snapshots", "git_root", gitRoot, "error", err)
@@ -2325,6 +2387,9 @@ func pruneOrphanedStateRefs(gitRoot string, logger *slog.Logger) {
 			continue
 		}
 		branch := strings.TrimPrefix(ref, localStateRefPrefix)
+		if branch == ref {
+			branch = strings.TrimPrefix(ref, mergedLocalBranchRefPrefix)
+		}
 		if branch == ref {
 			continue
 		}

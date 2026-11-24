@@ -16,7 +16,8 @@ const (
 	// is deliberately exempted from the version floor so `make daemon` stays
 	// unblocked, which let exactly such a daemon through (MUL-5707). A daemon
 	// that implements the mode says so; one that does not, cannot.
-	DaemonCapabilityLocalWorktreeV1 = "local-worktree-v1"
+	DaemonCapabilityLocalWorktreeV1     = "local-worktree-v1"
+	DaemonCapabilityLocalAutoWorktreeV1 = "local-auto-worktree-v1"
 	// DaemonCapabilitySourceContextQuickCreateV1 advertises support for the
 	// two-section quick-create prompt that keeps a new instruction separate
 	// from immutable historical source context.

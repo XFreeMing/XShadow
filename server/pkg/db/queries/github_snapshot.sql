@@ -36,6 +36,14 @@ WHERE id = sqlc.arg('pr_id') AND head_sha = sqlc.arg('head_sha');
 -- as UpdateGitHubPRSnapshot and the inserts below.
 DELETE FROM github_pull_request_check_run WHERE pr_id = $1;
 
+-- name: ConfirmGitHubPRMerged :execrows
+UPDATE github_pull_request
+SET state = 'merged', merged_at = sqlc.arg(merged_at),
+    closed_at = sqlc.arg(merged_at), head_sha = sqlc.arg(head_sha),
+    branch = sqlc.arg(head_ref), pr_updated_at = sqlc.arg(pr_updated_at), updated_at = now()
+WHERE id = sqlc.arg(pr_id) AND state <> 'merged'
+  AND pr_updated_at <= sqlc.arg(pr_updated_at);
+
 -- name: InsertGitHubPRCheckRun :exec
 INSERT INTO github_pull_request_check_run (
     pr_id, head_sha, ordinal, name, status, conclusion, details_url, is_status_context
@@ -60,6 +68,9 @@ WITH candidates AS (
           OR api_mergeable IS NULL
           OR api_mergeable = 'UNKNOWN'
           OR checks_rollup_state IN ('PENDING', 'EXPECTED')
+          OR EXISTS (
+              SELECT 1 FROM issue_pull_request link WHERE link.pull_request_id = pr.id
+          )
           OR EXISTS (
               SELECT 1
               FROM github_pull_request_check_run AS cr

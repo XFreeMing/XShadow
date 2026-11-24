@@ -1163,7 +1163,16 @@ type GCMeta struct {
 	// envRoot's output/ and logs/ around longer so users can inspect what
 	// the agent did in their own tree). Pattern-based artifact cleanup is
 	// still allowed.
-	LocalDirectory bool `json:"local_directory,omitempty"`
+	LocalDirectory bool                 `json:"local_directory,omitempty"`
+	LocalDelivery  *LocalBranchDelivery `json:"local_delivery,omitempty"`
+}
+
+// LocalBranchDelivery identifies a managed branch left by an isolated run;
+// the project checkout is outside the daemon's task root.
+type LocalBranchDelivery struct {
+	Directory string `json:"directory"`
+	Branch    string `json:"branch"`
+	AgentID   string `json:"agent_id"`
 }
 
 const gcMetaFile = ".gc_meta.json"
@@ -1182,7 +1191,9 @@ func WriteGCMeta(envRoot string, meta GCMeta, logger *slog.Logger) error {
 		logger.Debug("execenv: skipping .gc_meta.json write: kind is empty", "envRoot", envRoot)
 		return nil
 	}
-	meta.CompletedAt = time.Now().UTC()
+	if meta.CompletedAt.IsZero() {
+		meta.CompletedAt = time.Now().UTC()
+	}
 	data, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal gc meta: %w", err)

@@ -115,6 +115,39 @@ func checkRunCount(t *testing.T, pool *pgxpool.Pool, prID pgtype.UUID) int {
 	return n
 }
 
+func TestSnapshotRecoversMergeAfterMissingHeadAndCloseWebhooks(t *testing.T) {
+	pool := testDBPool(t)
+	q := db.New(pool)
+	pr := seedPRAt(t, pool, q, 1, "recover-merge", 7, "old-head")
+	now := pr.PrUpdatedAt.Time.Add(time.Minute).UTC().Format(time.RFC3339)
+	srv := snapshotServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/recover-merge/pulls/7" {
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"merged":true,"merged_at":%q,"updated_at":%q,"head":{"sha":"new-head","ref":"agent/coder/dev-7"}}`, now, now)
+	})
+	defer srv.Close()
+	m := NewManager(newTestClient(t, srv.URL), q, pool, nil)
+	m.jitter = func() time.Duration { return 0 }
+	receipts := 0
+	m.SetMergedObserver(func(_ context.Context, id pgtype.UUID) {
+		if id != pr.ID {
+			t.Errorf("merged unrelated PR: %v", id)
+		}
+		receipts++
+	})
+	addr := address{InstallationID: pr.InstallationID, Owner: pr.RepoOwner, Repo: pr.RepoName, Number: pr.PrNumber}
+	m.process(t.Context(), addr)
+	m.process(t.Context(), addr)
+	got, err := q.GetGitHubPullRequestByID(t.Context(), pr.ID)
+	if err != nil || got.State != "merged" || got.HeadSha != "new-head" ||
+		got.Branch.String != "agent/coder/dev-7" || !got.MergedAt.Valid || receipts != 1 {
+		t.Fatalf("got state=%s head=%s branch=%s merge=%v receipts=%d err=%v", got.State, got.HeadSha, got.Branch.String, got.MergedAt.Valid, receipts, err)
+	}
+}
+
 func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T) {
 	pool := testDBPool(t)
 	q := db.New(pool)

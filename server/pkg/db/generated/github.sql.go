@@ -429,6 +429,58 @@ func (q *Queries) ListAutoLinkedIssueIDsForPullRequest(ctx context.Context, pull
 	return items, nil
 }
 
+const listGitHubHeadsForIssueGC = `-- name: ListGitHubHeadsForIssueGC :many
+SELECT link.issue_id, pr.repo_owner, pr.repo_name, pr.branch, pr.head_sha, pr.state, pr.merged_at
+FROM issue_pull_request link
+JOIN github_pull_request pr ON pr.id = link.pull_request_id
+JOIN issue i ON i.id = link.issue_id AND i.workspace_id = pr.workspace_id
+WHERE pr.workspace_id = $1
+  AND link.issue_id = ANY($2::uuid[])
+`
+
+type ListGitHubHeadsForIssueGCParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	IssueIds    []pgtype.UUID `json:"issue_ids"`
+}
+
+type ListGitHubHeadsForIssueGCRow struct {
+	IssueID   pgtype.UUID        `json:"issue_id"`
+	RepoOwner string             `json:"repo_owner"`
+	RepoName  string             `json:"repo_name"`
+	Branch    pgtype.Text        `json:"branch"`
+	HeadSha   string             `json:"head_sha"`
+	State     string             `json:"state"`
+	MergedAt  pgtype.Timestamptz `json:"merged_at"`
+}
+
+func (q *Queries) ListGitHubHeadsForIssueGC(ctx context.Context, arg ListGitHubHeadsForIssueGCParams) ([]ListGitHubHeadsForIssueGCRow, error) {
+	rows, err := q.db.Query(ctx, listGitHubHeadsForIssueGC, arg.WorkspaceID, arg.IssueIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGitHubHeadsForIssueGCRow{}
+	for rows.Next() {
+		var i ListGitHubHeadsForIssueGCRow
+		if err := rows.Scan(
+			&i.IssueID,
+			&i.RepoOwner,
+			&i.RepoName,
+			&i.Branch,
+			&i.HeadSha,
+			&i.State,
+			&i.MergedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGitHubInstallationsByInstallationID = `-- name: ListGitHubInstallationsByInstallationID :many
 SELECT id, workspace_id, installation_id, account_login, account_type, account_avatar_url, connected_by_id, created_at, updated_at FROM github_installation
 WHERE installation_id = $1
@@ -796,6 +848,7 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     changed_files = EXCLUDED.changed_files,
     updated_at = now()
 WHERE EXCLUDED.pr_updated_at >= github_pull_request.pr_updated_at
+  AND (github_pull_request.state <> 'merged' OR EXCLUDED.state = 'merged')
 RETURNING id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files, api_mergeable, api_merge_state_status, checks_rollup_state, snapshot_head_sha, snapshot_fetched_at
 `
 

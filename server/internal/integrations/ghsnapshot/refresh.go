@@ -62,6 +62,7 @@ type Manager struct {
 	readSelector *dbreader.Selector
 	pool         TxBeginner
 	onApplied    func(ctx context.Context, prID pgtype.UUID)
+	onMerged     func(ctx context.Context, prID pgtype.UUID)
 
 	concurrency   int
 	viewTTL       time.Duration
@@ -139,6 +140,12 @@ func (m *Manager) SetReadSelector(selector *dbreader.Selector) {
 
 // Enabled reports whether the pipeline will actually do anything.
 func (m *Manager) Enabled() bool { return m != nil && m.client.Enabled() }
+
+// SetMergedObserver wires a recovered merge to the same delivery actions as a webhook.
+// The observer is configured before the manager starts.
+func (m *Manager) SetMergedObserver(observer func(context.Context, pgtype.UUID)) {
+	m.onMerged = observer
+}
 
 // Start launches the worker pool and the TTL sweeper under ctx. No-op (and
 // safe) when the manager is disabled.
@@ -273,6 +280,18 @@ func (m *Manager) process(ctx context.Context, addr address) {
 	anyApplied := false
 	anyOpenApplied := false
 	for _, row := range rows {
+		if snap.Merge != nil {
+			changed, err := m.queries.ConfirmGitHubPRMerged(ctx, db.ConfirmGitHubPRMergedParams{
+				PrID: row.ID, HeadSha: snap.HeadSHA, HeadRef: textOrNull(snap.Merge.HeadRef),
+				MergedAt: tsFromTime(snap.Merge.MergedAt), PrUpdatedAt: tsFromTime(snap.Merge.UpdatedAt),
+			})
+			if err != nil {
+				slog.Warn("ghsnapshot: confirm merge failed", "err", err.Error())
+			} else if changed != 0 && m.onMerged != nil {
+				m.onMerged(ctx, row.ID)
+			}
+			continue
+		}
 		applied, err := m.applySnapshot(ctx, row.ID, snap)
 		if err != nil {
 			slog.Warn("ghsnapshot: apply snapshot failed", "err", err.Error())
