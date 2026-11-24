@@ -127,6 +127,7 @@ describe("GoalPlanSection", () => {
   let qc: QueryClient;
   const api = {
     getGoalPlan: vi.fn(),
+    getGoalWorkMethod: vi.fn(),
     saveGoalPlan: vi.fn(),
     setGoalExecution: vi.fn(),
     createGoalPlanGeneration: vi.fn(),
@@ -138,6 +139,7 @@ describe("GoalPlanSection", () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     api.getGoalPlan.mockReset().mockResolvedValue(plan());
+    api.getGoalWorkMethod.mockReset().mockResolvedValue({ method: null, reason: "" });
     api.setGoalExecution.mockReset();
     api.saveGoalPlan.mockReset().mockImplementation(async (_goalId, data) =>
       plan({
@@ -164,6 +166,10 @@ describe("GoalPlanSection", () => {
     );
   }
 
+  async function openGeneration(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("button", { name: /^AI planning/ }));
+  }
+
   async function openTask(user: ReturnType<typeof userEvent.setup>, id: string, title: string) {
     const node = await screen.findByTestId(`mindmap-node-${id}`);
     await user.click(within(node).getByRole("button", { name: title }));
@@ -173,6 +179,48 @@ describe("GoalPlanSection", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   }
+
+  it("keeps review, generation and method details in the toolbar and retains generation input", async () => {
+    api.getGoalPlan.mockResolvedValue(plan({
+      items: [item("node-1", "First")],
+      review: {
+        generation_id: "review-1",
+        base_revision: 2,
+        phase: "preflight",
+        state: "succeeded",
+        assessment: { decision: "covered", summary: "The current review covers the expected outcome.", checks: [] },
+      },
+    }));
+    api.getGoalWorkMethod.mockResolvedValue({ method: null, reason: "Choose a method when the scope is known." });
+    const user = userEvent.setup();
+    renderSection({ ...goal, status: "in_progress" });
+
+    const tools = await screen.findByTestId("goal-plan-tools");
+    const review = await within(tools).findByRole("button", { name: /Goal review.*Coverage verified.*r2/ });
+    const generationButton = within(tools).getByRole("button", { name: "AI planning" });
+    const method = await within(tools).findByRole("button", { name: /Recommended work method.*No matching method/ });
+    const chart = await screen.findByTestId("goal-mindmap-canvas");
+    expect(tools.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(review).toHaveAttribute("aria-expanded", "false");
+    expect(generationButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Generate plan" })).not.toBeInTheDocument();
+
+    await user.click(review);
+    const summary = within(tools).getByText("The current review covers the expected outcome.");
+    expect(summary).toBeVisible();
+    await user.click(generationButton);
+    expect(summary).not.toBeVisible();
+    const intent = within(tools).getByRole("textbox", { name: "What should the plan deliver?" });
+    await user.clear(intent);
+    await user.type(intent, "Keep this draft");
+    await user.click(method);
+    expect(intent).not.toBeVisible();
+    expect(within(tools).getByText("Choose a method when the scope is known.")).toBeVisible();
+    await user.click(generationButton);
+    expect(intent).toBeVisible();
+    expect(intent).toHaveValue("Keep this draft");
+    expect(api.createGoalPlanGeneration).not.toHaveBeenCalled();
+  });
 
   it("authorizes and revokes the displayed saved plan", async () => {
     const base = plan({
@@ -320,6 +368,7 @@ describe("GoalPlanSection", () => {
     await user.clear(title);
     await user.type(title, "User title");
     await closeTask(user);
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -408,6 +457,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -433,6 +483,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -464,6 +515,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -494,6 +546,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -527,6 +580,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -563,6 +617,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -639,6 +694,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -695,6 +751,7 @@ describe("GoalPlanSection", () => {
     await user.click(screen.getByRole("button", { name: "Remove dependency on First" }));
     await user.click(screen.getByRole("button", { name: "Delete Second" }));
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -749,6 +806,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -792,6 +850,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const intent = await screen.findByLabelText("What should the plan deliver?");
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
@@ -827,6 +886,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const intent = await screen.findByLabelText("What should the plan deliver?");
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
@@ -877,6 +937,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const intent = await screen.findByLabelText("What should the plan deliver?");
     const top = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(top).toBeEnabled());
@@ -930,6 +991,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const intent = await screen.findByLabelText("What should the plan deliver?");
     const top = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(top).toBeEnabled());
@@ -995,6 +1057,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const top = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(top).toBeEnabled());
     await user.click(top);
@@ -1048,7 +1111,7 @@ describe("GoalPlanSection", () => {
       base_revision: second.expected_revision,
       state: "succeeded",
     });
-    expect(await screen.findByText("Plan ready")).toBeInTheDocument();
+    expect(await within(screen.getByTestId("plan-generation-status")).findByText("Plan ready")).toBeInTheDocument();
     expect(screen.getByTestId("plan-candidate")).toBeInTheDocument();
     expect(screen.queryByText("Planner broke")).not.toBeInTheDocument();
 
@@ -1073,6 +1136,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const intent = await screen.findByLabelText("What should the plan deliver?");
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
@@ -1110,6 +1174,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1159,6 +1224,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1210,6 +1276,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1292,6 +1359,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1376,6 +1444,7 @@ describe("GoalPlanSection", () => {
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Unsaved edit");
     await closeTask(user);
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1430,6 +1499,7 @@ describe("GoalPlanSection", () => {
     await user.click(await screen.findByRole("button", { name: "Add task" }));
     await user.type(screen.getByLabelText("Title"), "Unsaved edit");
     await closeTask(user);
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1461,6 +1531,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);
@@ -1490,6 +1561,7 @@ describe("GoalPlanSection", () => {
     const user = userEvent.setup();
     renderSection();
 
+    await openGeneration(user);
     const generate = await screen.findByRole("button", { name: "Generate plan" });
     await waitFor(() => expect(generate).toBeEnabled());
     await user.click(generate);

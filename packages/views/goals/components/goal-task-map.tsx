@@ -396,6 +396,8 @@ export function GoalTaskMap({
         </p>
       ) : null}
 
+      {children}
+
       {issuesError && !isFetchNextPageError && graph.nodes.length > 0 ? (
         <div role="alert" className="flex items-center gap-2 border-t px-4 py-2 text-caption text-muted-foreground">
           <span>{t(($) => $.detail.tasks_load_failed)}</span>
@@ -706,7 +708,6 @@ export function GoalTaskMap({
           </div>
         </div>
       ) : null}
-      {children}
     </section>
   );
 

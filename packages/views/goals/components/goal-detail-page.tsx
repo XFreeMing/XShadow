@@ -17,7 +17,6 @@ import {
   useUnlinkGoalIssue,
   useUpdateGoal,
 } from "@multica/core/goals";
-import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { projectListOptions } from "@multica/core/projects/queries";
@@ -39,7 +38,6 @@ import { AppLink, useNavigation } from "../../navigation";
 import { CollectionPageState } from "../../layout/collection-page";
 import { OBJECT_PAGE_BODY, ObjectPage } from "../../layout/object-page";
 import { useT } from "../../i18n";
-import { WorkMethodSteps } from "../../workflows/work-method-step";
 import { GoalStatusBadge } from "./goal-status-badge";
 import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
@@ -69,55 +67,6 @@ function BriefCard({ title, children }: { title: string; children: ReactNode }) 
       <h2 className="text-caption font-medium text-muted-foreground">{title}</h2>
       {children}
     </section>
-  );
-}
-
-function GoalMethodRecommendation({ wsId, goalId, updatedAt }: { wsId: string; goalId: string; updatedAt: string }) {
-  const { t } = useT("issues");
-  const query = useQuery({
-    queryKey: ["work-methods", wsId, "goal", goalId, updatedAt],
-    queryFn: () => api.getGoalWorkMethod(goalId),
-    staleTime: 0,
-    retry: false,
-  });
-  if (query.error instanceof ApiError && query.error.status === 404) return null;
-  if (query.isError) {
-    return (
-      <div
-        role="alert"
-        className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive"
-      >
-        <span className="font-medium">{t(($) => $.method.recommended)}</span>
-        <span>{t(($) => $.method.load_error)}</span>
-        <Button size="xs" variant="link" onClick={() => void query.refetch()}>
-          {t(($) => $.method.retry)}
-        </Button>
-      </div>
-    );
-  }
-  if (!query.data) return null;
-  return (
-    <div className="rounded-lg border bg-surface/40 px-3.5 py-2 text-caption">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-medium text-muted-foreground">{t(($) => $.method.recommended)}</span>
-        <span className="font-medium text-foreground">
-          {query.data.method?.name ?? t(($) => $.method.no_match)}
-        </span>
-        {query.data.reason ? (
-          <span className="text-muted-foreground">· {query.data.reason}</span>
-        ) : null}
-      </div>
-      {query.data.method ? (
-        <details className="mt-1.5 text-caption">
-          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-            {t(($) => $.method.steps)}
-          </summary>
-          <div className="mt-1.5">
-            <WorkMethodSteps steps={query.data.method.steps} />
-          </div>
-        </details>
-      ) : null}
-    </div>
   );
 }
 
@@ -342,8 +291,6 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
           onUnlinkIssue: handleUnlink,
         }}
       />
-
-      <GoalMethodRecommendation wsId={wsId} goalId={goal.id} updatedAt={goal.updated_at} />
 
       <GoalOutcomeGallery key={goal.id} wsId={wsId} goalId={goal.id} />
       {!issuesQuery.isError && <GoalTaskPrototypes key={`prototypes-${goal.id}`} issues={linkedIssues} />}

@@ -47,6 +47,7 @@ import {
   readInputContext,
 } from "../plan";
 import { PlanBasis } from "./goal-plan-basis";
+import { GoalPlanTool } from "./goal-plan-tool";
 
 /** What applying a candidate did to the saved plan. */
 export type ApplyCandidateOutcome = "applied" | "conflict" | "failed";
@@ -76,6 +77,8 @@ export function GoalPlanGenerationPanel({
   onUnavailable,
   onReloadPlan,
   onStartNewGeneration,
+  open,
+  onToggle,
 }: {
   goal: Goal;
   planRevision: number;
@@ -88,6 +91,8 @@ export function GoalPlanGenerationPanel({
   onUnavailable: () => void;
   onReloadPlan: () => Promise<boolean>;
   onStartNewGeneration: () => Promise<void>;
+  open: boolean;
+  onToggle: () => void;
 }) {
   const { t } = useT("goals");
   const wsId = useWorkspaceId();
@@ -400,8 +405,7 @@ export function GoalPlanGenerationPanel({
     await onStartNewGeneration();
   };
 
-  if (projectConflict) {
-    return (
+  const conflictPanel = projectConflict ? (
       <div
         className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-3"
         role="alert"
@@ -429,8 +433,7 @@ export function GoalPlanGenerationPanel({
           </Button>
         </div>
       </div>
-    );
-  }
+  ) : null;
 
   const usable = generation ? isCandidateUsable(generation.candidate) : false;
   const inputBasis = generation ? readInputContext(generation.input_context) : null;
@@ -452,64 +455,66 @@ export function GoalPlanGenerationPanel({
               : t(($) => $.plan.state_unknown, { state: generation.state })
     : null;
 
-  return (
-    <div className="space-y-3" data-testid="plan-generation-panel">
+  const generationPanel = (
+    <div className="max-w-5xl space-y-3" data-testid="plan-generation-panel">
       <div className="space-y-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="plan-generation-intent">{t(($) => $.plan.intent_label)}</Label>
-          <Textarea
-            id="plan-generation-intent"
-            value={intent}
-            placeholder={t(($) => $.plan.intent_placeholder)}
-            className="min-h-24 bg-background"
-            disabled={pending || starting}
-            onChange={(event) => setIntent(event.target.value)}
-          />
-        </div>
-        <div className="space-y-3">
+        <div className="grid items-start gap-3 @3xl:grid-cols-[minmax(0,1.4fr)_minmax(14rem,0.6fr)]">
           <div className="space-y-1.5">
-            <Label htmlFor="plan-generation-agent">{t(($) => $.plan.agent_label)}</Label>
-            <Select
-              items={activeAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
-              value={agentId}
-              disabled={pending || starting || activeAgents.length === 0}
-              onValueChange={(next) => setAgentId(next ?? "")}
-            >
-              <SelectTrigger id="plan-generation-agent" className="w-full bg-background">
-                <SelectValue placeholder={t(($) => $.plan.agent_placeholder)}>
-                  {activeAgents.find((agent) => agent.id === agentId)?.name}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                {activeAgents.map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="plan-generation-intent">{t(($) => $.plan.intent_label)}</Label>
+            <Textarea
+              id="plan-generation-intent"
+              value={intent}
+              placeholder={t(($) => $.plan.intent_placeholder)}
+              className="min-h-24 bg-background"
+              disabled={pending || starting}
+              onChange={(event) => setIntent(event.target.value)}
+            />
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void startGeneration(explicitNewRun)}
-            disabled={
-              !intent.trim() ||
-              !agentId ||
-              pending ||
-              starting ||
-              (startRefused && applyBlocked)
-            }
-          >
-            {starting ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
-            {starting
-              ? t(($) => $.plan.starting)
-              : startUnknown
-                ? t(($) => $.plan.retry)
-                : generation
-                  ? t(($) => $.plan.generate_again)
-                  : t(($) => $.plan.generate)}
-          </Button>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="plan-generation-agent">{t(($) => $.plan.agent_label)}</Label>
+              <Select
+                items={activeAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                value={agentId}
+                disabled={pending || starting || activeAgents.length === 0}
+                onValueChange={(next) => setAgentId(next ?? "")}
+              >
+                <SelectTrigger id="plan-generation-agent" className="w-full bg-background">
+                  <SelectValue placeholder={t(($) => $.plan.agent_placeholder)}>
+                    {activeAgents.find((agent) => agent.id === agentId)?.name}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {activeAgents.map((agent) => (
+                    <SelectItem key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void startGeneration(explicitNewRun)}
+              disabled={
+                !intent.trim() ||
+                !agentId ||
+                pending ||
+                starting ||
+                (startRefused && applyBlocked)
+              }
+            >
+              {starting ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
+              {starting
+                ? t(($) => $.plan.starting)
+                : startUnknown
+                  ? t(($) => $.plan.retry)
+                  : generation
+                    ? t(($) => $.plan.generate_again)
+                    : t(($) => $.plan.generate)}
+            </Button>
+          </div>
         </div>
         {activeAgents.length === 0 ? (
           <p className="text-caption text-muted-foreground">{t(($) => $.plan.no_agents)}</p>
@@ -702,5 +707,20 @@ export function GoalPlanGenerationPanel({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+
+  const toolStatus = projectConflict || runUnavailable || generationUnavailable || startError || generationQuery.isError
+    ? t(($) => $.plan.state_failed)
+    : starting ? t(($) => $.plan.starting) : stateLabel;
+  return (
+    <GoalPlanTool
+      label={t(($) => $.plan.generation_title)}
+      icon={<Sparkles aria-hidden="true" />}
+      status={toolStatus}
+      open={open}
+      onToggle={onToggle}
+    >
+      {conflictPanel ?? generationPanel}
+    </GoalPlanTool>
   );
 }
