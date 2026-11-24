@@ -53,27 +53,37 @@ type Run struct {
 }
 
 type Event struct {
-	PreviousMethod *Template `json:"previous_method,omitempty"`
-	MethodRevision int       `json:"method_revision,omitempty"`
-	CheckedItems   []int     `json:"checked_items,omitempty"`
-	FromStep       *int      `json:"from_step,omitempty"`
-	Action         string    `json:"action"`
-	Step           int       `json:"step"`
-	Evidence       string    `json:"evidence"`
-	Actor          string    `json:"actor"`
-	At             string    `json:"at"`
+	PreviousMethod *Template       `json:"previous_method,omitempty"`
+	MethodRevision int             `json:"method_revision,omitempty"`
+	CheckedItems   []int           `json:"checked_items,omitempty"`
+	FromStep       *int            `json:"from_step,omitempty"`
+	Action         string          `json:"action"`
+	Step           int             `json:"step"`
+	Evidence       string          `json:"evidence"`
+	Findings       []ReviewFinding `json:"findings,omitempty"`
+	Actor          string          `json:"actor"`
+	At             string          `json:"at"`
+}
+
+type ReviewFinding struct {
+	CriterionID string `json:"criterion_id,omitempty"`
+	CaseID      string `json:"case_id,omitempty"`
+	Expected    string `json:"expected"`
+	Actual      string `json:"actual"`
+	Evidence    string `json:"evidence"`
 }
 
 type Change struct {
-	MethodRevision  *int           `json:"method_revision,omitempty"`
-	CheckedItems    []int          `json:"checked_items,omitempty"`
-	Action          string         `json:"action"`
-	DelegateAgentID string         `json:"delegate_agent_id,omitempty"`
-	BaseRevision    *int           `json:"base_revision"`
-	MethodID        string         `json:"method_id,omitempty"`
-	Evidence        string         `json:"evidence,omitempty"`
-	TargetStep      *int           `json:"target_step,omitempty"`
-	ProjectLesson   *ProjectLesson `json:"project_lesson,omitempty"`
+	MethodRevision  *int            `json:"method_revision,omitempty"`
+	CheckedItems    []int           `json:"checked_items,omitempty"`
+	Action          string          `json:"action"`
+	DelegateAgentID string          `json:"delegate_agent_id,omitempty"`
+	BaseRevision    *int            `json:"base_revision"`
+	MethodID        string          `json:"method_id,omitempty"`
+	Evidence        string          `json:"evidence,omitempty"`
+	Findings        []ReviewFinding `json:"findings,omitempty"`
+	TargetStep      *int            `json:"target_step,omitempty"`
+	ProjectLesson   *ProjectLesson  `json:"project_lesson,omitempty"`
 }
 
 var (
@@ -213,6 +223,17 @@ func (r *Run) Apply(c Change, methods []Template, actor, at string) error {
 		return errors.New("须填写本次交付、评审或退回的证据，最多 12000 个字符")
 	}
 	event := Event{Action: c.Action, Step: r.Step, Evidence: evidence, Actor: actor, At: at}
+	if len(c.Findings) > 0 {
+		if c.Action != "rework" || len(c.Findings) > 10 {
+			return errors.New("只有退回评审可记录发现，最多十条")
+		}
+		for _, finding := range c.Findings {
+			if !validText(finding.Expected, 1000) || !validText(finding.Actual, 1000) || !validText(finding.Evidence, 1500) {
+				return errors.New("每条评审发现须提供预期、实际结果和复现证据")
+			}
+		}
+		event.Findings = slices.Clone(c.Findings)
+	}
 	if c.Action == "approve" || c.Action == "rework" {
 		if r.State != "review" || r.Method == nil || r.Step < 0 || r.Step >= len(r.Method.Steps) {
 			return errors.New("当前步骤尚未提交评审")

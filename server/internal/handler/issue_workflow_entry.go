@@ -487,6 +487,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	ownsStep := taskRunsForAssignee(issue, task) && !stepMoved
 	methodBrief := ""
 	stepContext := false
+	freshSession := false
 	if method.Method != nil {
 		issueRef := h.getIssuePrefix(ctx, issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
 		recipient, err := h.methodRecipient(ctx, issue, method)
@@ -498,6 +499,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 			ownsStep = task != nil && (recipient.Kind == "agent" && uuidToString(task.AgentID) == recipient.ID || recipient.Kind == "squad" && task.IsLeaderTask && uuidToString(task.SquadID) == recipient.ID)
 		}
 		stepContext = usesCurrentStepContext(issue, method, task)
+		freshSession = stepContext && currentStepContextMode(issue.Metadata) == "current_step"
 		methodBrief = contract.claimBrief(issueRef) + methodClaimBrief(method, issueRef, ownsStep, stepContext)
 		if stepContext {
 			methodBrief = fmt.Sprintf("Issue %s: %q.\n", issueRef, issue.Title) + methodBrief + stepAcceptanceIndex(issue, method)
@@ -510,7 +512,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 		if methodBrief == "" {
 			return nil
 		}
-		return &TaskProjectWorkflowData{Brief: methodBrief, StepContext: stepContext, stepMoved: stepMoved}
+		return &TaskProjectWorkflowData{Brief: methodBrief, StepContext: stepContext, stepMoved: stepMoved, freshSession: freshSession}
 	}
 	in := h.workflowBriefInput(ctx, issue, *def, project)
 	in.LegacyRuntimeRules = legacyRuntimeRules
@@ -527,7 +529,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	if methodBrief != "" {
 		brief += "\n" + methodBrief
 	}
-	return &TaskProjectWorkflowData{Brief: brief, StepContext: stepContext, stepMoved: stepMoved}
+	return &TaskProjectWorkflowData{Brief: brief, StepContext: stepContext, stepMoved: stepMoved, freshSession: freshSession}
 }
 
 // A fresh rerun of step work gets the same brief as a new handoff.
@@ -575,10 +577,17 @@ func usesCurrentStepContext(issue db.Issue, run workmethod.Run, task *db.AgentTa
 	if trigger.Revision == 0 && !task.TriggerCommentID.Valid && !task.DelegatedFromTaskID.Valid {
 		return false
 	}
+	mode := currentStepContextMode(issue.Metadata)
+	return mode == "current_step" || (mode == "" && run.GoalExecution && run.Method != nil &&
+		run.Method.Kind == "development" && trigger.Revision > 0 && run.AcceptsTaskRevision(trigger.Revision))
+}
+
+func currentStepContextMode(raw []byte) string {
 	var config struct {
 		Mode string `json:"work_method_context"`
 	}
-	return json.Unmarshal(issue.Metadata, &config) == nil && config.Mode == "current_step"
+	_ = json.Unmarshal(raw, &config)
+	return config.Mode
 }
 
 // The handoff carries the current contract and an index into the ledger. Large
@@ -604,7 +613,7 @@ func stepAcceptanceIndex(issue db.Issue, run workmethod.Run) string {
 		var ids []string
 		for _, tc := range c.Cases {
 			if tc.Retired == nil {
-				ids = append(ids, tc.ID)
+				ids = append(ids, fmt.Sprintf("%s v%d", tc.ID, tc.Version()))
 			}
 		}
 		fmt.Fprintf(&b, " Active cases: %s.", strings.Join(ids, ", "))
@@ -638,6 +647,7 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 		last := run.History[n-1]
 		fmt.Fprintf(&b, "Latest recorded action %q; evidence: %q.\n", last.Action, last.Evidence)
 		if stepContext {
+			writeStepReviewFindings(&b, run)
 			anchor := last.At
 			if n > 1 {
 				anchor = run.History[n-2].At
@@ -699,7 +709,7 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 		if run.Step == len(run.Method.Steps)-1 {
 			fmt.Fprintf(&b, "Final review criteria: %s\n", run.Method.Review)
 		}
-		b.WriteString("Review the submitted work and each check against original evidence. Approve only after all checks pass. Otherwise record action rework with the target_step (zero-based) and concrete deficiencies.\n")
+		b.WriteString("Review the submitted work and each check against original evidence. Approve only after all checks pass. Otherwise record rework with the zero-based target_step. For each reproducible finding, submit findings with criterion_id and case_id when applicable, expected, actual, and evidence.\n")
 	}
 	payload := map[string]any{"base_revision": run.Revision, "action": action, "evidence": "<actual deliverable or review findings and source>"}
 	if action == "approve" && step.Reviewer != nil && len(step.Checks) > 0 {
@@ -750,4 +760,24 @@ func (h *Handler) stepHandlerName(ctx context.Context, issue db.Issue, project d
 		return name + " (issue creator)"
 	}
 	return name
+}
+
+func writeStepReviewFindings(b *strings.Builder, run workmethod.Run) {
+	for i := len(run.History) - 1; i >= 0; i-- {
+		event := run.History[i]
+		if event.Step != run.Step {
+			continue
+		}
+		if event.Action == "approve" {
+			return
+		}
+		if event.Action != "rework" {
+			continue
+		}
+		for _, finding := range event.Findings {
+			fmt.Fprintf(b, "Review finding %s %s. Expected: %q. Actual: %q. Reproduce: %q.\n",
+				finding.CriterionID, finding.CaseID, finding.Expected, finding.Actual, finding.Evidence)
+		}
+		return
+	}
 }

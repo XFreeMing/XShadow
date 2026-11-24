@@ -176,3 +176,46 @@ func TestLegacyLedgerDecodesWithoutRetirement(t *testing.T) {
 		t.Fatalf("legacy impact incorrect: %+v", impact)
 	}
 }
+
+func TestCaseRevisionCannotInheritAnEarlierPassAtTheSameCommit(t *testing.T) {
+	trace := Trace{}
+	const commit = "1111111111111111111111111111111111111111"
+	apply := func(op Change) error {
+		op.BaseRevision = &trace.Revision
+		op.CriterionID = "AC1"
+		return trace.Apply(op)
+	}
+	mustApply := func(op Change) {
+		t.Helper()
+		if err := apply(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustApply(Change{Action: "criterion", Text: "Reopen the same active job"})
+	mustApply(Change{Action: "case", CaseID: "T1", Text: "Check the job response"})
+	mustApply(Change{Action: "implementation", Repository: "org/repo", Branch: "dev", Commit: commit})
+	mustApply(Change{Action: "run", CaseID: "T1", Candidate: commit, Result: "pass", Evidence: "old run"})
+	mustApply(Change{Action: "case_revision", CaseID: "T1", Text: "Check the job response and browser path"})
+	impact := trace.Criteria[0].Impact()
+	if len(impact.Retest) != 1 || impact.Retest[0] != "T1" {
+		t.Fatalf("previous green run still satisfies the revised case: %+v", impact)
+	}
+	version := 1
+	run := Change{Action: "run", CaseID: "T1", Candidate: commit, Result: "pass", Evidence: "new run", CaseVersion: &version}
+	if err := apply(run); err == nil {
+		t.Fatal("a stale case's evidence was accepted")
+	}
+	version = 2
+	mustApply(run)
+	run.Kind, run.ExpectedResult, run.Result, run.Evidence = Counterexample, "fail", "fail", "wrong URL was rejected"
+	mustApply(run)
+	tc := trace.Criteria[0].Cases[0]
+	if tc.Version() != 2 || tc.PreviousSpecifications[0].Text != "Check the job response" ||
+		tc.LatestBehaviorRun().Evidence != "new run" || len(tc.Runs) != 3 {
+		t.Fatalf("revision or evidence history was lost: %+v", tc)
+	}
+	impact = trace.Criteria[0].Impact()
+	if len(impact.Retest)+len(impact.Unrun)+len(impact.Failed) != 0 {
+		t.Fatalf("an expected counterexample failure replaced the candidate result: %+v", impact)
+	}
+}

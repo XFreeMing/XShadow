@@ -537,6 +537,15 @@ function MethodCard({
                           ))}
                         </ul>
                       )}
+                      {entry.findings?.map((finding, index) => (
+                        <div key={index} className="grid gap-1 break-words text-caption">
+                          {(finding.criterion_id || finding.case_id) && (
+                            <p className="font-medium">{finding.criterion_id} {finding.case_id}</p>
+                          )}
+                          <p>{finding.expected} → {finding.actual}</p>
+                          <p className="whitespace-pre-wrap">{finding.evidence}</p>
+                        </div>
+                      ))}
                       {entry.evidence && (
                         <p className="whitespace-pre-wrap break-words">
                           {entry.evidence}

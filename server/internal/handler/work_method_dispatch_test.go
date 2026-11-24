@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -253,6 +254,18 @@ func TestBoundMethodStepContextKeepsCurrentReviewEvidence(t *testing.T) {
 	}
 	if claim().StepContext {
 		t.Fatal("unconfigured issue opted in")
+	}
+	var goalRun workmethod.Run
+	if err := json.Unmarshal(issue.WorkMethodRun, &goalRun); err != nil {
+		t.Fatal(err)
+	}
+	goalRun.GoalExecution = true
+	if !usesCurrentStepContext(issue, goalRun, &task) {
+		t.Fatal("goal development handoff did not default to the current-step brief")
+	}
+	issue.Metadata = []byte(`{"work_method_context":"full"}`)
+	if usesCurrentStepContext(issue, goalRun, &task) {
+		t.Fatal("explicit full context was ignored")
 	}
 	issue.Metadata = []byte(`{"work_method_context":"current_step"}`)
 	scoped := claim()

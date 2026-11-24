@@ -23,7 +23,7 @@ func (h *Handler) dispatchGoalCandidate(w http.ResponseWriter, r *http.Request, 
 	}
 	brief := strings.TrimSpace(change.Evidence)
 	if change.BaseRevision == nil || *change.BaseRevision < 1 || brief == "" || len(brief) > 12000 ||
-		change.MethodID != "" || change.MethodRevision != nil || change.TargetStep != nil || len(change.CheckedItems) != 0 {
+		change.MethodID != "" || change.MethodRevision != nil || change.TargetStep != nil || (len(change.CheckedItems) != 0 || len(change.Findings) != 0) {
 		writeError(w, http.StatusBadRequest, "candidate actions require base_revision and evidence")
 		return
 	}

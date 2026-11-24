@@ -375,7 +375,8 @@ type TaskProjectWorkflowData struct {
 	StepContext bool   `json:"step_context,omitempty"`
 	Brief       string `json:"brief"`
 	// stepMoved selects the server-side leader briefing without changing the wire.
-	stepMoved bool
+	stepMoved    bool
+	freshSession bool
 }
 
 // ClaimParentIssue points a sub-issue's run at its parent issue, where the

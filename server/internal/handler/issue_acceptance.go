@@ -38,8 +38,19 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 409, err.Error())
 		return
 	}
+	ws := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, ws)
+	task, hasTask := h.taskFromRequestHeader(r)
+	var origin acceptance.RunOrigin
+	if change.Action == "run" {
+		now := time.Now().UTC()
+		origin = acceptance.RunOrigin{Actor: actorType + "/" + actorID, RecordedAt: &now}
+		if hasTask && task.IssueID == issue.ID && actorType == "agent" && uuidToString(task.AgentID) == actorID {
+			origin.TaskID = uuidToString(task.ID)
+		}
+	}
 	before := trace.Revision
-	if err := trace.Apply(change); err != nil {
+	if err := trace.ApplyWithOrigin(change, origin); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, acceptance.ErrConflict) {
 			status = http.StatusConflict
@@ -56,8 +67,6 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, "failed to encode acceptance records")
 		return
 	}
-	ws := uuidToString(issue.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, ws)
 	var run workmethod.Run
 	redispatch := false
 	if len(issue.WorkMethodRun) > 0 {
@@ -65,13 +74,14 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 			writeError(w, 500, "failed to read method run")
 			return
 		}
-		if task, hasTask := h.taskFromRequestHeader(r); hasTask && methodBoundRevision(&task) > 0 {
+		if hasTask && methodBoundRevision(&task) > 0 {
 			if task.IssueID != issue.ID || !run.AcceptsTaskRevision(methodBoundRevision(&task)) || isTerminalTaskStatus(task.Status) {
 				writeError(w, 409, "来源运行已结束或工作方法已推进，请读取当前步骤")
 				return
 			}
 		}
-		if run.EvidenceGate() != "" && run.State != "ready" {
+		changesGate := change.Action != "run" || change.Kind == ""
+		if changesGate && run.EvidenceGate() != "" && run.State != "ready" {
 			var changed acceptance.Criterion
 			for _, c := range trace.Criteria {
 				if c.ID == change.CriterionID {
@@ -86,7 +96,7 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 				run.History = append(run.History, workmethod.Event{Action: "rework", FromStep: &from, Step: step, Evidence: fmt.Sprintf("%s（标准版本 v%d，验收记录修订 %d）发生 %s 变更，请核查受影响用例及候选提交。", change.CriterionID, len(changed.Versions), trace.Revision, change.Action), Actor: actorType + "/" + actorID, At: time.Now().UTC().Format(time.RFC3339Nano)})
 				redispatch = true
 			}
-		} else if run.State == "closed" && run.Method != nil && run.Method.Kind == "development" {
+		} else if changesGate && run.State == "closed" && run.Method != nil && run.Method.Kind == "development" {
 			if issuestatus.Effective(r.Context(), h.Queries, issue.WorkspaceID, issue.Status) == "done" {
 				writeError(w, 409, "请先重新打开已完成的事项，再修改研发验收记录")
 				return
@@ -134,7 +144,7 @@ func agileReworkStep(run workmethod.Run, action string, criterion acceptance.Cri
 	switch action {
 	case "criterion":
 		targetGate = "criteria"
-	case "case":
+	case "case", "case_revision":
 		targetGate = "coverage"
 	case "implementation":
 	case "run", "case_retire":

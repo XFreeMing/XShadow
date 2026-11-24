@@ -49,6 +49,13 @@ export const WorkMethodSchema = z
 export const WorkMethodListSchema = z.object({
   methods: z.array(WorkMethodSchema),
 });
+const finding = z.object({
+  criterion_id: nonEmpty.optional(),
+  case_id: nonEmpty.optional(),
+  expected: nonEmpty,
+  actual: nonEmpty,
+  evidence: nonEmpty,
+});
 export const WorkMethodRunSchema = z
   .object({
     revision: index,
@@ -69,6 +76,7 @@ export const WorkMethodRunSchema = z
           previous_method: WorkMethodSchema.optional(),
           method_revision: z.number().int().positive().optional(),
           checked_items: z.array(index).nullish(),
+          findings: z.array(finding).optional(),
           evidence: z
             .string()
             .nullish()
@@ -105,5 +113,6 @@ export type WorkMethodAction = { base_revision: number } & (
       evidence: string;
       target_step?: number;
       checked_items?: number[];
+      findings?: z.infer<typeof finding>[];
     }
 );

@@ -3532,7 +3532,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 				AgentID: task.AgentID,
 				IssueID: task.IssueID,
 			}); err == nil && prior.SessionID.Valid {
-				if prior.RuntimeID == task.RuntimeID && (projectWorkflow == nil || !projectWorkflow.StepContext) {
+				if prior.RuntimeID == task.RuntimeID && (projectWorkflow == nil || !projectWorkflow.freshSession) {
 					resp.PriorSessionID = prior.SessionID.String
 					resumedRunStartedAt = prior.StartedAt
 					// Same rule as the rerun path: date the deltas from the run
@@ -3556,7 +3556,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			if missing, err := h.Queries.GetLatestTaskRolloutMissing(r.Context(), db.GetLatestTaskRolloutMissingParams{
 				AgentID: task.AgentID,
 				IssueID: task.IssueID,
-			}); err == nil && missing && (projectWorkflow == nil || !projectWorkflow.StepContext) {
+			}); err == nil && missing && (projectWorkflow == nil || !projectWorkflow.freshSession) {
 				resp.PriorSessionResumeUnavailable = true
 			}
 		} else if task.RetryOfTaskID.Valid {

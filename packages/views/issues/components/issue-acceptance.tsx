@@ -18,6 +18,10 @@ type Editor = {
   caseId?: string;
 };
 
+function caseVersion(testCase: AcceptanceTrace["criteria"][number]["cases"][number]) {
+  return (testCase.previous_specifications?.length ?? 0) + 1;
+}
+
 function Field({
   label,
   name,
@@ -76,6 +80,8 @@ export function IssueAcceptance({
     setFormError("");
     setEditor({ action, criterion, caseId, base: trace.revision });
   }
+  const editedCase = editor?.criterion?.cases.find((testCase) => testCase.id === editor.caseId);
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editor) return;
@@ -111,16 +117,21 @@ export function IssueAcceptance({
           commit: field("commit"),
         });
         break;
-      case "run":
+      case "run": {
+        if (!editedCase) return;
+        const version = caseVersion(editedCase);
         mutation.mutate({
           ...base,
           action: "run",
-          case_id: editor.caseId ?? "",
+          case_id: editedCase.id,
+          ...(version > 1 && { case_version: version }),
+          ...(editedCase.artifact_sha256 && { artifact_sha256: field("artifact_sha256") }),
           result: field("result") === "pass" ? "pass" : "fail",
           candidate: field("candidate"),
           evidence: field("evidence"),
         });
         break;
+      }
     }
   }
   const button = (label: string, callback: () => void) => (
@@ -180,10 +191,11 @@ export function IssueAcceptance({
                 </p>
               )}
               {c.cases.map((tc) => {
-                const latest = tc.runs.at(-1);
+                const latest = tc.runs.filter((run) => !run.run_kind).at(-1);
+                const testVersion = caseVersion(tc);
                 const status = !latest
                   ? t(($) => $.acceptance.untested)
-                  : latest.version !== version || (candidate && latest.candidate !== candidate)
+                  : latest.version !== version || (latest.case_version ?? 1) !== testVersion || (candidate && latest.candidate !== candidate)
                     ? t(($) => $.acceptance.retest)
                     : latest.result === "pass"
                       ? t(($) => $.acceptance.pass)
@@ -194,11 +206,12 @@ export function IssueAcceptance({
                     className="border-l border-border pl-3 text-label"
                   >
                     <p>
-                      <strong>{tc.id}</strong> · {status} · {tc.specification}
+                      <strong>{tc.id} v{testVersion}</strong> · {status} · {tc.specification}
                     </p>
                     {tc.runs.map((r, i) => (
                       <p key={i} className="break-all text-muted-foreground">
-                        {`v${r.version}`} ·{" "}
+                        {c.id} v{r.version} · {tc.id} v{r.case_version ?? 1} ·{" "}
+                        {r.run_kind && <><code>{r.run_kind}</code> · </>}
                         {r.result === "pass"
                           ? t(($) => $.acceptance.pass)
                           : t(($) => $.acceptance.fail)}{" "}
@@ -319,6 +332,9 @@ export function IssueAcceptance({
                   name="candidate"
                   pattern={shaPattern}
                 />
+                {editedCase?.artifact_sha256 && (
+                  <Field label="SHA-256" name="artifact_sha256" pattern="[a-f0-9]{64}" />
+                )}
                 <Field
                   label={t(($) => $.acceptance.evidence)}
                   name="evidence"

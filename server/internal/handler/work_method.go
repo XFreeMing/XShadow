@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -279,6 +280,12 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if len(change.Findings) > 0 {
+		if err := validateReviewFindingReferences(issue.AcceptanceCriteria, change.Findings); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	if err := run.Apply(change, methods, actorType+"/"+actorID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, workmethod.ErrConflict) {
@@ -297,4 +304,26 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		"assignee_changed":   issue.AssigneeType != updated.AssigneeType || issue.AssigneeID != updated.AssigneeID,
 		"prev_assignee_type": textToPtr(issue.AssigneeType), "prev_assignee_id": uuidToPtr(issue.AssigneeID)})
 	h.writeIssueMethodView(w, r, updated, run, delivery)
+}
+
+func validateReviewFindingReferences(raw []byte, findings []workmethod.ReviewFinding) error {
+	trace, err := acceptance.Decode(raw)
+	if err != nil {
+		return err
+	}
+	for _, finding := range findings {
+		if finding.CriterionID == "" && finding.CaseID == "" {
+			continue
+		}
+		valid := slices.ContainsFunc(trace.Criteria, func(criterion acceptance.Criterion) bool {
+			return criterion.ID == finding.CriterionID && (finding.CaseID == "" ||
+				slices.ContainsFunc(criterion.Cases, func(tc acceptance.TestCase) bool {
+					return tc.ID == finding.CaseID && tc.Retired == nil
+				}))
+		})
+		if !valid {
+			return errors.New("评审发现须引用本事项的现行标准和用例")
+		}
+	}
+	return nil
 }

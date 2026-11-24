@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Trace struct {
@@ -49,12 +50,12 @@ func (c Criterion) Impact() Impact {
 			result.Retired = append(result.Retired, tc.ID)
 			continue
 		}
-		if len(tc.Runs) == 0 {
+		latest := tc.LatestBehaviorRun()
+		if latest == nil {
 			result.Unrun = append(result.Unrun, tc.ID)
 			continue
 		}
-		latest := tc.Runs[len(tc.Runs)-1]
-		if latest.Version != result.Version || (candidate != "" && latest.Candidate != candidate) {
+		if latest.Version != result.Version || latest.TestCaseVersion() != tc.Version() || (candidate != "" && latest.Candidate != candidate) {
 			result.Retest = append(result.Retest, tc.ID)
 		} else if latest.Result == "fail" {
 			result.Failed = append(result.Failed, tc.ID)
@@ -64,10 +65,30 @@ func (c Criterion) Impact() Impact {
 }
 
 type TestCase struct {
-	ID            string      `json:"id"`
-	Specification string      `json:"specification"`
-	Runs          []Run       `json:"runs"`
-	Retired       *Retirement `json:"retired,omitempty"`
+	ID                     string              `json:"id"`
+	Specification          string              `json:"specification"`
+	ArtifactSHA256         string              `json:"artifact_sha256,omitempty"`
+	PreviousSpecifications []CaseSpecification `json:"previous_specifications,omitempty"`
+	Runs                   []Run               `json:"runs"`
+	Retired                *Retirement         `json:"retired,omitempty"`
+}
+
+type CaseSpecification struct {
+	Text           string `json:"text"`
+	ArtifactSHA256 string `json:"artifact_sha256,omitempty"`
+}
+
+func (tc TestCase) Version() int {
+	return len(tc.PreviousSpecifications) + 1
+}
+
+func (tc TestCase) LatestBehaviorRun() *Run {
+	for i := len(tc.Runs) - 1; i >= 0; i-- {
+		if tc.Runs[i].Kind == "" {
+			return &tc.Runs[i]
+		}
+	}
+	return nil
 }
 
 // Retirement marks a replaced case. The original specification and runs stay
@@ -78,11 +99,35 @@ type Retirement struct {
 	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
+type RunKind string
+
+const (
+	Counterexample RunKind = "counterexample"
+	BeforeChange   RunKind = "red_before_change"
+)
+
 type Run struct {
-	Version   int    `json:"version"`
-	Result    string `json:"result"`
-	Candidate string `json:"candidate"`
-	Evidence  string `json:"evidence"`
+	Version        int     `json:"version"`
+	CaseVersion    int     `json:"case_version,omitempty"`
+	Kind           RunKind `json:"run_kind,omitempty"`
+	ExpectedResult string  `json:"expected_result,omitempty"`
+	Result         string  `json:"result"`
+	Candidate      string  `json:"candidate"`
+	Evidence       string  `json:"evidence"`
+	RunOrigin
+}
+
+type RunOrigin struct {
+	Actor      string     `json:"actor,omitempty"`
+	TaskID     string     `json:"task_id,omitempty"`
+	RecordedAt *time.Time `json:"recorded_at,omitempty"`
+}
+
+func (r Run) TestCaseVersion() int {
+	if r.CaseVersion == 0 {
+		return 1
+	}
+	return r.CaseVersion
 }
 
 type Implementation struct {
@@ -93,24 +138,29 @@ type Implementation struct {
 }
 
 type Change struct {
-	BaseRevision *int   `json:"base_revision"`
-	Action       string `json:"action"`
-	CriterionID  string `json:"criterion_id"`
-	CaseID       string `json:"case_id"`
-	Text         string `json:"text"`
-	Repository   string `json:"repository"`
-	Branch       string `json:"branch"`
-	Commit       string `json:"commit"`
-	Result       string `json:"result"`
-	Candidate    string `json:"candidate"`
-	Evidence     string `json:"evidence"`
-	Reason       string `json:"reason"`
-	SupersededBy string `json:"superseded_by"`
+	BaseRevision   *int    `json:"base_revision"`
+	Action         string  `json:"action"`
+	CriterionID    string  `json:"criterion_id"`
+	CaseID         string  `json:"case_id"`
+	Text           string  `json:"text"`
+	Repository     string  `json:"repository"`
+	Branch         string  `json:"branch"`
+	Commit         string  `json:"commit"`
+	Result         string  `json:"result"`
+	Candidate      string  `json:"candidate"`
+	Evidence       string  `json:"evidence"`
+	CaseVersion    *int    `json:"case_version,omitempty"`
+	ArtifactSHA256 string  `json:"artifact_sha256,omitempty"`
+	Kind           RunKind `json:"run_kind,omitempty"`
+	ExpectedResult string  `json:"expected_result,omitempty"`
+	Reason         string  `json:"reason"`
+	SupersededBy   string  `json:"superseded_by"`
 }
 
 var (
 	ErrConflict = errors.New("acceptance records changed; reload before saving")
 	key         = regexp.MustCompile("^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$")
+	sha256      = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	sha         = regexp.MustCompile("^(?:[a-f0-9]{40}|[a-f0-9]{64})$")
 )
 
@@ -131,6 +181,10 @@ func Decode(raw []byte) (Trace, error) {
 }
 
 func (t *Trace) Apply(op Change) error {
+	return t.ApplyWithOrigin(op, RunOrigin{})
+}
+
+func (t *Trace) ApplyWithOrigin(op Change, origin RunOrigin) error {
 	if op.BaseRevision == nil {
 		return errors.New("base_revision is required")
 	}
@@ -157,6 +211,9 @@ func (t *Trace) Apply(op Change) error {
 		}
 	}
 	op.Text = strings.TrimSpace(op.Text)
+	if op.ArtifactSHA256 != "" && !sha256.MatchString(op.ArtifactSHA256) {
+		return errors.New("artifact_sha256 must be a full lowercase SHA-256")
+	}
 	if criterion == nil && op.Action != "criterion" {
 		return errors.New("criterion does not exist")
 	}
@@ -180,7 +237,16 @@ func (t *Trace) Apply(op Change) error {
 		if test != nil {
 			return errors.New("case_id already exists")
 		}
-		criterion.Cases = append(criterion.Cases, TestCase{ID: op.CaseID, Specification: op.Text, Runs: []Run{}})
+		criterion.Cases = append(criterion.Cases, TestCase{ID: op.CaseID, Specification: op.Text, ArtifactSHA256: op.ArtifactSHA256, Runs: []Run{}})
+	case "case_revision":
+		if test == nil || test.Retired != nil || op.Text == "" {
+			return errors.New("case_revision requires an active case and test specification")
+		}
+		if test.Specification == op.Text && test.ArtifactSHA256 == op.ArtifactSHA256 {
+			return nil
+		}
+		test.PreviousSpecifications = append(test.PreviousSpecifications, CaseSpecification{Text: test.Specification, ArtifactSHA256: test.ArtifactSHA256})
+		test.Specification, test.ArtifactSHA256 = op.Text, op.ArtifactSHA256
 	case "implementation":
 		if strings.TrimSpace(op.Repository) == "" || strings.TrimSpace(op.Branch) == "" || !sha.MatchString(op.Commit) {
 			return errors.New("repository, branch and full lowercase commit SHA are required")
@@ -194,13 +260,14 @@ func (t *Trace) Apply(op Change) error {
 		if test == nil {
 			return errors.New("case not found")
 		}
-		if op.Result != "pass" && op.Result != "fail" {
-			return errors.New("result must be pass or fail")
+		if err := validateRunChange(op, *test); err != nil {
+			return err
 		}
-		if !sha.MatchString(op.Candidate) || strings.TrimSpace(op.Evidence) == "" {
-			return errors.New("candidate commit SHA and evidence are required")
-		}
-		test.Runs = append(test.Runs, Run{len(criterion.Versions), op.Result, op.Candidate, op.Evidence})
+		test.Runs = append(test.Runs, Run{
+			Version: len(criterion.Versions), CaseVersion: test.Version(), Kind: op.Kind,
+			ExpectedResult: op.ExpectedResult, Result: op.Result,
+			Candidate: op.Candidate, Evidence: op.Evidence, RunOrigin: origin,
+		})
 	case "case_retire":
 		if test == nil {
 			return errors.New("case not found")
@@ -243,5 +310,37 @@ func (t *Trace) Apply(op Change) error {
 		return fmt.Errorf("unknown acceptance action %q", op.Action)
 	}
 	t.Revision++
+	return nil
+}
+
+func validateRunChange(op Change, test TestCase) error {
+	if op.Result != "pass" && op.Result != "fail" {
+		return errors.New("result must be pass or fail")
+	}
+	if !sha.MatchString(op.Candidate) || strings.TrimSpace(op.Evidence) == "" {
+		return errors.New("candidate commit SHA and evidence are required")
+	}
+	if op.CaseVersion == nil && test.Version() > 1 || op.CaseVersion != nil && *op.CaseVersion != test.Version() {
+		return fmt.Errorf("case_version must match current case version %d", test.Version())
+	}
+	if op.ArtifactSHA256 != test.ArtifactSHA256 {
+		return errors.New("artifact_sha256 must match the registered test artifact")
+	}
+	switch op.Kind {
+	case "":
+		if op.ExpectedResult != "" {
+			return errors.New("expected_result requires a counterexample or red_before_change run")
+		}
+	case Counterexample:
+		if op.ExpectedResult != "pass" && op.ExpectedResult != "fail" {
+			return errors.New("counterexample requires expected_result pass or fail")
+		}
+	case BeforeChange:
+		if op.ExpectedResult != "fail" {
+			return errors.New("red_before_change requires expected_result fail")
+		}
+	default:
+		return errors.New("unknown acceptance run_kind")
+	}
 	return nil
 }

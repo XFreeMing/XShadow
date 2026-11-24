@@ -25,7 +25,15 @@ Change file examples (use the revision returned by the last read):
   {"base_revision":1,"action":"case","criterion_id":"C1","case_id":"T1","text":"Steps and expected result"}
   {"base_revision":2,"action":"implementation","criterion_id":"C1","repository":"org/repo","branch":"dev","commit":"<full-sha>"}
   {"base_revision":3,"action":"run","criterion_id":"C1","case_id":"T1","result":"pass","candidate":"<tested-sha>","evidence":"<log or report reference>"}
-  {"base_revision":4,"action":"case_retire","criterion_id":"C1","case_id":"T1","reason":"replaced by T1R2","superseded_by":"T1R2"}
+  {"base_revision":4,"action":"case_revision","criterion_id":"C1","case_id":"T1","text":"Updated test and expected result","artifact_sha256":"<sha256 of versioned test files and fixtures>"}
+  {"base_revision":5,"action":"run","criterion_id":"C1","case_id":"T1","case_version":2,"artifact_sha256":"<same digest>","result":"pass","candidate":"<tested-sha>","evidence":"<log or report reference>"}
+  {"base_revision":6,"action":"run","criterion_id":"C1","case_id":"T1","case_version":2,"artifact_sha256":"<same digest>","run_kind":"counterexample","expected_result":"fail","result":"fail","candidate":"<tested-sha>","evidence":"<failing assertion reference>"}
+  {"base_revision":7,"action":"case_retire","criterion_id":"C1","case_id":"T1","reason":"replaced by T1R2","superseded_by":"T1R2"}
+
+case_revision keeps the prior test specification and invalidates its pass.
+After a revision, run must name the current case_version and any registered
+artifact_sha256. counterexample and red_before_change runs remain in history
+and do not set the ordinary acceptance result.
 
 case_retire keeps the case specification and run history, records the retiring
 revision and reason, and stops listing the case as required by the candidate
@@ -118,6 +126,8 @@ type currentCaseView struct {
 	Rule           string                     `json:"rule"`
 	ID             string                     `json:"case_id"`
 	Specification  string                     `json:"specification"`
+	CaseVersion    int                        `json:"case_version"`
+	ArtifactSHA256 string                     `json:"artifact_sha256,omitempty"`
 	Retired        *acceptance.Retirement     `json:"retired,omitempty"`
 	Implementation *acceptance.Implementation `json:"current_implementation"`
 	LatestRun      *acceptance.Run            `json:"latest_run"`
@@ -136,23 +146,23 @@ func selectCurrentCase(trace *acceptance.Trace, id string) (currentCaseView, err
 			}
 			c.Cases = []acceptance.TestCase{tc}
 			view := currentCaseView{
-				Revision:      trace.Revision,
-				CriterionID:   c.ID,
-				Version:       version,
-				Rule:          c.Versions[version-1],
-				ID:            tc.ID,
-				Specification: tc.Specification,
-				Retired:       tc.Retired,
-				Impact:        c.Impact(),
+				Revision:       trace.Revision,
+				CriterionID:    c.ID,
+				Version:        version,
+				Rule:           c.Versions[version-1],
+				ID:             tc.ID,
+				Specification:  tc.Specification,
+				CaseVersion:    tc.Version(),
+				ArtifactSHA256: tc.ArtifactSHA256,
+				LatestRun:      tc.LatestBehaviorRun(),
+				Retired:        tc.Retired,
+				Impact:         c.Impact(),
 			}
 			for i := len(c.Implementations) - 1; i >= 0; i-- {
 				if c.Implementations[i].Version == version {
 					view.Implementation = &c.Implementations[i]
 					break
 				}
-			}
-			if len(tc.Runs) > 0 {
-				view.LatestRun = &tc.Runs[len(tc.Runs)-1]
 			}
 			return view, nil
 		}
