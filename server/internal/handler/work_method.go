@@ -121,11 +121,7 @@ func (h *Handler) GetIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
 	h.writeIssueMethodView(w, r, issue, run, delivery)
 }
 
-func developmentReview(raw []byte, gate string) error {
-	trace, err := acceptance.Decode(raw)
-	if err != nil {
-		return err
-	}
+func developmentReview(trace acceptance.Trace, gate string) error {
 	if len(trace.Criteria) == 0 {
 		return errors.New("请先登记研发验收标准与用例")
 	}
@@ -254,9 +250,11 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	var closeout *acceptance.Closeout
 	if change.Action == "advance" || change.Action == "approve" {
 		gate := run.EvidenceGate()
-		if change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1 {
+		closing := change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1
+		if closing {
 			gate = "delivery"
 		}
 		if gate != "" {
@@ -264,9 +262,17 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			if trace != nil {
 				criteria = trace
 			}
-			if err := developmentReview(criteria, gate); err != nil {
+			acceptanceTrace, err := acceptance.Decode(criteria)
+			if err == nil {
+				err = developmentReview(acceptanceTrace, gate)
+			}
+			if err != nil {
 				writeError(w, 409, err.Error())
 				return
+			}
+			if closing {
+				snapshot := acceptanceTrace.Closeout(nil)
+				closeout = &snapshot
 			}
 		}
 	}
@@ -293,6 +299,9 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		}
 		writeError(w, status, err.Error())
 		return
+	}
+	if closeout != nil {
+		run.History[len(run.History)-1].Closeout = closeout
 	}
 	updated, ok := h.persistMethodTransition(w, r, issue, &run, trace, lesson)
 	if !ok {

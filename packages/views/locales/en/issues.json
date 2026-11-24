@@ -24,6 +24,14 @@
     "chat_draft": "Revise the prototype for {{issue}} ({{id}}).\n\n{{request}}\n\nOriginal frames, in order\n{{originals}}\n\nRead the task and original images. Ask me if the target frame is unclear. Make replacement image files and show them here with `multica attachment upload`. Keep the attachment IDs and wait for my explicit approval. After approval, use `multica issue get` to read the latest description and revision. If the target image references changed, show me the difference and wait. Download the approved files. In the latest description replace only the selected image references with local relative paths, keeping the remaining text and attachments. Publish with {{command}}. Repeat --attachment for each approved image. If the revision conflicts, reread the task and tell me. Read back the updated task to verify the new references."
   },
   "method": {
+    "closeout": "Closeout",
+    "closeout_passed": "{{passed}}/{{total}} passed",
+    "closeout_reconstructed": "From historical records",
+    "closeout_unknown": "Unverified",
+    "closeout_evidence": "Final evidence",
+    "closeout_attachment": "Download attachment {{number}}",
+    "run_history": "Run history",
+    "expected_run_result": "Result matched expectation",
     "start": "Started",
     "confirmed": "Confirmed",
     "unconfirmed": "Unchecked",

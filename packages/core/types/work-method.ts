@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AcceptanceCloseoutSchema } from "./acceptance";
 import { GoalPlanDeliverySchema } from "./goal-plan-delivery";
 
 export const WorkMethodKindSchema = z.enum([
@@ -71,6 +72,7 @@ export const WorkMethodRunSchema = z
       .array(
         z.object({
           action: z.string(),
+          closeout: AcceptanceCloseoutSchema.optional().catch(undefined),
           step: index,
           from_step: index.optional(),
           previous_method: WorkMethodSchema.optional(),

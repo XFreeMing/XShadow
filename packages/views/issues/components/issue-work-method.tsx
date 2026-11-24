@@ -20,6 +20,7 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { useLocale, useT } from "../../i18n";
 import { PlannedDeliverySummary } from "../../goals/components/goal-plan-delivery";
+import { IssueCloseout } from "./issue-closeout";
 import { useActorName } from "@multica/core/workspace/hooks";
 
 export function IssueWorkMethod({
@@ -61,7 +62,7 @@ export function IssueWorkMethod({
           </Button>
         </div>
       )}
-      {run.data?.planned_delivery && <PlannedDeliverySummary delivery={run.data.planned_delivery} />}
+      {run.data?.state !== "closed" && run.data?.planned_delivery && <PlannedDeliverySummary delivery={run.data.planned_delivery} />}
       {run.data && (
         <MethodCard
           wsId={wsId}
@@ -152,6 +153,7 @@ function MethodCard({
   const reviewComplete =
     !step?.reviewer || checks.every((_, i) => checked.includes(i));
   const latest = [...run.history].reverse();
+  const closeout = run.state === "closed" ? latest[0]?.closeout : undefined;
   const delivery = latest.find((event) => event.action === "advance");
   const returned = latest.find(
     (event) => event.action === "rework" && event.step === run.step,
@@ -242,7 +244,7 @@ function MethodCard({
         )}
       </summary>
       <div className="mt-3 grid gap-3 text-label">
-        {run.reason && <p className="text-muted-foreground">{run.reason}</p>}
+        {run.state !== "closed" && run.reason && <p className="text-muted-foreground">{run.reason}</p>}
         {canChoose && !choosing && (
           <div>
             <Button
@@ -311,6 +313,7 @@ function MethodCard({
         )}
         {method && (
           <>
+            {closeout && <IssueCloseout closeout={closeout} actorName={actorName} />}
             {acceptance}
             {run.state !== "closed" && step && (
               <>

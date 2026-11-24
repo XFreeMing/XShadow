@@ -14,8 +14,14 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_type: string, id: string) => id }),
 }));
 
+const { download } = vi.hoisted(() => ({ download: vi.fn() }));
+vi.mock("../../editor/use-download-attachment", () => ({
+  useDownloadAttachment: () => download,
+}));
+
 afterEach(() => {
   cleanup();
+  download.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -147,4 +153,48 @@ it("displays approvals against the checklist the reviewer signed", async () => {
     ],
   });
   expect(await screen.findByText(/Original signed check/)).toBeInTheDocument();
+});
+
+it("shows one current result per criterion and opens the signed evidence on demand", async () => {
+  const attachment = "01a20c18-444a-7a66-9b41-6daec377bf47";
+  const candidate = "19dfad1" + "a".repeat(33);
+  mount({
+    method: { ...method, kind: "development" },
+    state: "closed",
+    step: 1,
+    history: [
+      { action: "rework", step: 0, actor: "member/Bella", at: "2026-01-01T01:00:00Z", evidence: "Previous rejected candidate" },
+      {
+        action: "approve",
+        step: 1,
+        actor: "member/Bella",
+        at: "2026-01-02T01:00:00Z",
+        evidence: "Signed decision",
+        closeout: {
+          trace_revision: 24,
+          criteria: [{
+            id: "US21-02",
+            version: 1,
+            summary: "Keep the original",
+            candidate,
+            passed: true,
+            evidence: [{
+              case_id: "B01", run_number: 7, version: 1, case_version: 2,
+              result: "pass", candidate, evidence: "Verified final run",
+              attachment_ids: [attachment],
+            }],
+          }],
+        },
+      },
+    ],
+  });
+  expect(await screen.findByRole("region", { name: "Closeout" })).toBeVisible();
+  expect(screen.getByText(/1\/1 passed/)).toBeVisible();
+  expect(screen.getByText("19dfad1")).toBeVisible();
+  expect(screen.getByText("Previous rejected candidate")).not.toBeVisible();
+  expect(screen.getByText("Verified final run")).not.toBeVisible();
+  fireEvent.click(screen.getByText("Final evidence"));
+  expect(screen.getByText("Verified final run")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Download attachment 1" }));
+  expect(download).toHaveBeenCalledWith(attachment);
 });

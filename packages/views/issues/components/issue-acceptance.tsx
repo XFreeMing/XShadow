@@ -208,16 +208,25 @@ export function IssueAcceptance({
                     <p>
                       <strong>{tc.id} v{testVersion}</strong> · {status} · {tc.specification}
                     </p>
-                    {tc.runs.map((r, i) => (
-                      <p key={i} className="break-all text-muted-foreground">
-                        {c.id} v{r.version} · {tc.id} v{r.case_version ?? 1} ·{" "}
-                        {r.run_kind && <><code>{r.run_kind}</code> · </>}
-                        {r.result === "pass"
-                          ? t(($) => $.acceptance.pass)
-                          : t(($) => $.acceptance.fail)}{" "}
-                        · <code>{r.candidate}</code> · {r.evidence}
-                      </p>
-                    ))}
+                    {tc.runs.length > 0 && (
+                      <details className="my-2 space-y-2">
+                        <summary className="cursor-pointer text-muted-foreground">
+                          {t(($) => $.method.run_history)} ({tc.runs.length})
+                        </summary>
+                        {tc.runs.map((r, i) => (
+                          <p key={i} className="break-all text-muted-foreground">
+                            {c.id} v{r.version} · {tc.id} v{r.case_version ?? 1} ·{" "}
+                            {r.run_kind && <><code>{r.run_kind}</code> · </>}
+                            {r.run_kind && r.expected_result === r.result
+                              ? t(($) => $.method.expected_run_result)
+                              : r.result === "pass"
+                              ? t(($) => $.acceptance.pass)
+                              : t(($) => $.acceptance.fail)}{" "}
+                            · <code>{r.candidate}</code> · {r.evidence}
+                          </p>
+                        ))}
+                      </details>
+                    )}
                     {button(
                       t(($) => $.acceptance.run),
                       () => edit("run", c, tc.id),

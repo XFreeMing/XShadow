@@ -96,8 +96,12 @@ func TestAgileApprovalReopensWhenAcceptedCriterionChanges(t *testing.T) {
 	accept("implementation", implementation)
 	method("approve", "v1 对应提交与用例通过", http.StatusOK)
 	closedRevision := run.Revision
-	if read := readDeliveryMethod(t, id); read.State != "closed" || read.Revision != closedRevision {
-		t.Fatalf("persisted method: %+v", read)
+	read := readDeliveryMethod(t, id)
+	first := read.History[len(read.History)-1].Closeout
+	if read.State != "closed" || read.Revision != closedRevision || first == nil || first.Reconstructed ||
+		first.TraceRevision != trace.Revision || len(first.Criteria) != 1 || len(first.Criteria[0].Evidence) != 1 ||
+		first.Criteria[0].Evidence[0].Evidence != "CI/report-json" {
+		t.Fatalf("persisted closeout: %+v", read)
 	}
 
 	accept("criterion", map[string]any{"text": "下载包含总计行的 JSON 报表"})
@@ -111,7 +115,11 @@ func TestAgileApprovalReopensWhenAcceptedCriterionChanges(t *testing.T) {
 	method("approve", "v2 尚无实现关联", http.StatusConflict)
 	accept("implementation", implementation)
 	method("approve", "v2 用例和提交已复核", http.StatusOK)
-	if read := readDeliveryMethod(t, id); read.State != "closed" || read.History[len(read.History)-1].Evidence != "v2 用例和提交已复核" {
+	read = readDeliveryMethod(t, id)
+	last := read.History[len(read.History)-1]
+	if read.State != "closed" || last.Evidence != "v2 用例和提交已复核" || last.Closeout == nil ||
+		last.Closeout.Criteria[0].Evidence[0].Evidence != "CI/report-json-with-total" ||
+		read.History[closedRevision-1].Closeout.Criteria[0].Evidence[0].Evidence != "CI/report-json" {
 		t.Fatalf("v2 final review: %+v", read)
 	}
 }

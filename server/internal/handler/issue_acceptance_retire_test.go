@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -13,8 +12,8 @@ import (
 // while an active unrun case still blocks them.
 func TestDevelopmentReviewIgnoresRetiredCases(t *testing.T) {
 	commit := strings.Repeat("d", 40)
-	build := func(cases []acceptance.TestCase) []byte {
-		raw, err := json.Marshal(acceptance.Trace{
+	build := func(cases []acceptance.TestCase) acceptance.Trace {
+		return acceptance.Trace{
 			Revision: 7,
 			Criteria: []acceptance.Criterion{{
 				ID:       "C1",
@@ -24,11 +23,7 @@ func TestDevelopmentReviewIgnoresRetiredCases(t *testing.T) {
 					{Version: 1, Repository: "org/repo", Branch: "dev", Commit: commit},
 				},
 			}},
-		})
-		if err != nil {
-			t.Fatal(err)
 		}
-		return raw
 	}
 
 	activeUnrun := build([]acceptance.TestCase{

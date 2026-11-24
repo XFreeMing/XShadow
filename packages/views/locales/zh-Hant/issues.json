@@ -24,6 +24,14 @@
     "chat_draft": "請按以下要求修改任務 {{issue}}（{{id}}）的原型圖。\n\n{{request}}\n\n現有原型圖及順序\n{{originals}}\n\n先讀原任務和原圖。範圍不明確時先詢問。用 `multica attachment upload` 將替換圖發到對話，記下附件 ID，等我明確確認。用 `multica issue get` 讀取最新描述和修訂號。若原圖引用已被更動，請告知差異並等我確認。下載已確認的圖，只將對應的圖片連結改為本機相對路徑，保留其餘描述與附件。以 {{command}} 發布，多張圖重複使用 --attachment。如有修訂衝突，請重新讀取並告知我。發布後核對新引用。"
   },
   "method": {
+    "closeout": "結案摘要",
+    "closeout_passed": "{{passed}}/{{total}} 通過",
+    "closeout_reconstructed": "依據歷史記錄",
+    "closeout_unknown": "未核實",
+    "closeout_evidence": "終驗證據",
+    "closeout_attachment": "下載附件 {{number}}",
+    "run_history": "歷史執行",
+    "expected_run_result": "結果符合預期",
     "start": "啟動方法",
     "confirmed": "已核對",
     "unconfirmed": "未勾選",

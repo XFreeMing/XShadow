@@ -5,6 +5,18 @@ const version = z.number().int().positive();
 const commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const result = z.enum(["pass", "fail"]);
+const acceptanceRun = z.object({
+  version,
+  case_version: version.optional(),
+  run_kind: z.string().optional(),
+  expected_result: result.optional(),
+  result,
+  actor: z.string().optional(),
+  task_id: z.string().optional(),
+  recorded_at: z.string().optional(),
+  candidate: commit,
+  evidence: z.string(),
+});
 export const AcceptanceTraceSchema = z.object({
   revision,
   criteria: z.array(
@@ -20,20 +32,7 @@ export const AcceptanceTraceSchema = z.object({
             text: z.string(),
             artifact_sha256: sha256.optional(),
           })).optional(),
-          runs: z.array(
-            z.object({
-              version,
-              case_version: version.optional(),
-              run_kind: z.string().optional(),
-              expected_result: result.optional(),
-              result,
-              actor: z.string().optional(),
-              task_id: z.string().optional(),
-              recorded_at: z.string().optional(),
-              candidate: commit,
-              evidence: z.string(),
-            }),
-          ),
+          runs: z.array(acceptanceRun),
         }),
       ),
       implementations: z.array(
@@ -71,3 +70,21 @@ export type AcceptanceChange = {
       evidence: string;
     }
 );
+
+export const AcceptanceCloseoutSchema = z.object({
+  trace_revision: revision,
+  reconstructed: z.boolean().optional(),
+  criteria: z.array(z.object({
+    id: z.string(),
+    version,
+    summary: z.string(),
+    candidate: commit.optional(),
+    passed: z.boolean(),
+    evidence: z.array(acceptanceRun.extend({
+      case_id: z.string(),
+      run_number: version,
+      attachment_ids: z.array(z.string().uuid()).optional(),
+    })),
+  })),
+});
+export type AcceptanceCloseout = z.infer<typeof AcceptanceCloseoutSchema>;

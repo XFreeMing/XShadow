@@ -24,6 +24,14 @@
     "chat_draft": "Modifie le prototype de {{issue}} ({{id}}).\n\n{{request}}\n\nImages d’origine dans l’ordre\n{{originals}}\n\nConsulte la tâche et les images. Interroge-moi si le périmètre est ambigu. Présente les révisions avec `multica attachment upload`, conserve leurs identifiants et attends mon accord explicite. Ensuite, lis la dernière description et sa révision avec `multica issue get`. Si les références d’origine ont changé, indique-moi les différences. Télécharge les images approuvées et remplace uniquement leurs références par des chemins locaux relatifs. Garde le reste de la description et les pièces jointes. Publie avec {{command}}, en répétant --attachment pour chaque image. En cas de conflit, relis la tâche et informe-moi. Vérifie les références publiées."
   },
   "method": {
+    "closeout": "Bilan de clôture",
+    "closeout_passed": "{{passed}}/{{total}} validés",
+    "closeout_reconstructed": "D’après l’historique",
+    "closeout_unknown": "Non vérifié",
+    "closeout_evidence": "Preuve finale",
+    "closeout_attachment": "Télécharger la pièce jointe {{number}}",
+    "run_history": "Historique des exécutions",
+    "expected_run_result": "Résultat conforme aux attentes",
     "start": "Méthode démarrée",
     "confirmed": "Vérifié",
     "unconfirmed": "Non coché",

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -136,6 +138,17 @@ func (h *Handler) canActOnMethod(r *http.Request, issue db.Issue, run workmethod
 func (h *Handler) writeIssueMethodView(w http.ResponseWriter, r *http.Request, issue db.Issue, run workmethod.Run, delivery *issuePlanContract) {
 	actor, err := h.methodRecipient(r.Context(), issue, run)
 	run.CurrentActor = actor
+	if run.State == "closed" && run.Method != nil && run.Method.Kind == "development" && len(run.History) > 0 {
+		last := &run.History[len(run.History)-1]
+		if last.Action == "approve" && last.Closeout == nil {
+			approvedAt, timeErr := time.Parse(time.RFC3339Nano, last.At)
+			trace, traceErr := acceptance.Decode(issue.AcceptanceCriteria)
+			if timeErr == nil && traceErr == nil && len(trace.Criteria) > 0 {
+				snapshot := trace.Closeout(&approvedAt)
+				last.Closeout = &snapshot
+			}
+		}
+	}
 	writeJSON(w, 200, struct {
 		workmethod.Run
 		CanAct bool `json:"can_act"`

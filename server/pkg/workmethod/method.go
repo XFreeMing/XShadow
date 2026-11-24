@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 )
 
 type Template struct {
@@ -53,16 +54,17 @@ type Run struct {
 }
 
 type Event struct {
-	PreviousMethod *Template       `json:"previous_method,omitempty"`
-	MethodRevision int             `json:"method_revision,omitempty"`
-	CheckedItems   []int           `json:"checked_items,omitempty"`
-	FromStep       *int            `json:"from_step,omitempty"`
-	Action         string          `json:"action"`
-	Step           int             `json:"step"`
-	Evidence       string          `json:"evidence"`
-	Findings       []ReviewFinding `json:"findings,omitempty"`
-	Actor          string          `json:"actor"`
-	At             string          `json:"at"`
+	Closeout       *acceptance.Closeout `json:"closeout,omitempty"`
+	PreviousMethod *Template            `json:"previous_method,omitempty"`
+	MethodRevision int                  `json:"method_revision,omitempty"`
+	CheckedItems   []int                `json:"checked_items,omitempty"`
+	FromStep       *int                 `json:"from_step,omitempty"`
+	Action         string               `json:"action"`
+	Step           int                  `json:"step"`
+	Evidence       string               `json:"evidence"`
+	Findings       []ReviewFinding      `json:"findings,omitempty"`
+	Actor          string               `json:"actor"`
+	At             string               `json:"at"`
 }
 
 type ReviewFinding struct {

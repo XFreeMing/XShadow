@@ -24,6 +24,14 @@
     "chat_draft": "请按以下要求修改任务 {{issue}}（{{id}}）的原型图。\n\n{{request}}\n\n现有原型图及顺序\n{{originals}}\n\n先读原任务和原图。图的范围不明确时先问我。制作替换图，用 `multica attachment upload` 发到这次对话让我预览，保留附件 ID。等我明确确认后，用 `multica issue get` 读取最新正文和修订号。如果要换的原图引用已改动，告诉我差异并等我确认。下载已确认的图，只把最新正文中对应的图片链接换成新图的本地相对路径，保留其余正文和附件。用 {{command}} 发布，多张图重复传入 --attachment。遇到修订冲突就重新读取并告知我。发布后读回任务，核对新的图片引用。"
   },
   "method": {
+    "closeout": "结案摘要",
+    "closeout_passed": "{{passed}}/{{total}} 通过",
+    "closeout_reconstructed": "依据历史记录",
+    "closeout_unknown": "未核实",
+    "closeout_evidence": "终验证据",
+    "closeout_attachment": "下载附件 {{number}}",
+    "run_history": "历史运行",
+    "expected_run_result": "结果符合预期",
     "start": "启动方法",
     "confirmed": "已核对",
     "unconfirmed": "未勾选",
