@@ -72,7 +72,7 @@ func ruleBasedAgile() Template {
 	return m
 }
 
-func agileTemplate() Template {
+func domainDrivenAgile() Template {
 	m := ruleBasedAgile()
 	m.Revision++
 	criteria, coverage, candidate, delivery := &m.Steps[0], &m.Steps[1], &m.Steps[2], &m.Steps[3]
@@ -89,9 +89,23 @@ func agileTemplate() Template {
 	return m
 }
 
+func agileTemplate() Template {
+	m := domainDrivenAgile()
+	m.Revision++
+	criteria, coverage, candidate := &m.Steps[0], &m.Steps[1], &m.Steps[2]
+	criteria.Instructions += " 在原用户故事写清使用者、情境和可观察的验收结果。独立评判人须能从已定义的领域对象、状态、规则与权限推导测试预期，才能交用例设计。"
+	coverage.Instructions += " 把 TDD 准备作为实现前的交付。关联每条验收标准的用例、获准的固定测试数据、夹具、测试入口和独立预期。新行为写明旧基线应在哪条业务断言出红灯，修复后同一用例怎样转绿。已有隔离基线时先复演红灯。用例、数据或预期不足时退回本步。"
+	coverage.Output = "可复演的 TDD 准备材料，包含标准和用例的版本、固定测试数据、入口、独立预期、红灯断言和绿灯条件。"
+	coverage.Checks[0] = "每条标准都有可复演的用例、固定测试数据、测试入口和独立预期"
+	coverage.Checks[2] = "新行为的红灯断言与绿灯条件可复现，既有行为有独立基线"
+	candidate.Instructions += " 如设计阶段已复演红灯，核对同一基线和用例修订；否则实现前先得到该红灯。跨版本重新确认用例时保留旧回执。"
+	m.Review += " 先验收故事、领域规则、测试用例和数据。红灯须由业务断言失败产生，绿灯使用同一用例核对新行为。"
+	return m
+}
+
 func upgradeAgile(m Template) Template {
 	current := agileTemplate()
-	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile()} {
+	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile()} {
 		if m.Kind != previous.Kind || len(m.Steps) != len(previous.Steps) {
 			continue
 		}

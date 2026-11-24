@@ -316,7 +316,7 @@ func TestAgileCatalogRevisionCarriesDomainRulesIntoNewStories(t *testing.T) {
 	methods := Catalog([]Template{previous})
 	run := Recommend(methods, "开发功能", "", "")
 	next := run.Method
-	if next == nil || next.ID != previous.ID || next.Revision != previous.Revision+1 ||
+	if next == nil || next.ID != previous.ID || next.Revision != previous.Revision+agileTemplate().Revision-ruleBasedAgile().Revision ||
 		!reflect.DeepEqual(next.Steps[0].Owner, previous.Steps[0].Owner) ||
 		!reflect.DeepEqual(next.Steps[0].Reviewer, previous.Steps[0].Reviewer) {
 		t.Fatalf("new story lost upgraded guidance or role bindings: %+v", run)
@@ -336,5 +336,23 @@ func TestAgileCatalogRevisionCarriesDomainRulesIntoNewStories(t *testing.T) {
 	previous.Steps[0].Instructions += " Local rule."
 	if got := Catalog([]Template{previous})[0]; !reflect.DeepEqual(got, previous) {
 		t.Fatal("custom method was overwritten")
+	}
+}
+
+func TestAgileUpgradesRoleBoundDomainTemplateWithTestFirstPreparation(t *testing.T) {
+	previous := domainDrivenAgile()
+	previous.Revision = 8
+	previous.Steps[1].Owner = &Actor{Kind: "creator"}
+	previous.Steps[1].Reviewer = &Actor{Kind: "project_lead"}
+	updated := Catalog([]Template{previous})[0]
+	design := updated.Steps[1]
+	if updated.Revision != previous.Revision+1 || design.Gate != "coverage" ||
+		!reflect.DeepEqual(design.Owner, previous.Steps[1].Owner) || !reflect.DeepEqual(design.Reviewer, previous.Steps[1].Reviewer) {
+		t.Fatalf("wrong method revision or design roles: %+v", updated)
+	}
+	for _, term := range []string{"固定测试数据", "红灯断言", "绿灯条件"} {
+		if !strings.Contains(design.Output, term) {
+			t.Errorf("design output lacks %q: %s", term, design.Output)
+		}
 	}
 }

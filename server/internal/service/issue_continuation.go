@@ -85,6 +85,16 @@ func (s *IssueContinuation) Tick(ctx context.Context) error {
 
 const continuationBrief = "请读取原事项、当前工作方法、最近回执与已登记的等待。接回当前步骤并核实下一位实际接单。若原目标或授权已明确撤销、事项重复或已被另一交付替代且无需再做，在原卡记录依据或替代事项，直接将状态设为 cancelled（已取消），并读回。超时、运行失败、缺资料或关联卡找不到，单独都不足以取消。已完成须满足原验收要求。还要等待时，在原卡登记真实条件、接回人和可用唤醒；没有可订阅事件则登记定时复核。保留已有授权、独立评审和成员决定。"
 const coordinationBrief = "你负责协调这个未接续的事项。核对上一轮为什么没有形成结果；仍需执行或审核时交给有权的负责人，并验证接单。待规划、成员答复和显式阻塞只做规划、核查或解除阻塞；不得代成员答复或自行扩大实施范围。"
+const backlogPlanningTrigger = "Issue continuation (planning)"
+const backlogPlanningBrief = `在原事项接续规划和设计，把 TDD 准备作为本轮首要产物。读取目标、前置、原讨论和已有证据，推进当前信息足以支持的部分，与获准参与的成员核对不同方案和反例。
+1. 先把敏捷用户故事的使用者、情境、用户结果和范围写清楚，给出编号的可观察验收标准，并用正反例消除歧义。
+2. 明确影响验收的 DDD 领域术语、模型边界、归属、状态转换、业务不变量和权限。从上下游交接、失败或重试中挑出能区分正确与错误实现的例子。
+3. 把验收标准和领域规则逐条映射到测试用例、可复用且获准使用的测试数据、固定输入和独立预期。写明测试入口、当前基线、红灯应因哪条业务断言失败、绿灯应看到什么。已有隔离基线时可先复演红灯。尚未运行的部分保留为待验证。
+4. 将草案、夹具或复现步骤、原件和复核入口留在原事项，记录缺口、接回人和复核条件。正式启动工作方法、修改正在使用的代码检出、派工实施或改写现行已授权计划均须经正式交付流程。`
+
+func IsBacklogPlanningTask(task db.AgentTaskQueue) bool {
+	return task.TriggerEvidenceKind.String == "issue_continuation" && task.TriggerSummary.String == backlogPlanningTrigger
+}
 
 func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, id pgtype.UUID) error {
 	tx, err := s.Tasks.TxStarter.Begin(ctx)
@@ -108,23 +118,40 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		return err
 	}
 
-	// A bound goal uses its saved sequence. Other work keeps its own
-	// explicitly recorded wait and can be coordinated independently.
 	var dependencyChange string
 	var goalGate goalBacklogGate
 	isBacklog := issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == issuestatus.Backlog
 	if isBacklog {
 		goalGate, err = goalBacklogPosition(ctx, q, issue)
-		if err != nil || (goalGate.managed && !goalGate.ready) {
+		if err != nil || (goalGate.managed && !goalGate.ready && !goalGate.planning) {
 			return err
 		}
-		if goalGate.managed {
-			dependencyChange = goalGate.key
-		} else {
-			var waiting bool
-			waiting, dependencyChange, err = backlogPlanWait(ctx, tx, issue)
-			if err != nil || waiting {
+		switch {
+		case goalGate.planning:
+			var facts string
+			if plan := readBacklogPlan(issue); plan != nil {
+				_, facts, err = backlogPlanDependencies(ctx, tx, issue, plan)
+				if err != nil {
+					return err
+				}
+			}
+			// Agent receipts do not reopen their own planning run. A member's
+			// new input or a changed dependency does.
+			var input string
+			if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT id::text||':'||updated_at::text FROM comment
+ WHERE workspace_id=$1 AND issue_id=$2 AND author_type='member'
+ ORDER BY updated_at DESC, id DESC LIMIT 1),'')`, issue.WorkspaceID, id).Scan(&input); err != nil {
 				return err
+			}
+			dependencyChange = goalGate.key + "/" + facts + "/" + input
+		case goalGate.ready:
+			dependencyChange = goalGate.key
+		default:
+			if plan := readBacklogPlan(issue); plan != nil {
+				dependencyChange, _, err = backlogPlanDependencies(ctx, tx, issue, plan)
+				if err != nil || dependencyChange == "" {
+					return err
+				}
 			}
 		}
 	}
@@ -137,6 +164,9 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 	if len(issue.WorkMethodRun) > 0 {
 		if err = json.Unmarshal(issue.WorkMethodRun, &method); err != nil {
 			return err
+		}
+		if goalGate.planning && method.GoalExecution {
+			return nil
 		}
 	}
 	var execution GoalExecution
@@ -195,8 +225,8 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 	}
 	var attempted, waitingForRecheck bool
 	if err = tx.QueryRow(ctx, `SELECT count(*)>0,coalesce(max(coalesce(completed_at,created_at))
- FILTER (WHERE context->>'continuation_role'='coordinator') > now()-interval '24 hours', false)
- OR ($3 AND coalesce(bool_or(status='completed' AND context->>'continuation_role'='coordinator'),false))
+ FILTER (WHERE context->>'continuation_role' IN ('coordinator','planning')) > now()-interval '24 hours', false)
+ OR ($3 AND coalesce(bool_or(status='completed' AND context->>'continuation_role' IN ('coordinator','planning')),false))
  FROM agent_task_queue WHERE issue_id=$1 AND context->>'continuation_gap'=$2
  AND ($4::uuid IS NULL OR runtime_id=$4)`, id, gap, dependencyChange != "", recoveryRuntime).Scan(&attempted, &waitingForRecheck); err != nil || waitingForRecheck {
 		return err
@@ -239,6 +269,10 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 	if startGoal {
 		note = fmt.Sprintf("目标已授权启动本卡的正式工作方法。用 \"$MULTICA_CLI_PATH\" issue method <本事项编号> 读取当前步骤，再用同一命令加 --change-stdin 提交 action=start、method_id=%q、当前 base_revision。平台将自动交给方法指定角色。", execution.Progress.MethodID)
 	}
+	summary := "Issue continuation (" + role + ")"
+	if goalGate.planning {
+		role, note, summary = "planning", backlogPlanningBrief, backlogPlanningTrigger
+	}
 	if err = (&IssueWakeupService{Tasks: s.Tasks}).authorize(ctx, q, issue.WorkspaceID, invoker, target.Agent); err != nil {
 		return err
 	}
@@ -254,7 +288,7 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 	if startGoal || (!coord && method.GoalExecution) {
 		params.GoalExecutionID = execution.ID
 	}
-	params.TriggerSummary = pgtype.Text{String: "Issue continuation (" + role + ")", Valid: true}
+	params.TriggerSummary = pgtype.Text{String: summary, Valid: true}
 	if !coord && (method.State == "working" || method.State == "review") {
 		params.WorkMethodRevision = pgtype.Int8{Int64: int64(method.Revision), Valid: method.Revision > 0}
 	}
@@ -272,40 +306,48 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 	return s.Tasks.PublishWorkMethodHandoff(ctx, task)
 }
 
-func backlogPlanWait(ctx context.Context, tx pgx.Tx, issue db.Issue) (bool, string, error) {
+type storedBacklogPlan struct {
+	State        string
+	Next         string
+	Dependencies []struct{ Issue, Status string }
+}
+
+func readBacklogPlan(issue db.Issue) *storedBacklogPlan {
 	var meta struct {
 		Plan json.RawMessage `json:"backlog_plan"`
 	}
 	if len(issue.Metadata) == 0 || json.Unmarshal(issue.Metadata, &meta) != nil {
-		return false, "", nil
+		return nil
 	}
 	raw := meta.Plan
 	var encoded string
 	if json.Unmarshal(raw, &encoded) == nil {
 		raw = []byte(encoded)
 	}
-	var plan struct {
-		State        string
-		Next         string
-		Dependencies []struct{ Issue, Status string }
-	}
-	if json.Unmarshal(raw, &plan) != nil || plan.Next == "" {
-		return false, "", nil
+	var plan storedBacklogPlan
+	if json.Unmarshal(raw, &plan) != nil || strings.TrimSpace(plan.Next) == "" {
+		return nil
 	}
 	switch plan.State {
 	case "waiting_scope", "needs_story", "waiting_dependency":
 	default:
-		return false, "", nil
+		return nil
 	}
-	var changes []string
+	for _, dep := range plan.Dependencies {
+		if dep.Issue == "" || dep.Status == "" {
+			return nil
+		}
+	}
+	return &plan
+}
+
+func backlogPlanDependencies(ctx context.Context, tx pgx.Tx, issue db.Issue, plan *storedBacklogPlan) (string, string, error) {
+	var changes, facts []string
 	tracked := make(map[string]bool, len(plan.Dependencies))
 	for _, dep := range plan.Dependencies {
 		tracked[strings.ToUpper(dep.Issue)] = true
 	}
 	for _, dep := range plan.Dependencies {
-		if dep.Issue == "" || dep.Status == "" {
-			return false, "", nil
-		}
 		var status, transition, choiceOwner string
 		err := tx.QueryRow(ctx, `SELECT i.status,
     CASE WHEN i.assignee_type='member' AND i.metadata ? 'member_todo_key'
@@ -316,19 +358,21 @@ func backlogPlanWait(ctx context.Context, tx pgx.Tx, issue db.Issue) (bool, stri
 		if errors.Is(err, pgx.ErrNoRows) {
 			status = "missing"
 		} else if err != nil {
-			return false, "", err
+			return "", "", err
 		}
 		// A downstream plan tracking the requesting story observes its delivery.
 		// The member's choice is input to that story alone.
 		if choiceOwner != "" && tracked[choiceOwner] {
 			continue
 		}
+		facts = append(facts, strings.ToUpper(dep.Issue)+":"+status)
 		if status != dep.Status {
 			changes = append(changes, fmt.Sprintf("%s:%s>%s:%s", strings.ToUpper(dep.Issue), dep.Status, status, transition))
 		}
 	}
 	sort.Strings(changes)
-	return len(changes) == 0, strings.Join(changes, ","), nil
+	sort.Strings(facts)
+	return strings.Join(changes, ","), strings.Join(facts, ","), nil
 }
 
 func continuationOwner(ctx context.Context, q *db.Queries, issue db.Issue, method workmethod.Run) (wakeTarget, error) {
@@ -373,7 +417,8 @@ func (s *IssueWakeupService) checkContinuationClaim(ctx context.Context, task db
 		if err != nil {
 			return err
 		}
-		if (gate.managed && !gate.ready) || (binding.GoalKey != "" && binding.GoalKey != gate.key) {
+		if (gate.managed && !gate.ready && !(gate.planning && binding.Role == "planning")) ||
+			(binding.GoalKey != "" && binding.GoalKey != gate.key) {
 			return ErrWakeupForbidden
 		}
 	}
@@ -398,7 +443,7 @@ func (s *IssueWakeupService) checkContinuationClaim(ctx context.Context, task db
 			return err
 		}
 		target = owner.Agent
-	case "coordinator":
+	case "coordinator", "planning":
 	default:
 		return ErrWakeupForbidden
 	}

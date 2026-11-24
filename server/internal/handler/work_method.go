@@ -146,6 +146,19 @@ func developmentReview(raw []byte, gate string) error {
 	return nil
 }
 
+func writeBacklogPlanningTransitionForbidden(w http.ResponseWriter) {
+	writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "待规划运行可以准备方案和验收草案，正式派工或修改目标执行计划需要另行授权")
+}
+
+func (h *Handler) rejectBacklogPlanningTransition(w http.ResponseWriter, r *http.Request) bool {
+	task, _ := h.taskFromRequestHeader(r)
+	if !service.IsBacklogPlanningTask(task) {
+		return false
+	}
+	writeBacklogPlanningTransitionForbidden(w)
+	return true
+}
+
 func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
@@ -167,6 +180,10 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	task, hasSource := h.taskFromRequestHeader(r)
+	if service.IsBacklogPlanningTask(task) {
+		writeBacklogPlanningTransitionForbidden(w)
+		return
+	}
 	binding := service.ReadGoalExecutionTask(task)
 	if binding.ID.Valid && (task.IssueID != issue.ID || (binding.Revision == 0 && change.Action != "start")) {
 		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "目标授权仅用于本事项的当前工作方法步骤")

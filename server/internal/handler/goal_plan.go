@@ -410,6 +410,9 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.rejectBacklogPlanningTransition(w, r) {
+		return
+	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
 		return

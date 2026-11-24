@@ -4029,6 +4029,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	var rawFields map[string]json.RawMessage
 	json.Unmarshal(bodyBytes, &rawFields)
 
+	if h.rejectBacklogPlanningIssueTransition(w, r, rawFields) {
+		return
+	}
 	if prevIssue.TriageState.Valid {
 		if field := triageLockedField(rawFields); field != "" {
 			writeIssueInTriage(w, field)
@@ -4888,6 +4891,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	if raw, exists := rawTop["updates"]; exists {
 		json.Unmarshal(raw, &rawUpdates)
 	}
+	if h.rejectBacklogPlanningIssueTransition(w, r, rawUpdates) {
+		return
+	}
 	if _, ok := rawUpdates["duplicate_of_issue_id"]; ok {
 		writeError(w, http.StatusBadRequest, "duplicate_of_issue_id is not supported in batch updates")
 		return
@@ -5250,6 +5256,15 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated)...)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
+}
+
+func (h *Handler) rejectBacklogPlanningIssueTransition(w http.ResponseWriter, r *http.Request, fields map[string]json.RawMessage) bool {
+	for _, key := range []string{"status", "assignee_type", "assignee_id", "project_id", "stage", "duplicate_of_issue_id"} {
+		if _, exists := fields[key]; exists {
+			return h.rejectBacklogPlanningTransition(w, r)
+		}
+	}
+	return false
 }
 
 type BatchDeleteIssuesRequest struct {

@@ -117,6 +117,25 @@ func TestGoalExecutionPrivateHandoffsAndRevocation(t *testing.T) {
 	}
 
 	tick()
+	planning := load(next, manager)
+	if err := wakeup.CheckClaim(ctx, planning); err != nil || !service.IsBacklogPlanningTask(planning) || service.ReadGoalExecutionTask(planning).ID.Valid {
+		t.Fatalf("expected an independent planning run with no execution grant: %v", err)
+	}
+	running(planning)
+	postMethod(next, planning, "start", template.ID, 0, 403)
+	asPlanning := func(method, path, target string, body any) *http.Request {
+		t.Helper()
+		r := goalRequest(method, path, testUserID, body, map[string]string{"id": target})
+		r.Header.Set("X-Actor-Source", "task_token")
+		r.Header.Set("X-Agent-ID", manager)
+		r.Header.Set("X-Task-ID", uuidToString(planning.ID))
+		return r
+	}
+	testutil.Call(t, testHandler.UpdateIssue, asPlanning("PATCH", "/api/issues/"+next, next, map[string]any{"status": "in_progress"})).Want(403)
+	testutil.Call(t, testHandler.PutGoalPlan, asPlanning("PUT", "/api/goals/"+goal.ID+"/plan", goal.ID, map[string]any{"expected_revision": 1, "items": items})).Want(403)
+	testutil.Call(t, testHandler.CreateComment, asPlanning("POST", "/api/issues/"+next+"/comments", next, map[string]any{
+		"content": "Draft acceptance and an example for independent review.",
+	})).Want(201)
 	ungranted := load(first, manager)
 	running(ungranted)
 	postMethod(first, ungranted, "start", template.ID, 0, 403)
@@ -172,9 +191,11 @@ func TestGoalExecutionPrivateHandoffsAndRevocation(t *testing.T) {
 	if err := wakeup.CheckClaim(ctx, review); err != nil {
 		t.Fatal(err)
 	}
-	if n := taskCountFor(t, next, manager); n != 0 {
-		t.Fatalf("dependent has %d premature runs", n)
+	if n := taskCountFor(t, next, manager); n != 1 {
+		t.Fatalf("dependent has %d runs, want only the planning run", n)
 	}
+	finish(planning)
+	dbfx.Exec(t, "UPDATE issue SET updated_at=now()-interval '2 minutes' WHERE id=$1", next)
 	save(1)
 	if err := wakeup.CheckClaim(ctx, review); !errors.Is(err, service.ErrWakeupForbidden) {
 		t.Fatalf("old queued review should be fenced by plan revision: %v", err)

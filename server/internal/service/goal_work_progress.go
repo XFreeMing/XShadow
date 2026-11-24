@@ -161,10 +161,11 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 }
 
 type goalBacklogGate struct {
-	managed bool
-	ready   bool
-	key     string
-	note    string
+	managed  bool
+	ready    bool
+	planning bool
+	key      string
+	note     string
 }
 
 func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (goalBacklogGate, error) {
@@ -192,6 +193,14 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 	}
 	gate := goalBacklogGate{managed: progress.Total > 0}
 	if progress.Phase != "planning" || progress.IssueID != util.UUIDToString(issue.ID) {
+		if gate.managed && goal.Status == "in_progress" && hasBacklogPlanning(issue, plan.Content) {
+			facts, err := json.Marshal([]any{goal.ID, goal.Intent, goal.Scope, goal.AcceptanceCriteria, json.RawMessage(plan.Content)})
+			if err != nil {
+				return goalBacklogGate{}, err
+			}
+			gate.planning = true
+			gate.key = fmt.Sprintf("goal-planning/%x", sha256.Sum256(facts))
+		}
 		return gate, nil
 	}
 	// Deduplicate by delivery facts, excluding incidental context snapshot
@@ -207,4 +216,21 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 		util.UUIDToString(goal.ID), plan.Revision, progress.Completed, progress.Total,
 	)
 	return gate, nil
+}
+
+func hasBacklogPlanning(issue db.Issue, content []byte) bool {
+	if readBacklogPlan(issue) != nil {
+		return true
+	}
+	var plan struct{ Items []goalWorkItem }
+	if json.Unmarshal(content, &plan) != nil {
+		return false
+	}
+	issueID := util.UUIDToString(issue.ID)
+	for _, item := range plan.Items {
+		if item.Binding.IssueID == issueID && item.Delivery.MethodID != "" {
+			return true
+		}
+	}
+	return false
 }
