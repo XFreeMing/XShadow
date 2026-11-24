@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "AI planning",
+    "jump_task": "Jump to task",
     "dependency_kind": "Dependency type",
     "dependency_hard": "Required",
     "dependency_conditional": "Conditional",

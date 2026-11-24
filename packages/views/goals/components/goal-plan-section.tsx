@@ -12,11 +12,12 @@ import {
   squadListOptions,
 } from "@multica/core/workspace/queries";
 import { ApiError, errorCode } from "@multica/core/api";
-import { CircleAlert } from "@multica/ui/icons";
+import { CircleAlert, Sparkles } from "@multica/ui/icons";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Spinner } from "@multica/ui/components/ui/spinner";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { isGoalUnavailableError } from "../status";
 import {
@@ -132,6 +133,7 @@ export function GoalPlanSection({
   const focusedInsideRef = useRef<HTMLElement | null>(null);
   const conflictReloadRef = useRef<HTMLButtonElement | null>(null);
   const planRetryRef = useRef<HTMLButtonElement | null>(null);
+  const generationHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const executionBlocked = dirty || setExecution.isPending || savePlan.isPending;
   useEffect(() => {
@@ -502,17 +504,32 @@ export function GoalPlanSection({
   }
 
   const header = (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="flex items-baseline gap-2">
+    <div className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-card px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
         <h2 className="text-title-sm font-semibold">{t(($) => $.plan.title)}</h2>
         {plan ? (
           <span className="text-caption text-muted-foreground">
             {t(($) => $.plan.revision, { revision: plan.revision })}
           </span>
         ) : null}
+        {dirty ? <Badge variant="outline">{t(($) => $.plan.unsaved)}</Badge> : null}
       </div>
       <div className="flex items-center gap-2">
-        {dirty ? <Badge variant="outline">{t(($) => $.plan.unsaved)}</Badge> : null}
+        {draft ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="@4xl:hidden"
+            onClick={() => {
+              generationHeadingRef.current?.focus({ preventScroll: true });
+              generationHeadingRef.current?.scrollIntoView({ block: "start" });
+            }}
+          >
+            <Sparkles className="size-3.5" />
+            {t(($) => $.plan.generation_title)}
+          </Button>
+        ) : null}
         <Button
           size="sm"
           onClick={handleSave}
@@ -565,68 +582,80 @@ export function GoalPlanSection({
     );
   }
 
+  const showProgress = !!progress && progress.total > 0;
+  const showExecution = plan && (executionState || (plan.can_manage_execution && executionAvailable));
+  const showEditor = draft && draftIsCurrentProject && !projectConflictNotice;
+
   return (
     <section
       ref={sectionRef}
       onFocusCapture={handleFocusIn}
       onBlurCapture={handleFocusOut}
-      className="space-y-3"
+      className="@container min-w-0 space-y-5"
       data-testid="goal-plan-section"
     >
       {header}
 
-      {progress && progress.total > 0 ? (
-        <div role="status" className="space-y-1 rounded-md border px-3 py-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
-            <span className="font-medium">
-              {t(($) => $.plan_progress.count, { completed: progress.completed, total: progress.total })}
-            </span>
-            <Badge variant="secondary">{t(($) => $.plan_progress.phase[progress.phase])}</Badge>
-          </div>
-          {current ? (
-            <p className="text-body">
-              {current.title}
-              {progress.method_step ? <span className="text-muted-foreground"> · {progress.method_step}</span> : null}
-            </p>
-          ) : null}
-          {blockers.length > 0 ? (
-            <p className="text-caption text-muted-foreground">
-              {t(($) => $.plan_progress.waiting_for, { tasks: blockers.map((item) => item.title).join(" · ") })}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {plan && (executionState || (plan.can_manage_execution && executionAvailable)) ? (
-        <div className="space-y-2 rounded-md border px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-caption font-medium">
-              {executionState === "active"
-                ? t(($) => $.plan_execution.active, { revision: plan.execution_revision })
-                : executionState === "stale"
-                  ? t(($) => $.plan_execution.stale)
-                  : t(($) => $.plan_execution.off)}
-            </span>
-            {plan.can_manage_execution ? (
-              <div className="flex flex-wrap gap-2">
-                {executionAvailable && executionState !== "active" ? (
-                  <Button type="button" size="sm" variant="outline"
-                    disabled={executionBlocked}
-                    onClick={() => void changeExecution(true)}>
-                    {t(($) => $.plan_execution.enable, { revision: plan.revision })}
-                  </Button>
+      {showProgress || showExecution ? (
+        <div className="rounded-lg border bg-surface/60 px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+            {showProgress ? (
+              <div role="status" className="min-w-0 flex-1 basis-72 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <span className="text-body font-semibold tabular-nums">
+                    {t(($) => $.plan_progress.count, { completed: progress.completed, total: progress.total })}
+                  </span>
+                  <div aria-hidden="true" className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full bg-brand" style={{ width: `${(progress.completed / progress.total) * 100}%` }} />
+                  </div>
+                  <Badge variant="outline">{t(($) => $.plan_progress.phase[progress.phase])}</Badge>
+                </div>
+                {current ? (
+                  <p className="break-words text-body">
+                    {current.title}
+                    {progress.method_step ? <span className="text-muted-foreground"> · {progress.method_step}</span> : null}
+                  </p>
                 ) : null}
-                {executionState ? (
-                  <Button type="button" size="sm" variant="outline"
-                    disabled={setExecution.isPending || savePlan.isPending}
-                    onClick={() => void changeExecution(false)}>
-                    {t(($) => $.plan_execution.revoke)}
-                  </Button>
+                {blockers.length > 0 ? (
+                  <p className="break-words text-label text-muted-foreground">
+                    {t(($) => $.plan_progress.waiting_for, { tasks: blockers.map((item) => item.title).join(" · ") })}
+                  </p>
                 ) : null}
               </div>
             ) : null}
+            {showExecution ? (
+              <div className="min-w-0 flex-1 basis-72 space-y-1.5">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1.5">
+                  <span className="text-body font-medium">
+                    {executionState === "active"
+                      ? t(($) => $.plan_execution.active, { revision: plan.execution_revision })
+                      : executionState === "stale"
+                        ? t(($) => $.plan_execution.stale)
+                        : t(($) => $.plan_execution.off)}
+                  </span>
+                  {plan.can_manage_execution ? (
+                    <div className="flex flex-wrap gap-2">
+                      {executionAvailable && executionState !== "active" ? (
+                        <Button type="button" size="sm" variant="outline"
+                          disabled={executionBlocked}
+                          onClick={() => void changeExecution(true)}>
+                          {t(($) => $.plan_execution.enable, { revision: plan.revision })}
+                        </Button>
+                      ) : null}
+                      {executionState ? (
+                        <Button type="button" size="sm" variant="outline"
+                          disabled={setExecution.isPending || savePlan.isPending}
+                          onClick={() => void changeExecution(false)}>
+                          {t(($) => $.plan_execution.revoke)}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+                <p className="text-label text-muted-foreground">{t(($) => $.plan_execution.scope)}</p>
+              </div>
+            ) : null}
           </div>
-          <p className="text-caption text-muted-foreground">{t(($) => $.plan_execution.scope)}</p>
         </div>
       ) : null}
 
@@ -699,40 +728,51 @@ export function GoalPlanSection({
         </div>
       ) : null}
 
-      <GoalPlanGenerationPanel
-        key={goal.id}
-        goal={goal}
-        planRevision={planRevision}
-        dirty={dirty}
-        generationNonce={generationNonce}
-        applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
-        onApplyCandidate={handleApplyCandidate}
-        onProjectConflict={handleProjectConflict}
-        onRevisionConflict={handleStartRevisionConflict}
-        onUnavailable={handleRunUnavailable}
-        onReloadPlan={handleLoadLatest}
-        onStartNewGeneration={handleStartNewGeneration}
-      />
-
-      {draft && draftIsCurrentProject && !projectConflictNotice ? (
-        <>
-          <GoalPlanEditor
+      <div className={cn("grid items-start gap-6", showEditor && "@4xl:grid-cols-[minmax(0,1fr)_minmax(17rem,31%)]")}>
+        {showEditor ? (
+          <div className="min-w-0 space-y-4">
+            <GoalPlanEditor
+              goal={goal}
+              items={draft.items}
+              linkedIssues={linkedIssues}
+              issueHref={issueHref}
+              edges={draft.edges}
+              onChange={handleContentChange}
+              onItemEdited={handleItemEdited}
+              onItemRemoved={handleItemRemoved}
+              onEdgeRemoved={handleEdgeRemoved}
+              ownerLabel={ownerLabel}
+            />
+            {Object.keys(draft.context_snapshot).length > 0 ? (
+              <PlanActualBasis snapshot={draft.context_snapshot} />
+            ) : null}
+          </div>
+        ) : null}
+        <section className="min-w-0 space-y-4 rounded-lg border bg-surface/60 p-4">
+          <h3
+            ref={generationHeadingRef}
+            tabIndex={-1}
+            className="flex scroll-mt-20 items-center gap-2 text-title-sm font-semibold"
+          >
+            <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+            {t(($) => $.plan.generation_title)}
+          </h3>
+          <GoalPlanGenerationPanel
+            key={goal.id}
             goal={goal}
-            items={draft.items}
-            linkedIssues={linkedIssues}
-            issueHref={issueHref}
-            edges={draft.edges}
-            onChange={handleContentChange}
-            onItemEdited={handleItemEdited}
-            onItemRemoved={handleItemRemoved}
-            onEdgeRemoved={handleEdgeRemoved}
-            ownerLabel={ownerLabel}
+            planRevision={planRevision}
+            dirty={dirty}
+            generationNonce={generationNonce}
+            applyBlocked={conflictRevision !== null || projectConflictNotice || !draftIsCurrentProject}
+            onApplyCandidate={handleApplyCandidate}
+            onProjectConflict={handleProjectConflict}
+            onRevisionConflict={handleStartRevisionConflict}
+            onUnavailable={handleRunUnavailable}
+            onReloadPlan={handleLoadLatest}
+            onStartNewGeneration={handleStartNewGeneration}
           />
-          {Object.keys(draft.context_snapshot).length > 0 ? (
-            <PlanActualBasis snapshot={draft.context_snapshot} />
-          ) : null}
-        </>
-      ) : null}
+        </section>
+      </div>
     </section>
   );
 }

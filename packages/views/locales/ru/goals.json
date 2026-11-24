@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "Планирование с ИИ",
+    "jump_task": "Перейти к задаче",
     "dependency_kind": "Тип зависимости",
     "dependency_hard": "Обязательная",
     "dependency_conditional": "Условная",

@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "AI 生成",
+    "jump_task": "跳到任务",
     "dependency_kind": "依赖类型",
     "dependency_hard": "必需",
     "dependency_conditional": "有条件",

@@ -336,7 +336,7 @@ describe("GoalDetailPage", () => {
           title: "Inspect personal memory",
           outcome: "Memory shows source and lifecycle",
           acceptance_criteria: "Can revoke memory",
-          evidence_refs: [],
+          evidence_refs: [{ kind: "doc", ref: "memory-guide.md", note: "", version: "" }],
           binding: { type: "new", issue_id: null },
           proposed_owner: null,
           stage: 2,
@@ -388,10 +388,20 @@ describe("GoalDetailPage", () => {
 
     // Clicking "Edit in plan" expands the collapsible plan editor section.
     await user.click(within(inspector).getByRole("button", { name: "Edit in plan" }));
-    expect(await screen.findByTestId("goal-plan-section")).toBeInTheDocument();
+    const planEditor = await screen.findByTestId("goal-plan-section");
+    expect(within(planEditor).getByRole("heading", { name: "AI planning" })).toBeVisible();
 
     const item = await screen.findByTestId("plan-item-item-2");
     const title = within(item).getByRole("textbox", { name: "Title" });
+    const taskJump = within(planEditor).getByRole("combobox", { name: "Jump to task" });
+    await user.selectOptions(taskJump, within(taskJump).getByRole("option", { name: "Inspect personal memory" }));
+    expect(title).toHaveFocus();
+
+    const evidence = within(item).getByText("memory-guide.md", { exact: false });
+    expect(evidence).not.toBeVisible();
+    await user.click(within(item).getByText("Evidence", { exact: false }));
+    expect(evidence).toBeVisible();
+
     fireEvent.change(title, { target: { value: "Inspect personal memory draft" } });
     expect(title).toHaveValue("Inspect personal memory draft");
     const editorToggle = screen.getByRole("button", { name: /Plan editor & AI generation/ });

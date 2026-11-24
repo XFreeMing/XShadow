@@ -415,7 +415,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
       ) : (
         <div
           ref={planEditorRef}
-          className="overflow-hidden rounded-xl border bg-card"
+          className="overflow-clip rounded-xl border bg-card"
           data-testid="goal-plan-collapsible"
         >
           <button
@@ -433,7 +433,7 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
               <span className="text-body font-semibold text-foreground">
                 {t(($) => $.map.plan_editor_title)}
               </span>
-              {plan ? (
+              {plan && !planEditorOpen ? (
                 <span className="text-caption text-muted-foreground">
                   {t(($) => $.plan.revision, { revision: plan.revision })} ·{" "}
                   {t(($) => $.plan.task_count, { value: plan.items.length })}

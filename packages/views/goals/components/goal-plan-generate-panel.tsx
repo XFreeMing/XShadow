@@ -454,28 +454,28 @@ export function GoalPlanGenerationPanel({
 
   return (
     <div className="space-y-3" data-testid="plan-generation-panel">
-      <div className="space-y-2">
-        <div className="space-y-1">
+      <div className="space-y-3">
+        <div className="space-y-1.5">
           <Label htmlFor="plan-generation-intent">{t(($) => $.plan.intent_label)}</Label>
           <Textarea
             id="plan-generation-intent"
             value={intent}
             placeholder={t(($) => $.plan.intent_placeholder)}
-            className="min-h-16"
+            className="min-h-24 bg-background"
             disabled={pending || starting}
             onChange={(event) => setIntent(event.target.value)}
           />
         </div>
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="space-y-1">
-            <Label>{t(($) => $.plan.agent_label)}</Label>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="plan-generation-agent">{t(($) => $.plan.agent_label)}</Label>
             <Select
               items={activeAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
               value={agentId}
               disabled={pending || starting || activeAgents.length === 0}
               onValueChange={(next) => setAgentId(next ?? "")}
             >
-              <SelectTrigger size="sm" className="w-52">
+              <SelectTrigger id="plan-generation-agent" className="w-full bg-background">
                 <SelectValue placeholder={t(($) => $.plan.agent_placeholder)}>
                   {activeAgents.find((agent) => agent.id === agentId)?.name}
                 </SelectValue>
@@ -490,7 +490,8 @@ export function GoalPlanGenerationPanel({
             </Select>
           </div>
           <Button
-            size="sm"
+            type="button"
+            variant="outline"
             onClick={() => void startGeneration(explicitNewRun)}
             disabled={
               !intent.trim() ||

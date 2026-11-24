@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "AI 產生",
+    "jump_task": "跳到任務",
     "dependency_kind": "相依類型",
     "dependency_hard": "必須",
     "dependency_conditional": "有條件",

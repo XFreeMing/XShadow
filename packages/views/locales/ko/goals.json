@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "AI 계획 생성",
+    "jump_task": "작업으로 이동",
     "dependency_kind": "종속성 유형",
     "dependency_hard": "필수",
     "dependency_conditional": "조건부",

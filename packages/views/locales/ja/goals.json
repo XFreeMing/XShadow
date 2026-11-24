@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "AIで計画",
+    "jump_task": "タスクに移動",
     "dependency_kind": "依存関係の種類",
     "dependency_hard": "必須",
     "dependency_conditional": "条件付き",

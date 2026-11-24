@@ -165,14 +165,36 @@ export function GoalPlanEditor({
 
   return (
     <div className="space-y-3" data-testid="goal-plan-editor">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-caption text-muted-foreground">
-          {t(($) => $.plan.task_count, { value: items.length })}
-        </p>
-        <Button type="button" size="sm" variant="outline" onClick={addItem} disabled={disabled}>
-          <Plus className="size-3.5" />
-          {t(($) => $.plan.add_task)}
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <h3 className="flex items-center gap-2 text-title-sm font-semibold">
+          {t(($) => $.tab.tasks)}
+          <span className="text-label font-normal tabular-nums text-muted-foreground">
+            {items.length}
+          </span>
+        </h3>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {items.length > 1 ? (
+            <select
+              aria-label={t(($) => $.plan.jump_task)}
+              defaultValue=""
+              disabled={disabled}
+              className="h-7 max-w-36 rounded-md border bg-background px-2 text-label focus-visible:ring-2 focus-visible:ring-ring/50"
+              onChange={(event) => {
+                const title = document.getElementById(`plan-title-${event.currentTarget.value}`);
+                event.currentTarget.value = "";
+                title?.closest("li")?.scrollIntoView({ block: "start" });
+                title?.focus({ preventScroll: true });
+              }}
+            >
+              <option value="" disabled>{t(($) => $.plan.jump_task)}</option>
+              {items.map(({ id }) => <option key={id} value={id}>{itemTitle(id)}</option>)}
+            </select>
+          ) : null}
+          <Button type="button" size="sm" variant="outline" onClick={addItem} disabled={disabled}>
+            <Plus className="size-3.5" />
+            {t(($) => $.plan.add_task)}
+          </Button>
+        </div>
       </div>
 
       {items.length === 0 ? (
@@ -194,11 +216,11 @@ export function GoalPlanEditor({
           return (
             <li
               key={item.id}
-              className="space-y-3 rounded-md border px-3 py-3"
+              className="scroll-mt-20 space-y-4 rounded-lg border px-4 py-3 focus-within:border-ring"
               data-testid={`plan-item-${item.id}`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-caption font-medium text-muted-foreground">
+                <span className="text-body font-semibold">
                   {t(($) => $.plan.task_index, { index: index + 1 })}
                 </span>
                 <div className="flex items-center gap-1">
@@ -237,14 +259,14 @@ export function GoalPlanEditor({
                 />
               </div>
 
-              <div className={item.delivery ? "space-y-1" : "grid gap-3 sm:grid-cols-2"}>
+              <div className={item.delivery ? "space-y-1" : "grid gap-3 @2xl:grid-cols-2"}>
                 <div className="space-y-1">
                   <Label htmlFor={`plan-outcome-${item.id}`}>{t(($) => $.plan.outcome)}</Label>
                   <Textarea
                     id={`plan-outcome-${item.id}`}
                     value={item.outcome}
                     disabled={disabled}
-                    className="min-h-16"
+                    className="min-h-20"
                     onChange={(event) => updateItem(item.id, { outcome: event.target.value })}
                   />
                 </div>
@@ -256,7 +278,7 @@ export function GoalPlanEditor({
                     id={`plan-acceptance-${item.id}`}
                     value={item.acceptance_criteria}
                     disabled={disabled}
-                    className="min-h-16"
+                    className="min-h-20"
                     onChange={(event) =>
                       updateItem(item.id, { acceptance_criteria: event.target.value })
                     }
@@ -297,7 +319,7 @@ export function GoalPlanEditor({
                 </div>
                 <div className="space-y-1">
                   <Label>{t(($) => $.plan.binding)}</Label>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <Select
                       items={[
                         { value: "new", label: t(($) => $.plan.binding_new) },
@@ -370,9 +392,12 @@ export function GoalPlanEditor({
               ) : null}
 
               {item.evidence_refs.length > 0 ? (
-                <div className="space-y-1">
-                  <p className="text-caption font-medium">{t(($) => $.plan.evidence)}</p>
-                  <ul className="space-y-0.5 text-caption text-muted-foreground">
+                <details className="rounded-md border bg-surface/60 px-3 py-2">
+                  <summary className="cursor-pointer text-label font-medium">
+                    {t(($) => $.plan.evidence)}
+                    <span className="ms-2 font-normal tabular-nums text-muted-foreground">{item.evidence_refs.length}</span>
+                  </summary>
+                  <ul className="mt-2 space-y-2 text-label text-muted-foreground">
                     {item.evidence_refs.map((ref, refIndex) => (
                       <li key={`${ref.kind}-${ref.ref}-${refIndex}`} className="break-all">
                         <span className="font-medium">{ref.kind}</span> {ref.ref}
@@ -381,7 +406,7 @@ export function GoalPlanEditor({
                       </li>
                     ))}
                   </ul>
-                </div>
+                </details>
               ) : null}
 
               {item.coordination ? (

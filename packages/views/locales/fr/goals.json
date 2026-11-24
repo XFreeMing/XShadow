@@ -134,6 +134,8 @@
     }
   },
   "plan": {
+    "generation_title": "Planification par IA",
+    "jump_task": "Aller à une tâche",
     "dependency_kind": "Type de dépendance",
     "dependency_hard": "Obligatoire",
     "dependency_conditional": "Conditionnelle",
