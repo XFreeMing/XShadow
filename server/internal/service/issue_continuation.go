@@ -177,7 +177,7 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 			return err
 		}
 	}
-	startGoal := execution.ID.Valid && execution.Progress.Phase == "planning" && !method.GoalExecution
+	startGoal := !goalGate.planning && execution.ID.Valid && execution.Progress.Phase == "planning" && !method.GoalExecution
 	if !startGoal && !method.GoalExecution {
 		execution = GoalExecution{}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -37,6 +38,12 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 		}
 	}
 	first, next, memory := item("Recover the job"), item("Open an excerpt"), item("Browse personal memory")
+	held := item("Compare a saved memory with the original")
+	t.Cleanup(func() {
+		for _, node := range []GoalPlanItem{next, memory, held} {
+			dbfx.Exec(t, "DELETE FROM issue WHERE id=$1", service.GoalPreparationIssueID(goalID, node.ID))
+		}
+	})
 	issue := dbfx.Issue(t, "Book receipt", testutil.Cols{"status": "done", "project_id": project})
 	first.Binding = GoalPlanItemBinding{Type: "existing", IssueID: &issue}
 	path := "/api/goals/" + goal.ID
@@ -45,8 +52,11 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 		map[string]string{"id": goal.ID, "issueId": issue})).Want(204)
 	var saved GoalPlanResponse
 	testutil.Call(t, testHandler.PutGoalPlan, goalRequest("PUT", path+"/plan", testUserID, map[string]any{
-		"expected_revision": 0, "items": []GoalPlanItem{first, next, memory},
-		"edges": []GoalPlanEdge{{DependentItemID: next.ID, PrerequisiteItemID: first.ID, Reason: "Reuse the accepted job ID"}},
+		"expected_revision": 0, "items": []GoalPlanItem{first, next, memory, held},
+		"edges": []GoalPlanEdge{
+			{DependentItemID: next.ID, PrerequisiteItemID: first.ID, Reason: "Reuse the accepted job ID"},
+			{DependentItemID: held.ID, PrerequisiteItemID: memory.ID, Reason: "Requires a saved memory"},
+		},
 	}, params)).Want(200).JSON(&saved)
 	if len(saved.Progress.ReadyToPrepare) != 2 || saved.Progress.ReadyToPrepare[0].ItemID != next.ID || saved.Progress.ReadyToPrepare[1].ItemID != memory.ID {
 		t.Fatalf("expected both independent preparation lines: %+v", saved.Progress)
@@ -68,6 +78,12 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 			map[string]any{"enabled": true, "expected_revision": 1}, params)).Want(status)
 	}
 	release(409)
+	if err := testHandler.TickGoalPlanReviews(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, after := getPlan(t, goal.ID); after.Items[1].Binding.IssueID != nil {
+		t.Fatal("preparation started before the review finished")
+	}
 	submit := func(run, task, decision, result string, items []GoalPlanItem, want int) GoalPlanGenerationResponse {
 		t.Helper()
 		body := map[string]any{
@@ -95,7 +111,40 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 		}
 		return run
 	}
-	dbfx.Exec(t, "UPDATE issue SET status='blocked', revision=revision+1 WHERE id=$1", issue)
+	ticks := make(chan error, 2)
+	for range 2 {
+		go func() { ticks <- testHandler.TickGoalPlanReviews(ctx) }()
+	}
+	for range 2 {
+		if err := <-ticks; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if uuidToString(tick().ID) != preflight.ID {
+		t.Fatal("card creation should preserve the completed review")
+	}
+	_, prepared := getPlan(t, goal.ID)
+	if prepared.Revision != 1 || len(prepared.Progress.ReadyToPrepare) != 2 || prepared.Items[3].Binding.IssueID != nil {
+		t.Fatalf("unexpected card readiness: %+v", prepared)
+	}
+	cards, err := testHandler.Queries.ListGoalIssues(ctx, db.ListGoalIssuesParams{WorkspaceID: workspace, GoalID: goalID, Limit: 20})
+	if err != nil || len(cards) != 3 {
+		t.Fatalf("expected exactly two new linked cards: %v %v", cards, err)
+	}
+	for _, index := range []int{1, 2} {
+		node := prepared.Items[index]
+		id := service.GoalPreparationIssueID(goalID, node.ID)
+		card, err := testHandler.Queries.GetIssue(ctx, id)
+		if err != nil || node.Binding.IssueID == nil || *node.Binding.IssueID != uuidToString(id) ||
+			card.Status != "backlog" || card.AssigneeID.Valid || card.FirstExecutedAt.Valid {
+			t.Fatalf("expected an unassigned backlog card for %s: %v %v", node.ID, card, err)
+		}
+		contract, err := testHandler.issuePlanDelivery(ctx, card, goal.ID)
+		if err != nil || contract == nil || contract.Delivery.MethodID != "agile" || len(contract.Delivery.Criteria) != 1 {
+			t.Fatalf("the card lost its planned delivery contract: %+v %v", contract, err)
+		}
+	}
+	dbfx.Exec(t, "UPDATE issue SET status='blocked', revision=revision+1 WHERE id=$1", *prepared.Items[1].Binding.IssueID)
 	blocked := tick()
 	if uuidToString(blocked.ID) == preflight.ID || tick().ID != blocked.ID {
 		t.Fatal("blocked issue must trigger exactly one new review")
@@ -107,15 +156,22 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 	adjustment := tick()
 	updated := submit(uuidToString(adjustment.ID), uuidToString(adjustment.TaskID), "planning_gap", "gap", []GoalPlanItem{item("Replay the integrated journey")}, 200)
 	var candidate GoalPlanCandidate
-	if err := json.Unmarshal(updated.Candidate, &candidate); err != nil || len(candidate.Items) != 4 ||
+	if err := json.Unmarshal(updated.Candidate, &candidate); err != nil || len(candidate.Items) != 5 ||
 		candidate.Items[0].ID != first.ID || candidate.Items[0].Binding.IssueID == nil ||
-		*candidate.Items[0].Binding.IssueID != issue || candidate.Items[3].Title != "Replay the integrated journey" {
+		*candidate.Items[0].Binding.IssueID != issue || candidate.Items[4].Title != "Replay the integrated journey" {
 		t.Fatalf("not a scoped candidate: %+v %v", candidate, err)
 	}
-	if _, after := getPlan(t, goal.ID); after.Revision != 1 || len(after.Items) != 3 || after.Review.Assessment.Decision != "planning_gap" {
+	if _, after := getPlan(t, goal.ID); after.Revision != 1 || len(after.Items) != 4 || after.Review.Assessment.Decision != "planning_gap" {
 		t.Fatalf("candidate unexpectedly changed the authorized plan: %+v", after)
 	}
 	release(409)
+	var presented GoalPlanGenerationResponse
+	testutil.Call(t, testHandler.GetGoalPlanGeneration, goalRequest("GET", path+"/plan/generations/"+updated.ID, testUserID, nil,
+		map[string]string{"id": goal.ID, "generationId": updated.ID})).Want(200).JSON(&presented)
+	if err := json.Unmarshal(presented.Candidate, &candidate); err != nil || candidate.Items[1].Binding.IssueID == nil ||
+		*candidate.Items[1].Binding.IssueID != *prepared.Items[1].Binding.IssueID {
+		t.Fatalf("candidate view lost the automatically linked card: %+v %v", candidate, err)
+	}
 	testutil.Call(t, testHandler.PutGoalPlan, goalRequest("PUT", path+"/plan", testUserID, map[string]any{
 		"expected_revision": 1, "generation_id": uuidToString(adjustment.ID), "items": candidate.Items,
 		"edges": candidate.Edges, "context_snapshot": candidate.ContextSnapshot,

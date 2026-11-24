@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -16,23 +18,30 @@ import (
 )
 
 type GoalWorkProgress struct {
-	Phase          string            `json:"phase"`
-	Total          int               `json:"total"`
-	Completed      int               `json:"completed"`
-	MethodID       string            `json:"-"`
-	ItemID         string            `json:"item_id,omitempty"`
-	IssueID        string            `json:"issue_id,omitempty"`
-	IssueStatus    string            `json:"issue_status,omitempty"`
-	MethodState    string            `json:"method_state,omitempty"`
-	MethodStep     string            `json:"method_step,omitempty"`
-	WaitingFor     []string          `json:"waiting_for,omitempty"`
-	ReadyToPrepare []GoalPreparation `json:"ready_to_prepare"`
+	Phase               string            `json:"phase"`
+	Total               int               `json:"total"`
+	Completed           int               `json:"completed"`
+	MethodID            string            `json:"-"`
+	ItemID              string            `json:"item_id,omitempty"`
+	IssueID             string            `json:"issue_id,omitempty"`
+	IssueStatus         string            `json:"issue_status,omitempty"`
+	MethodState         string            `json:"method_state,omitempty"`
+	MethodStep          string            `json:"method_step,omitempty"`
+	WaitingFor          []string          `json:"waiting_for,omitempty"`
+	ReadyToPrepare      []GoalPreparation `json:"ready_to_prepare"`
+	PreparationBindings map[string]string `json:"-"`
 }
 
 type GoalPreparation struct {
 	ItemID  string `json:"item_id"`
 	Title   string `json:"title"`
 	IssueID string `json:"issue_id,omitempty"`
+}
+
+// GoalPreparationIssueID gives one goal item a stable issue identity without
+// rewriting the plan revision or depending on a mutable title.
+func GoalPreparationIssueID(goalID pgtype.UUID, itemID string) pgtype.UUID {
+	return pgtype.UUID{Bytes: uuid.NewSHA1(uuid.UUID(goalID.Bytes), []byte("goal-preparation/"+itemID)), Valid: true}
 }
 
 type goalWorkItem struct {
@@ -43,6 +52,7 @@ type goalWorkItem struct {
 	ID      string `json:"id"`
 	Stage   *int   `json:"stage"`
 	Binding struct {
+		Type    string `json:"type"`
 		IssueID string `json:"issue_id"`
 	} `json:"binding"`
 }
@@ -91,6 +101,17 @@ func ReadGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		}
 		if len(rows) < 100 {
 			break
+		}
+	}
+
+	progress.PreparationBindings = make(map[string]string)
+	for i := range content.Items {
+		item := &content.Items[i]
+		issueID := util.UUIDToString(GoalPreparationIssueID(goal.ID, item.ID))
+		issue, found := linked[issueID]
+		if found && issue.ProjectID == goal.ProjectID && (item.Binding.Type == "new" || item.Binding.IssueID == issueID) {
+			item.Binding.IssueID = issueID
+			progress.PreparationBindings[item.ID] = issueID
 		}
 	}
 
@@ -215,6 +236,23 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 		return goalBacklogGate{}, err
 	}
 	gate := goalBacklogGate{managed: progress.Total > 0}
+	for itemID, issueID := range progress.PreparationBindings {
+		if issueID != util.UUIDToString(issue.ID) {
+			continue
+		}
+		for _, node := range progress.ReadyToPrepare {
+			if node.ItemID == itemID {
+				facts, err := json.Marshal([]any{json.RawMessage(plan.Content), goal.Intent, goal.Scope, goal.AcceptanceCriteria, itemID})
+				if err != nil {
+					return gate, err
+				}
+				gate.planning = true
+				gate.key = fmt.Sprintf("goal-preparation/%x", sha256.Sum256(facts))
+				break
+			}
+		}
+		return gate, nil
+	}
 	if progress.Phase != "planning" || progress.IssueID != util.UUIDToString(issue.ID) {
 		if gate.managed && goal.Status == "in_progress" && hasBacklogPlanning(issue, plan.Content) {
 			facts, err := json.Marshal([]any{goal.ID, goal.Intent, goal.Scope, goal.AcceptanceCriteria, json.RawMessage(plan.Content)})

@@ -144,12 +144,22 @@ func (h *Handler) TickGoalPlanReviews(ctx context.Context) error {
 			}
 			continue
 		}
-		current, err := buildGoalReviewInput(ctx, h.Queries, goal, plan, policy.OwnerID)
+		progress, err := service.ReadGoalWorkProgress(ctx, h.Queries, goal, plan)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		current, err := buildGoalReviewInputWithBindings(ctx, h.Queries, goal, plan, policy.OwnerID, progress.PreparationBindings)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
 		if current.Fingerprint == policy.Fingerprint {
+			if last.State == "succeeded" && last.BaseRevision == plan.Revision {
+				if err := h.materializeGoalPreparation(ctx, goal, plan, last, policy.OwnerID, progress); err != nil {
+					failures = append(failures, err)
+				}
+			}
 			continue
 		}
 		_, err = h.startGoalPlanReview(ctx, goal, policy.OwnerID, last.AgentID, 0)
@@ -282,10 +292,19 @@ func (h *Handler) startGoalPlanReview(ctx context.Context, goal db.Goal, owner, 
 }
 
 func buildGoalReviewInput(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan, owner pgtype.UUID) (goalReviewInput, error) {
+	progress, err := service.ReadGoalWorkProgress(ctx, q, goal, plan)
+	if err != nil {
+		return goalReviewInput{}, err
+	}
+	return buildGoalReviewInputWithBindings(ctx, q, goal, plan, owner, progress.PreparationBindings)
+}
+
+func buildGoalReviewInputWithBindings(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan, owner pgtype.UUID, bindings map[string]string) (goalReviewInput, error) {
 	var content GoalPlanContent
 	if err := json.Unmarshal(plan.Content, &content); err != nil {
 		return goalReviewInput{}, err
 	}
+	bindGoalPreparationIssues(content.Items, bindings)
 	review := goalReviewInput{OwnerID: owner, Phase: "execution", Issues: []goalReviewIssue{}}
 	complete := 0
 	for _, item := range content.Items {
@@ -360,6 +379,11 @@ func buildGoalReviewInput(ctx context.Context, q *db.Queries, goal db.Goal, plan
 			} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return review, err
 			}
+		}
+		// Creating or preparing a card alone does not invalidate the review.
+		// An execution problem or a closeout still becomes review evidence.
+		if bindings[item.ID] != "" && fact.Status == "open" && fact.ProblemAt == "" && fact.SourceTask == "" {
+			continue
 		}
 		review.Issues = append(review.Issues, fact)
 	}
