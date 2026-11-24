@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -97,6 +98,18 @@ func (h *Handler) issuePlanDelivery(ctx context.Context, issue db.Issue, goalID 
 	if err := json.Unmarshal(plan.Content, &content); err != nil {
 		return nil, err
 	}
+	goal, err := h.Queries.GetGoalInWorkspace(ctx, db.GetGoalInWorkspaceParams{WorkspaceID: issue.WorkspaceID, ID: plan.GoalID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	progress, err := service.ReadGoalWorkProgress(ctx, h.Queries, goal, plan)
+	if err != nil {
+		return nil, err
+	}
+	bindGoalPreparationIssues(content.Items, progress.PreparationBindings)
 	return content.contractForIssue(uuidToString(issue.ID)), nil
 }
 

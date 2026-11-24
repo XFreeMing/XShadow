@@ -85,8 +85,8 @@ type GoalPlanEvidenceRef struct {
 	Version string `json:"version,omitempty"`
 }
 
-// GoalPlanItemBinding is "new" for a node that will become a new issue in
-// DEV-7, or "existing" with the issue it reuses. Binding to an issue never
+// GoalPlanItemBinding is "new" for a node intended to become an issue,
+// or "existing" for a node that already references one. Binding to an issue never
 // assigns it and never changes that issue.
 type GoalPlanItemBinding struct {
 	Type    string  `json:"type"`
@@ -247,6 +247,7 @@ func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 			executionState = "active"
 		}
 	}
+	bindGoalPreparationIssues(content.Items, progress.PreparationBindings)
 	review, err := goalPlanReviewView(ctx, q, plan)
 	if err != nil {
 		return GoalPlanResponse{}, err
@@ -486,6 +487,7 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	removeProjectedGoalBindings(&content, locked.ID)
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save plan")
@@ -1045,7 +1047,35 @@ func (h *Handler) GetGoalPlanGeneration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to load plan")
 		return
 	}
-	writeJSON(w, http.StatusOK, goalPlanGenerationToResponse(generation, state, current))
+	response := goalPlanGenerationToResponse(generation, state, current)
+	if current > 0 && generation.BaseRevision == current && len(response.Candidate) > 0 {
+		plan, err := h.Queries.GetGoalPlan(r.Context(), db.GetGoalPlanParams{WorkspaceID: goal.WorkspaceID, GoalID: goal.ID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load plan")
+			return
+		}
+		if plan.Revision == current {
+			progress, err := service.ReadGoalWorkProgress(r.Context(), h.Queries, goal, plan)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load plan bindings")
+				return
+			}
+			if len(progress.PreparationBindings) > 0 {
+				var candidate GoalPlanCandidate
+				if err := json.Unmarshal(response.Candidate, &candidate); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to load plan candidate")
+					return
+				}
+				bindGoalPreparationIssues(candidate.Items, progress.PreparationBindings)
+				response.Candidate, err = json.Marshal(candidate)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to render plan candidate")
+					return
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // SubmitGoalPlanGenerationResult is the dedicated result entry for a planning
