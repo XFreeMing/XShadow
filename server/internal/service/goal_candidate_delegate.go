@@ -93,8 +93,31 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 			IssueID: issue.ID, SquadID: source.SquadID, AgentID: workerID,
 			ExecutionID: util.UUIDToString(execution.ID), SlotRevision: fmt.Sprint(run.SlotRevision()),
 		})
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return offer, err
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return empty, err
+		}
+		if err == nil {
+			switch offer.Status {
+			case "completed", "failed", "cancelled":
+				if offer.TriggerEvidenceRefID == source.ID {
+					return offer, nil
+				}
+				// A scheduler retry alone does not authorize another invitation.
+				var reopened bool
+				err := tx.QueryRow(ctx, `SELECT EXISTS (
+					SELECT 1 FROM activity_log
+					WHERE workspace_id=$1 AND issue_id=$2 AND action='status_changed'
+					  AND details->>'from'='blocked' AND details->>'to'=$3 AND created_at>$4
+				)`, issue.WorkspaceID, issue.ID, issue.Status, offer.CreatedAt).Scan(&reopened)
+				if err != nil {
+					return empty, err
+				}
+				if !reopened {
+					return offer, nil
+				}
+			default:
+				return offer, nil
+			}
 		}
 	}
 	prior, err := GoalCandidateWorker(ctx, q, issue, run, execution.ID)
