@@ -1623,6 +1623,24 @@ func TestScanKimiMainTurnFailureFlipsOnFailedTerminalEvent(t *testing.T) {
 	}
 }
 
+func TestScanKimiMainTurnFailureUsesMatchingStructuredQuotaDiagnostic(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	now := time.Now()
+	writeKimiWireLog(t, home, "session_quota", "main",
+		kimiWireTurnEndedLine("failed", "[object Object]", now),
+		fmt.Sprintf(`{"type":"turn.ended","turnId":1,"time":%d,"reason":"failed","error":{"message":"wrong turn"}}`, now.UnixMilli()),
+		fmt.Sprintf(`{"type":"turn.ended","turnId":0,"time":%d,"reason":"failed","error":{"code":"provider.api_error","message":"You've reached your 5-hour usage limit.","details":{"traceId":"private-trace"}}}`, now.UnixMilli()),
+	)
+	detail, failed := scanKimiMainTurnFailure(kimiUsageScan{
+		startTime: now.Add(-time.Second), kimiHome: home, sessionID: "session_quota",
+	})
+	if !failed || taskfailure.Classify(detail) != taskfailure.ReasonAgentProviderQuotaLimit ||
+		!strings.Contains(detail, "5-hour usage limit") || strings.Contains(detail, "private-trace") {
+		t.Fatalf("expected only the classified current turn diagnostic, got %q (failed=%t)", detail, failed)
+	}
+}
+
 // TestScanKimiMainTurnFailureSanitizesWireDiagnostic covers the review on
 // #9057: kimi's diagnostic is provider-authored text, and a JSON credential
 // embedded in it (request={"api_key":...}) survives both the raw string and
