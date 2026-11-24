@@ -321,11 +321,46 @@ func testGoalCandidateHandoff(t *testing.T, selfClaim bool) {
 	}, http.StatusOK, nil)
 	finish(independent)
 	rework := start(latest(lead))
-	delegate(issue, tokenFor(rework), worker, 3, http.StatusOK)
+	firstReworkID := delegate(issue, tokenFor(rework), worker, 3, http.StatusOK)
 	if selfClaim {
+		declined := start(latest(worker))
+		finish(declined)
+		if replay := delegate(issue, tokenFor(rework), worker, 3, http.StatusOK); replay != firstReworkID {
+			t.Fatalf("the original leader run must replay the same invitation: %s", replay)
+		}
+		finish(rework)
+		tick()
+		retry := start(latest(lead))
+		if replay := delegate(issue, tokenFor(retry), worker, 3, http.StatusOK); replay != firstReworkID {
+			t.Fatalf("a scheduler retry alone must not issue another invitation: %s", replay)
+		}
+		finish(retry)
+		for _, status := range []string{"blocked", "in_progress"} {
+			testutil.Call(t, testHandler.UpdateIssue, goalRequest(http.MethodPut, "/api/issues/"+issue, testUserID,
+				map[string]any{"status": status}, map[string]string{"id": issue})).Want(http.StatusOK)
+		}
+		// The server's activity listener is outside the handler test harness.
+		dbfx.Exec(t, `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+			VALUES ($1, $2, 'member', $3, 'status_changed', '{"from":"blocked","to":"in_progress"}')`,
+			testWorkspaceID, issue, testUserID)
+		tick()
+		resumed := latest(lead)
+		if resumed.ID == retry.ID {
+			t.Fatal("reopening the card must schedule a new leader run")
+		}
+		reopened := start(resumed)
+		fresh := delegate(issue, tokenFor(reopened), worker, 3, http.StatusOK)
+		if fresh == firstReworkID || fresh == "" {
+			t.Fatalf("the resumed leader must create a new invitation after an unclaimed assessment: %s", fresh)
+		}
+		if replay := delegate(issue, tokenFor(reopened), worker, 3, http.StatusOK); replay != fresh {
+			t.Fatalf("retrying the new invitation must reuse its active run: %s", replay)
+		}
+		dispatch("claim_candidate", issue, tokenFor(declined), "", 3, http.StatusForbidden)
 		assessment := start(latest(worker))
 		dispatch("claim_candidate", issue, tokenFor(assessment), "", 3, http.StatusOK)
 		finish(assessment)
+		finish(reopened)
 	}
 	next := latest(worker)
 	if next.ID == implementer.ID {
