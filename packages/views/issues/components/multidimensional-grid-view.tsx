@@ -269,7 +269,7 @@ export function MultidimensionalGridView({
 
   const fields = useMemo<GridFieldView[]>(
     () => [
-      { id: "title", name: t(($) => $.table.columns.title), kind: "text" },
+      { id: "title", name: t(($) => $.table.columns.title), kind: "text", cancelOnEscape: true },
       { id: "status", name: t(($) => $.table.columns.status), kind: "single_select" },
       { id: "assignee", name: t(($) => $.table.columns.assignee), kind: "text" },
     ],

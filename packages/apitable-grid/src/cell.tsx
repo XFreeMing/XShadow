@@ -114,6 +114,7 @@ export function GridCell({
     return getGridSnapshot(state, datasheetId)?.records[recordId]?.revision ?? 0;
   });
   const origin = useRef<{ value: GridCellValue; revision: number }>({ value: null, revision: 0 });
+  const discardDraft = useRef(false);
   const [text, setText] = useState(shown(value));
   useEffect(() => {
     if (editing) return;
@@ -121,6 +122,7 @@ export function GridCell({
   }, [editing, value]);
 
   const focusCell = () => {
+    discardDraft.current = false;
     origin.current = { value: value ?? null, revision };
     dispatch(setActiveCell(datasheetId, { recordId, fieldId: field.id }));
     dispatch(setEditStatus(datasheetId, { recordId, fieldId: field.id }));
@@ -378,14 +380,36 @@ export function GridCell({
         type={date ? "date" : "text"}
         value={date && typeof value === "string" ? value : text}
         onFocus={focusCell}
-        onKeyDown={onKeyDown}
+        onKeyDown={(event) => {
+          const native = event.nativeEvent;
+          const composing = native.isComposing || native.keyCode === 229;
+          if (
+            field.cancelOnEscape &&
+            field.kind === "text" &&
+            event.key === "Escape" &&
+            !composing
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            discardDraft.current = true;
+            setText(shown(origin.current.value));
+            event.currentTarget.blur();
+            return;
+          }
+          onKeyDown(event);
+        }}
         onChange={(event) => {
+          discardDraft.current = false;
           setText(event.target.value);
           if (date) commit(event.target.value || null);
         }}
         onBlur={() => {
           blurCell();
           if (date) return;
+          if (discardDraft.current) {
+            discardDraft.current = false;
+            return;
+          }
           if (field.kind === "number") {
             if (text.trim() === "") commit(null);
             else {

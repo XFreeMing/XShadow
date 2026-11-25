@@ -53,6 +53,34 @@ describe("ApitableGrid", () => {
     expect(onCellCommit).not.toHaveBeenCalledWith("rec1", "count", 0);
   });
 
+  it("discards a text edit on Escape without committing when the host opts in", async () => {
+    const user = userEvent.setup();
+    const onCellCommit = vi.fn();
+    render(
+      <ApitableGrid
+        datasheetId="dst"
+        fields={fields.map((field) => field.kind === "text" ? { ...field, cancelOnEscape: true } : field)}
+        records={records}
+        labels={labels}
+        onCellCommit={onCellCommit}
+      />,
+    );
+
+    const name = screen.getByRole("textbox", { name: "资料名称" });
+    await user.click(name);
+    await user.clear(name);
+    await user.type(name, "丢弃的草稿");
+    await user.keyboard("{Escape}");
+    expect(name).toHaveValue("合同");
+    expect(onCellCommit).not.toHaveBeenCalled();
+
+    await user.click(name);
+    await user.clear(name);
+    await user.type(name, "保留的修改");
+    await user.tab();
+    expect(onCellCommit).toHaveBeenCalledExactlyOnceWith("rec1", "name", "保留的修改", 1);
+  });
+
   it("shows a received record and a conflict mark from the remote patch", () => {
     render(
       <ApitableGrid
