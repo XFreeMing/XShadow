@@ -256,26 +256,8 @@ WHERE EXISTS (SELECT 1 FROM issue i WHERE i.id = r.issue_id AND %s)
 GROUP BY r.agent_id`, len(compiled.args)+1, compiled.where)
 		compiled.args = append(compiled.args, agentIDs)
 	case "property":
-		propertyID, err := util.ParseUUID(facet.PropertyID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid facets.property_id")
-			return response, false
-		}
-		property, err := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{
-			ID:          propertyID,
-			WorkspaceID: compiled.workspaceID,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				writeIssueTableUnsupportedGroup(w, "property_not_found", "The faceted property no longer exists.")
-				return response, false
-			}
-			slog.Warn("resolve table facet property failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeIssueTableQueryFailure(w, r, "failed to resolve table facet")
-			return response, false
-		}
-		if property.ArchivedAt.Valid {
-			writeIssueTableUnsupportedGroup(w, "property_archived", "The faceted property is archived.")
+		property, ok := h.resolveIssueTableFacetProperty(w, r, compiled.workspaceID, facet.PropertyID)
+		if !ok {
 			return response, false
 		}
 		propertyKey := "'" + util.UUIDToString(property.ID) + "'"
@@ -333,6 +315,29 @@ GROUP BY r.agent_id`, len(compiled.args)+1, compiled.where)
 	return response, true
 }
 
+func (h *Handler) resolveIssueTableFacetProperty(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, id string) (db.IssueProperty, bool) {
+	propertyID, err := util.ParseUUID(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid facets.property_id")
+		return db.IssueProperty{}, false
+	}
+	property, err := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: propertyID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeIssueTableUnsupportedGroup(w, "property_not_found", "The faceted property no longer exists.")
+		return db.IssueProperty{}, false
+	}
+	if err != nil {
+		slog.Warn("resolve table facet property failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeIssueTableQueryFailure(w, r, "failed to resolve table facet")
+		return db.IssueProperty{}, false
+	}
+	if property.ArchivedAt.Valid {
+		writeIssueTableUnsupportedGroup(w, "property_archived", "The faceted property is archived.")
+		return db.IssueProperty{}, false
+	}
+	return property, true
+}
+
 // The working-agents facet discloses agent identity. Resolve its visible,
 // active user agents inside the table snapshot before scanning their tasks.
 // accessibleAgentIDs intentionally includes archived agents for other
@@ -381,6 +386,7 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("facets must contain between 1 and %d entries", issueTableMaxFacets))
 		return
 	}
+	baseHandler := h
 	r, cancel := withIssueTableQueryTimeout(r)
 	defer cancel()
 	snapshot, tx, err := h.beginIssueTableSnapshot(r.Context())
@@ -417,6 +423,23 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	includeTotal := request.IncludeTotal == nil || *request.IncludeTotal
+	pilot, ok := h.rustIssueTablePilot(w, r, base.workspaceID)
+	if !ok {
+		return
+	}
+	if pilot {
+		query, ok := h.prepareRustIssueTableFacets(w, r, base, request.Query, normalizedFacets, includeTotal)
+		if !ok {
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeIssueTableQueryFailure(w, r, "failed to finish table query")
+			return
+		}
+		committed = true
+		baseHandler.writeRustIssueTableFacets(w, r, base, query)
+		return
+	}
 	batchFacets := make([]issueTableFacetSpec, 0, len(normalizedFacets))
 	individualIndexes := make([]int, 0, len(normalizedFacets))
 	for index, facet := range normalizedFacets {

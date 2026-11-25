@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 
+mod facets;
 mod groups;
 mod table;
+pub use facets::{IssueTableFacetsQuery, table_facets};
 pub use groups::{IssueTableGroupsQuery, table_groups};
 pub use table::{IssueTableQuery, table_rows};
 
@@ -15,7 +17,7 @@ use super::{
     resolve_custom_status, workspace_issue_prefix,
 };
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct IssueListQuery {
     open_only: bool,
@@ -63,22 +65,23 @@ pub struct IssueListQuery {
     offset: i64,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(default)]
 struct FilterNode {
     match_any: bool,
     negate: bool,
     children: Vec<FilterNode>,
     query: Option<IssueListQuery>,
+    flat_dimension: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Relations {
     user_id: String,
     kinds: Vec<RelationKind>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum RelationKind {
     Assigned,
@@ -87,13 +90,13 @@ enum RelationKind {
     MyAgents,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct DueDates {
     today: String,
     kinds: Vec<DueDateKind>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum DueDateKind {
     Overdue,
@@ -104,7 +107,7 @@ enum DueDateKind {
     None,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct PropertySort {
     id: String,
     kind: String,
@@ -112,21 +115,21 @@ struct PropertySort {
     options: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ActorFilter {
     #[serde(rename = "type")]
     kind: String,
     id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct DateFilter {
     column: DateColumn,
     start: String,
     end: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum DateColumn {
     CreatedAt,

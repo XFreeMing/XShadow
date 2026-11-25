@@ -12,8 +12,8 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use super::store::{
-    self, CallerActor, IssueListQuery, IssueReadError, IssueTableGroupsQuery, IssueTableQuery,
-    is_uuid,
+    self, CallerActor, IssueListQuery, IssueReadError, IssueTableFacetsQuery,
+    IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
 use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
 
@@ -125,17 +125,22 @@ fn parse_actor(headers: &HeaderMap) -> Result<CallerActor, AuthFailure> {
 
 pub fn router(pool: PgPool, token: String) -> Router {
     let state = Arc::new(Issues { pool, token });
+    // Go caps the public table body at 1 MiB. Compiling a property value
+    // into containment alternatives and escaping it can expand the JSON.
+    let table_body_limit = DefaultBodyLimit::max(16 * 1024 * 1024);
     Router::new()
         .route("/internal/issues", post(list_issues))
-        // Go caps the public table body at 1 MiB. Compiling a property value
-        // into containment alternatives and escaping it can expand the JSON.
         .route(
             "/internal/issues/table/rows",
-            post(table_rows).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+            post(table_rows).layer(table_body_limit),
         )
         .route(
             "/internal/issues/table/groups",
-            post(table_groups).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+            post(table_groups).layer(table_body_limit),
+        )
+        .route(
+            "/internal/issues/table/facets",
+            post(table_facets).layer(table_body_limit),
         )
         .route(
             "/internal/issues/{id}",
@@ -201,6 +206,17 @@ async fn table_groups(
     match store::table_groups(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
         Ok(response) => Json(response).into_response(),
         Err(error) => table_read_error(error, "failed to list table groups"),
+    }
+}
+
+async fn table_facets(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(query): Json<IssueTableFacetsQuery>,
+) -> Response {
+    match store::table_facets(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => table_read_error(error, "failed to list table facets"),
     }
 }
 

@@ -75,6 +75,9 @@ type rustIssueFilterNode struct {
 	Negate   bool                  `json:"negate,omitempty"`
 	Children []rustIssueFilterNode `json:"children,omitempty"`
 	Query    *rustIssueListQuery   `json:"query,omitempty"`
+	// Facets can drop a flat negation for their own dimension. Advanced
+	// conditions have no flat dimension and always stay in the query.
+	FlatDimension string `json:"flat_dimension,omitempty"`
 }
 
 func (q *rustIssueListQuery) applyNegations(fields []string) {
@@ -111,7 +114,7 @@ func (q *rustIssueListQuery) applyNegations(fields []string) {
 		case "due_dates":
 			leaf.DueDates, q.DueDates = q.DueDates, nil
 		}
-		root.Children = append(root.Children, rustIssueFilterNode{Negate: true, Query: leaf})
+		root.Children = append(root.Children, rustIssueFilterNode{Negate: true, Query: leaf, FlatDimension: field})
 	}
 	q.Advanced = root
 }

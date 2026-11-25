@@ -7,7 +7,8 @@ use sqlx::{PgConnection, PgPool, Row};
 
 mod list;
 pub use list::{
-    IssueListQuery, IssueTableGroupsQuery, IssueTableQuery, list_issues, table_groups, table_rows,
+    IssueListQuery, IssueTableFacetsQuery, IssueTableGroupsQuery, IssueTableQuery, list_issues,
+    table_facets, table_groups, table_rows,
 };
 mod ordinary;
 pub use ordinary::{OrdinaryIssueEdit, OrdinaryIssueEditError, update_ordinary_issue};
