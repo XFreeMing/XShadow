@@ -20,6 +20,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `POST /api/issues/{id}/labels` 与 `DELETE /api/issues/{id}/labels/{labelId}` 纳入 `XSHADOW_ISSUES_RUST_WRITE_PILOT`。Go 校验公开请求。Go 和 Rust 都按标签目录行、任务行、关联表的顺序写入。标签目录删除在同一事务里先删除目录行，再清理关联。Rust 持锁复核任务可见范围并记录唤醒事件的来源。实际增删才推进 `revision` 和 `last_activity_at`，重复操作仍返回 200 且省略修订。
 
+`XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT` 为 `POST /api/issues/{id}/acceptance` 的普通验收记录写入指定试点工作区。Go 继续校验公开请求、计算验收记录、处理工作方法重开和派工，并发布 WebSocket 事件。Rust 在任务行锁内复核项目可见范围和任务修订，写入验收记录，返回提交后的任务快照。Go 验证回执的任务修订和验收记录再发事件。试点上游不可用返回 `503`，回执格式错误返回 `502`。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

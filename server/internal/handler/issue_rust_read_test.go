@@ -56,6 +56,24 @@ func TestIssueReadBridgeFromEnvAndPilotMatching(t *testing.T) {
 		}
 	})
 
+	t.Run("acceptance pilot scopes are independent of write pilot", func(t *testing.T) {
+		t.Setenv("XSHADOW_ISSUES_RUST_WRITE_PILOT", "")
+		t.Setenv("XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT", "acc-pilot ")
+		t.Setenv("XSHADOW_TABLES_UPSTREAM", "http://127.0.0.1:18080")
+		t.Setenv("XSHADOW_TABLES_INTERNAL_TOKEN", "shared-secret")
+
+		bridge := NewIssueReadBridgeFromEnv(nil)
+		if !bridge.Enabled() {
+			t.Fatal("expected bridge enabled with loopback upstream")
+		}
+		if !reflect.DeepEqual(bridge.AcceptancePilotScopes, []string{"acc-pilot"}) {
+			t.Fatalf("AcceptancePilotScopes = %v, want [acc-pilot]", bridge.AcceptancePilotScopes)
+		}
+		if len(bridge.WritePilotScopes) != 0 {
+			t.Fatalf("WritePilotScopes = %v, want empty", bridge.WritePilotScopes)
+		}
+	})
+
 	t.Run("falls back to tables upstream and token when issue-specific env unset", func(t *testing.T) {
 		t.Setenv("XSHADOW_ISSUES_RUST_READ_PILOT", "pilot-a, PILOT-B ")
 		t.Setenv("XSHADOW_ISSUES_UPSTREAM", "")

@@ -114,16 +114,28 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	} else {
-		updated, err = wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {
-			return q.UpdateIssueAcceptanceTrace(r.Context(), db.UpdateIssueAcceptanceTraceParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, Trace: raw, IssueRevision: issue.Revision})
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, 409, acceptance.ErrConflict.Error())
+		pilot, pilotOK := h.rustIssueAcceptancePilot(w, r, issue.WorkspaceID)
+		if !pilotOK {
 			return
 		}
-		if err != nil {
-			writeError(w, 500, "failed to save acceptance change")
-			return
+		if pilot {
+			var routed bool
+			updated, routed = h.persistAcceptanceTraceViaRust(w, r, issue, userID, raw)
+			if !routed {
+				return
+			}
+		} else {
+			updated, err = wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {
+				return q.UpdateIssueAcceptanceTrace(r.Context(), db.UpdateIssueAcceptanceTraceParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID, Trace: raw, IssueRevision: issue.Revision})
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, 409, acceptance.ErrConflict.Error())
+				return
+			}
+			if err != nil {
+				writeError(w, 500, "failed to save acceptance change")
+				return
+			}
 		}
 	}
 	resp := issueToResponse(updated, h.getIssuePrefix(r.Context(), issue.WorkspaceID))

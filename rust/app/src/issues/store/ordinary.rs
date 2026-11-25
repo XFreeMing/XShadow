@@ -64,7 +64,7 @@ impl From<serde_json::Error> for OrdinaryIssueEditError {
 
 // PostgreSQL JSON spells BC dates differently from the public API. Use the
 // same integer representation as the PostgreSQL date codec in the gateway.
-const SNAPSHOT: &str = "(
+pub(super) const ISSUE_ROW_SNAPSHOT: &str = "(
     to_jsonb(i) || jsonb_build_object(
         'start_date', CASE i.start_date
             WHEN 'infinity'::date THEN 2147483647
@@ -100,7 +100,7 @@ pub async fn update_ordinary_issue(
     }
     let locked = sqlx::query(&format!(
         "SELECT i.project_id::text, i.revision, i.title, i.description, i.status,
-                i.work_method_run::text AS work_method, {SNAPSHOT} AS snapshot
+                i.work_method_run::text AS work_method, {ISSUE_ROW_SNAPSHOT} AS snapshot
          FROM issue i WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid FOR UPDATE"
     ))
     .bind(issue_id)
@@ -213,7 +213,7 @@ pub async fn update_ordinary_issue(
                    ELSE i.last_activity_at END
           FROM changes
          WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid
-        RETURNING {SNAPSHOT}, i.revision"
+        RETURNING {ISSUE_ROW_SNAPSHOT}, i.revision"
     ))
     .bind(issue_id)
     .bind(workspace_id)
@@ -244,7 +244,7 @@ pub async fn update_ordinary_issue(
     };
     let after = if attachments_changed && saved_revision == revision {
         sqlx::query_scalar(&format!(
-            "SELECT {SNAPSHOT} FROM issue i WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid"
+            "SELECT {ISSUE_ROW_SNAPSHOT} FROM issue i WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid"
         ))
         .bind(issue_id)
         .bind(workspace_id)

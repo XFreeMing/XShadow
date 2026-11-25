@@ -18,6 +18,10 @@ mod property_write;
 pub use property_write::{IssuePropertyWrite, IssuePropertyWriteError, write_issue_property};
 mod label_write;
 pub use label_write::{IssueLabelWrite, IssueLabelWriteError, write_issue_label};
+mod acceptance_write;
+pub use acceptance_write::{
+    IssueAcceptanceWrite, IssueAcceptanceWriteError, write_issue_acceptance_trace,
+};
 
 #[derive(Debug)]
 pub enum IssueReadError {

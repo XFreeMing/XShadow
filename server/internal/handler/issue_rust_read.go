@@ -35,12 +35,13 @@ var rustIssueReadClient = &http.Client{
 // IssueReadBridge selects issue operations for the Rust service over trusted
 // loopback HTTP. Selected operations fail closed when Rust is unavailable.
 type IssueReadBridge struct {
-	Upstream         string
-	Token            string
-	PilotScopes      []string
-	ListPilotScopes  []string
-	TablePilotScopes []string
-	WritePilotScopes []string
+	Upstream              string
+	Token                 string
+	PilotScopes           []string
+	ListPilotScopes       []string
+	TablePilotScopes      []string
+	WritePilotScopes      []string
+	AcceptancePilotScopes []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -51,11 +52,14 @@ type IssueReadBridge struct {
 //     of the Rust service.
 //   - XSHADOW_ISSUES_INTERNAL_TOKEN (fallback: XSHADOW_TABLES_INTERNAL_TOKEN):
 //     shared internal token verified by the Rust service.
+//   - XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT: comma-separated workspace slugs or
+//     UUIDs for native acceptance trace persistence (independent of write pilot).
 func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	scopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_READ_PILOT"))
 	listScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_LIST_PILOT"))
 	tableScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_TABLE_PILOT"))
 	writeScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_WRITE_PILOT"))
+	acceptanceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
 	if upstream == "" {
 		upstream = strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_TABLES_UPSTREAM")), "/")
@@ -65,14 +69,15 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		token = strings.TrimSpace(os.Getenv("XSHADOW_TABLES_INTERNAL_TOKEN"))
 	}
 	bridge := &IssueReadBridge{
-		Upstream:         upstream,
-		Token:            token,
-		PilotScopes:      scopes,
-		ListPilotScopes:  listScopes,
-		TablePilotScopes: tableScopes,
-		WritePilotScopes: writeScopes,
+		Upstream:              upstream,
+		Token:                 token,
+		PilotScopes:           scopes,
+		ListPilotScopes:       listScopes,
+		TablePilotScopes:      tableScopes,
+		WritePilotScopes:      writeScopes,
+		AcceptancePilotScopes: acceptanceScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}

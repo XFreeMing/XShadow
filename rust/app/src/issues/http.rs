@@ -15,10 +15,12 @@ use super::store::{
     self, CallerActor, IssueListQuery, IssueReadError, IssueTableFacetsQuery,
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
+use super::store::{
+    IssueAcceptanceWrite, IssueAcceptanceWriteError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+};
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
 use super::store::{IssuePropertyWrite, IssuePropertyWriteError};
-use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
 
 struct Issues {
     pool: PgPool,
@@ -165,8 +167,62 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/issues/{id}/labels/{label_id}",
             put(write_issue_label),
         )
+        .route(
+            "/internal/issues/{id}/acceptance",
+            put(write_issue_acceptance).layer(DefaultBodyLimit::disable()),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn write_issue_acceptance(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueAcceptanceWrite>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::write_issue_acceptance_trace(
+        &app.pool,
+        &ctx.workspace_id,
+        &ctx.actor,
+        &id,
+        request,
+    )
+    .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueAcceptanceWriteError::RevisionConflict) => error_response(
+            StatusCode::CONFLICT,
+            "acceptance records changed; reload before saving",
+        ),
+        Err(IssueAcceptanceWriteError::Access(error)) => {
+            issue_request_error(error, "failed to save acceptance change")
+        }
+        Err(IssueAcceptanceWriteError::Database(error)) => {
+            eprintln!("rust issue acceptance write failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to save acceptance change",
+            )
+        }
+        Err(IssueAcceptanceWriteError::Snapshot(error)) => {
+            eprintln!("rust issue acceptance write snapshot failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to save acceptance change",
+            )
+        }
+        Err(IssueAcceptanceWriteError::InvalidCommitProof) => {
+            eprintln!("rust issue acceptance write commit proof invalid; rolling back");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to save acceptance change",
+            )
+        }
+    }
 }
 
 async fn write_issue_label(
