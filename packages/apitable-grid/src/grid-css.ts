@@ -164,6 +164,8 @@ export const gridCss = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Fills stay the light APITable option colors, so the label keeps that theme's text. */
+  color: #262626;
 }
 .apitable-grid__optionCell {
   position: relative;
