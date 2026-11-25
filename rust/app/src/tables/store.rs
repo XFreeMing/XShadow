@@ -291,20 +291,23 @@ pub async fn update_record(
     Ok(saved)
 }
 
+pub struct ViewWrite<'a> {
+    pub name: &'a str,
+    pub columns: Option<&'a [String]>,
+    pub filter: Option<&'a StoredFilter>,
+    pub sort: Option<&'a StoredSort>,
+}
+
 pub async fn create_view(
     pool: &PgPool,
     workspace: &str,
     table: &str,
-    name: &str,
-    columns: Option<&[String]>,
-    filter: Option<&StoredFilter>,
-    sort: Option<&StoredSort>,
+    write: &ViewWrite<'_>,
 ) -> Result<ViewDto, StoreError> {
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
     let fields = load_field_defs(&mut tx, workspace, table).await?;
-    let view = validate::normalize_view(name, columns, filter, sort, &fields)
-        .map_err(StoreError::Invalid)?;
+    let view = normalize_write(write, &fields)?;
     let saved = insert_view(&mut tx, workspace, table, &view).await?;
     commit(tx).await?;
     Ok(saved)
@@ -315,20 +318,24 @@ pub async fn save_view(
     workspace: &str,
     table: &str,
     view: &str,
-    name: &str,
-    columns: Option<&[String]>,
-    filter: Option<&StoredFilter>,
-    sort: Option<&StoredSort>,
+    write: &ViewWrite<'_>,
 ) -> Result<ViewDto, StoreError> {
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
     ensure_view(&mut tx, workspace, table, view).await?;
     let fields = load_field_defs(&mut tx, workspace, table).await?;
-    let spec = validate::normalize_view(name, columns, filter, sort, &fields)
-        .map_err(StoreError::Invalid)?;
+    let spec = normalize_write(write, &fields)?;
     let saved = update_view(&mut tx, workspace, table, view, &spec).await?;
     commit(tx).await?;
     Ok(saved)
+}
+
+fn normalize_write(
+    write: &ViewWrite<'_>,
+    fields: &[FieldDef],
+) -> Result<validate::StoredView, StoreError> {
+    validate::normalize_view(write.name, write.columns, write.filter, write.sort, fields)
+        .map_err(StoreError::Invalid)
 }
 
 async fn load_sheet(
@@ -367,31 +374,31 @@ async fn load_sheet(
                 });
             }
         }
-        if let Some(sort) = &view.sort {
-            if let Some(field) = fields.iter().find(|item| item.id == sort.field_id) {
-                let def = def_of(field);
-                let desc = sort.direction == "desc";
-                records.sort_by(|left, right| {
-                    let left_key = validate::sort_key(
-                        &def,
-                        left.values.get(&field.id).filter(|value| !value.is_null()),
-                    );
-                    let right_key = validate::sort_key(
-                        &def,
-                        right.values.get(&field.id).filter(|value| !value.is_null()),
-                    );
-                    match (left_key, right_key) {
-                        (None, None) => left.id.cmp(&right.id),
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (Some(a), Some(b)) => {
-                            let order = a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
-                            let order = if desc { order.reverse() } else { order };
-                            order.then(left.id.cmp(&right.id))
-                        }
+        if let Some(sort) = &view.sort
+            && let Some(field) = fields.iter().find(|item| item.id == sort.field_id)
+        {
+            let def = def_of(field);
+            let desc = sort.direction == "desc";
+            records.sort_by(|left, right| {
+                let left_key = validate::sort_key(
+                    &def,
+                    left.values.get(&field.id).filter(|value| !value.is_null()),
+                );
+                let right_key = validate::sort_key(
+                    &def,
+                    right.values.get(&field.id).filter(|value| !value.is_null()),
+                );
+                match (left_key, right_key) {
+                    (None, None) => left.id.cmp(&right.id),
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (Some(a), Some(b)) => {
+                        let order = a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+                        let order = if desc { order.reverse() } else { order };
+                        order.then(left.id.cmp(&right.id))
                     }
-                });
-            }
+                }
+            });
         }
     }
     Ok(SheetDto {

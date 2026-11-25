@@ -119,6 +119,9 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   });
 
   const saveCell = useMutation({
+    // Later cells in this window wait for the revision the previous save stored.
+    // A 409 does not adopt the other writer's revision.
+    scope: { id: `generic-table:${wsId}:${tableId}` },
     mutationFn: (body: { record: GenericRecord; fieldId: string; value: GenericCellValue }) => {
       const revision = Math.max(body.record.revision, revisions.current.get(body.record.id) ?? 0);
       return api.updateGenericRecord(tableId, body.record.id, revision, { [body.fieldId]: body.value });
@@ -251,7 +254,11 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
                       <CellEditor
                         field={field}
                         value={record.values[field.id] ?? null}
-                        onCommit={(value) => saveCell.mutate({ record, fieldId: field.id, value })}
+                        onCommit={(value) => {
+                          const current = record.values[field.id] ?? null;
+                          if (value === current) return;
+                          saveCell.mutate({ record, fieldId: field.id, value });
+                        }}
                       />
                     </TableCell>
                   ))}

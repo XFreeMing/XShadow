@@ -124,7 +124,7 @@ pub fn normalize_value(field: &FieldDef, value: &Value) -> Result<Option<Value>,
         }
         "single_select" => {
             let picked = value.as_str().ok_or("单选字段只能选择一个选项")?;
-            if !option_ids(field).iter().any(|id| *id == picked) {
+            if !option_ids(field).contains(&picked) {
                 return Err("选项不在这个字段里");
             }
             Ok(Some(Value::String(picked.to_owned())))

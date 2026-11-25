@@ -291,6 +291,15 @@ struct ViewBody {
     sort: Option<StoredSort>,
 }
 
+fn view_write(body: &ViewBody) -> store::ViewWrite<'_> {
+    store::ViewWrite {
+        name: &body.name,
+        columns: body.columns.as_deref(),
+        filter: body.filter.as_ref(),
+        sort: body.sort.as_ref(),
+    }
+}
+
 async fn create_view(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
@@ -306,17 +315,7 @@ async fn create_view(
     if let Some(response) = bad_view_ids(&body) {
         return response;
     }
-    match store::create_view(
-        &app.pool,
-        &ws,
-        &id,
-        &body.name,
-        body.columns.as_deref(),
-        body.filter.as_ref(),
-        body.sort.as_ref(),
-    )
-    .await
-    {
+    match store::create_view(&app.pool, &ws, &id, &view_write(&body)).await {
         Ok(view) => (StatusCode::CREATED, Json(json!({ "view": view }))).into_response(),
         Err(err) => store_error(err),
     }
@@ -337,18 +336,7 @@ async fn save_view(
     if let Some(response) = bad_view_ids(&body) {
         return response;
     }
-    match store::save_view(
-        &app.pool,
-        &ws,
-        &id,
-        &view_id,
-        &body.name,
-        body.columns.as_deref(),
-        body.filter.as_ref(),
-        body.sort.as_ref(),
-    )
-    .await
-    {
+    match store::save_view(&app.pool, &ws, &id, &view_id, &view_write(&body)).await {
         Ok(view) => Json(json!({ "view": view })).into_response(),
         Err(err) => store_error(err),
     }
