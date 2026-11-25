@@ -26,6 +26,8 @@ pub struct PendingAgentOriginTrust {
     pub expected_requester_id: String,
     #[serde(default)]
     pub expected_clones: Vec<SourceContextCloneTrust>,
+    #[serde(default)]
+    pub expected_source_project_id: Option<String>,
 }
 
 pub fn validate_pending_agent_origin_request(
@@ -134,7 +136,7 @@ fn validate_quick_create_task_context(
     Ok(())
 }
 
-pub async fn lock_agent_origin_and_source(
+pub async fn lock_agent_origin(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: &str,
     member_id: &str,
@@ -187,21 +189,7 @@ pub async fn lock_agent_origin_and_source(
     let context = context.ok_or(IssueCreateError::ConfigurationChanged)?;
     validate_quick_create_task_context(workspace_id, trust, &context)
         .map_err(|_| IssueCreateError::ConfigurationChanged)?;
-
-    let source_project: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT project_id::text FROM issue
-          WHERE workspace_id = $1::uuid AND id = $2::uuid
-          FOR SHARE",
-    )
-    .bind(workspace_id)
-    .bind(&trust.expected_source_issue_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    match source_project {
-        Some(None) => Ok(()),
-        Some(Some(_)) => Err(IssueCreateError::ConfigurationChanged),
-        None => Err(IssueCreateError::ParentNotFound),
-    }
+    Ok(())
 }
 
 pub async fn lock_pending_agent_origin_context(

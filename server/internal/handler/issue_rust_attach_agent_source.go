@@ -25,19 +25,32 @@ type rustPendingAgentOriginTrust struct {
 	ExpectedSourceIssueID     string                        `json:"expected_source_issue_id"`
 	ExpectedRequesterID       string                        `json:"expected_requester_id"`
 	ExpectedClones            []rustSourceContextCloneTrust `json:"expected_clones,omitempty"`
+	ExpectedSourceProjectID   *string                       `json:"expected_source_project_id,omitempty"`
 }
 
 type preparedAgentQuickCreateAttach struct {
-	WorkspaceID   pgtype.UUID
-	IssueID       pgtype.UUID
-	ContextID     pgtype.UUID
-	SourceIssueID pgtype.UUID
-	RequesterID   pgtype.UUID
-	AgentID       pgtype.UUID
-	OriginTaskID  pgtype.UUID
-	CaptureDigest string
-	FilePlan      rustAgentSourceContextFilePlan
-	Trust         rustPendingAgentOriginTrust
+	WorkspaceID             pgtype.UUID
+	IssueID                 pgtype.UUID
+	ContextID               pgtype.UUID
+	SourceIssueID           pgtype.UUID
+	RequesterID             pgtype.UUID
+	AgentID                 pgtype.UUID
+	OriginTaskID            pgtype.UUID
+	CaptureDigest           string
+	FilePlan                rustAgentSourceContextFilePlan
+	ExpectedSourceProjectID pgtype.UUID
+	Trust                   rustPendingAgentOriginTrust
+}
+
+func agentQuickCreateAttachReceiptProjectOK(
+	plan preparedAgentQuickCreateAttach,
+	receipt rustIssueCreatePayload,
+) bool {
+	if plan.ExpectedSourceProjectID.Valid {
+		return receipt.Issue.ProjectID != nil &&
+			*receipt.Issue.ProjectID == uuidToString(plan.ExpectedSourceProjectID)
+	}
+	return receipt.Issue.ProjectID == nil
 }
 
 func taskHeaderMatchesOrigin(r *http.Request, originID pgtype.UUID) bool {
@@ -195,8 +208,28 @@ func (h *Handler) prepareAgentQuickCreateAttachRust(
 	sourceIssue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: sourceIssueID, WorkspaceID: wsUUID,
 	})
-	if err != nil || sourceIssue.ProjectID.Valid {
+	if err != nil {
 		return false, none, nil
+	}
+	var expectedSourceProject pgtype.UUID
+	if sourceIssue.ProjectID.Valid {
+		if len(h.IssueReadBridge.AgentSourceProjectLifecycleScopes) == 0 {
+			return false, none, nil
+		}
+		inProjectLife, pilotErr := matchesIssuePilot(
+			ctx, h.Queries, h.IssueReadBridge.AgentSourceProjectLifecycleScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if pilotErr != nil || !inProjectLife {
+			return false, none, pilotErr
+		}
+		hidden, hiddenErr := h.hiddenProjects(r, uuidToString(wsUUID))
+		if hiddenErr != nil {
+			return false, none, hiddenErr
+		}
+		if !hidden.CanSeeProject(sourceIssue.ProjectID) {
+			return false, none, nil
+		}
+		expectedSourceProject = sourceIssue.ProjectID
 	}
 	ag, err := h.Queries.GetAgent(ctx, agentID)
 	if err != nil || ag.ArchivedAt.Valid || ag.OwnerID != requesterID || ag.RuntimeMode != "local" ||
@@ -225,17 +258,22 @@ func (h *Handler) prepareAgentQuickCreateAttachRust(
 		ExpectedRequesterID:       uuidToString(requesterID),
 		ExpectedClones:            filePlan.Clones,
 	}
+	if expectedSourceProject.Valid {
+		projectID := uuidToString(expectedSourceProject)
+		trust.ExpectedSourceProjectID = &projectID
+	}
 	return true, preparedAgentQuickCreateAttach{
-		WorkspaceID:   wsUUID,
-		IssueID:       dbid.NewV7(),
-		ContextID:     contextID,
-		SourceIssueID: sourceIssueID,
-		RequesterID:   requesterID,
-		AgentID:       agentID,
-		OriginTaskID:  originID,
-		CaptureDigest: pending.CaptureDigest,
-		FilePlan:      filePlan,
-		Trust:         trust,
+		WorkspaceID:             wsUUID,
+		IssueID:                 dbid.NewV7(),
+		ContextID:               contextID,
+		SourceIssueID:           sourceIssueID,
+		RequesterID:             requesterID,
+		AgentID:                 agentID,
+		OriginTaskID:            originID,
+		CaptureDigest:           pending.CaptureDigest,
+		FilePlan:                filePlan,
+		ExpectedSourceProjectID: expectedSourceProject,
+		Trust:                   trust,
 	}, nil
 }
 
@@ -244,7 +282,7 @@ func (h *Handler) agentQuickCreateAttachCommitted(
 	plan preparedAgentQuickCreateAttach,
 	receipt rustIssueCreatePayload,
 ) bool {
-	if receipt.Issue.ID != uuidToString(plan.IssueID) {
+	if receipt.Issue.ID != uuidToString(plan.IssueID) || !agentQuickCreateAttachReceiptProjectOK(plan, receipt) {
 		return false
 	}
 	if receipt.Issue.CreatorType != "agent" || receipt.Issue.CreatorID != uuidToString(plan.AgentID) {
@@ -264,8 +302,12 @@ func (h *Handler) agentQuickCreateAttachCommitted(
 		issue.RequesterUserID != plan.RequesterID || issue.Revision < receipt.Issue.Revision {
 		return false
 	}
+	projectOK := !plan.ExpectedSourceProjectID.Valid && !issue.ProjectID.Valid
+	if plan.ExpectedSourceProjectID.Valid {
+		projectOK = issue.ProjectID == plan.ExpectedSourceProjectID
+	}
 	if issue.Revision == receipt.Issue.Revision &&
-		(issue.ParentIssueID != plan.SourceIssueID || issue.ProjectID.Valid ||
+		(issue.ParentIssueID != plan.SourceIssueID || !projectOK ||
 			receipt.Issue.Title != issue.Title || receipt.Issue.Priority != issue.Priority || receipt.Issue.Status != issue.Status) {
 		return false
 	}

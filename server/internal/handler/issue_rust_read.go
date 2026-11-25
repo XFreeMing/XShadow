@@ -159,7 +159,9 @@ type IssueReadBridge struct {
 //     workspace slugs or UUIDs for manual retry on failed agent source captures
 //     whose source issue inherits an authorized project (requires RETRY_AGENT_SOURCE
 //     on the same workspace). Managed clone attachments also require
-//     AGENT_SOURCE_FILES_LIFECYCLE. Attach reuse is a follow-on slice.
+//     AGENT_SOURCE_FILES_LIFECYCLE. Quick-create attach with an inherited source
+//     project uses the same flag with CREATE and ATTACH_AGENT_SOURCE pilots.
+//     Attach-only follow-ons stay out of this slice.
 //   - XSHADOW_ISSUES_RUST_DELETE_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member issue deletes on DELETE /api/issues/{id}.
 //   - XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT: comma-separated workspace

@@ -9,7 +9,7 @@ use serde_json::value::RawValue;
 use sqlx::{Acquire, PgConnection, PgPool, Postgres, Row, Transaction};
 
 use super::attach_agent_source_issue::{
-    PendingAgentOriginTrust, attach_pending_agent_origin_context, lock_agent_origin_and_source,
+    PendingAgentOriginTrust, attach_pending_agent_origin_context, lock_agent_origin,
     lock_pending_agent_origin_context, validate_pending_agent_origin_request,
 };
 use super::create_source_context::{
@@ -500,7 +500,7 @@ async fn create_issue_attempt(
     .execute(&mut *tx)
     .await?;
     if let Some(trust) = pending_origin {
-        lock_agent_origin_and_source(&mut tx, workspace_id, member_id, trust).await?;
+        lock_agent_origin(&mut tx, workspace_id, member_id, trust).await?;
     }
     let mut source_context_prepared = None;
     if let Some(trust) = request.source_context_create_trust.as_ref() {
@@ -525,6 +525,11 @@ async fn create_issue_attempt(
             }
             other => other?,
         };
+    if let Some(trust) = pending_origin
+        && trust.expected_source_project_id.as_deref() != effective_project.as_deref()
+    {
+        return Err(IssueCreateError::ConfigurationChanged);
+    }
     let source_context = if let Some((trust, prepared)) = source_context_prepared {
         reconcile_source_context_project(trust, effective_project.as_deref())?;
         let prefix = validate_source_context_create_trust(

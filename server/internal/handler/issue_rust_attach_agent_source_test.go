@@ -53,6 +53,25 @@ func TestTaskHeaderMatchesOrigin(t *testing.T) {
 	}
 }
 
+func TestAgentQuickCreateAttachReceiptProjectOK(t *testing.T) {
+	t.Parallel()
+	project := util.MustParseUUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+	projectStr := util.UUIDToString(project)
+	plan := preparedAgentQuickCreateAttach{ExpectedSourceProjectID: project}
+	receipt := rustIssueCreatePayload{Issue: IssueResponse{ProjectID: &projectStr}}
+	if !agentQuickCreateAttachReceiptProjectOK(plan, receipt) {
+		t.Fatal("matching child project receipt should qualify")
+	}
+	wrong := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	receipt.Issue.ProjectID = &wrong
+	if agentQuickCreateAttachReceiptProjectOK(plan, receipt) {
+		t.Fatal("wrong child project receipt should fail")
+	}
+	if !agentQuickCreateAttachReceiptProjectOK(preparedAgentQuickCreateAttach{}, rustIssueCreatePayload{Issue: IssueResponse{}}) {
+		t.Fatal("projectless child receipt should omit project_id")
+	}
+}
+
 func TestAgentQuickCreateAttachShapeRejectsAssignment(t *testing.T) {
 	t.Parallel()
 	parent := util.MustParseUUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")

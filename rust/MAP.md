@@ -64,9 +64,9 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT` 为 `POST /api/tasks/{taskId}/retry-source-context` 指定试点工作区（默认关闭）。首批覆盖失败且无事项/聊天/自动驾驶绑定、仍由同一请求者持有的待附着来源快照、无目标项目或上传、智能体/运行时仍为本人本地在线且具备来源快速创建能力的形状。无项目时沿用原范围；继承来源项目另需 `XSHADOW_ISSUES_RUST_AGENT_SOURCE_PROJECT_LIFECYCLE_PILOT`；有管理克隆附件另需 `AGENT_SOURCE_FILES_LIFECYCLE`。Go 保留调用权、项目可见性与容量检查、运行时 MCP 叠加层、公开 202 契约、事件及分析。Rust 锁定运行时与原失败任务后，先锁计划来源项目及授权，再锁来源任务行、待附着快照与克隆计划，同一事务写入手动后继、转移原快照及持久唤醒；回执 `source_project_id` 绑定锁内项目。军团、非本地、离线或非原请求者继续由 Go 处理。
 
-`XSHADOW_ISSUES_RUST_AGENT_SOURCE_PROJECT_LIFECYCLE_PILOT` 默认关闭，须与同工作区 `RETRY_AGENT_SOURCE` 同时启用。本切片仅覆盖 manual retry；attach 为后续工作。
+`XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 同时启用，默认关闭。由已启动的快速创建任务凭证调用原 `POST /api/issues`。首批覆盖无项目、无附件、本人本地直连智能体的标准待办任务，支持普通优先级和日期。Rust 在原创建事务校验任务、运行时、来源与已冻结快照，在编号和容量检查后锁定并附着快照。Go 核验创建结果和原凭证归因后发布事件，旧 daemon 完成入口继续关联任务。并发提交维持原查重及单次附着行为。继承来源默认工作流项目另需 `AGENT_SOURCE_PROJECT_LIFECYCLE`；冻结克隆另需 `AGENT_SOURCE_FILES_LIFECYCLE`。`guard_parent_projects_and_assignee` 先于来源行锁定期望项目；子任务回执按 `issue.project_id` 绑定计划，不读可变来源行。
 
-`XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 同时启用，默认关闭。由已启动的快速创建任务凭证调用原 `POST /api/issues`。首批覆盖无项目、无附件、本人本地直连智能体的标准待办任务，支持普通优先级和日期。Rust 在原创建事务校验任务、运行时、来源与已冻结快照，在编号和容量检查后锁定并附着快照。Go 核验创建结果和原凭证归因后发布事件，旧 daemon 完成入口继续关联任务。并发提交维持原查重及单次附着行为。
+`XSHADOW_ISSUES_RUST_AGENT_SOURCE_PROJECT_LIFECYCLE_PILOT` 默认关闭。本切片覆盖 manual retry（须 `RETRY_AGENT_SOURCE`）与 quick_create attach（须 `CREATE` + `ATTACH_AGENT_SOURCE`）；有文件时另须 `AGENT_SOURCE_FILES_LIFECYCLE`。
 
 继承项目且冻结来源附件的手动创建须在同一工作区启用上述四个试点开关。任一开关关闭时由 Go 处理。Rust 在同一事务写入带项目的子任务、快照和克隆附件，并核对实际消费的意图集合。Go 核验子任务项目和来源归属，再发布创建事件。
 
