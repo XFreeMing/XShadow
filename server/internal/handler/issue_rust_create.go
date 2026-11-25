@@ -55,6 +55,7 @@ type rustIssueCreate struct {
 	PRAutoCompleteDisabled bool                  `json:"pr_auto_complete_disabled,omitempty"`
 	PreparedEnqueue        *json.RawMessage      `json:"prepared_enqueue,omitempty"`
 	SquadCreateTrust       *rustSquadCreateTrust `json:"squad_create_trust,omitempty"`
+	AttachmentIDs          []string              `json:"attachment_ids,omitempty"`
 }
 
 type rustSquadCreateTrust struct {
@@ -67,13 +68,15 @@ type rustIssueCreatePayload struct {
 	Labels                []LabelResponse `json:"labels"`
 	QueuedTaskID          *string         `json:"queued_task_id,omitempty"`
 	CoalescedQueuedTaskID *string         `json:"coalesced_queued_task_id,omitempty"`
+	LinkedAttachmentIDs   *[]string       `json:"linked_attachment_ids"`
 }
 
 type issueCreateRustPlan struct {
-	useRust      bool
-	issueID      pgtype.UUID
-	dispatchPrep *service.IssuePreparedAgentEnqueue
-	squadTrust   *rustSquadCreateTrust
+	useRust             bool
+	issueID             pgtype.UUID
+	dispatchPrep        *service.IssuePreparedAgentEnqueue
+	squadTrust          *rustSquadCreateTrust
+	nativeAttachmentIDs []string
 }
 
 func (h *Handler) loadOwnedSquadForIssueCreate(
@@ -124,6 +127,7 @@ func (h *Handler) plainIssueCreateRustEligible(
 	status string,
 	originType pgtype.Text,
 	attachmentIDs []pgtype.UUID,
+	attachmentsNative bool,
 	workflowNeedsGo bool,
 ) bool {
 	if creatorType != "member" {
@@ -132,7 +136,7 @@ func (h *Handler) plainIssueCreateRustEligible(
 	if originType.Valid || req.OriginType != nil || req.OriginID != nil {
 		return false
 	}
-	if len(attachmentIDs) > 0 {
+	if len(attachmentIDs) > 0 && !attachmentsNative {
 		return false
 	}
 	if req.Stage != nil {
@@ -192,6 +196,10 @@ func (h *Handler) planIssueCreateRust(
 		return plan, err
 	}
 
+	if len(attachmentIDs) > 0 && assigneeType.Valid && assigneeType.String != "member" {
+		return plan, nil
+	}
+
 	if assigneeType.Valid && assigneeType.String == "agent" {
 		if len(h.IssueReadBridge.CreateDispatchPilotScopes) == 0 {
 			return plan, nil
@@ -200,7 +208,7 @@ func (h *Handler) planIssueCreateRust(
 		if err != nil || !inDispatchPilot {
 			return plan, err
 		}
-		if !h.plainIssueCreateRustEligible(req, creatorType, pgtype.Text{}, status, originType, attachmentIDs, workflowNeedsGo) {
+		if !h.plainIssueCreateRustEligible(req, creatorType, pgtype.Text{}, status, originType, attachmentIDs, false, workflowNeedsGo) {
 			return plan, nil
 		}
 		if !wsUUID.Valid || actualCreatorID == "" || !assigneeID.Valid || !h.nativeCreateDirectAgentOwnerOnly(r.Context(), wsUUID, assigneeID, actualCreatorID) {
@@ -240,7 +248,7 @@ func (h *Handler) planIssueCreateRust(
 		if err != nil || !inSquadPilot {
 			return plan, err
 		}
-		if !h.plainIssueCreateRustEligible(req, creatorType, pgtype.Text{}, status, originType, attachmentIDs, workflowNeedsGo) {
+		if !h.plainIssueCreateRustEligible(req, creatorType, pgtype.Text{}, status, originType, attachmentIDs, false, workflowNeedsGo) {
 			return plan, nil
 		}
 		if !wsUUID.Valid || actualCreatorID == "" || !assigneeID.Valid {
@@ -275,7 +283,29 @@ func (h *Handler) planIssueCreateRust(
 		return plan, nil
 	}
 
-	if !h.plainIssueCreateRustEligible(req, creatorType, assigneeType, status, originType, attachmentIDs, workflowNeedsGo) {
+	attachmentsNative := false
+	if len(attachmentIDs) > 0 {
+		if len(h.IssueReadBridge.CreateAttachPilotScopes) == 0 {
+			return plan, nil
+		}
+		inAttachmentsPilot, err := matchesIssuePilot(
+			r.Context(), h.Queries, h.IssueReadBridge.CreateAttachPilotScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if err != nil || !inAttachmentsPilot {
+			return plan, err
+		}
+		ok, err := h.issueCreateAttachmentsPreflight(r.Context(), wsUUID, attachmentIDs)
+		if err != nil {
+			return plan, err
+		}
+		if !ok {
+			return plan, nil
+		}
+		attachmentsNative = true
+		plan.nativeAttachmentIDs = canonicalAttachmentIDStrings(attachmentIDs)
+	}
+
+	if !h.plainIssueCreateRustEligible(req, creatorType, assigneeType, status, originType, attachmentIDs, attachmentsNative, workflowNeedsGo) {
 		return plan, nil
 	}
 	plan.useRust = true
@@ -389,6 +419,9 @@ func (h *Handler) createIssueViaRust(
 	if plan.squadTrust != nil {
 		payload.SquadCreateTrust = plan.squadTrust
 	}
+	if len(plan.nativeAttachmentIDs) > 0 {
+		payload.AttachmentIDs = append([]string(nil), plan.nativeAttachmentIDs...)
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -438,6 +471,20 @@ func (h *Handler) createIssueViaRust(
 		writeError(w, http.StatusBadGateway, "invalid rust issue create response")
 		return
 	}
+	if len(plan.nativeAttachmentIDs) > 0 {
+		if receipt.LinkedAttachmentIDs == nil {
+			writeError(w, http.StatusBadGateway, "invalid rust issue create attachment receipt")
+			return
+		}
+		linkedReceipt := *receipt.LinkedAttachmentIDs
+		if !rustIssueCreateLinkedAttachmentsValid(plan.nativeAttachmentIDs, linkedReceipt) {
+			writeError(w, http.StatusBadGateway, "invalid rust issue create attachment receipt")
+			return
+		}
+	} else if receipt.LinkedAttachmentIDs != nil {
+		writeError(w, http.StatusBadGateway, "unexpected rust issue create attachment receipt")
+		return
+	}
 	taskReceipt := derefString(receipt.QueuedTaskID)
 	coalescedReceipt := derefString(receipt.CoalescedQueuedTaskID)
 	if dispatchPrepared != nil {
@@ -467,8 +514,38 @@ func (h *Handler) createIssueViaRust(
 	issue := receipt.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", issue.ID, "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
 
+	var linkedAttachments []db.Attachment
+	if len(plan.nativeAttachmentIDs) > 0 {
+		var err error
+		linkedAttachments, err = h.Queries.ListAttachmentsByIssue(r.Context(), db.ListAttachmentsByIssueParams{
+			IssueID: issueID, WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			slog.Warn("list native create attachments failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusBadGateway, "failed to resolve created issue attachments")
+			return
+		}
+		if !attachmentRowsMatchLinkedIDs(linkedAttachments, *receipt.LinkedAttachmentIDs) {
+			writeError(w, http.StatusBadGateway, "invalid rust issue create attachment receipt")
+			return
+		}
+	}
+
+	attachmentMode := attachmentURLModeFromRequest(r)
+	buildAttachmentResponses := func(atts []db.Attachment) []AttachmentResponse {
+		if len(atts) == 0 {
+			return nil
+		}
+		out := make([]AttachmentResponse, len(atts))
+		for i, a := range atts {
+			out[i] = h.attachmentToResponse(a, attachmentMode)
+		}
+		return out
+	}
+
 	respIssue := issue
 	fillCreated(&respIssue)
+	respIssue.Attachments = buildAttachmentResponses(linkedAttachments)
 	labelResponses := receipt.Labels
 	if labelResponses == nil {
 		labelResponses = []LabelResponse{}

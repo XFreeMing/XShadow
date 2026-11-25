@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{Acquire, PgConnection, PgPool, Postgres, Row, Transaction};
 
 use super::create_validate::{
     guard_parent_projects_and_assignee, revalidate_type_and_properties,
@@ -68,6 +68,8 @@ pub struct IssueCreateRequest {
     pub pr_auto_complete_disabled: bool,
     pub prepared_enqueue: Option<PreparedStatusEnqueue>,
     pub squad_create_trust: Option<SquadCreateTrust>,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +80,8 @@ pub struct IssueCreatePayload {
     pub queued_task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coalesced_queued_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_attachment_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,6 +146,53 @@ fn is_properties_size_violation(error: &sqlx::Error) -> bool {
                 && db.constraint() == Some("issue_properties_size_limit")
         }
         _ => false,
+    }
+}
+
+async fn link_create_attachments(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace_id: &str,
+    issue_id: &str,
+    ids: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
+    let mut link_tx = tx.begin().await?;
+    let linked = sqlx::query_scalar::<_, String>(
+        "WITH to_claim AS MATERIALIZED (
+            SELECT id
+              FROM attachment
+             WHERE workspace_id = $1::uuid
+               AND issue_id IS NULL AND comment_id IS NULL
+               AND chat_session_id IS NULL AND chat_message_id IS NULL
+               AND task_id IS NULL AND source_context_id IS NULL
+               AND id = ANY($2::uuid[])
+             ORDER BY id
+             FOR UPDATE
+        ), updated AS (
+            UPDATE attachment AS a
+               SET issue_id = $3::uuid
+              FROM to_claim AS t
+             WHERE a.id = t.id
+             RETURNING a.id::text AS id
+        )
+        SELECT id FROM updated ORDER BY id",
+    )
+    .bind(workspace_id)
+    .bind(ids)
+    .bind(issue_id)
+    .fetch_all(&mut *link_tx)
+    .await;
+
+    match linked {
+        Ok(ids) => {
+            link_tx.commit().await?;
+            Ok(ids)
+        }
+        Err(sqlx::Error::Database(error)) => {
+            link_tx.rollback().await?;
+            eprintln!("rust issue {issue_id}: optional attachment linkage failed: {error}");
+            Ok(Vec::new())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -377,6 +428,20 @@ async fn create_issue_attempt(
         )
     {
         return Err(IssueCreateError::InvalidInput);
+    }
+    for id in &request.attachment_ids {
+        if !is_uuid(id) {
+            return Err(IssueCreateError::InvalidInput);
+        }
+    }
+    if !request.attachment_ids.is_empty() {
+        match request.assignee_type.as_deref() {
+            Some("agent") | Some("squad") => return Err(IssueCreateError::InvalidInput),
+            _ => {}
+        }
+        if request.prepared_enqueue.is_some() {
+            return Err(IssueCreateError::InvalidInput);
+        }
     }
     if let Some(assignee_type) = request.assignee_type.as_deref() {
         if assignee_type != "member" && assignee_type != "agent" && assignee_type != "squad" {
@@ -695,6 +760,15 @@ async fn create_issue_attempt(
         None => (None, None),
     };
 
+    let linked_attachment_ids = if request.attachment_ids.is_empty() {
+        None
+    } else {
+        Some(
+            link_create_attachments(&mut tx, workspace_id, &request.id, &request.attachment_ids)
+                .await?,
+        )
+    };
+
     let prefix = workspace_prefix(&mut tx, workspace_id).await?;
     let issue = map_create_row_to_response(&inserted, &prefix)?;
 
@@ -705,6 +779,7 @@ async fn create_issue_attempt(
         labels: receipt_labels,
         queued_task_id,
         coalesced_queued_task_id,
+        linked_attachment_ids,
     })
 }
 

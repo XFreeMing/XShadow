@@ -35,6 +35,15 @@ func TestCreateIssueUsesRustRejectsOutOfScopeShapes(t *testing.T) {
 		t.Fatalf("plain member todo uses rust = %v err=%v, want true", ok, err)
 	}
 
+	att := util.MustParseUUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	ok, err = planUsesRust(h, CreateIssueRequest{
+		Title:  "attachments without attachments pilot",
+		Status: issuestatus.Todo,
+	}, "member", pgtype.Text{}, pgtype.UUID{}, issuestatus.Todo, pgtype.Text{}, []pgtype.UUID{att}, false)
+	if err != nil || ok {
+		t.Fatalf("attachments without attachments pilot uses rust = %v err=%v, want false", ok, err)
+	}
+
 	ok, err = planUsesRust(h, CreateIssueRequest{
 		Title:  "agent",
 		Status: issuestatus.Todo,
@@ -54,6 +63,19 @@ func TestCreateIssueUsesRustRejectsOutOfScopeShapes(t *testing.T) {
 	}
 
 	agentID := util.MustParseUUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+	hAttach := &Handler{IssueReadBridge: &IssueReadBridge{
+		CreatePilotScopes:            []string{"*"},
+		CreateDispatchPilotScopes:    []string{"*"},
+		CreateAttachPilotScopes: []string{"*"},
+	}}
+	ok, err = planUsesRust(hAttach, CreateIssueRequest{
+		Title:  "parked agent with attachments",
+		Status: issuestatus.Backlog,
+	}, "member", pgtype.Text{String: "agent", Valid: true}, agentID, issuestatus.Backlog, pgtype.Text{}, []pgtype.UUID{att}, false)
+	if err != nil || ok {
+		t.Fatalf("agent assignee with attachments uses rust = %v err=%v, want false", ok, err)
+	}
+
 	ok, err = planUsesRust(h, CreateIssueRequest{
 		Title:  "assigned agent backlog",
 		Status: issuestatus.Backlog,
