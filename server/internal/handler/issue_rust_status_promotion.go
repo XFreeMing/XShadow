@@ -34,7 +34,7 @@ type issueStatusPreparedEnqueue struct {
 	QueueKeyHeadSha      string          `json:"queue_key_head_sha"`
 }
 
-func marshalIssueStatusPreparedEnqueue(prep service.IssueStatusPromotionEnqueue) ([]byte, error) {
+func marshalIssueStatusPreparedEnqueue(prep service.IssuePreparedAgentEnqueue) ([]byte, error) {
 	task := prep.Task
 	wire := issueStatusPreparedEnqueue{
 		TaskID:            uuidToString(task.ID),
@@ -88,7 +88,7 @@ func rustStatusQueuedTaskValid(
 	ctx context.Context,
 	q *db.Queries,
 	receipt string,
-	prep service.IssueStatusPromotionEnqueue,
+	prep service.IssuePreparedAgentEnqueue,
 ) bool {
 	if receipt == "" {
 		return false
@@ -121,7 +121,7 @@ func rustStatusCoalescedTaskValid(
 	ctx context.Context,
 	q *db.Queries,
 	receipt string,
-	prep service.IssueStatusPromotionEnqueue,
+	prep service.IssuePreparedAgentEnqueue,
 ) bool {
 	taskID, err := util.ParseUUID(receipt)
 	if err != nil {

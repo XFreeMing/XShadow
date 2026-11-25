@@ -119,7 +119,7 @@ func (h *Handler) updateIssueStatusViaRust(
 	current db.Issue,
 	params db.UpdateIssueParams,
 	req UpdateIssueRequest,
-	prepared *service.IssueStatusPromotionEnqueue,
+	prepared *service.IssuePreparedAgentEnqueue,
 ) (after, before db.Issue, statusActivityID, queuedTaskID string, ok bool) {
 	plannedActivityID := dbid.NewV7()
 	edit := issueStatusEdit{

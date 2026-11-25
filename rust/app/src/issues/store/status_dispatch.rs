@@ -155,6 +155,25 @@ async fn issue_review_head_sha(
     )
 }
 
+pub async fn lock_target_agent_for_assignment(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    agent_id: &str,
+) -> Result<Option<String>, StatusPromotionError> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT a.owner_id::text FROM agent a
+         WHERE a.id = $1::uuid AND a.workspace_id = $2::uuid
+           AND a.archived_at IS NULL
+         FOR SHARE",
+    )
+    .bind(agent_id)
+    .bind(workspace_id)
+    .fetch_optional(conn)
+    .await
+    .map_err(StatusPromotionError::Database)?
+    .ok_or(StatusPromotionError::RouteChanged)
+}
+
 pub async fn lock_prepared_agent(
     conn: &mut PgConnection,
     workspace_id: &str,
@@ -177,6 +196,35 @@ pub async fn lock_prepared_agent(
     .ok_or(StatusPromotionError::RouteChanged)
 }
 
+pub async fn validate_agent_issue_project_access(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    project_id: Option<&str>,
+    principals: Vec<String>,
+) -> Result<(), StatusPromotionError> {
+    let Some(project_id) = project_id.filter(|id| is_uuid(id)) else {
+        return Ok(());
+    };
+    let visibility: Option<String> = sqlx::query_scalar(
+        "SELECT visibility::text FROM project WHERE id = $1::uuid AND workspace_id = $2::uuid",
+    )
+    .bind(project_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(StatusPromotionError::Database)?;
+    if visibility.as_deref() != Some("private") {
+        return Ok(());
+    }
+    let hidden = hidden_projects_for_principals(conn, workspace_id, &principals)
+        .await
+        .map_err(|_| StatusPromotionError::RouteChanged)?;
+    if !hidden.can_see(Some(project_id)) {
+        return Err(StatusPromotionError::RouteChanged);
+    }
+    Ok(())
+}
+
 pub async fn validate_prepared_status_enqueue(
     conn: &mut PgConnection,
     workspace_id: &str,
@@ -191,36 +239,13 @@ pub async fn validate_prepared_status_enqueue(
     if head_sha != prepared.queue_key_head_sha || head_sha != prepared.head_sha {
         return Err(StatusPromotionError::RouteChanged);
     }
-    let Some(project_id) = project_id.filter(|id| is_uuid(id)) else {
-        return Ok(());
-    };
-    let visibility: Option<String> = sqlx::query_scalar(
-        "SELECT visibility::text FROM project WHERE id = $1::uuid AND workspace_id = $2::uuid",
-    )
-    .bind(project_id)
-    .bind(workspace_id)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(StatusPromotionError::Database)?;
-    let Some(visibility) = visibility else {
-        return Ok(());
-    };
-    if visibility != "private" {
-        return Ok(());
-    }
     let human = if is_uuid(&prepared.originator_user_id) {
         &prepared.originator_user_id
     } else {
         &prepared.accountable_user_id
     };
-    let principals: Vec<_> = std::iter::once(human.clone()).chain(agent_owner).collect();
-    let hidden = hidden_projects_for_principals(conn, workspace_id, &principals)
-        .await
-        .map_err(|_| StatusPromotionError::RouteChanged)?;
-    if !hidden.can_see(Some(project_id)) {
-        return Err(StatusPromotionError::RouteChanged);
-    }
-    Ok(())
+    let principals = std::iter::once(human.clone()).chain(agent_owner).collect();
+    validate_agent_issue_project_access(conn, workspace_id, project_id, principals).await
 }
 
 pub async fn apply_prepared_status_enqueue(

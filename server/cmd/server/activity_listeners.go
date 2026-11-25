@@ -144,7 +144,9 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 			}
 		}
 
-		if assigneeChanged {
+		if assigneeChanged && e.PreRecordedActivityID != "" && !statusChanged {
+			publishPreRecordedAssigneeActivity(ctx, bus, queries, e, issue, payload)
+		} else if assigneeChanged {
 			prevAssigneeType, _ := payload["prev_assignee_type"].(*string)
 			prevAssigneeID, _ := payload["prev_assignee_id"].(*string)
 
@@ -328,6 +330,48 @@ func handleTaskActivity(ctx context.Context, bus *events.Bus, queries *db.Querie
 		return
 	}
 
+	publishActivityEvent(bus, e, activity)
+}
+
+func publishPreRecordedAssigneeActivity(ctx context.Context, bus *events.Bus, queries *db.Queries, e events.Event, issue handler.IssueResponse, payload map[string]any) {
+	activity, err := queries.GetActivity(ctx, parseUUID(e.PreRecordedActivityID))
+	if err != nil {
+		slog.Error("activity: failed to load pre-recorded assignee change",
+			"issue_id", issue.ID, "activity_id", e.PreRecordedActivityID, "error", err)
+		return
+	}
+	issueUUID := parseUUID(issue.ID)
+	wsUUID := parseUUID(issue.WorkspaceID)
+	if activity.IssueID != issueUUID || activity.WorkspaceID != wsUUID || activity.Action != "assignee_changed" ||
+		activity.ActorType != util.StrToText(e.ActorType) || activity.ActorID != optionalUUID(e.ActorID) {
+		slog.Error("activity: pre-recorded assignee change identity mismatch",
+			"issue_id", issue.ID, "activity_id", e.PreRecordedActivityID)
+		return
+	}
+	var stored map[string]string
+	if err := json.Unmarshal(activity.Details, &stored); err != nil {
+		slog.Error("activity: pre-recorded assignee change details unreadable",
+			"issue_id", issue.ID, "activity_id", e.PreRecordedActivityID)
+		return
+	}
+	prevAssigneeType, _ := payload["prev_assignee_type"].(*string)
+	prevAssigneeID, _ := payload["prev_assignee_id"].(*string)
+	if prevAssigneeType != nil && stored["from_type"] != *prevAssigneeType {
+		slog.Error("activity: pre-recorded assignee change prev type mismatch", "issue_id", issue.ID)
+		return
+	}
+	if prevAssigneeID != nil && stored["from_id"] != *prevAssigneeID {
+		slog.Error("activity: pre-recorded assignee change prev id mismatch", "issue_id", issue.ID)
+		return
+	}
+	if issue.AssigneeType == nil || stored["to_type"] != *issue.AssigneeType {
+		slog.Error("activity: pre-recorded assignee change next type mismatch", "issue_id", issue.ID)
+		return
+	}
+	if issue.AssigneeID == nil || stored["to_id"] != *issue.AssigneeID {
+		slog.Error("activity: pre-recorded assignee change next id mismatch", "issue_id", issue.ID)
+		return
+	}
 	publishActivityEvent(bus, e, activity)
 }
 

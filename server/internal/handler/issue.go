@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4385,6 +4386,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	var issue db.Issue
 	var statusActivityReceipt string
+	var assignActivityReceipt string
 	var queuedTaskReceipt string
 	attachmentsChanged := false
 	rustStatus, err := h.statusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
@@ -4395,6 +4397,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	var assignPrepared *service.IssuePreparedAgentEnqueue
+	rustAssign := false
+	if !rustStatus {
+		rustAssign, err = h.assignIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, params)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				slog.Warn("resolve rust issue assign pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue assign route")
+			}
+			return
+		}
+	}
 	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params, attachmentIDs)
 	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
@@ -4403,7 +4417,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	var statusPromotionPrepared *service.IssueStatusPromotionEnqueue
+	var statusPromotionPrepared *service.IssuePreparedAgentEnqueue
 	dispatchSensitiveAgent := rustStatus && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) && prevIssue.AssigneeType.String == "agent"
 	if dispatchSensitiveAgent && !req.SuppressRun {
 		projected := prevIssue
@@ -4419,7 +4433,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		if !promotionWillRun {
 			rustStatus = false
 		} else {
-			prep, prepErr := h.TaskService.PrepareIssueStatusPromotionEnqueue(
+			prep, prepErr := h.TaskService.PrepareIssueAgentEnqueue(
 				r.Context(), projected, req.HandoffNote, memberActorUserID(actorType, actorID),
 			)
 			if prepErr != nil {
@@ -4429,9 +4443,42 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if rustAssign && !req.SuppressRun && prevIssue.Status != issuestatus.Backlog &&
+		(params.AssigneeType != prevIssue.AssigneeType || params.AssigneeID != prevIssue.AssigneeID) {
+		projected := prevIssue
+		projected.AssigneeType = params.AssigneeType
+		projected.AssigneeID = params.AssigneeID
+		_, assignWillRun := h.IssueService.WillEnqueueRun(r.Context(),
+			service.IssueTriggerInput{
+				Issue:           projected,
+				PrevStatus:      prevIssue.Status,
+				AssigneeChanged: true,
+			},
+			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
+		)
+		if assignWillRun {
+			prep, prepErr := h.TaskService.PrepareIssueAgentEnqueue(
+				r.Context(), projected, req.HandoffNote, memberActorUserID(actorType, actorID),
+			)
+			if prepErr != nil {
+				rustAssign = false
+			} else {
+				assignPrepared = &prep
+			}
+		} else {
+			rustAssign = false
+		}
+	}
 	if rustStatus {
 		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, ok = h.updateIssueStatusViaRust(
 			w, r, userID, prevIssue, params, req, statusPromotionPrepared,
+		)
+		if !ok {
+			return
+		}
+	} else if rustAssign {
+		issue, prevIssue, assignActivityReceipt, queuedTaskReceipt, ok = h.updateIssueAssignViaRust(
+			w, r, userID, prevIssue, params, req, assignPrepared,
 		)
 		if !ok {
 			return
@@ -4548,18 +4595,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil {
 		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 	}
-	if statusActivityReceipt != "" {
-		h.Bus.Publish(events.Event{
-			Type:                  protocol.EventIssueUpdated,
-			WorkspaceID:           workspaceID,
-			ActorType:             actorType,
-			ActorID:               actorID,
-			Payload:               updatedPayload,
-			PreRecordedActivityID: statusActivityReceipt,
-		})
-	} else {
-		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
-	}
+	h.publishIssueUpdated(workspaceID, actorType, actorID, updatedPayload, cmp.Or(statusActivityReceipt, assignActivityReceipt))
 	if attachmentsChanged {
 		// The full owner snapshot must be admitted before an auxiliary event at
 		// the same revision. Otherwise clients advance only the revision here and
@@ -4594,7 +4630,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil && req.StopPreviousAssigneeRuns {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if willRun && statusPromotionPrepared == nil {
+	if willRun && statusPromotionPrepared == nil && !rustAssign {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
 	} else if queuedTaskReceipt != "" {
 		if taskID, err := util.ParseUUID(queuedTaskReceipt); err == nil {
@@ -4708,6 +4744,25 @@ func (h *Handler) validateAssigneePair(ctx context.Context, r *http.Request, wor
 	default:
 		return http.StatusBadRequest, "assignee_type must be 'member', 'agent', or 'squad'"
 	}
+}
+
+func (h *Handler) publishIssueUpdated(
+	workspaceID, actorType, actorID string,
+	payload map[string]any,
+	activityReceipt string,
+) {
+	if activityReceipt == "" {
+		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, payload)
+		return
+	}
+	h.Bus.Publish(events.Event{
+		Type:                  protocol.EventIssueUpdated,
+		WorkspaceID:           workspaceID,
+		ActorType:             actorType,
+		ActorID:               actorID,
+		Payload:               payload,
+		PreRecordedActivityID: activityReceipt,
+	})
 }
 
 // shouldEnqueueAgentTask returns true when an issue creation or assignment

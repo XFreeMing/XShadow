@@ -56,6 +56,16 @@ func TestIssueReadBridgeFromEnvAndPilotMatching(t *testing.T) {
 		}
 	})
 
+	t.Run("assign pilot scopes are independent of other pilots", func(t *testing.T) {
+		t.Setenv("XSHADOW_ISSUES_RUST_ASSIGN_PILOT", "assign-pilot")
+		t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
+		t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
+		bridge := NewIssueReadBridgeFromEnv(nil)
+		if !reflect.DeepEqual(bridge.AssignPilotScopes, []string{"assign-pilot"}) {
+			t.Fatalf("AssignPilotScopes = %v, want [assign-pilot]", bridge.AssignPilotScopes)
+		}
+	})
+
 	t.Run("status pilot scopes are independent of other pilots", func(t *testing.T) {
 		t.Setenv("XSHADOW_ISSUES_RUST_STATUS_PILOT", "status-pilot")
 		t.Setenv("XSHADOW_ISSUES_RUST_WRITE_PILOT", "")

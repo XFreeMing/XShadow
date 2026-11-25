@@ -12,34 +12,36 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// IssueStatusPromotionEnqueue is the trusted queue insert Go prepares for a
-// backlog→active promotion the Rust status pilot commits atomically with the
-// issue row.
-type IssueStatusPromotionEnqueue struct {
+var errIssueNotDirectAgent = fmt.Errorf("issue is not assigned to a direct agent")
+
+// IssuePreparedAgentEnqueue is the trusted queue insert Go prepares for a
+// direct-agent write the Rust pilot commits atomically with the issue row.
+type IssuePreparedAgentEnqueue struct {
 	Task            db.CreateAgentTaskParams
 	QueueKeyHeadSha string
 }
 
-// PrepareIssueStatusPromotionEnqueue mirrors the direct-agent assign/promote
-// enqueue plan without writing the queue row.
-func (s *TaskService) PrepareIssueStatusPromotionEnqueue(
+// PrepareIssueAgentEnqueue mirrors the direct-agent assign/promote enqueue plan
+// without writing the queue row. WorkflowStep is stamped from the projected issue
+// status so the native insert matches the Go CreateAgentTask path.
+func (s *TaskService) PrepareIssueAgentEnqueue(
 	ctx context.Context,
 	issue db.Issue,
 	handoffNote string,
 	actorUserID pgtype.UUID,
-) (IssueStatusPromotionEnqueue, error) {
+) (IssuePreparedAgentEnqueue, error) {
 	if !issue.AssigneeID.Valid || issue.AssigneeType.String != "agent" {
-		return IssueStatusPromotionEnqueue{}, fmt.Errorf("issue is not assigned to a direct agent")
+		return IssuePreparedAgentEnqueue{}, errIssueNotDirectAgent
 	}
 	params, headSha, err := s.prepareIssueAssigneeEnqueueParams(
 		ctx, issue, pgtype.UUID{}, nil, false, handoffNote, actorUserID,
 		pgtype.UUID{}, OriginDerived, false,
 	)
 	if err != nil {
-		return IssueStatusPromotionEnqueue{}, err
+		return IssuePreparedAgentEnqueue{}, err
 	}
 	params.WorkflowStep = pgtype.Text{String: issue.Status, Valid: true}
-	return IssueStatusPromotionEnqueue{Task: params, QueueKeyHeadSha: headSha}, nil
+	return IssuePreparedAgentEnqueue{Task: params, QueueKeyHeadSha: headSha}, nil
 }
 
 // CompleteIssueStatusPromotionAfterNativeWrite performs post-commit wakeups only
@@ -50,7 +52,7 @@ func (s *TaskService) CompleteIssueStatusPromotionAfterNativeWrite(ctx context.C
 	}
 	task, err := s.Queries.GetAgentTask(ctx, taskID)
 	if err != nil {
-		slog.Warn("native status promotion: load queued task failed",
+		slog.Warn("native agent enqueue: load queued task failed",
 			"task_id", util.UUIDToString(taskID), "error", err)
 		return
 	}

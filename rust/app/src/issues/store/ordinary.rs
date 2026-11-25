@@ -267,6 +267,15 @@ pub(super) async fn set_write_actor(
     actor: &CallerActor,
     source_task_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
+    set_write_session(conn, actor, source_task_id, None).await
+}
+
+pub(super) async fn set_write_session(
+    conn: &mut PgConnection,
+    actor: &CallerActor,
+    source_task_id: Option<&str>,
+    handed_to_agent: Option<&str>,
+) -> Result<(), sqlx::Error> {
     let (actor_type, actor_id) = match actor {
         CallerActor::Member { user_id } => ("member", user_id),
         CallerActor::Agent { agent_id, .. } => ("agent", agent_id),
@@ -274,11 +283,13 @@ pub(super) async fn set_write_actor(
     sqlx::query(
         "SELECT set_config('multica.actor_type',$1,true),
                 set_config('multica.actor_id',$2,true),
-                set_config('multica.source_task_id',$3,true)",
+                set_config('multica.source_task_id',$3,true),
+                set_config('multica.handed_to_agent',$4,true)",
     )
     .bind(actor_type)
     .bind(actor_id)
     .bind(source_task_id.unwrap_or(""))
+    .bind(handed_to_agent.unwrap_or(""))
     .execute(conn)
     .await?;
     Ok(())

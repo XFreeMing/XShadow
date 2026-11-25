@@ -22,8 +22,10 @@ mod acceptance_write;
 pub use acceptance_write::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, write_issue_acceptance_trace,
 };
+mod assign_write;
 mod status_dispatch;
 mod status_write;
+pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
 pub use status_write::{IssueStatusEdit, IssueStatusEditError, update_issue_status};
 
 #[derive(Debug)]

@@ -16,8 +16,8 @@ use super::store::{
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
 use super::store::{
-    IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueStatusEdit, IssueStatusEditError,
-    OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
+    IssueStatusEdit, IssueStatusEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -173,6 +173,7 @@ pub fn router(pool: PgPool, token: String) -> Router {
             put(write_issue_acceptance).layer(DefaultBodyLimit::disable()),
         )
         .route("/internal/issues/{id}/status", put(update_issue_status))
+        .route("/internal/issues/{id}/assign", put(update_issue_assign))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
 }
@@ -356,6 +357,44 @@ async fn write_issue_property(
         Err(IssuePropertyWriteError::Json(error)) => {
             eprintln!("rust issue property write returned invalid JSON: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+    }
+}
+
+async fn update_issue_assign(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(edit): Json<IssueAssignEdit>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::update_issue_assign(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
+        Ok(write) => Json(write).into_response(),
+        Err(IssueAssignEditError::Access(error)) => {
+            issue_request_error(error, "failed to update issue")
+        }
+        Err(IssueAssignEditError::InvalidAssignee) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid assignee for assign pilot")
+        }
+        Err(IssueAssignEditError::DispatchSensitive) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "dispatch_sensitive": true })),
+        )
+            .into_response(),
+        Err(IssueAssignEditError::RevisionConflict(actual_revision)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(IssueAssignEditError::Database(error)) => {
+            eprintln!("rust issue assign write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+        Err(IssueAssignEditError::Snapshot(error)) => {
+            eprintln!("rust issue assign write snapshot failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
         }
     }
 }
