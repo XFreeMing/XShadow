@@ -66,6 +66,24 @@ func TestIssueReadBridgeFromEnvAndPilotMatching(t *testing.T) {
 		}
 	})
 
+	t.Run("batch pilot scopes are independent of write pilot", func(t *testing.T) {
+		t.Setenv("XSHADOW_ISSUES_RUST_BATCH_PILOT", "batch-pilot")
+		t.Setenv("XSHADOW_ISSUES_RUST_WRITE_PILOT", "write-pilot")
+		t.Setenv("XSHADOW_TABLES_UPSTREAM", "http://127.0.0.1:18080")
+		t.Setenv("XSHADOW_TABLES_INTERNAL_TOKEN", "shared-secret")
+
+		bridge := NewIssueReadBridgeFromEnv(nil)
+		if !bridge.Enabled() {
+			t.Fatal("expected bridge enabled with loopback upstream")
+		}
+		if !reflect.DeepEqual(bridge.BatchPilotScopes, []string{"batch-pilot"}) {
+			t.Fatalf("BatchPilotScopes = %v, want [batch-pilot]", bridge.BatchPilotScopes)
+		}
+		if !reflect.DeepEqual(bridge.WritePilotScopes, []string{"write-pilot"}) {
+			t.Fatalf("WritePilotScopes = %v, want [write-pilot]", bridge.WritePilotScopes)
+		}
+	})
+
 	t.Run("status pilot scopes are independent of other pilots", func(t *testing.T) {
 		t.Setenv("XSHADOW_ISSUES_RUST_STATUS_PILOT", "status-pilot")
 		t.Setenv("XSHADOW_ISSUES_RUST_WRITE_PILOT", "")

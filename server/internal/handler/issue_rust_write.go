@@ -118,6 +118,20 @@ func (s ordinaryIssueSnapshot) issue() db.Issue {
 	return i
 }
 
+type ordinaryIssueRustSnapshots struct {
+	Before             ordinaryIssueSnapshot `json:"before"`
+	After              ordinaryIssueSnapshot `json:"after"`
+	AttachmentsChanged bool                  `json:"attachments_changed"`
+}
+
+func decodeOrdinaryIssueRustSnapshots(issueID, workspaceID pgtype.UUID, body []byte) (ordinaryIssueRustSnapshots, bool) {
+	var snapshots ordinaryIssueRustSnapshots
+	valid := json.Unmarshal(body, &snapshots) == nil &&
+		snapshots.Before.ID == issueID && snapshots.Before.WorkspaceID == workspaceID &&
+		snapshots.After.ID == issueID && snapshots.After.WorkspaceID == workspaceID
+	return snapshots, valid
+}
+
 func (h *Handler) updateOrdinaryIssueViaRust(w http.ResponseWriter, r *http.Request, userID string, current db.Issue, params db.UpdateIssueParams, req UpdateIssueRequest, fields map[string]json.RawMessage, attachmentIDs []pgtype.UUID) (after, before db.Issue, attachmentsChanged, ok bool) {
 	edit := ordinaryIssueEdit{
 		Title:           textToPtr(params.Title),
@@ -186,14 +200,8 @@ func (h *Handler) updateOrdinaryIssueViaRust(w http.ResponseWriter, r *http.Requ
 		writeRustIssueResponse(w, resp, bytes.NewReader(body))
 		return after, before, false, false
 	}
-	var snapshots struct {
-		Before             ordinaryIssueSnapshot `json:"before"`
-		After              ordinaryIssueSnapshot `json:"after"`
-		AttachmentsChanged bool                  `json:"attachments_changed"`
-	}
-	if json.Unmarshal(body, &snapshots) != nil ||
-		snapshots.Before.ID != current.ID || snapshots.Before.WorkspaceID != current.WorkspaceID ||
-		snapshots.After.ID != current.ID || snapshots.After.WorkspaceID != current.WorkspaceID {
+	snapshots, valid := decodeOrdinaryIssueRustSnapshots(current.ID, current.WorkspaceID, body)
+	if !valid {
 		writeError(w, http.StatusBadGateway, "invalid rust issue edit snapshots")
 		return after, before, false, false
 	}

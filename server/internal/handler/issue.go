@@ -5282,6 +5282,29 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		batchProjectID = projectUUID
 	}
 
+	rustBatch, err := h.batchOrdinaryIssueEditUsesRust(r, wsUUID, rawUpdates)
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust batch ordinary issue edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
+		}
+		return
+	}
+	if rustBatch {
+		edit, editOK := h.buildBatchOrdinaryIssueEdit(req.Updates, rawUpdates, h.wakeupSourceTaskID(r))
+		if !editOK {
+			writeJSON(w, http.StatusOK, map[string]any{"updated": 0})
+			return
+		}
+		updated, ok := h.batchUpdateOrdinaryIssuesViaRust(w, r, userID, workspaceID, wsUUID, req.IssueIDs, req.Updates, edit)
+		if !ok {
+			return
+		}
+		slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated)...)
+		writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
+		return
+	}
+
 	updated := 0
 	// One Resolver for the whole batch — a per-issue filler would query the
 	// catalog once per custom-status row. (MUL-6243)
