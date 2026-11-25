@@ -90,20 +90,22 @@ func (s *TaskService) deliverNativeQueueNotification(ctx context.Context, taskID
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("load task %s for queue notification: %w", util.UUIDToString(taskID), err)
 		}
-		if errors.Is(err, pgx.ErrNoRows) || task.Status != "queued" || !task.RuntimeID.Valid {
+		if !task.RuntimeID.Valid {
 			outcome = nativeQueueNotifySettled
 			return q.DeleteQueueNotificationOutbox(ctx, taskID)
 		}
-
 		runtimeKey := util.UUIDToString(task.RuntimeID)
-		if invalidateErr = s.EmptyClaim.bump(ctx, runtimeKey); invalidateErr != nil {
+		hintTaskID := util.UUIDToString(taskID)
+		if IsTerminalCloseCancellationTask(task) {
+			s.forgetTaskReclaim(task)
+			hintTaskID = ""
+		} else if task.Status != "queued" {
+			outcome = nativeQueueNotifySettled
+			return q.DeleteQueueNotificationOutbox(ctx, taskID)
+		}
+		if invalidateErr = s.bumpRuntimeQueueHint(ctx, runtimeKey, hintTaskID); invalidateErr != nil {
 			outcome = nativeQueueNotifyRetry
 			return recordQueueNotificationRetry(ctx, q, row, invalidateErr)
-		}
-		// The hint can repeat if this transaction is interrupted after sending.
-		// Keep the obligation until both invalidation and the wakeup attempt run.
-		if s.Wakeup != nil {
-			s.Wakeup.NotifyTaskAvailable(runtimeKey, util.UUIDToString(taskID))
 		}
 		outcome = nativeQueueNotifyDelivered
 		return q.DeleteQueueNotificationOutbox(ctx, taskID)
@@ -112,6 +114,16 @@ func (s *TaskService) deliverNativeQueueNotification(ctx context.Context, taskID
 		return nativeQueueNotifyRetry, errors.Join(invalidateErr, err)
 	}
 	return outcome, invalidateErr
+}
+
+func (s *TaskService) bumpRuntimeQueueHint(ctx context.Context, runtimeKey, taskID string) error {
+	if invalidateErr := s.EmptyClaim.bump(ctx, runtimeKey); invalidateErr != nil {
+		return invalidateErr
+	}
+	if s.Wakeup != nil {
+		s.Wakeup.NotifyTaskAvailable(runtimeKey, taskID)
+	}
+	return nil
 }
 
 func recordQueueNotificationRetry(ctx context.Context, q *db.Queries, row db.AgentTaskQueueNotifyOutbox, cause error) error {

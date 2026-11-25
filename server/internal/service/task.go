@@ -2922,7 +2922,7 @@ func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID
 //
 // reactionTargets optionally carries anchors captured before deleting the
 // channel delivery rows. They stay on the internal event, outside its payload.
-func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, workspaceID string, cancelled []db.AgentTaskQueue, reactionTargets ...map[string]*events.ChannelReactionTarget) {
+func (s *TaskService) broadcastCancelledTaskEvents(ctx context.Context, workspaceID string, cancelled []db.AgentTaskQueue, reactionTargets ...map[string]*events.ChannelReactionTarget) {
 	for _, t := range cancelled {
 		s.captureTaskCancelled(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
@@ -2934,6 +2934,10 @@ func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, workspaceID s
 			s.Bus.Publish(e)
 		}
 	}
+}
+
+func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, workspaceID string, cancelled []db.AgentTaskQueue, reactionTargets ...map[string]*events.ChannelReactionTarget) {
+	s.broadcastCancelledTaskEvents(ctx, workspaceID, cancelled, reactionTargets...)
 	s.notifyTasksFinished(cancelled)
 }
 

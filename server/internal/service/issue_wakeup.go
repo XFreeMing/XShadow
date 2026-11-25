@@ -247,6 +247,42 @@ func wakeupIssueActive(ctx context.Context, q *db.Queries, i db.Issue) (bool, er
 	return category != "done" && category != "closed", nil
 }
 
+var terminalCloseCancellationErrors = map[string]struct{}{
+	"Issue closed; wakeup disabled":      {},
+	"Issue closed; continuation stopped": {},
+}
+
+// IsTerminalCloseCancellationTask reports whether a queue row matches the
+// issue-close cancellation persisted by StopClosedIssueWakeups and the Rust
+// terminal writer: cancelled before start with wakeup or continuation context.
+func IsTerminalCloseCancellationTask(task db.AgentTaskQueue) bool {
+	if task.Status != "cancelled" || !task.CompletedAt.Valid || task.StartedAt.Valid {
+		return false
+	}
+	if _, ok := terminalCloseCancellationErrors[task.Error.String]; !ok {
+		return false
+	}
+	if len(task.Context) == 0 {
+		return false
+	}
+	var payload map[string]any
+	if json.Unmarshal(task.Context, &payload) != nil {
+		return false
+	}
+	wakeup := payload["wakeup_id"] != nil
+	_, continuation := payload["continuation_gap"]
+	if !wakeup && !continuation {
+		return false
+	}
+	if continuation && task.Error.String != "Issue closed; continuation stopped" {
+		return false
+	}
+	if wakeup && !continuation && task.Error.String != "Issue closed; wakeup disabled" {
+		return false
+	}
+	return true
+}
+
 // StopClosedIssueWakeups applies the close rule after a status write: once an
 // issue is done or closed, every wakeup on it is disabled and wakeup runs that
 // have not started are cancelled. Running work keeps its ordinary Stop

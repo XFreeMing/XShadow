@@ -4560,7 +4560,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(cancelledWakeups) > 0 {
-			h.broadcastCancelledWakeups(r.Context(), prevIssue.WorkspaceID, cancelledWakeups)
+			h.TaskService.CompleteNativeTerminalCloseAfterWrite(
+				r.Context(), uuidToString(prevIssue.WorkspaceID), cancelledWakeups,
+			)
 		}
 	} else if rustAssign {
 		issue, prevIssue, assignActivityReceipt, queuedTaskReceipt, ok = h.updateIssueAssignViaRust(

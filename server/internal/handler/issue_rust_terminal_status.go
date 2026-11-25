@@ -8,14 +8,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
-
-var terminalCloseCancellationErrors = map[string]struct{}{
-	"Issue closed; wakeup disabled":      {},
-	"Issue closed; continuation stopped": {},
-}
 
 type issueTerminalScope struct {
 	ProjectID *string `json:"project_id"`
@@ -42,7 +38,7 @@ func rustTerminalCancelledTasksValid(
 		if receipt.ID == "" || receipt.IssueID != issueStr || receipt.Status != "cancelled" {
 			return nil, false
 		}
-		if _, ok := terminalCloseCancellationErrors[receipt.Error]; !ok {
+		if receipt.Error != "Issue closed; wakeup disabled" && receipt.Error != "Issue closed; continuation stopped" {
 			return nil, false
 		}
 		if _, dup := seen[receipt.ID]; dup {
@@ -65,25 +61,7 @@ func rustTerminalCancelledTasksValid(
 		if row.Status != "cancelled" || row.Error.String != receipt.Error {
 			return nil, false
 		}
-		if row.StartedAt.Valid || !row.CompletedAt.Valid {
-			return nil, false
-		}
-		if len(row.Context) == 0 {
-			return nil, false
-		}
-		var payload map[string]any
-		if json.Unmarshal(row.Context, &payload) != nil {
-			return nil, false
-		}
-		wakeup := payload["wakeup_id"] != nil
-		_, continuation := payload["continuation_gap"]
-		if !wakeup && !continuation {
-			return nil, false
-		}
-		if continuation && receipt.Error != "Issue closed; continuation stopped" {
-			return nil, false
-		}
-		if wakeup && !continuation && receipt.Error != "Issue closed; wakeup disabled" {
+		if !service.IsTerminalCloseCancellationTask(row) {
 			return nil, false
 		}
 		out = append(out, row)

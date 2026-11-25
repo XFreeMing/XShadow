@@ -13,6 +13,31 @@ pub struct CancelledTaskReceipt {
     pub error: String,
 }
 
+const STOP_CLOSED_ISSUE_WAKEUPS: &str = r#"
+WITH cancelled AS (
+    UPDATE agent_task_queue SET status = 'cancelled', completed_at = now(), error = CASE
+        WHEN context ? 'continuation_gap' THEN 'Issue closed; continuation stopped'
+        ELSE 'Issue closed; wakeup disabled'
+    END
+    WHERE issue_id = $1::uuid
+      AND (context->>'wakeup_id' IS NOT NULL OR context ? 'continuation_gap')
+      AND status IN ('queued', 'deferred')
+      AND started_at IS NULL
+    RETURNING id, issue_id, agent_id, status, error, runtime_id
+),
+notified AS (
+    INSERT INTO agent_task_queue_notify_outbox (task_id, next_attempt_at)
+    SELECT id, now()
+    FROM cancelled
+    WHERE runtime_id IS NOT NULL
+    ON CONFLICT (task_id) DO UPDATE SET
+        next_attempt_at = LEAST(agent_task_queue_notify_outbox.next_attempt_at, EXCLUDED.next_attempt_at)
+    RETURNING task_id
+)
+SELECT id::text, issue_id::text, agent_id::text, status, COALESCE(error, '')
+FROM cancelled
+"#;
+
 pub async fn stop_closed_issue_wakeups(
     conn: &mut PgConnection,
     issue_id: &str,
@@ -25,20 +50,10 @@ pub async fn stop_closed_issue_wakeups(
     .execute(&mut *conn)
     .await?;
 
-    let rows = sqlx::query(
-        "UPDATE agent_task_queue SET status = 'cancelled', completed_at = now(), error = CASE
-            WHEN context ? 'continuation_gap' THEN 'Issue closed; continuation stopped'
-            ELSE 'Issue closed; wakeup disabled'
-         END
-         WHERE issue_id = $1::uuid
-           AND (context->>'wakeup_id' IS NOT NULL OR context ? 'continuation_gap')
-           AND status IN ('queued', 'deferred')
-           AND started_at IS NULL
-         RETURNING id::text, issue_id::text, agent_id::text, status, COALESCE(error, '')",
-    )
-    .bind(issue_id)
-    .fetch_all(&mut *conn)
-    .await?;
+    let rows = sqlx::query(STOP_CLOSED_ISSUE_WAKEUPS)
+        .bind(issue_id)
+        .fetch_all(&mut *conn)
+        .await?;
     rows.iter()
         .map(|row| {
             Ok(CancelledTaskReceipt {

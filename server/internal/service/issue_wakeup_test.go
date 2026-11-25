@@ -345,3 +345,27 @@ func TestIssueWakeupConcurrentDispatchIsIdempotent(t *testing.T) {
 		t.Fatalf("created %d runs", n)
 	}
 }
+
+func TestIsTerminalCloseCancellationTask(t *testing.T) {
+	t.Parallel()
+	base := db.AgentTaskQueue{
+		Status:      "cancelled",
+		CompletedAt: pgtype.Timestamptz{Valid: true},
+		Error:       pgtype.Text{String: "Issue closed; wakeup disabled", Valid: true},
+		Context:     []byte(`{"wakeup_id":"11111111-1111-4111-8111-111111111111"}`),
+	}
+	if !IsTerminalCloseCancellationTask(base) {
+		t.Fatal("expected wakeup close cancellation")
+	}
+	cont := base
+	cont.Error = pgtype.Text{String: "Issue closed; continuation stopped", Valid: true}
+	cont.Context = []byte(`{"continuation_gap":{}}`)
+	if !IsTerminalCloseCancellationTask(cont) {
+		t.Fatal("expected continuation close cancellation")
+	}
+	running := base
+	running.StartedAt = pgtype.Timestamptz{Valid: true}
+	if IsTerminalCloseCancellationTask(running) {
+		t.Fatal("started runs must not match")
+	}
+}

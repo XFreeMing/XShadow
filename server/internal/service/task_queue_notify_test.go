@@ -128,6 +128,113 @@ func TestRecoverPendingQueueNotifications_SettlesTerminalTask(t *testing.T) {
 	}
 }
 
+func TestRecoverPendingQueueNotifications_BumpsTerminalCloseCancellation(t *testing.T) {
+	svc, pool, ctx, runtimeID, taskID := queueNotifyQueuedFixture(t)
+	wakeup := svc.Wakeup.(*stubWakeup)
+	if _, err := pool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'cancelled',
+		    completed_at = now(),
+		    error = 'Issue closed; wakeup disabled',
+		    context = '{"wakeup_id":"22222222-2222-4222-8222-222222222222"}'::jsonb
+		WHERE id = $1::uuid`, taskID); err != nil {
+		t.Fatalf("cancel task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_task_queue_notify_outbox (task_id, next_attempt_at)
+		VALUES ($1::uuid, now())`, taskID); err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+	runtimeKey := runtimeID
+	v0 := svc.EmptyClaim.CurrentVersion(ctx, runtimeKey)
+	svc.EmptyClaim.MarkEmpty(ctx, runtimeKey, v0)
+	result, err := svc.RecoverPendingQueueNotifications(ctx, QueueNotificationSweepBatchSize)
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if result.Delivered != 1 {
+		t.Fatalf("delivered = %d", result.Delivered)
+	}
+	if svc.EmptyClaim.IsEmpty(ctx, runtimeKey) {
+		t.Fatal("recovery must invalidate cached empty verdict")
+	}
+	if len(wakeup.calls) != 1 || wakeup.calls[0].taskID != "" {
+		t.Fatalf("wakeup = %#v", wakeup.calls)
+	}
+}
+
+const terminalCloseNotifyOutboxUpsert = `
+INSERT INTO agent_task_queue_notify_outbox (task_id, next_attempt_at)
+SELECT $1::uuid, now()
+WHERE EXISTS (
+    SELECT 1 FROM agent_task_queue WHERE id = $1::uuid AND runtime_id IS NOT NULL
+)
+ON CONFLICT (task_id) DO UPDATE SET
+    next_attempt_at = LEAST(agent_task_queue_notify_outbox.next_attempt_at, EXCLUDED.next_attempt_at)`
+
+func TestTerminalCloseNotifyOutboxPinsDelayedRow(t *testing.T) {
+	_, pool, ctx, _, taskID := queueNotifyQueuedFixture(t)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_task_queue_notify_outbox (task_id, next_attempt_at)
+		VALUES ($1::uuid, now() + interval '10 minutes')`, taskID); err != nil {
+		t.Fatalf("seed delayed outbox: %v", err)
+	}
+	if _, err := pool.Exec(ctx, terminalCloseNotifyOutboxUpsert, taskID); err != nil {
+		t.Fatalf("pin outbox: %v", err)
+	}
+	var due time.Time
+	if err := pool.QueryRow(ctx, `SELECT next_attempt_at FROM agent_task_queue_notify_outbox WHERE task_id = $1::uuid`, taskID).Scan(&due); err != nil {
+		t.Fatal(err)
+	}
+	if due.After(time.Now().Add(2 * time.Second)) {
+		t.Fatalf("next_attempt_at still deferred: %v", due)
+	}
+}
+
+func TestRecoverPendingQueueNotifications_RetriesRedisWrongTypeAndRecovers(t *testing.T) {
+	svc, pool, ctx, runtimeID, taskID := queueNotifyQueuedFixture(t)
+	wakeup := svc.Wakeup.(*stubWakeup)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_task_queue_notify_outbox (task_id, next_attempt_at)
+		VALUES ($1::uuid, now())`, taskID); err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+	versionKey := emptyClaimVersion(runtimeID)
+	if err := svc.EmptyClaim.rdb.HSet(ctx, versionKey, "fixture-deny-version-increment", "1").Err(); err != nil {
+		t.Fatalf("wrong-type fixture: %v", err)
+	}
+	result, err := svc.RecoverPendingQueueNotifications(ctx, QueueNotificationSweepBatchSize)
+	if err == nil {
+		t.Fatal("expected redis error from recovery pass")
+	}
+	if result.Retried != 1 {
+		t.Fatalf("retried = %d, want 1", result.Retried)
+	}
+	var attempts int32
+	if err := pool.QueryRow(ctx, `SELECT attempt_count FROM agent_task_queue_notify_outbox WHERE task_id = $1::uuid`, taskID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts < 1 {
+		t.Fatalf("attempt_count = %d, want >= 1", attempts)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_task_queue_notify_outbox SET next_attempt_at = now() WHERE task_id = $1::uuid`, taskID); err != nil {
+		t.Fatalf("force due: %v", err)
+	}
+	if err := svc.EmptyClaim.rdb.Del(ctx, versionKey).Err(); err != nil {
+		t.Fatalf("clear wrong-type key: %v", err)
+	}
+	result, err = svc.RecoverPendingQueueNotifications(ctx, QueueNotificationSweepBatchSize)
+	if err != nil {
+		t.Fatalf("second recover: %v", err)
+	}
+	if result.Delivered != 1 {
+		t.Fatalf("delivered = %d", result.Delivered)
+	}
+	if len(wakeup.calls) != 1 || wakeup.calls[0].taskID != taskID {
+		t.Fatalf("wakeup = %#v", wakeup.calls)
+	}
+}
+
 func TestCompleteIssueStatusPromotionAfterNativeWrite_RemovesOutbox(t *testing.T) {
 	svc, pool, ctx, _, taskID := queueNotifyQueuedFixture(t)
 	if _, err := pool.Exec(ctx, `
