@@ -74,6 +74,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_METHOD_ADOPT_PILOT` 为 `POST /api/issues/{id}/work-method` 中 `adopt_revision` 的普通成员采用试点。Go 沿用 `run.Adopt` 域计算与视图/事件组装，并向 Rust 提交同一工作区模板快照与计划运行。Rust 锁模板目录与事项行，核对修订与原始 `work_method_run`，仅在计划要求时写入新方法快照并推进事项修订。目标计划交付、项目交付绑定与军团执行绑定仍走 Go。试点上游不可用返回 `503`，回执异常返回 `502`，失败闭集不回退 Go 二次写入。
 
+`XSHADOW_ISSUES_RUST_REACTION_PILOT` 为 `POST`/`DELETE /api/issues/{id}/reactions` 指定试点工作区，默认关闭。首批覆盖成员身份、无项目任务的添加与移除。Go 保留公开校验、持久唤醒回执与 WebSocket 事件；Rust 先对工作区/成员 `FOR SHARE` 并设置写会话，再在无任务锁的情况下写入 `issue_reaction`，随后以 `FOR NO KEY UPDATE` 复核无项目可见范围，仅在实际增删时递增 `revision`（不触碰 `updated_at`）。冲突路径在独立语句中读取获胜行并可有限重试。范围拒绝整笔回滚反应行与触发器回执。重复添加返回同一回应且无事件；移除不存在的回应仍返回 `204`。持锁后落入项目或私有范围返回 `404`/`409`。智能体身份、有项目任务及评论回应继续走 Go。Go 以数据库 revision 与反应行归属确认回执后再广播。上游不可用或回执异常分别返回 `503`/`502`，选定形状不回退 Go 二次写入。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

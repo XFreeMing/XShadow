@@ -22,8 +22,9 @@ use super::store::{
 use super::store::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
     IssueCommentCreate, IssueCommentCreateError, IssueCreateError, IssueCreateRequest,
-    IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueStatusEdit, IssueStatusEditError,
-    IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError,
+    IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
+    OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -207,6 +208,12 @@ pub fn router(pool: PgPool, token: String) -> Router {
         .route(
             "/internal/issues/{id}/comments",
             post(create_issue_comment).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/internal/issues/{id}/reactions",
+            post(add_issue_reaction_handler)
+                .delete(remove_issue_reaction_handler)
+                .layer(DefaultBodyLimit::disable()),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
@@ -757,6 +764,64 @@ fn map_agent_source_quick_create_error(error: IssueCreateError) -> Response {
             StatusCode::BAD_REQUEST,
             "invalid agent source quick-create request",
         ),
+    }
+}
+
+async fn add_issue_reaction_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueReactionWrite>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::add_issue_reaction(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request).await {
+        Ok(result) => (StatusCode::CREATED, Json(result)).into_response(),
+        Err(IssueReactionWriteError::Access(error)) => {
+            issue_request_error(error, "failed to add reaction")
+        }
+        Err(IssueReactionWriteError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid issue reaction request")
+        }
+        Err(IssueReactionWriteError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(IssueReactionWriteError::Database(error)) => {
+            eprintln!("rust issue reaction write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to add reaction")
+        }
+    }
+}
+
+async fn remove_issue_reaction_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueReactionWrite>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::remove_issue_reaction(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request).await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueReactionWriteError::Access(error)) => {
+            issue_request_error(error, "failed to remove reaction")
+        }
+        Err(IssueReactionWriteError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid issue reaction request")
+        }
+        Err(IssueReactionWriteError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(IssueReactionWriteError::Database(error)) => {
+            eprintln!("rust issue reaction write failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to remove reaction",
+            )
+        }
     }
 }
 

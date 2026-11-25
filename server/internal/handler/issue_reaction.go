@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type IssueReactionResponse struct {
@@ -75,6 +74,17 @@ func (h *Handler) AddIssueReaction(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
+	useRust, pilotErr := h.issueReactionUsesRust(r, issue, actorType)
+	if pilotErr != nil {
+		slog.Warn("issue reaction rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "issue_id", issueID)...)
+		writeError(w, http.StatusInternalServerError, "failed to add reaction")
+		return
+	}
+	if useRust {
+		h.addIssueReactionViaRust(w, r, issue, userID, actorType, actorID, req.Emoji)
+		return
+	}
+
 	reaction, err := wakeupWrite(h, r, func(q *db.Queries) (db.AddIssueReactionRow, error) {
 		return q.AddIssueReaction(r.Context(), db.AddIssueReactionParams{
 			IssueID:     issue.ID,
@@ -92,15 +102,7 @@ func (h *Handler) AddIssueReaction(w http.ResponseWriter, r *http.Request) {
 
 	resp := addedIssueReactionToResponse(reaction)
 	if reaction.IssueRevision > 0 {
-		h.publish(protocol.EventIssueReactionAdded, workspaceID, actorType, actorID, map[string]any{
-			"reaction":       resp,
-			"issue_id":       uuidToString(issue.ID),
-			"issue_title":    issue.Title,
-			"issue_status":   issue.Status,
-			"creator_type":   issue.CreatorType,
-			"creator_id":     uuidToString(issue.CreatorID),
-			"issue_revision": reaction.IssueRevision,
-		})
+		h.publishIssueReactionAddedEvent(issue, workspaceID, actorType, actorID, resp, reaction.IssueRevision)
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -133,6 +135,17 @@ func (h *Handler) RemoveIssueReaction(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
+	useRust, pilotErr := h.issueReactionUsesRust(r, issue, actorType)
+	if pilotErr != nil {
+		slog.Warn("issue reaction rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "issue_id", issueID)...)
+		writeError(w, http.StatusInternalServerError, "failed to remove reaction")
+		return
+	}
+	if useRust {
+		h.removeIssueReactionViaRust(w, r, issue, userID, actorType, actorID, req.Emoji)
+		return
+	}
+
 	removed, err := wakeupWrite(h, r, func(q *db.Queries) (db.RemoveIssueReactionRow, error) {
 		return q.RemoveIssueReaction(r.Context(), db.RemoveIssueReactionParams{
 			IssueID:   issue.ID,
@@ -148,13 +161,7 @@ func (h *Handler) RemoveIssueReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if removed.Changed {
-		h.publish(protocol.EventIssueReactionRemoved, workspaceID, actorType, actorID, map[string]any{
-			"issue_id":       uuidToString(issue.ID),
-			"emoji":          req.Emoji,
-			"actor_type":     actorType,
-			"actor_id":       actorID,
-			"issue_revision": removed.IssueRevision,
-		})
+		h.publishIssueReactionRemovedEvent(issue, workspaceID, actorType, actorID, req.Emoji, removed.IssueRevision)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

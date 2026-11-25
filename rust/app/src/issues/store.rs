@@ -36,6 +36,7 @@ mod create_source_context;
 mod create_validate;
 mod create_write;
 mod delete_write;
+mod reaction_write;
 mod retry_agent_source_context;
 mod status_dispatch;
 mod status_write;
@@ -49,6 +50,9 @@ pub use create_agent_source_context::{
 };
 pub use create_write::{IssueCreateError, IssueCreateRequest, create_issue};
 pub use delete_write::{IssueDeleteWrite, IssueDeleteWriteError, delete_issue};
+pub use reaction_write::{
+    IssueReactionWrite, IssueReactionWriteError, add_issue_reaction, remove_issue_reaction,
+};
 pub use retry_agent_source_context::{AgentSourceRetryWrite, retry_agent_source_quick_create};
 pub use status_write::{IssueStatusEdit, IssueStatusEditError, update_issue_status};
 pub use workflow_squad_write::{
