@@ -215,20 +215,32 @@ pub async fn lock_active_squad_leader(
     })
 }
 
-/// Re-reads the leader's bound runtime under the transaction for active squad
-/// creates. Mirrors AgentReadiness::Ready — online machine with consent for the
-/// agent owner on private runtimes.
-pub async fn validate_squad_leader_runtime_for_active_enqueue(
+/// Which active create path is rechecking a bound runtime under the transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeEnqueueCaller {
+    /// Active squad creates mirror AgentReadiness::Ready and require an online machine.
+    SquadLeader,
+    /// Active direct-agent creates may queue for an offline machine; only the
+    /// machine consent for the agent owner is rechecked.
+    DirectAgent,
+}
+
+/// Re-reads the bound runtime under the transaction for active creates and
+/// rechecks consent for the agent owner on private runtimes. The squad caller
+/// also requires an online machine.
+pub async fn validate_runtime_for_active_enqueue(
     conn: &mut PgConnection,
     workspace_id: &str,
     agent_owner_id: &str,
     runtime_id: &str,
+    caller: RuntimeEnqueueCaller,
 ) -> Result<(), StatusPromotionError> {
     if !is_uuid(runtime_id) || !is_uuid(agent_owner_id) {
         return Err(StatusPromotionError::RouteChanged);
     }
+    let require_online = caller == RuntimeEnqueueCaller::SquadLeader;
     let ready = sqlx::query_scalar::<_, bool>(
-        "SELECT status = 'online' AND (
+        "SELECT (NOT $4::bool OR status = 'online') AND (
              visibility IS DISTINCT FROM 'private'
              OR owner_id IS NULL
              OR owner_id = $3::uuid
@@ -241,6 +253,7 @@ pub async fn validate_squad_leader_runtime_for_active_enqueue(
     .bind(runtime_id)
     .bind(workspace_id)
     .bind(agent_owner_id)
+    .bind(require_online)
     .fetch_optional(conn)
     .await
     .map_err(StatusPromotionError::Database)?;

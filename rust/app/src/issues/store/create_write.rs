@@ -442,6 +442,15 @@ async fn create_issue_attempt(
             return Err(IssueCreateError::AgentInvokeForbidden);
         }
         if let Some(plan) = prepared {
+            status_dispatch::validate_runtime_for_active_enqueue(
+                &mut tx,
+                workspace_id,
+                user_id,
+                &plan.runtime_id,
+                status_dispatch::RuntimeEnqueueCaller::DirectAgent,
+            )
+            .await
+            .map_err(map_dispatch_error)?;
             status_dispatch::validate_prepared_status_enqueue(
                 &mut tx,
                 workspace_id,
@@ -493,11 +502,12 @@ async fn create_issue_attempt(
             return Err(IssueCreateError::SquadInvokeForbidden);
         }
         if let Some(plan) = prepared {
-            status_dispatch::validate_squad_leader_runtime_for_active_enqueue(
+            status_dispatch::validate_runtime_for_active_enqueue(
                 &mut tx,
                 workspace_id,
                 user_id,
                 &plan.runtime_id,
+                status_dispatch::RuntimeEnqueueCaller::SquadLeader,
             )
             .await
             .map_err(map_dispatch_error)?;
