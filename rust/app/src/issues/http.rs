@@ -20,11 +20,11 @@ use super::store::{
     IssuePropertyWrite, IssuePropertyWriteError,
 };
 use super::store::{
-    IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
-    IssueCommentCreate, IssueCommentCreateError, IssueCreateError, IssueCreateRequest,
-    IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError,
-    IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
-    OrdinaryIssueEdit, OrdinaryIssueEditError,
+    CommentResolutionError, IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit,
+    IssueAssignEditError, IssueCommentCreate, IssueCommentCreateError, IssueCreateError,
+    IssueCreateRequest, IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite,
+    IssueReactionWriteError, IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit,
+    IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -214,6 +214,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
             post(add_issue_reaction_handler)
                 .delete(remove_issue_reaction_handler)
                 .layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/internal/comments/{id}/resolve",
+            post(resolve_comment_handler).delete(unresolve_comment_handler),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
@@ -820,6 +824,64 @@ async fn remove_issue_reaction_handler(
             error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to remove reaction",
+            )
+        }
+    }
+}
+
+async fn resolve_comment_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "comment not found");
+    }
+    match store::resolve_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id).await {
+        Ok(result) => Json(result).into_response(),
+        Err(CommentResolutionError::Access(error)) => {
+            issue_request_error(error, "failed to resolve comment")
+        }
+        Err(CommentResolutionError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid comment resolve request")
+        }
+        Err(CommentResolutionError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(CommentResolutionError::Database(error)) => {
+            eprintln!("rust comment resolve failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to resolve comment",
+            )
+        }
+    }
+}
+
+async fn unresolve_comment_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "comment not found");
+    }
+    match store::unresolve_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id).await {
+        Ok(result) => Json(result).into_response(),
+        Err(CommentResolutionError::Access(error)) => {
+            issue_request_error(error, "failed to unresolve comment")
+        }
+        Err(CommentResolutionError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid comment resolve request")
+        }
+        Err(CommentResolutionError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(CommentResolutionError::Database(error)) => {
+            eprintln!("rust comment unresolve failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to unresolve comment",
             )
         }
     }

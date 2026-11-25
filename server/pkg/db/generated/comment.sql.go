@@ -2095,6 +2095,58 @@ func (q *Queries) LockCommentForDelete(ctx context.Context, arg LockCommentForDe
 	return i, err
 }
 
+const lockCommentThreadForResolution = `-- name: LockCommentThreadForResolution :one
+WITH target AS (
+    SELECT c0.id, c0.issue_id, c0.workspace_id
+    FROM comment c0
+    WHERE c0.id = $1
+      AND c0.workspace_id = $2
+      AND c0.issue_id = $3
+      AND c0.deleted_at IS NULL
+),
+thread_root AS (
+    SELECT comment_thread_root_id((SELECT id FROM target))::uuid AS id
+),
+locked_issue AS MATERIALIZED (
+    SELECT issue.id
+    FROM issue
+    JOIN target t ON issue.id = t.issue_id AND issue.workspace_id = t.workspace_id
+    FOR SHARE OF issue
+),
+locked_root AS MATERIALIZED (
+    SELECT root.id AS root_id
+    FROM comment root
+    JOIN thread_root tr ON root.id = tr.id
+    CROSS JOIN locked_issue
+    WHERE root.workspace_id = (SELECT workspace_id FROM target)
+      AND root.issue_id = (SELECT issue_id FROM target)
+    FOR NO KEY UPDATE OF root
+)
+SELECT c.id
+FROM comment c
+JOIN target t ON c.id = t.id
+WHERE EXISTS (SELECT 1 FROM locked_issue)
+  AND EXISTS (SELECT 1 FROM locked_root)
+  AND c.deleted_at IS NULL
+`
+
+type LockCommentThreadForResolutionParams struct {
+	CommentID   pgtype.UUID `json:"comment_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+}
+
+// Serialize resolve/unresolve against concurrent sibling resolutions in the
+// same thread: issue (SHARE) then thread root (NO KEY UPDATE) before the clear
+// and set. A missing/deleted target reads as absent so callers never partially
+// clear.
+func (q *Queries) LockCommentThreadForResolution(ctx context.Context, arg LockCommentThreadForResolutionParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockCommentThreadForResolution, arg.CommentID, arg.WorkspaceID, arg.IssueID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const lockLiveComment = `-- name: LockLiveComment :one
 WITH locked_issue AS MATERIALIZED (
     SELECT issue.id

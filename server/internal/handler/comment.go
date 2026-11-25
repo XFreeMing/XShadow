@@ -4124,13 +4124,44 @@ func (h *Handler) loadCommentForActor(w http.ResponseWriter, r *http.Request) (d
 	return comment, workspaceID, actorType, actorID, true
 }
 
+func lockLiveCommentResolutionTarget(ctx context.Context, qtx *db.Queries, comment db.Comment) (db.Comment, error) {
+	if _, err := qtx.LockCommentThreadForResolution(ctx, db.LockCommentThreadForResolutionParams{
+		CommentID: comment.ID, WorkspaceID: comment.WorkspaceID, IssueID: comment.IssueID,
+	}); err != nil {
+		return db.Comment{}, err
+	}
+	// Start a fresh snapshot after acquiring the root lock.
+	live, err := qtx.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{ID: comment.ID, WorkspaceID: comment.WorkspaceID})
+	if err != nil {
+		return db.Comment{}, err
+	}
+	if live.DeletedAt.Valid || live.IssueID != comment.IssueID {
+		return db.Comment{}, pgx.ErrNoRows
+	}
+	return live, nil
+}
+
 func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 	r = h.withWakeupActor(r)
 	comment, workspaceID, actorType, actorID, ok := h.loadCommentForActor(w, r)
 	if !ok {
 		return
 	}
-	wasResolved := comment.ResolvedAt.Valid
+	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	useRust, pilotErr := h.commentResolutionUsesRust(r, issue, actorType)
+	if pilotErr != nil {
+		slog.Warn("comment resolution rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(comment.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve comment")
+		return
+	}
+	if useRust {
+		h.resolveCommentViaRust(w, r, comment, workspaceID, actorType, actorID)
+		return
+	}
 
 	actorUUID, err := util.ParseUUID(actorID)
 	if err != nil {
@@ -4149,6 +4180,17 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+
+	locked, err := lockLiveCommentResolutionTarget(r.Context(), qtx, comment)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	} else if err != nil {
+		slog.Warn("lock comment thread for resolution failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve comment")
+		return
+	}
+	wasResolvedBefore := locked.ResolvedAt.Valid
 
 	cleared, err := qtx.ClearOtherThreadResolutions(r.Context(), db.ClearOtherThreadResolutionsParams{
 		TargetID:    comment.ID,
@@ -4183,32 +4225,7 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Emit a comment:unresolved per cleared sibling so granular realtime
-	// consumers (which patch a single comment in place) drop the stale
-	// resolution instead of showing two. Published after commit so no event ever
-	// describes an uncommitted state.
-	for _, c := range cleared {
-		clearedID := uuidToString(c.ID)
-		clearedReactions := h.groupReactions(r, []pgtype.UUID{c.ID})
-		clearedAtt := h.groupAttachments(r, []pgtype.UUID{c.ID})
-		clearedResp := commentToResponse(c, clearedReactions[clearedID], clearedAtt[clearedID])
-		slog.Info("comment unresolved (replaced)", append(logger.RequestAttrs(r), "comment_id", clearedID)...)
-		h.publish(protocol.EventCommentUnresolved, workspaceID, actorType, actorID, map[string]any{"comment": clearedResp})
-	}
-
-	grouped := h.groupReactions(r, []pgtype.UUID{updated.ID})
-	groupedAtt := h.groupAttachments(r, []pgtype.UUID{updated.ID})
-	cid := uuidToString(updated.ID)
-	resp := commentToResponse(updated, grouped[cid], groupedAtt[cid])
-
-	// Suppress the target event on a re-resolve no-op so consumers do not
-	// re-process an unchanged thread (notifications, log spam). Cleared siblings
-	// still get their own events above — those rows did change.
-	if !wasResolved {
-		slog.Info("comment resolved", append(logger.RequestAttrs(r), "comment_id", cid)...)
-		h.publish(protocol.EventCommentResolved, workspaceID, actorType, actorID, map[string]any{"comment": resp})
-	}
-	writeJSON(w, http.StatusOK, resp)
+	h.finishCommentResolution(w, r, workspaceID, actorType, actorID, wasResolvedBefore, true, cleared, updated)
 }
 
 func (h *Handler) UnresolveComment(w http.ResponseWriter, r *http.Request) {
@@ -4217,25 +4234,52 @@ func (h *Handler) UnresolveComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	wasResolved := comment.ResolvedAt.Valid
+	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	useRust, pilotErr := h.commentResolutionUsesRust(r, issue, actorType)
+	if pilotErr != nil {
+		slog.Warn("comment resolution rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(comment.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to unresolve comment")
+		return
+	}
+	if useRust {
+		h.unresolveCommentViaRust(w, r, comment, workspaceID, actorType, actorID)
+		return
+	}
 
-	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.Comment, error) {
-		return q.UnresolveComment(r.Context(), comment.ID)
-	})
+	tx, err := h.beginWakeupWrite(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unresolve comment")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	locked, err := lockLiveCommentResolutionTarget(r.Context(), qtx, comment)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	} else if err != nil {
+		slog.Warn("lock comment thread for unresolve failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to unresolve comment")
+		return
+	}
+	wasResolvedBefore := locked.ResolvedAt.Valid
+
+	updated, err := qtx.UnresolveComment(r.Context(), comment.ID)
 	if err != nil {
 		slog.Warn("unresolve comment failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
 		writeError(w, http.StatusInternalServerError, "failed to unresolve comment")
 		return
 	}
-
-	grouped := h.groupReactions(r, []pgtype.UUID{updated.ID})
-	groupedAtt := h.groupAttachments(r, []pgtype.UUID{updated.ID})
-	cid := uuidToString(updated.ID)
-	resp := commentToResponse(updated, grouped[cid], groupedAtt[cid])
-
-	if wasResolved {
-		slog.Info("comment unresolved", append(logger.RequestAttrs(r), "comment_id", cid)...)
-		h.publish(protocol.EventCommentUnresolved, workspaceID, actorType, actorID, map[string]any{"comment": resp})
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Warn("unresolve comment commit failed", append(logger.RequestAttrs(r), "error", err, "comment_id", uuidToString(comment.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to unresolve comment")
+		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+
+	h.finishCommentResolution(w, r, workspaceID, actorType, actorID, wasResolvedBefore, false, nil, updated)
 }

@@ -30,6 +30,7 @@ mod agent_source_queue_lock;
 mod assign_write;
 mod attach_agent_source_issue;
 mod batch_delete_write;
+mod comment_resolution_write;
 mod comment_write;
 mod create_agent_source_context;
 mod create_source_context;
@@ -44,6 +45,7 @@ mod terminal_wakeup;
 mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
 pub use batch_delete_write::{IssueBatchDeleteWrite, batch_delete_issues};
+pub use comment_resolution_write::{CommentResolutionError, resolve_comment, unresolve_comment};
 pub use comment_write::{IssueCommentCreate, IssueCommentCreateError, create_issue_comment};
 pub use create_agent_source_context::{
     AgentSourceQuickCreateWrite, create_agent_source_quick_create,
