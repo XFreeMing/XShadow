@@ -486,10 +486,10 @@ async fn create_issue_attempt(
         if request.status != "todo" {
             return Err(IssueCreateError::InvalidInput);
         }
-        let prefix =
+        let plan =
             validate_source_context_create_trust(&mut tx, workspace_id, user_id, request, trust)
                 .await?;
-        Some((trust, prefix))
+        Some((trust, plan))
     } else {
         None
     };
@@ -743,8 +743,8 @@ async fn create_issue_attempt(
         }
     })?;
 
-    if let Some((trust, prefix)) = source_context {
-        insert_attached_source_context(&mut tx, workspace_id, &request.id, trust, &prefix).await?;
+    if let Some((trust, plan)) = source_context {
+        insert_attached_source_context(&mut tx, workspace_id, &request.id, trust, &plan).await?;
     }
 
     if request.pr_auto_complete_disabled {

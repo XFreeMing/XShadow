@@ -120,6 +120,25 @@ func (q *Queries) ClaimSourceContextObjectIntentForCleanup(ctx context.Context, 
 	return i, err
 }
 
+const countSourceContextObjectIntents = `-- name: CountSourceContextObjectIntents :one
+SELECT COUNT(*)::bigint
+FROM issue_source_context_object_intent
+WHERE workspace_id = $1
+  AND source_context_id = $2
+`
+
+type CountSourceContextObjectIntentsParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	SourceContextID pgtype.UUID `json:"source_context_id"`
+}
+
+func (q *Queries) CountSourceContextObjectIntents(ctx context.Context, arg CountSourceContextObjectIntentsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSourceContextObjectIntents, arg.WorkspaceID, arg.SourceContextID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createIssueSourceContext = `-- name: CreateIssueSourceContext :one
 INSERT INTO issue_source_context (
     id, workspace_id, issue_id, origin_task_id, source_issue_id,

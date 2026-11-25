@@ -796,7 +796,7 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 			issueTypeID = parsed
 		}
 		return h.createManualCommentSubIssueViaRust(
-			w, r, workspaceIDStr, workspaceID, userID, input, capture, limits, status, priority,
+			w, r, workspaceIDStr, workspaceID, userID, input, capture, build, limits, status, priority,
 			labelIDs, properties, issueTypeID, startDate, dueDate, rustPlan,
 		)
 	}

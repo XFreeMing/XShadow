@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -25,18 +27,84 @@ import (
 )
 
 type rustSourceContextCreateTrust struct {
-	ContextID        string          `json:"context_id"`
-	SourceIssueID    string          `json:"source_issue_id"`
-	AnchorCommentID  string          `json:"anchor_comment_id"`
-	CaptureDigest    string          `json:"capture_digest"`
-	CapturedByUserID string          `json:"captured_by_user_id"`
-	CapturedAt       string          `json:"captured_at"`
-	Snapshot         json.RawMessage `json:"snapshot"`
+	ContextID             string                        `json:"context_id"`
+	SourceIssueID         string                        `json:"source_issue_id"`
+	AnchorCommentID       string                        `json:"anchor_comment_id"`
+	CaptureDigest         string                        `json:"capture_digest"`
+	CapturedByUserID      string                        `json:"captured_by_user_id"`
+	CapturedAt            string                        `json:"captured_at"`
+	Snapshot              json.RawMessage               `json:"snapshot"`
+	SourceCompareSnapshot json.RawMessage               `json:"source_compare_snapshot,omitempty"`
+	Clones                []rustSourceContextCloneTrust `json:"clones,omitempty"`
+}
+
+type rustSourceContextCloneTrust struct {
+	CloneID            string `json:"clone_id"`
+	SourceAttachmentID string `json:"source_attachment_id"`
+	Filename           string `json:"filename"`
+	URL                string `json:"url"`
+	ContentType        string `json:"content_type"`
+	SizeBytes          int64  `json:"size_bytes"`
+	StorageKey         string `json:"storage_key"`
 }
 
 type manualSourceContextCreateRustPlan struct {
 	useRust bool
 	issueID pgtype.UUID
+}
+
+func rustSourceContextClonePlanMatchesCapture(build service.SourceContextBuild, capture service.SourceContextCapture) bool {
+	if len(build.Rows) != len(capture.Clones) || len(build.Rows) == 0 {
+		return false
+	}
+	frozenBySource := sourceContextAttachmentsByOriginalID(capture.Snapshot, true)
+	compareBySource := sourceContextAttachmentsByOriginalID(build.Snapshot, false)
+	if len(frozenBySource) != len(build.Rows) || len(compareBySource) != len(build.Rows) {
+		return false
+	}
+	for i, row := range build.Rows {
+		sourceID := util.UUIDToString(row.ID)
+		clone := capture.Clones[i]
+		frozen, frozenOK := frozenBySource[sourceID]
+		compare, compareOK := compareBySource[sourceID]
+		if !frozenOK || !compareOK || frozen.ID != util.UUIDToString(clone.ID) ||
+			frozen.Filename != clone.Filename || frozen.ContentType != clone.ContentType || frozen.SizeBytes != clone.SizeBytes ||
+			compare.Filename != row.Filename || compare.ContentType != row.ContentType || compare.SizeBytes != row.SizeBytes ||
+			compare.OwnerType != frozen.OwnerType || compare.OwnerID != frozen.OwnerID || compare.CreatedAt != frozen.CreatedAt {
+			return false
+		}
+		delete(frozenBySource, sourceID)
+	}
+	return true
+}
+
+func sourceContextAttachmentsByOriginalID(snapshot service.SourceContextSnapshot, frozen bool) map[string]service.SourceContextAttachment {
+	out := make(map[string]service.SourceContextAttachment)
+	record := func(items []service.SourceContextAttachment) bool {
+		for _, item := range items {
+			sourceID := item.ID
+			if frozen {
+				sourceID = item.SourceAttachmentID
+			}
+			if sourceID == "" || item.ID == "" {
+				return false
+			}
+			if _, exists := out[sourceID]; exists {
+				return false
+			}
+			out[sourceID] = item
+		}
+		return true
+	}
+	if !record(snapshot.SourceIssue.Attachments) {
+		return nil
+	}
+	for _, comment := range snapshot.CommentThread {
+		if !record(comment.Attachments) {
+			return nil
+		}
+	}
+	return out
 }
 
 func snapshotHasSourceContextAttachments(snapshot service.SourceContextSnapshot) bool {
@@ -73,7 +141,22 @@ func (h *Handler) manualSourceContextCreateRustEligible(
 	if err != nil || !inSourceContextPilot {
 		return plan, err
 	}
-	if len(build.Rows) > 0 || len(capture.Clones) > 0 || snapshotHasSourceContextAttachments(capture.Snapshot) {
+	hasSourceFiles := len(build.Rows) > 0 || len(capture.Clones) > 0 || snapshotHasSourceContextAttachments(capture.Snapshot)
+	if hasSourceFiles {
+		if len(h.IssueReadBridge.CreateSourceFilesPilotScopes) == 0 {
+			return plan, nil
+		}
+		inSourceFilesPilot, pilotErr := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.CreateSourceFilesPilotScopes, uuidToString(wsUUID), wsUUID)
+		if pilotErr != nil || !inSourceFilesPilot {
+			return plan, pilotErr
+		}
+		if len(build.Rows) != len(capture.Clones) || len(build.Rows) == 0 {
+			return plan, nil
+		}
+		if !rustSourceContextClonePlanMatchesCapture(build, capture) {
+			return plan, nil
+		}
+	} else if len(build.Rows) > 0 || len(capture.Clones) > 0 {
 		return plan, nil
 	}
 	if status != issuestatus.Todo {
@@ -118,6 +201,7 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 	wsUUID, userUUID pgtype.UUID,
 	input CreateIssueRequest,
 	capture service.SourceContextCapture,
+	build service.SourceContextBuild,
 	limits service.SourceContextLimitUsage,
 	status, priority string,
 	labelIDs []pgtype.UUID,
@@ -160,6 +244,38 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		writeError(w, http.StatusInternalServerError, "failed to encode source context snapshot")
 		return errSourceContextResponseWritten
 	}
+	var compareSnapshotJSON json.RawMessage
+	var cloneTrust []rustSourceContextCloneTrust
+	if len(capture.Clones) > 0 {
+		compareSnapshotJSON, err = json.Marshal(build.Snapshot)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encode source context compare snapshot")
+			return errSourceContextResponseWritten
+		}
+		cloneTrust = make([]rustSourceContextCloneTrust, len(capture.Clones))
+		workspaceKey := util.UUIDToString(wsUUID)
+		for i, clone := range capture.Clones {
+			row := build.Rows[i]
+			sourceID := util.UUIDToString(row.ID)
+			if sourceID == "" {
+				writeError(w, http.StatusBadGateway, "invalid source context clone plan")
+				return errSourceContextResponseWritten
+			}
+			cloneID := util.UUIDToString(clone.ID)
+			cloneTrust[i] = rustSourceContextCloneTrust{
+				CloneID:            cloneID,
+				SourceAttachmentID: sourceID,
+				Filename:           clone.Filename,
+				URL:                clone.URL,
+				ContentType:        clone.ContentType,
+				SizeBytes:          clone.SizeBytes,
+				StorageKey: fmt.Sprintf(
+					"workspaces/%s/source-context/%s%s",
+					workspaceKey, cloneID, path.Ext(clone.Filename),
+				),
+			}
+		}
+	}
 
 	payload := assembleRustIssueCreate(
 		issueID, input, "member", memberID, status, priority,
@@ -173,13 +289,15 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		},
 	)
 	payload.SourceContextCreateTrust = &rustSourceContextCreateTrust{
-		ContextID:        util.UUIDToString(capture.ID),
-		SourceIssueID:    util.UUIDToString(capture.SourceIssueID),
-		AnchorCommentID:  util.UUIDToString(capture.AnchorCommentID),
-		CaptureDigest:    capture.Digest,
-		CapturedByUserID: memberID,
-		CapturedAt:       capture.CapturedAt.UTC().Format(time.RFC3339Nano),
-		Snapshot:         snapshotJSON,
+		ContextID:             util.UUIDToString(capture.ID),
+		SourceIssueID:         util.UUIDToString(capture.SourceIssueID),
+		AnchorCommentID:       util.UUIDToString(capture.AnchorCommentID),
+		CaptureDigest:         capture.Digest,
+		CapturedByUserID:      memberID,
+		CapturedAt:            capture.CapturedAt.UTC().Format(time.RFC3339Nano),
+		Snapshot:              snapshotJSON,
+		SourceCompareSnapshot: compareSnapshotJSON,
+		Clones:                cloneTrust,
 	}
 
 	body, err := json.Marshal(payload)
@@ -263,6 +381,33 @@ func rustIssueCreateSourceContextReceiptValid(
 		row.AnchorCommentID != capture.AnchorCommentID ||
 		row.CapturedByUserID != capture.CapturedByUserID ||
 		row.CaptureDigest != capture.Digest {
+		return false
+	}
+	if len(capture.Clones) == 0 {
+		return true
+	}
+	attachments, err := queries.ListAttachmentsBySourceContext(ctx, db.ListAttachmentsBySourceContextParams{
+		WorkspaceID: wsUUID, SourceContextID: capture.ID,
+	})
+	if err != nil || len(attachments) != len(capture.Clones) {
+		return false
+	}
+	byCloneID := make(map[string]db.Attachment, len(attachments))
+	for _, attachment := range attachments {
+		byCloneID[util.UUIDToString(attachment.ID)] = attachment
+	}
+	for _, clone := range capture.Clones {
+		stored, ok := byCloneID[util.UUIDToString(clone.ID)]
+		if !ok || stored.Filename != clone.Filename || stored.ContentType != clone.ContentType ||
+			stored.SizeBytes != clone.SizeBytes || stored.Url != clone.URL ||
+			stored.UploaderType != "member" || stored.UploaderID != capture.CapturedByUserID {
+			return false
+		}
+	}
+	intentCount, err := queries.CountSourceContextObjectIntents(ctx, db.CountSourceContextObjectIntentsParams{
+		WorkspaceID: wsUUID, SourceContextID: capture.ID,
+	})
+	if err != nil || intentCount != 0 {
 		return false
 	}
 	return true

@@ -129,6 +129,12 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND state = 'pending'
 RETURNING storage_key;
 
+-- name: CountSourceContextObjectIntents :one
+SELECT COUNT(*)::bigint
+FROM issue_source_context_object_intent
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND source_context_id = sqlc.arg(source_context_id);
+
 -- name: ClaimSourceContextObjectIntentForCleanup :one
 -- MATERIALIZED pins the single candidate so nested-loop rescans cannot lease
 -- extra objects.
