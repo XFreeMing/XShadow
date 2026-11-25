@@ -559,9 +559,11 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 	// "Is not" keeps every row the positive predicate does not accept,
 	// including rows where it is NULL (no assignee, no project): `IS NOT TRUE`
 	// rather than `NOT`, which would drop those too.
+	var normalizedNegations []string
 	appendFilter := func(field, predicate string) {
 		if negated[field] {
 			where = append(where, "("+predicate+") IS NOT TRUE")
+			normalizedNegations = append(normalizedNegations, field)
 			return
 		}
 		where = append(where, predicate)
@@ -662,15 +664,19 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		switch relation {
 		case "assigned":
 			where = append(where, fmt.Sprintf("i.assignee_type = 'member' AND i.assignee_id = %s::uuid", addArg(userUUID)))
+			native.MyRelations = &rustIssueRelations{UserID: uuidToString(userUUID), Kinds: []string{"assigned"}}
 		case "created":
 			where = append(where, issueCreatedByUserPredicate(addArg(userUUID)))
+			native.MyRelations = &rustIssueRelations{UserID: uuidToString(userUUID), Kinds: []string{"created"}}
 		case "involved":
 			where = appendIssueTableInvolvedPredicate(where, addArg, userUUID)
+			native.MyRelations = &rustIssueRelations{UserID: uuidToString(userUUID), Kinds: []string{"my_agents"}}
 		case "any":
 			assignedRef := addArg(userUUID)
 			createdRef := addArg(userUUID)
 			involved := appendIssueTableInvolvedPredicate(nil, addArg, userUUID)[0]
 			where = append(where, fmt.Sprintf("((i.assignee_type = 'member' AND i.assignee_id = %s::uuid) OR %s OR %s)", assignedRef, issueCreatedByUserPredicate(createdRef), involved))
+			native.MyRelations = &rustIssueRelations{UserID: uuidToString(userUUID), Kinds: []string{"assigned", "created", "my_agents"}}
 		default:
 			writeError(w, http.StatusBadRequest, "invalid scope.relation")
 			return issueTableSQL{}, false
@@ -737,6 +743,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		for _, relation := range relations {
 			ors = append(ors, issueTableRelationPredicate(relation, userRef))
 		}
+		native.Relations = &rustIssueRelations{UserID: uuidToString(userUUID), Kinds: relations}
 		appendFilter("relations", "("+strings.Join(ors, " OR ")+")")
 	}
 
@@ -822,6 +829,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		for _, bucket := range buckets {
 			ors = append(ors, issueTableDueDatePredicate(bucket, day, addArg))
 		}
+		native.DueDates = &rustIssueDueDates{Today: day.Format(time.DateOnly), Kinds: buckets}
 		appendFilter("due_dates", "("+strings.Join(ors, " OR ")+")")
 	}
 
@@ -829,12 +837,12 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		compiler := issueTableFilterCompiler{
 			addArg: addArg,
 			today:  resolveToday,
-			userRef: func() (string, error) {
+			user: func() (pgtype.UUID, error) {
 				userUUID, err := util.ParseUUID(requestUserID(r))
 				if err != nil {
-					return "", issueTableFilterError{status: http.StatusUnauthorized, message: "user not authenticated"}
+					return pgtype.UUID{}, issueTableFilterError{status: http.StatusUnauthorized, message: "user not authenticated"}
 				}
-				return addArg(userUUID), nil
+				return userUUID, nil
 			},
 		}
 		predicate, err := compiler.compile(*spec.Filters.Advanced)
@@ -844,6 +852,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		}
 		if predicate != "" {
 			where = append(where, predicate)
+			native.Advanced = &compiler.native
 		}
 	}
 
@@ -922,6 +931,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		native.TopLevelOnly = true
 	}
 	where = appendIssueTableSearchFilter(where, addArg, spec.Search)
+	native.applyNegations(normalizedNegations)
 
 	return issueTableSQL{
 		native:            native,

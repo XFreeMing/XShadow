@@ -49,12 +49,57 @@ pub struct IssueListQuery {
     properties: Vec<Vec<Value>>,
     date: Option<DateFilter>,
     involves_user_id: Option<String>,
+    my_relations: Option<Relations>,
+    relations: Option<Relations>,
+    due_dates: Option<DueDates>,
+    advanced: Option<Box<FilterNode>>,
     sort: String,
     property_sort: Option<PropertySort>,
     descending: bool,
     status_order: Vec<String>,
     limit: i64,
     offset: i64,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct FilterNode {
+    match_any: bool,
+    negate: bool,
+    children: Vec<FilterNode>,
+    query: Option<IssueListQuery>,
+}
+
+#[derive(Deserialize)]
+struct Relations {
+    user_id: String,
+    kinds: Vec<RelationKind>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RelationKind {
+    Assigned,
+    Created,
+    Subscribed,
+    MyAgents,
+}
+
+#[derive(Deserialize)]
+struct DueDates {
+    today: String,
+    kinds: Vec<DueDateKind>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DueDateKind {
+    Overdue,
+    Today,
+    ThisWeek,
+    #[serde(rename = "next_7_days")]
+    Next7Days,
+    None,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +241,10 @@ fn add_filters<'a>(
             .push_bind(hidden_ids)
             .push("::uuid[])))");
     }
+    add_query_conditions(sql, query);
+}
+
+fn add_query_conditions<'a>(sql: &mut QueryBuilder<'a, Postgres>, query: &'a IssueListQuery) {
     if query.open_only {
         sql.push(" AND NOT (i.status = ANY(")
             .push_bind(&query.terminal_status_keys)
@@ -236,11 +285,8 @@ fn add_filters<'a>(
             .push("::uuid[])");
     }
     if let Some(creator) = &query.created_by_id {
-        sql.push(" AND ((i.creator_type = 'member' AND i.creator_id = ")
-            .push_bind(creator)
-            .push("::uuid) OR i.requester_user_id = ")
-            .push_bind(creator)
-            .push("::uuid)");
+        sql.push(" AND ");
+        add_created_by_user(sql, creator);
     }
     add_actor_filter(
         sql,
@@ -319,8 +365,114 @@ fn add_filters<'a>(
             .push("::timestamptz");
     }
     if let Some(user) = &query.involves_user_id {
+        sql.push(" AND ");
         add_involves_user_filter(sql, user);
     }
+    for relations in [&query.my_relations, &query.relations]
+        .into_iter()
+        .flatten()
+    {
+        add_relations(sql, relations);
+    }
+    if let Some(due_dates) = &query.due_dates {
+        add_due_dates(sql, due_dates);
+    }
+    if let Some(node) = &query.advanced {
+        sql.push(" AND ");
+        add_filter_node(sql, node);
+    }
+}
+
+fn add_filter_node<'a>(sql: &mut QueryBuilder<'a, Postgres>, node: &'a FilterNode) {
+    sql.push("(");
+    if let Some(query) = &node.query {
+        sql.push("TRUE");
+        add_query_conditions(sql, query);
+    } else {
+        let separator = if node.match_any { " OR " } else { " AND " };
+        for (index, child) in node.children.iter().enumerate() {
+            if index != 0 {
+                sql.push(separator);
+            }
+            add_filter_node(sql, child);
+        }
+    }
+    sql.push(")");
+    if node.negate {
+        sql.push(" IS NOT TRUE");
+    }
+}
+
+fn add_created_by_user<'a>(sql: &mut QueryBuilder<'a, Postgres>, user: &'a str) {
+    sql.push("((i.creator_type = 'member' AND i.creator_id = ")
+        .push_bind(user)
+        .push("::uuid) OR i.requester_user_id = ")
+        .push_bind(user)
+        .push("::uuid)");
+}
+
+fn add_relations<'a>(sql: &mut QueryBuilder<'a, Postgres>, relations: &'a Relations) {
+    sql.push(" AND (");
+    let user = &relations.user_id;
+    for (index, kind) in relations.kinds.iter().enumerate() {
+        if index != 0 {
+            sql.push(" OR ");
+        }
+        match kind {
+            RelationKind::Assigned => {
+                sql.push("(i.assignee_type = 'member' AND i.assignee_id = ")
+                    .push_bind(user)
+                    .push("::uuid)");
+            }
+            RelationKind::Created => add_created_by_user(sql, user),
+            RelationKind::Subscribed => {
+                sql.push("EXISTS (SELECT 1 FROM issue_subscriber s WHERE s.issue_id = i.id AND s.user_type = 'member' AND s.user_id = ")
+                    .push_bind(user)
+                    .push("::uuid AND s.unsubscribed_at IS NULL)");
+            }
+            RelationKind::MyAgents => add_involves_user_filter(sql, user),
+        }
+    }
+    sql.push(")");
+}
+
+fn add_due_dates<'a>(sql: &mut QueryBuilder<'a, Postgres>, dates: &'a DueDates) {
+    sql.push(" AND (");
+    for (index, kind) in dates.kinds.iter().enumerate() {
+        if index != 0 {
+            sql.push(" OR ");
+        }
+        match kind {
+            DueDateKind::Overdue => {
+                sql.push("i.due_date < ")
+                    .push_bind(&dates.today)
+                    .push("::date");
+            }
+            DueDateKind::Today => {
+                sql.push("i.due_date = ")
+                    .push_bind(&dates.today)
+                    .push("::date");
+            }
+            DueDateKind::ThisWeek => {
+                sql.push("(i.due_date >= date_trunc('week', ")
+                    .push_bind(&dates.today)
+                    .push("::date::timestamp)::date AND i.due_date < date_trunc('week', ")
+                    .push_bind(&dates.today)
+                    .push("::date::timestamp)::date + 7)");
+            }
+            DueDateKind::Next7Days => {
+                sql.push("(i.due_date >= ")
+                    .push_bind(&dates.today)
+                    .push("::date AND i.due_date < ")
+                    .push_bind(&dates.today)
+                    .push("::date + 7)");
+            }
+            DueDateKind::None => {
+                sql.push("i.due_date IS NULL");
+            }
+        }
+    }
+    sql.push(")");
 }
 
 fn add_actor_filter<'a>(
@@ -395,7 +547,7 @@ fn add_search_filter<'a>(sql: &mut QueryBuilder<'a, Postgres>, query: &'a IssueL
 }
 
 fn add_involves_user_filter<'a>(sql: &mut QueryBuilder<'a, Postgres>, user: &'a str) {
-    sql.push(" AND EXISTS (SELECT 1 FROM (SELECT ")
+    sql.push("EXISTS (SELECT 1 FROM (SELECT ")
         .push_bind(user)
         .push(
             "::uuid AS id) p WHERE

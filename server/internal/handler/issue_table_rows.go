@@ -370,7 +370,7 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 	if !ok {
 		return issueTableRowsResponse{}, false
 	}
-	pilot, ok := h.rustIssueTablePilot(w, r, compiled.workspaceID, request)
+	pilot, ok := h.rustIssueTablePilot(w, r, compiled.workspaceID)
 	if !ok {
 		return issueTableRowsResponse{}, false
 	}

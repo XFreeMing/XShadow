@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Extension, Path, State},
+    extract::{DefaultBodyLimit, Extension, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -123,7 +123,12 @@ pub fn router(pool: PgPool, token: String) -> Router {
     let state = Arc::new(Issues { pool, token });
     Router::new()
         .route("/internal/issues", post(list_issues))
-        .route("/internal/issues/table/rows", post(table_rows))
+        // Go caps the public table body at 1 MiB. Compiling a property value
+        // into containment alternatives and escaping it can expand the JSON.
+        .route(
+            "/internal/issues/table/rows",
+            post(table_rows).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
         .route("/internal/issues/{id}", get(get_issue))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)

@@ -52,13 +52,8 @@ type rustIssueTablePage struct {
 	Next  *rustIssueTablePosition `json:"next"`
 }
 
-func (h *Handler) rustIssueTablePilot(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, request issueTableRowsRequest) (bool, bool) {
+func (h *Handler) rustIssueTablePilot(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) (bool, bool) {
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.TablePilotScopes) == 0 {
-		return false, true
-	}
-	filters := request.Query.Filters
-	if request.Query.Scope.Kind == "my" ||
-		len(filters.Relations) != 0 || len(filters.DueDates) != 0 || len(filters.Negate) != 0 || filters.Advanced != nil {
 		return false, true
 	}
 	matches, err := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.TablePilotScopes, uuidToString(workspaceID), workspaceID)

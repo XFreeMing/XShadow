@@ -48,12 +48,72 @@ type rustIssueListQuery struct {
 	Properties         [][]json.RawMessage    `json:"properties,omitempty"`
 	Date               *rustIssueDate         `json:"date,omitempty"`
 	InvolvesUserID     *string                `json:"involves_user_id,omitempty"`
+	MyRelations        *rustIssueRelations    `json:"my_relations,omitempty"`
+	Relations          *rustIssueRelations    `json:"relations,omitempty"`
+	DueDates           *rustIssueDueDates     `json:"due_dates,omitempty"`
+	Advanced           *rustIssueFilterNode   `json:"advanced,omitempty"`
 	Sort               string                 `json:"sort"`
 	PropertySort       *rustIssuePropertySort `json:"property_sort,omitempty"`
 	Descending         bool                   `json:"descending"`
 	StatusOrder        []string               `json:"status_order,omitempty"`
 	Limit              int                    `json:"limit"`
 	Offset             int                    `json:"offset"`
+}
+
+type rustIssueRelations struct {
+	UserID string   `json:"user_id"`
+	Kinds  []string `json:"kinds"`
+}
+
+type rustIssueDueDates struct {
+	Today string   `json:"today"`
+	Kinds []string `json:"kinds"`
+}
+
+type rustIssueFilterNode struct {
+	MatchAny bool                  `json:"match_any,omitempty"`
+	Negate   bool                  `json:"negate,omitempty"`
+	Children []rustIssueFilterNode `json:"children,omitempty"`
+	Query    *rustIssueListQuery   `json:"query,omitempty"`
+}
+
+func (q *rustIssueListQuery) applyNegations(fields []string) {
+	if len(fields) == 0 {
+		return
+	}
+	root := &rustIssueFilterNode{}
+	if q.Advanced != nil {
+		root.Children = append(root.Children, *q.Advanced)
+	}
+	for _, field := range fields {
+		leaf := &rustIssueListQuery{}
+		switch field {
+		case "statuses":
+			leaf.Statuses, q.Statuses = q.Statuses, nil
+		case "priorities":
+			leaf.Priorities, q.Priorities = q.Priorities, nil
+		case "assignees":
+			leaf.AssigneeFilters, q.AssigneeFilters = q.AssigneeFilters, nil
+			leaf.IncludeNoAssignee, q.IncludeNoAssignee = q.IncludeNoAssignee, false
+			// An explicitly empty assignee filter was normalized to an empty ID set.
+			leaf.IDs, q.IDs = q.IDs, nil
+		case "creators":
+			leaf.CreatorFilters, q.CreatorFilters = q.CreatorFilters, nil
+		case "project_ids":
+			leaf.ProjectIDs, q.ProjectIDs = q.ProjectIDs, nil
+			leaf.IncludeNoProject, q.IncludeNoProject = q.IncludeNoProject, false
+		case "project_statuses":
+			leaf.ProjectStatuses, q.ProjectStatuses = q.ProjectStatuses, nil
+		case "label_ids":
+			leaf.LabelIDs, q.LabelIDs = q.LabelIDs, nil
+		case "relations":
+			leaf.Relations, q.Relations = q.Relations, nil
+		case "due_dates":
+			leaf.DueDates, q.DueDates = q.DueDates, nil
+		}
+		root.Children = append(root.Children, rustIssueFilterNode{Negate: true, Query: leaf})
+	}
+	q.Advanced = root
 }
 
 type rustIssuePropertySort struct {
