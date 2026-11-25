@@ -931,6 +931,7 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 	if !decodeIssueTableJSON(w, r, &request) {
 		return
 	}
+	baseHandler := h
 	r, cancel := withIssueTableQueryTimeout(r)
 	defer cancel()
 	snapshot, tx, err := h.beginIssueTableSnapshot(r.Context())
@@ -962,6 +963,28 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 	if !issueTableCursorMatches(w, cursor, compiled.fingerprint, &groupIdentity, nil) {
 		return
 	}
+	if cursor != nil && (cursor.GroupOrder == nil || cursor.GroupSortKey == nil || cursor.GroupCursorKey == nil) {
+		writeError(w, http.StatusBadRequest, "invalid cursor")
+		return
+	}
+	pilot, ok := h.rustIssueTablePilot(w, r, compiled.workspaceID)
+	if !ok {
+		return
+	}
+	if pilot {
+		prefix := ""
+		if group.kind == "parent" || (group.primary != nil && group.primary.kind == "parent") {
+			prefix = h.getIssuePrefix(r.Context(), compiled.workspaceID)
+		}
+		query := prepareRustIssueTableGroups(compiled, request, group, limit, cursor, prefix)
+		if err := tx.Commit(r.Context()); err != nil {
+			writeIssueTableQueryFailure(w, r, "failed to finish table query")
+			return
+		}
+		committed = true
+		baseHandler.writeRustIssueTableGroups(w, r, compiled, group, groupIdentity, query)
+		return
+	}
 
 	args := append([]any(nil), compiled.args...)
 	addArg := func(value any) string {
@@ -974,10 +997,6 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 	contextExpr := group.contextExpression(addArg, h.getIssuePrefix(r.Context(), compiled.workspaceID), compiled.parentVisible())
 	cursorPredicate := "TRUE"
 	if cursor != nil {
-		if cursor.GroupOrder == nil || cursor.GroupSortKey == nil || cursor.GroupCursorKey == nil {
-			writeError(w, http.StatusBadRequest, "invalid cursor")
-			return
-		}
 		orderRef := addArg(*cursor.GroupOrder)
 		sortRef := addArg(*cursor.GroupSortKey)
 		keyRef := addArg(*cursor.GroupCursorKey)

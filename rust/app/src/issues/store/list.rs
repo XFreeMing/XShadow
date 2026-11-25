@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 
+mod groups;
 mod table;
+pub use groups::{IssueTableGroupsQuery, table_groups};
 pub use table::{IssueTableQuery, table_rows};
 
 use super::{

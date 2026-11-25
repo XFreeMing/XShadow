@@ -11,7 +11,10 @@ use axum::{
 use serde_json::json;
 use sqlx::PgPool;
 
-use super::store::{self, CallerActor, IssueListQuery, IssueReadError, IssueTableQuery, is_uuid};
+use super::store::{
+    self, CallerActor, IssueListQuery, IssueReadError, IssueTableGroupsQuery, IssueTableQuery,
+    is_uuid,
+};
 use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
 
 struct Issues {
@@ -131,6 +134,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
             post(table_rows).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route(
+            "/internal/issues/table/groups",
+            post(table_groups).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
             "/internal/issues/{id}",
             get(get_issue).put(update_ordinary_issue),
         )
@@ -182,16 +189,32 @@ async fn table_rows(
 ) -> Response {
     match store::table_rows(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(IssueReadError::NotFound(message)) => error_response(StatusCode::NOT_FOUND, message),
-        Err(IssueReadError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
-        Err(IssueReadError::ProjectAccessFailed) => error_response(
+        Err(error) => table_read_error(error, "failed to list table rows"),
+    }
+}
+
+async fn table_groups(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(query): Json<IssueTableGroupsQuery>,
+) -> Response {
+    match store::table_groups(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => table_read_error(error, "failed to list table groups"),
+    }
+}
+
+fn table_read_error(error: IssueReadError, database_message: &'static str) -> Response {
+    match error {
+        IssueReadError::NotFound(message) => error_response(StatusCode::NOT_FOUND, message),
+        IssueReadError::Forbidden(message) => error_response(StatusCode::FORBIDDEN, message),
+        IssueReadError::ProjectAccessFailed => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to resolve project access",
         ),
-        Err(IssueReadError::DatabaseFailed) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to list table rows",
-        ),
+        IssueReadError::DatabaseFailed => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, database_message)
+        }
     }
 }
 

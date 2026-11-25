@@ -258,8 +258,8 @@ func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, metho
 		if writeQueryCancellation(w, r, err) {
 			return nil, false
 		}
-		if path == rustIssueTablePath && errors.Is(r.Context().Err(), context.DeadlineExceeded) {
-			writeIssueTableQueryFailure(w, r, "failed to list table rows")
+		if strings.HasPrefix(path, "/internal/issues/table/") && errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+			writeIssueTableQueryFailure(w, r, "failed to list table results")
 			return nil, false
 		}
 		slog.Warn("rust issue upstream failed", append(logger.RequestAttrs(r), "workspace_id", workspaceID, "method", method, "error", err)...)
