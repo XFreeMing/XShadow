@@ -17,7 +17,8 @@ use super::store::{
 };
 use super::store::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
-    IssueStatusEdit, IssueStatusEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueCommentCreate, IssueCommentCreateError, IssueStatusEdit, IssueStatusEditError,
+    OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -174,6 +175,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
         )
         .route("/internal/issues/{id}/status", put(update_issue_status))
         .route("/internal/issues/{id}/assign", put(update_issue_assign))
+        .route(
+            "/internal/issues/{id}/comments",
+            post(create_issue_comment).layer(DefaultBodyLimit::disable()),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
 }
@@ -395,6 +400,51 @@ async fn update_issue_assign(
         Err(IssueAssignEditError::Snapshot(error)) => {
             eprintln!("rust issue assign write snapshot failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+    }
+}
+
+async fn create_issue_comment(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueCommentCreate>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::create_issue_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request).await
+    {
+        Ok(result) => {
+            let status = if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(result)).into_response()
+        }
+        Err(IssueCommentCreateError::Access(error)) => {
+            issue_request_error(error, "failed to create comment")
+        }
+        Err(IssueCommentCreateError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid comment write request")
+        }
+        Err(IssueCommentCreateError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(IssueCommentCreateError::IdConflict { code }) => {
+            let message = match code {
+                "comment_id_other_issue" => "comment id is already in use on another issue",
+                _ => "comment id is already in use by another author",
+            };
+            error_response(StatusCode::CONFLICT, message)
+        }
+        Err(IssueCommentCreateError::Database(error)) => {
+            eprintln!("rust issue comment write failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create comment",
+            )
         }
     }
 }

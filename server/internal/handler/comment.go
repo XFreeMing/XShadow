@@ -1859,6 +1859,21 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	if requestedCommentID.Valid {
 		commentID = requestedCommentID
 	}
+
+	useRust, pilotErr := h.commentCreateUsesRust(r, issue, req, authorType)
+	if pilotErr != nil {
+		if writeQueryCancellation(w, r, pilotErr) {
+			return
+		}
+		slog.Warn("resolve rust comment pilot failed", append(logger.RequestAttrs(r), "error", pilotErr, "issue_id", issueID)...)
+		writeError(w, http.StatusInternalServerError, "failed to resolve comment route")
+		return
+	}
+	if useRust {
+		h.createCommentViaRust(w, r, issue, userID, authorType, authorID, commentID, req)
+		return
+	}
+
 	createParams := db.CreateCommentParams{
 		ID:           commentID,
 		IssueID:      issue.ID,
@@ -1957,14 +1972,7 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	resp := commentToResponse(comment, nil, groupedAtt[uuidToString(comment.ID)])
 	resp.IssueRevision = created.IssueRevision
 	slog.Info("comment created", append(logger.RequestAttrs(r), "comment_id", uuidToString(comment.ID), "issue_id", issueID)...)
-	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), authorType, authorID, map[string]any{
-		"comment":             resp,
-		"issue_title":         issue.Title,
-		"issue_assignee_type": textToPtr(issue.AssigneeType),
-		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
-		"issue_status":        issue.Status,
-		"issue_revision":      created.IssueRevision,
-	})
+	h.publishCommentCreatedEvent(issue, resp, created.IssueRevision, authorType, authorID)
 
 	// A reply in a resolved thread re-opens it. Done after CreateComment commits
 	// so the reply is visible regardless of the unresolve outcome. Shared with

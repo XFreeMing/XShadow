@@ -23,9 +23,11 @@ pub use acceptance_write::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, write_issue_acceptance_trace,
 };
 mod assign_write;
+mod comment_write;
 mod status_dispatch;
 mod status_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
+pub use comment_write::{IssueCommentCreate, IssueCommentCreateError, create_issue_comment};
 pub use status_write::{IssueStatusEdit, IssueStatusEditError, update_issue_status};
 
 #[derive(Debug)]
@@ -317,7 +319,7 @@ pub fn wire_category(status: &str, category: &str) -> String {
     }
 }
 
-fn format_issue_timestamp(raw: String) -> String {
+pub(super) fn format_issue_timestamp(raw: String) -> String {
     let Ok(timestamp) = DateTime::parse_from_rfc3339(&raw) else {
         return raw;
     };
@@ -327,7 +329,7 @@ fn format_issue_timestamp(raw: String) -> String {
     )
 }
 
-fn format_timestamp(timestamp: DateTime<FixedOffset>, include_fraction: bool) -> String {
+pub(super) fn format_timestamp(timestamp: DateTime<FixedOffset>, include_fraction: bool) -> String {
     let formatted = timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
     let nanoseconds = timestamp.timestamp_subsec_nanos();
     if !include_fraction || nanoseconds == 0 {
