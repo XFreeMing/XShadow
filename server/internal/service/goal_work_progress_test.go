@@ -27,7 +27,7 @@ func TestIssueContinuationAuthorizesParallelPreparedStories(t *testing.T) {
 		t.Fatal(err)
 	}
 	type story struct{ name, scope, id string }
-	stories := []story{{name: "Book status", scope: "rust/books"}, {name: "Memory history", scope: "rust/memory"}, {name: "Integrated reader", scope: "rust/app"}}
+	stories := []story{{name: "Book status", scope: "rust/books"}, {name: "Memory history", scope: "rust/memory"}, {name: "Integrated reader", scope: "rust/app"}, {name: "Later story", scope: "rust/later"}}
 	items := make([]map[string]any, 0, len(stories))
 	for i := range stories {
 		s := &stories[i]
@@ -37,12 +37,20 @@ func TestIssueContinuationAuthorizesParallelPreparedStories(t *testing.T) {
 		f.Exec(t, "UPDATE issue SET updated_at=now()-interval '2 minutes' WHERE id=$1", s.id)
 		f.Exec(t, "INSERT INTO goal_issue (workspace_id,goal_id,issue_id) VALUES ($1,$2,$3)", f.WorkspaceID, goalID, s.id)
 		f.Cleanup(t, "DELETE FROM agent_task_queue WHERE issue_id=$1", s.id)
+		stage := 1
+		if i == 3 {
+			stage = 2
+		}
 		items = append(items, map[string]any{
-			"id": util.UUIDToString(node), "title": s.name, "stage": 1,
+			"id": util.UUIDToString(node), "title": s.name, "stage": stage,
 			"binding": map[string]any{"type": "new"}, "delivery": map[string]any{"method_id": "agile"},
 			"coordination": map[string]any{"parallel_reason": "Separate repository surfaces", "write_scope": []string{s.scope}},
 		})
 	}
+	items = append(items, map[string]any{
+		"id": util.UUIDToString(dbid.NewV7()), "title": "Uncreated later story", "stage": 2,
+		"binding": map[string]any{"type": "new"}, "delivery": map[string]any{"method_id": "agile"},
+	})
 	content, err := json.Marshal(map[string]any{"items": items, "edges": []map[string]any{{
 		"dependent_item_id": items[2]["id"], "prerequisite_item_id": items[0]["id"], "kind": "required",
 	}}})
@@ -54,7 +62,7 @@ func TestIssueContinuationAuthorizesParallelPreparedStories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, err := GoalExecutionScope(ctx, f.q, goal, plan)
+	scope, err := GoalExecutionScope(ctx, f.q, goal, plan, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +93,23 @@ func TestIssueContinuationAuthorizesParallelPreparedStories(t *testing.T) {
 	}
 	if n := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1 AND context ? 'goal_execution_id'", stories[2].id); n != 0 {
 		t.Fatalf("dependent story got %d authorized runs before its prerequisite", n)
+	}
+	for _, story := range stories[:3] {
+		f.Exec(t, "UPDATE issue SET status='done' WHERE id=$1", story.id)
+	}
+	if err := svc.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1", stories[3].id); n != 0 {
+		t.Fatalf("later stage got %d runs after the authorized stage closed", n)
+	}
+	plan, err = f.q.GetGoalPlan(ctx, db.GetGoalPlanParams{WorkspaceID: workspace, GoalID: goal.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress, err := ReadGoalWorkProgress(ctx, f.q, goal, plan)
+	if err != nil || len(progress.ReadyToPrepare) != 0 {
+		t.Fatalf("later-stage creation is still eligible: %+v, %v", progress.ReadyToPrepare, err)
 	}
 }
 

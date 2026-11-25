@@ -39,12 +39,18 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 	}
 	first, next, memory := item("Recover the job"), item("Open an excerpt"), item("Browse personal memory")
 	held := item("Compare a saved memory with the original")
+	stageOne, stageTwo := 1, 2
+	first.Stage, next.Stage, memory.Stage, held.Stage = &stageOne, &stageOne, &stageTwo, &stageTwo
 	t.Cleanup(func() {
 		for _, node := range []GoalPlanItem{next, memory, held} {
 			dbfx.Exec(t, "DELETE FROM issue WHERE id=$1", service.GoalPreparationIssueID(goalID, node.ID))
 		}
 	})
-	issue := dbfx.Issue(t, "Book receipt", testutil.Cols{"status": "done", "project_id": project})
+	var receipt IssueResponse
+	testutil.Call(t, testHandler.CreateIssue, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID,
+		map[string]any{"title": "Book receipt", "status": "done", "project_id": project})).Want(201).JSON(&receipt)
+	issue := receipt.ID
+	t.Cleanup(func() { dbfx.Exec(t, "DELETE FROM issue WHERE id=$1", issue) })
 	first.Binding = GoalPlanItemBinding{Type: "existing", IssueID: &issue}
 	path := "/api/goals/" + goal.ID
 	params := map[string]string{"id": goal.ID}
@@ -76,6 +82,11 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 		t.Helper()
 		testutil.Call(t, testHandler.PutGoalExecution, goalRequest("PUT", path+"/plan/execution", testUserID,
 			map[string]any{"enabled": true, "expected_revision": 1}, params)).Want(status)
+	}
+	revoke := func() {
+		t.Helper()
+		testutil.Call(t, testHandler.PutGoalExecution, goalRequest("PUT", path+"/plan/execution", testUserID,
+			map[string]any{"enabled": false, "expected_revision": 1}, params)).Want(200)
 	}
 	release(409)
 	if err := testHandler.TickGoalPlanReviews(ctx); err != nil {
@@ -151,6 +162,30 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 	}
 	submit(uuidToString(blocked.ID), uuidToString(blocked.TaskID), "execution_issue", "unverified", []GoalPlanItem{item("Unrelated rewrite")}, 400)
 	submit(uuidToString(blocked.ID), uuidToString(blocked.TaskID), "execution_issue", "unverified", nil, 200)
+
+	revoke()
+	dbfx.Exec(t, "UPDATE issue SET status='in_progress', revision=revision+1 WHERE id=$1", *prepared.Items[1].Binding.IssueID)
+	dbfx.Exec(t, "UPDATE issue SET revision=revision+1 WHERE id=$1", issue)
+	resumed := tick()
+	submit(uuidToString(resumed.ID), uuidToString(resumed.TaskID), "insufficient_evidence", "unverified", nil, 200)
+	release(409)
+	resumePreflight := start()
+	if resumePreflight.ID == uuidToString(resumed.ID) || start().ID != resumePreflight.ID {
+		t.Fatal("reauthorization needs exactly one distinct preflight review of the same facts")
+	}
+	if _, plan := getPlan(t, goal.ID); plan.Review.Phase != "preflight" {
+		t.Fatalf("reauthorization reviewed delivered results instead of plan coverage: %+v", plan.Review)
+	}
+	submit(resumePreflight.ID, *resumePreflight.TaskID, "covered", "sufficient", nil, 200)
+	testutil.Call(t, testHandler.PutGoalExecution, goalRequest("PUT", path+"/plan/execution", testUserID,
+		map[string]any{"enabled": true, "expected_revision": 1, "stage": 3}, params)).Want(400)
+	var authorized GoalPlanResponse
+	testutil.Call(t, testHandler.PutGoalExecution, goalRequest("PUT", path+"/plan/execution", testUserID,
+		map[string]any{"enabled": true, "expected_revision": 1, "stage": 1}, params)).Want(200).JSON(&authorized)
+	if authorized.ExecutionState != "active" || authorized.ExecutionStage != 1 || len(authorized.Progress.ReadyToPrepare) != 0 {
+		t.Fatalf("stage-specific reauthorization left later work eligible: %+v", authorized)
+	}
+	revoke()
 
 	dbfx.Exec(t, "UPDATE issue SET revision=revision+1 WHERE id=$1", issue)
 	adjustment := tick()

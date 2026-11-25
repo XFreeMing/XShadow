@@ -226,10 +226,16 @@ func (h *Handler) startGoalPlanReview(ctx context.Context, goal db.Goal, owner, 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return empty, err
 	}
-	if latest.BaseRevision != plan.Revision {
-		if review.Phase != "closeout" {
-			review.Phase = "preflight"
+	forExecution := false
+	if expected != 0 && review.Phase != "closeout" {
+		execution, err := service.ReadGoalExecution(ctx, q, locked, plan)
+		if err != nil {
+			return empty, err
 		}
+		forExecution = !execution.ID.Valid
+	}
+	if (latest.BaseRevision != plan.Revision || forExecution) && review.Phase != "closeout" {
+		review.Phase = "preflight"
 	}
 	if expected == 0 && (!latest.ID.Valid || latest.AgentID != reviewer) {
 		return empty, errGoalReviewChanged
@@ -241,6 +247,14 @@ func (h *Handler) startGoalPlanReview(ctx context.Context, goal db.Goal, owner, 
 		}
 	}
 	key := "review/" + review.Fingerprint + "/" + uuidToString(reviewer)
+	if forExecution {
+		if previous, _ := readGoalReviewInput(latest.InputContext); previous != nil &&
+			previous.Fingerprint == review.Fingerprint && previous.Phase == "preflight" && latest.AgentID == reviewer &&
+			h.effectiveGoalPlanGenerationState(ctx, latest) != "failed" {
+			return latest, nil
+		}
+		key += "/preflight/" + uuidToString(latest.ID)
+	}
 	known, err := q.GetGoalPlanGenerationByRequestKey(ctx, db.GetGoalPlanGenerationByRequestKeyParams{GoalID: goal.ID, WorkspaceID: goal.WorkspaceID, RequestKey: key})
 	if err == nil {
 		if previous, _ := readGoalReviewInput(latest.InputContext); previous != nil &&
@@ -407,6 +421,7 @@ func buildGoalReviewPrompt(generation db.GoalPlanGeneration, input goalPlanGener
 %s
 
 先以独立评判者身份逐条核对目标原有验收条件。设想所有事项都按各自标准交付，找具体的反例，尤其核对不同卡能否用同一身份、同一任务/版次沿实际入口联验。closeout 阶段必须以真实已采信结果核对。
+preflight 阶段评判计划能否覆盖目标。尚未交付的事项按其用户结果、验收标准和依赖评判。仅缺少实施或终验结果时，若计划清楚覆盖原条件，可以给 sufficient 并说明未来联验方式。需要验证但计划没有安排的目标行为仍是缺口。
 执行中先归因。若当前卡正确交付仍无法达成目标，归为 planning_gap。实现或用例返工、提供商、权限或环境问题归为 execution_issue，给出原处理路径。缺乏证据时用 insufficient_evidence。充分覆盖才用 covered。结案证据只证明其记录的范围。
 仅 planning_gap 自动生成局部候选。保留其余事项、已绑定事项和已采信证据。现有节点同一 ID，仅补全可调整的未绑定节点。新增节点需 UUID、binding {type:"new"}、实际证据 refs、交付类型、评审方法和独立可执行的验证标准。items 只写新增或变更的节点，edges 只写新增边或显式替换的入边。若要替换现有待办节点的入边，列入 replace_dependencies_for，并提交该节点的全部新版入边。禁止删除或更改已绑定节点。不要保存计划、创建事项、修改项目文件或派工。
 提交 UTF-8 JSON 如下。checks 每条目标条件一项，item_ids 填实际对应的计划节点 UUID，result 为 sufficient、gap 或 unverified，reason 写证据或可复现缺口。非规划缺口时 items 和 edges 留空。

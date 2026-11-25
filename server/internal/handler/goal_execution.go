@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -44,11 +45,16 @@ func (h *Handler) PutGoalExecution(w http.ResponseWriter, r *http.Request) {
 	var mutation struct {
 		Enabled          *bool `json:"enabled"`
 		ExpectedRevision int32 `json:"expected_revision"`
+		Stage            *int  `json:"stage"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&mutation); err != nil || mutation.Enabled == nil || mutation.ExpectedRevision <= 0 {
 		writeError(w, http.StatusBadRequest, "enabled and a saved expected_revision are required")
+		return
+	}
+	if mutation.Stage != nil && (!*mutation.Enabled || *mutation.Stage <= 0) {
+		writeError(w, http.StatusBadRequest, "stage requires an enabled grant and a positive stage number")
 		return
 	}
 	ctx := r.Context()
@@ -85,6 +91,19 @@ func (h *Handler) PutGoalExecution(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: goal.WorkspaceID, GoalID: goal.ID, ExpectedRevision: plan.Revision,
 	}
 	if *mutation.Enabled {
+		stage := 0
+		if mutation.Stage != nil {
+			stage = *mutation.Stage
+			var content GoalPlanContent
+			if err := json.Unmarshal(plan.Content, &content); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read goal plan items")
+				return
+			}
+			if !slices.ContainsFunc(content.Items, func(item GoalPlanItem) bool { return item.Stage != nil && *item.Stage == stage }) {
+				writeError(w, http.StatusBadRequest, "stage is not part of the saved goal plan")
+				return
+			}
+		}
 		if ok, err := h.goalReviewAllows(r.Context(), q, goal, plan, false); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to verify goal review")
 			return
@@ -101,7 +120,7 @@ func (h *Handler) PutGoalExecution(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "an in-progress goal with outstanding planned work is required")
 			return
 		}
-		scope, err := service.GoalExecutionScope(ctx, q, goal, plan)
+		scope, err := service.GoalExecutionScope(ctx, q, goal, plan, stage)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read goal execution scope")
 			return

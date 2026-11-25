@@ -20,18 +20,19 @@ import (
 )
 
 type GoalWorkProgress struct {
-	Phase               string            `json:"phase"`
-	Total               int               `json:"total"`
-	Completed           int               `json:"completed"`
-	MethodID            string            `json:"-"`
-	ItemID              string            `json:"item_id,omitempty"`
-	IssueID             string            `json:"issue_id,omitempty"`
-	IssueStatus         string            `json:"issue_status,omitempty"`
-	MethodState         string            `json:"method_state,omitempty"`
-	MethodStep          string            `json:"method_step,omitempty"`
-	WaitingFor          []string          `json:"waiting_for,omitempty"`
-	ReadyToPrepare      []GoalPreparation `json:"ready_to_prepare"`
-	PreparationBindings map[string]string `json:"-"`
+	Phase                 string            `json:"phase"`
+	Total                 int               `json:"total"`
+	Completed             int               `json:"completed"`
+	MethodID              string            `json:"-"`
+	ItemID                string            `json:"item_id,omitempty"`
+	IssueID               string            `json:"issue_id,omitempty"`
+	IssueStatus           string            `json:"issue_status,omitempty"`
+	MethodState           string            `json:"method_state,omitempty"`
+	MethodStep            string            `json:"method_step,omitempty"`
+	WaitingFor            []string          `json:"waiting_for,omitempty"`
+	ReadyToPrepare        []GoalPreparation `json:"ready_to_prepare"`
+	PreparationBindings   map[string]string `json:"-"`
+	OutsideExecutionStage bool              `json:"-"`
 }
 
 type GoalPreparation struct {
@@ -132,8 +133,12 @@ func readGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 	})
 	byID := make(map[string]goalWorkItem, progress.Total)
 	var activeItem goalWorkItem
+	executionStage := GoalExecutionStage(plan)
 	for _, item := range content.Items {
 		byID[item.ID] = item
+		if issueID != "" && item.Binding.IssueID == issueID && !goalStageAllowsItem(executionStage, item) {
+			progress.OutsideExecutionStage = true
+		}
 		switch states[item.Binding.IssueID] {
 		case issuestatus.Done:
 			progress.Completed++
@@ -157,7 +162,7 @@ func readGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		}
 		for _, item := range content.Items {
 			state := states[item.Binding.IssueID]
-			if !waiting[item.ID] && (item.Binding.IssueID == "" || state == issuestatus.Todo || state == issuestatus.Backlog) {
+			if goalStageAllowsItem(executionStage, item) && !waiting[item.ID] && (item.Binding.IssueID == "" || state == issuestatus.Todo || state == issuestatus.Backlog) {
 				progress.ReadyToPrepare = append(progress.ReadyToPrepare, GoalPreparation{ItemID: item.ID, Title: item.Title, IssueID: item.Binding.IssueID})
 			}
 		}
@@ -219,6 +224,10 @@ func readGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		}
 	}
 	return progress, nil
+}
+
+func goalStageAllowsItem(stage int, item goalWorkItem) bool {
+	return stage == 0 || (item.Stage != nil && *item.Stage == stage)
 }
 
 // A stage remains serial unless all outstanding stories at that stage declare
@@ -301,6 +310,9 @@ func goalBacklogPosition(ctx context.Context, q *db.Queries, issue db.Issue) (go
 		return goalBacklogGate{}, err
 	}
 	gate := goalBacklogGate{managed: progress.Total > 0}
+	if progress.OutsideExecutionStage {
+		return gate, nil
+	}
 	ready := progress.Phase == "planning" && progress.IssueID == issueID
 	for itemID, preparedIssueID := range progress.PreparationBindings {
 		if preparedIssueID != issueID {
