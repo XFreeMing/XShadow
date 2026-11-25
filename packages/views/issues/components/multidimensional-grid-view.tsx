@@ -12,6 +12,12 @@ import {
 } from "@multica/apitable-grid";
 import { Loader2, Plus } from "@multica/ui/icons";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -33,6 +39,8 @@ import { AssigneePicker, StatusPicker } from "./pickers";
 
 const GRID_PAGE_LIMIT = 50;
 const INITIAL_CURSORS: Array<string | null> = [null];
+
+type OptionalGridColumn = "status" | "assignee";
 
 export interface MultidimensionalGridViewProps {
   serverQuery: IssueTableQuerySpec;
@@ -267,6 +275,28 @@ export function MultidimensionalGridView({
     ],
     [t],
   );
+  // Local to this grid. The issue title is not optional, and other views keep
+  // their own column settings.
+  const [optionalColumns, setOptionalColumns] = useState<
+    Record<OptionalGridColumn, boolean>
+  >({ status: true, assignee: true });
+  const setOptionalColumnVisible = useCallback(
+    (column: OptionalGridColumn, visible: boolean) => {
+      setOptionalColumns((current) =>
+        current[column] === visible ? current : { ...current, [column]: visible },
+      );
+    },
+    [],
+  );
+  const visibleFields = useMemo(
+    () =>
+      fields.filter((field) => {
+        if (field.id === "status") return optionalColumns.status;
+        if (field.id === "assignee") return optionalColumns.assignee;
+        return true;
+      }),
+    [fields, optionalColumns],
+  );
 
   const records = useMemo<GridRecordView[]>(
     () =>
@@ -345,10 +375,40 @@ export function MultidimensionalGridView({
           {issues.length}
           {total > issues.length ? ` / ${total}` : ""}
         </span>
-        <Button size="sm" variant="outline" onClick={() => onCreateIssue()}>
-          <Plus className="size-3.5" aria-hidden="true" />
-          {t(($) => $.views.new_issue)}
-        </Button>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button type="button" size="sm" variant="outline" />}
+            >
+              {t(($) => $.table.columns.section)}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuCheckboxItem checked disabled>
+                {t(($) => $.table.columns.title)}
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={optionalColumns.status}
+                onCheckedChange={(checked) =>
+                  setOptionalColumnVisible("status", checked)
+                }
+              >
+                {t(($) => $.table.columns.status)}
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={optionalColumns.assignee}
+                onCheckedChange={(checked) =>
+                  setOptionalColumnVisible("assignee", checked)
+                }
+              >
+                {t(($) => $.table.columns.assignee)}
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button size="sm" variant="outline" onClick={() => onCreateIssue()}>
+            <Plus className="size-3.5" aria-hidden="true" />
+            {t(($) => $.views.new_issue)}
+          </Button>
+        </div>
       </div>
 
       {isHeadLoading ? (
@@ -375,7 +435,7 @@ export function MultidimensionalGridView({
         <div className="flex-1 min-h-0 overflow-auto">
           <ApitableGrid
             datasheetId={`issues:${wsId}:${queryIdentity}`}
-            fields={fields}
+            fields={visibleFields}
             records={records}
             labels={labels}
             renderCell={renderCell}

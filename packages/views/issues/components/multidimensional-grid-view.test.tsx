@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
@@ -581,5 +581,86 @@ describe("MultidimensionalGridView", () => {
         page: expect.objectContaining({ cursor: "cursor-new" }),
       }),
     );
+  });
+
+  it("hides and restores Status and Assignee independently while the issue title stays visible", async () => {
+    const issue = makeIssue({
+      id: "uuid-cols",
+      identifier: "XSH-7",
+      title: "Column task",
+    });
+    setupApi({
+      listIssueTableRows: vi.fn(async () => ({
+        rows: [{ issue, direct_child_count: 0 }],
+        total: 1,
+        branch_total: 1,
+        next_cursor: null,
+        group_key: null,
+        parent_id: null,
+        query_fingerprint: "fp-cols",
+      })),
+    });
+
+    const surfaceKey = "workspace:columns";
+    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+
+    const qc = createQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("Column task")).toBeInTheDocument();
+    const grid = within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    expect(grid.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
+    expect(grid.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+    expect(grid.getByRole("columnheader", { name: "Assignee" })).toBeInTheDocument();
+
+    const columnsButton = screen.getByRole("button", { name: "Columns" });
+    fireEvent.click(columnsButton);
+
+    const issueOption = await screen.findByRole("menuitemcheckbox", { name: "Issue" });
+    const statusOption = screen.getByRole("menuitemcheckbox", { name: "Status" });
+    const assigneeOption = screen.getByRole("menuitemcheckbox", { name: "Assignee" });
+    expect(issueOption).toHaveAttribute("aria-disabled", "true");
+    expect(issueOption).toHaveAttribute("aria-checked", "true");
+    expect(statusOption).toHaveAttribute("aria-checked", "true");
+    expect(assigneeOption).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(statusOption);
+    await waitFor(() => {
+      expect(grid.queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+    });
+    expect(grid.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
+    expect(grid.getByRole("columnheader", { name: "Assignee" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemcheckbox", { name: "Status" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Assignee" }));
+    await waitFor(() => {
+      expect(grid.queryByRole("columnheader", { name: "Assignee" })).not.toBeInTheDocument();
+    });
+    expect(grid.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
+    expect(grid.queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Status" }));
+    await waitFor(() => {
+      expect(grid.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+    });
+    expect(grid.queryByRole("columnheader", { name: "Assignee" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Assignee" }));
+    await waitFor(() => {
+      expect(grid.getByRole("columnheader", { name: "Assignee" })).toBeInTheDocument();
+    });
+    expect(grid.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
+    expect(grid.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
   });
 });
