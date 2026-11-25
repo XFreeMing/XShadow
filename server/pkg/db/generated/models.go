@@ -799,6 +799,102 @@ type Feedback struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type GenericCell struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	RecordID    pgtype.UUID `json:"record_id"`
+	FieldID     pgtype.UUID `json:"field_id"`
+	Value       []byte      `json:"value"`
+}
+
+type GenericChange struct {
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	TableID        pgtype.UUID        `json:"table_id"`
+	Seq            int64              `json:"seq"`
+	RecordID       pgtype.UUID        `json:"record_id"`
+	BaseRevision   int64              `json:"base_revision"`
+	ClientRevision int64              `json:"client_revision"`
+	RecordRevision int64              `json:"record_revision"`
+	Fields         []byte             `json:"fields"`
+	ActorSource    string             `json:"actor_source"`
+	ActorID        pgtype.UUID        `json:"actor_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	ActorLabel     string             `json:"actor_label"`
+	OpDigest       string             `json:"op_digest"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type GenericField struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	TableID     pgtype.UUID        `json:"table_id"`
+	Name        string             `json:"name"`
+	Kind        string             `json:"kind"`
+	Config      []byte             `json:"config"`
+	Position    int32              `json:"position"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GenericPresence struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	TableID     pgtype.UUID        `json:"table_id"`
+	ActorID     pgtype.UUID        `json:"actor_id"`
+	ActorSource string             `json:"actor_source"`
+	TaskID      pgtype.UUID        `json:"task_id"`
+	ActorLabel  string             `json:"actor_label"`
+	RecordID    pgtype.UUID        `json:"record_id"`
+	FieldID     pgtype.UUID        `json:"field_id"`
+	LeaseUntil  pgtype.Timestamptz `json:"lease_until"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GenericRecord struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	TableID     pgtype.UUID        `json:"table_id"`
+	Revision    int64              `json:"revision"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GenericRecordComment struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	TableID     pgtype.UUID        `json:"table_id"`
+	RecordID    pgtype.UUID        `json:"record_id"`
+	ParentID    pgtype.UUID        `json:"parent_id"`
+	Seq         int64              `json:"seq"`
+	Body        string             `json:"body"`
+	ActorSource string             `json:"actor_source"`
+	ActorID     pgtype.UUID        `json:"actor_id"`
+	TaskID      pgtype.UUID        `json:"task_id"`
+	ActorLabel  string             `json:"actor_label"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type GenericTable struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Name        string             `json:"name"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GenericView struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	TableID     pgtype.UUID        `json:"table_id"`
+	Name        string             `json:"name"`
+	Columns     []byte             `json:"columns"`
+	Filter      []byte             `json:"filter"`
+	Sort        []byte             `json:"sort"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	GroupField  pgtype.Text        `json:"group_field"`
+	Kind        string             `json:"kind"`
+	Config      []byte             `json:"config"`
+}
+
 type GithubInstallation struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
@@ -1019,6 +1115,7 @@ type Issue struct {
 	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
 	RequesterUserID    pgtype.UUID        `json:"requester_user_id"`
 	WorkMethodRun      []byte             `json:"work_method_run"`
+	IssueTypeID        pgtype.UUID        `json:"issue_type_id"`
 }
 
 type IssueChildEvent struct {
@@ -1219,6 +1316,17 @@ type IssueSubscriber struct {
 type IssueToLabel struct {
 	IssueID pgtype.UUID `json:"issue_id"`
 	LabelID pgtype.UUID `json:"label_id"`
+}
+
+type IssueType struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Name        string             `json:"name"`
+	Fields      []byte             `json:"fields"`
+	Position    float64            `json:"position"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type IssueUnread struct {

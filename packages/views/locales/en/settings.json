@@ -762,6 +762,28 @@
       "cancel": "Cancel",
       "confirm": "Archive property",
       "failed": "Couldn't archive property"
+    },
+    "issue_types": {
+      "title": "Task types",
+      "new_type": "New task type",
+      "empty": "No task types yet",
+      "edit": "Edit",
+      "archive": "Archive",
+      "restore": "Restore",
+      "actions_aria": "Actions for {{name}}",
+      "create_title": "New task type",
+      "edit_title": "Edit task type",
+      "name": "Name",
+      "name_placeholder": "e.g. Research, Delivery",
+      "fields": "Fields",
+      "add_field": "Add field",
+      "no_fields": "Add existing custom properties to define this task type.",
+      "required": "Required",
+      "default_label": "Default",
+      "no_default": "None",
+      "move_up": "Move field up",
+      "move_down": "Move field down",
+      "remove_field": "Remove field"
     }
   },
   "labels": {

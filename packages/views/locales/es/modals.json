@@ -249,7 +249,11 @@
       "error_unknown": "No se ha podido enviar. Inténtalo de nuevo.",
       "sub_issue_of": "Subtarea de {{identifier}}",
       "qoder_attachments_unsupported": "Qoder Cloud Agents no puede leer adjuntos. Quítalos o elige otro agente."
-    }
+    },
+    "task_type_aria": "Tipo de tarea",
+    "task_type_default": "Predeterminado",
+    "required_badge": "Obligatorio",
+    "required_fields_missing": "Completa los campos obligatorios antes de crear: {{fields}}"
   },
   "mark_duplicate": {
     "title": "Marcar como duplicada",

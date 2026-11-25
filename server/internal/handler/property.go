@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issueproperty"
+	"github.com/multica-ai/multica/server/internal/issuetype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -785,6 +786,31 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("GetIssueProperty in DeleteIssueProperty failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to unset property")
 		return
+	}
+
+	// Required fields on a typed issue cannot be cleared via DELETE; optional
+	// fields (and properties on untyped issues) remain clearable.
+	if issue.IssueTypeID.Valid {
+		issueType, err := h.Queries.GetIssueType(r.Context(), db.GetIssueTypeParams{
+			ID:          issue.IssueTypeID,
+			WorkspaceID: issue.WorkspaceID,
+		})
+		if err == nil {
+			fields, parseErr := issuetype.ParseFields(issueType.Fields)
+			if parseErr == nil {
+				propKey := uuidToString(propertyID)
+				for _, field := range fields {
+					if field.PropertyID == propKey && field.Required {
+						writeError(w, http.StatusBadRequest, fmt.Sprintf("cannot clear required property for issue type %q", issueType.Name))
+						return
+					}
+				}
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("GetIssueType in DeleteIssueProperty failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to unset property")
+			return
+		}
 	}
 
 	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {

@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issueposition"
 	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/issuetype"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -86,7 +87,11 @@ type IssueCreateParams struct {
 	// Properties is keyed only by property-definition UUID. Create validates
 	// and canonicalizes every value while holding the same per-definition locks
 	// used by the standalone PUT path, then inserts the complete bag atomically.
-	Properties     map[pgtype.UUID]json.RawMessage
+	Properties map[pgtype.UUID]json.RawMessage
+	// IssueTypeID optionally binds the new issue to a workspace issue_type.
+	// When set, Create applies any configured field defaults not supplied by
+	// the caller and enforces required fields inside the same transaction.
+	IssueTypeID    pgtype.UUID
 	AllowDuplicate bool
 	// PRAutoCompleteDisabled is persisted before the issue becomes visible.
 	PRAutoCompleteDisabled bool
@@ -170,6 +175,14 @@ var ErrIssueLabelNotFound = errors.New("issue label not found in this workspace"
 // constraint surfaced as a client error. The same database constraint applies
 // to standalone PUT and atomic create writes.
 var ErrIssuePropertiesTooLarge = errors.New("issue properties exceed the 16KB size limit")
+
+// ErrIssueTypeNotFound signals that the requested issue_type_id does not exist
+// in this workspace.
+var ErrIssueTypeNotFound = errors.New("issue type not found in this workspace")
+
+// ErrIssueTypeArchived signals that the requested issue_type_id is archived and
+// cannot be used for new issues.
+var ErrIssueTypeArchived = errors.New("issue type is archived and cannot be used for new issues")
 
 // IssuePropertyValidationError identifies the definition whose value made an
 // atomic create invalid. Unknown and foreign-workspace IDs intentionally share
@@ -283,7 +296,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
 
-	properties, err := validateIssueCreateProperties(ctx, tx, qtx, p.WorkspaceID, p.Properties)
+	properties, err := resolveIssueCreateTypeAndProperties(ctx, tx, qtx, p.WorkspaceID, p.IssueTypeID, p.Properties)
 	if err != nil {
 		return IssueCreateResult{}, err
 	}
@@ -454,6 +467,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 			Stage:           p.Stage,
 			WorkMethodRun:   readyMethod,
 			Properties:      properties,
+			IssueTypeID:     p.IssueTypeID,
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
@@ -476,6 +490,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 			Stage:         p.Stage,
 			WorkMethodRun: readyMethod,
 			Properties:    properties,
+			IssueTypeID:   p.IssueTypeID,
 		})
 	}
 	if err != nil {
@@ -624,6 +639,99 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
+}
+
+// resolveIssueCreateTypeAndProperties validates the optional issue_type_id,
+// merges any configured field defaults for fields not explicitly provided by
+// the caller, runs the canonical property validator on every resulting value,
+// and enforces the type's required fields inside the create transaction.
+func resolveIssueCreateTypeAndProperties(
+	ctx context.Context,
+	tx pgx.Tx,
+	qtx *db.Queries,
+	workspaceID pgtype.UUID,
+	issueTypeID pgtype.UUID,
+	values map[pgtype.UUID]json.RawMessage,
+) ([]byte, error) {
+	if !issueTypeID.Valid {
+		return validateIssueCreateProperties(ctx, tx, qtx, workspaceID, values)
+	}
+
+	// Lock the workspace issue_type registry before acquiring per-property
+	// locks, matching CreateIssueType/UpdateIssueType lock order.
+	typeLockKey := "issue_types:" + util.UUIDToString(workspaceID)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", typeLockKey); err != nil {
+		return nil, fmt.Errorf("lock issue types: %w", err)
+	}
+
+	issueType, err := qtx.GetIssueType(ctx, db.GetIssueTypeParams{
+		ID:          issueTypeID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIssueTypeNotFound
+		}
+		return nil, fmt.Errorf("get issue type: %w", err)
+	}
+	if issueType.ArchivedAt.Valid {
+		return nil, ErrIssueTypeArchived
+	}
+
+	fields, err := issuetype.ParseFields(issueType.Fields)
+	if err != nil {
+		return nil, fmt.Errorf("parse issue type fields: %w", err)
+	}
+
+	merged := make(map[pgtype.UUID]json.RawMessage, len(values)+len(fields))
+	for k, v := range values {
+		merged[k] = v
+	}
+	for _, field := range fields {
+		if !field.HasDefault() {
+			continue
+		}
+		propUUID, parseErr := util.ParseUUID(field.PropertyID)
+		if parseErr != nil {
+			continue
+		}
+		if _, provided := merged[propUUID]; !provided {
+			merged[propUUID] = field.DefaultValue
+		}
+	}
+
+	encoded, err := validateIssueCreateProperties(ctx, tx, qtx, workspaceID, merged)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify every required field is present in the merged/validated bag.
+	// Legitimate falsy values (0, false) are present keys and pass this check.
+	for _, field := range fields {
+		if !field.Required {
+			continue
+		}
+		propUUID, parseErr := util.ParseUUID(field.PropertyID)
+		if parseErr != nil {
+			return nil, &IssuePropertyValidationError{
+				PropertyID: field.PropertyID,
+				Message:    fmt.Sprintf("property %q is required for issue type %q", field.PropertyID, issueType.Name),
+			}
+		}
+		if _, present := merged[propUUID]; !present {
+			label := field.PropertyID
+			if def, defErr := qtx.GetIssueProperty(ctx, db.GetIssuePropertyParams{
+				ID: propUUID, WorkspaceID: workspaceID,
+			}); defErr == nil && def.Name != "" {
+				label = def.Name
+			}
+			return nil, &IssuePropertyValidationError{
+				PropertyID: field.PropertyID,
+				Message:    fmt.Sprintf("property %q is required for issue type %q", label, issueType.Name),
+			}
+		}
+	}
+	return encoded, nil
 }
 
 // validateIssueCreateProperties returns the canonical JSONB bag to put on the

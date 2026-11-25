@@ -138,6 +138,10 @@ import type {
   IssueProperty,
   IssuePropertyValue,
   CreatePropertyRequest,
+  IssueType,
+  CreateIssueTypeRequest,
+  UpdateIssueTypeRequest,
+  ListIssueTypesResponse,
   QuickAction,
   CreateQuickActionRequest,
   UpdateQuickActionRequest,
@@ -545,6 +549,10 @@ import {
   IssuePropertySchema,
   ListPropertiesResponseSchema,
   IssuePropertiesResponseSchema,
+  IssueTypeSchema,
+  ListIssueTypesResponseSchema,
+  EMPTY_ISSUE_TYPE,
+  EMPTY_LIST_ISSUE_TYPES_RESPONSE,
   QuickActionSchema,
   ListQuickActionsResponseSchema,
   QuickActionRenderSchema,
@@ -5128,6 +5136,34 @@ export class ApiClient {
     });
     return parseWithFallback(raw, IssuePropertiesResponseSchema, EMPTY_ISSUE_PROPERTIES_RESPONSE, {
       endpoint: "DELETE /api/issues/{id}/properties/{propertyId}",
+    });
+  }
+
+  async listIssueTypes(includeArchived = false): Promise<ListIssueTypesResponse> {
+    const qs = includeArchived ? "?include_archived=true" : "";
+    const raw = await this.fetch<unknown>(`/api/issue-types${qs}`);
+    return parseWithFallback(raw, ListIssueTypesResponseSchema, EMPTY_LIST_ISSUE_TYPES_RESPONSE, {
+      endpoint: "GET /api/issue-types",
+    });
+  }
+
+  async createIssueType(data: CreateIssueTypeRequest): Promise<IssueType> {
+    const raw = await this.fetch<unknown>(`/api/issue-types`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, IssueTypeSchema, EMPTY_ISSUE_TYPE, {
+      endpoint: "POST /api/issue-types",
+    });
+  }
+
+  async updateIssueType(id: string, data: UpdateIssueTypeRequest): Promise<IssueType> {
+    const raw = await this.fetch<unknown>(`/api/issue-types/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, IssueTypeSchema, EMPTY_ISSUE_TYPE, {
+      endpoint: "PATCH /api/issue-types/{id}",
     });
   }
 

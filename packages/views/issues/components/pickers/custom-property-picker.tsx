@@ -83,12 +83,14 @@ export function isCustomPropertyReadOnly(
 export function CustomPropertyValueEditor({
   issue,
   property,
+  required = false,
   defaultOpen = false,
   open,
   onOpenChange,
 }: {
   issue: Issue;
   property: IssueProperty;
+  required?: boolean;
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -104,6 +106,7 @@ export function CustomPropertyValueEditor({
       key={`${issue.id}:${property.id}`}
       property={property}
       value={value}
+      required={required}
       defaultOpen={defaultOpen}
       open={open}
       onOpenChange={onOpenChange}
@@ -140,6 +143,7 @@ export function CustomPropertyValueInput({
   property,
   value,
   onChange,
+  required = false,
   defaultOpen = false,
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
@@ -149,6 +153,7 @@ export function CustomPropertyValueInput({
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
   onChange: (value: IssuePropertyValue | undefined) => void | Promise<void>;
+  required?: boolean;
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -181,8 +186,9 @@ export function CustomPropertyValueInput({
 
   // Empty value as the first row, not a footer button — the position every
   // other picker uses for "no value", and being a real row it can carry the
-  // checkmark when the property is unset.
-  const emptyRow = (
+  // checkmark when the property is unset. Required fields omit this row so
+  // only optional fields can be cleared.
+  const emptyRow = required ? null : (
     <PickerItem
       emptyValue
       selected={!hasValue}
@@ -253,8 +259,11 @@ export function CustomPropertyValueInput({
         const next = selected.includes(optionId)
           ? selected.filter((id) => id !== optionId)
           : [...selected, optionId];
-        if (next.length === 0) clear();
-        else commit(next);
+        if (next.length === 0) {
+          if (!required) clear();
+        } else {
+          commit(next);
+        }
       };
       return (
         <PropertyPicker
@@ -302,6 +311,7 @@ export function CustomPropertyValueInput({
         <ListPropertyEditor
           property={property}
           value={value}
+          required={required}
           open={open}
           onOpenChange={setOpen}
           onCommit={commit}
@@ -322,25 +332,27 @@ export function CustomPropertyValueInput({
           </PopoverTrigger>
           <PopoverContent className="w-auto p-0" align="start">
             {/* Empty value above the calendar — same position as DateOnlyPicker. */}
-            <button
-              type="button"
-              onClick={() => {
-                clear();
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-3 border-b px-3 py-2 text-left text-body transition-colors hover:bg-accent"
-            >
-              <span className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground">
-                {t(($) => $.pickers.custom_property.none)}
-              </span>
-              <Check className={`h-3.5 w-3.5 shrink-0 text-muted-foreground ${date ? "invisible" : ""}`} />
-            </button>
+            {!required && (
+              <button
+                type="button"
+                onClick={() => {
+                  clear();
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-3 border-b px-3 py-2 text-left text-body transition-colors hover:bg-accent"
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground">
+                  {t(($) => $.pickers.custom_property.none)}
+                </span>
+                <Check className={`h-3.5 w-3.5 shrink-0 text-muted-foreground ${date ? "invisible" : ""}`} />
+              </button>
+            )}
             <LazyCalendar
               mode="single"
               selected={date}
               onSelect={(d: Date | undefined) => {
                 if (d) commit(toDateOnly(d));
-                else clear();
+                else if (!required) clear();
                 setOpen(false);
               }}
             />
@@ -384,6 +396,7 @@ export function CustomPropertyValueInput({
           key={property.id}
           property={property}
           value={value}
+          required={required}
           open={open}
           onOpenChange={setOpen}
           onCommit={commit}
@@ -400,6 +413,7 @@ export function CustomPropertyValueInput({
 function TextishPropertyEditor({
   property,
   value,
+  required = false,
   open,
   onOpenChange,
   onCommit,
@@ -410,6 +424,7 @@ function TextishPropertyEditor({
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
+  required?: boolean;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onCommit: (next: IssuePropertyValue) => void;
@@ -442,6 +457,7 @@ function TextishPropertyEditor({
   const submit = () => {
     const trimmed = draft.trim();
     if (!trimmed) {
+      if (required) return;
       if (value !== undefined) onClear();
       onOpenChange(false);
       return;
@@ -515,6 +531,7 @@ function TextishPropertyEditor({
 function ListPropertyEditor({
   property,
   value,
+  required = false,
   open,
   onOpenChange,
   onCommit,
@@ -524,6 +541,7 @@ function ListPropertyEditor({
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
+  required?: boolean;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onCommit: (next: IssuePropertyValue) => void | Promise<void>;
@@ -611,7 +629,7 @@ function ListPropertyEditor({
                   variant="ghost"
                   size="icon-sm"
                   label={t(($) => $.pickers.custom_property.remove_item, { value: item })}
-                  disabled={saving}
+                  disabled={saving || (required && items.length <= 1)}
                   onClick={() => void save(items.filter((entry) => entry !== item))}
                 >
                   <X className="size-3.5" />

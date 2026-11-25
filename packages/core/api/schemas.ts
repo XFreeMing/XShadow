@@ -75,6 +75,8 @@ import type {
   MemberWithUser,
   IssueProperty,
   ListPropertiesResponse,
+  IssueType,
+  ListIssueTypesResponse,
   QuickAction,
   ListQuickActionsResponse,
   IssuePropertiesResponse,
@@ -981,6 +983,63 @@ export const EMPTY_LIST_PROPERTIES_RESPONSE: ListPropertiesResponse = {
   total: 0,
 };
 
+const IssuePropertyValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string()),
+]);
+
+export const IssueTypeFieldSchema = z.object({
+  property_id: z.string(),
+  required: z.boolean().optional().default(false),
+  default_value: z.preprocess(
+    (raw) => {
+      if (raw === null || raw === undefined) return undefined;
+      const ok =
+        typeof raw === "string" ||
+        typeof raw === "number" ||
+        typeof raw === "boolean" ||
+        (Array.isArray(raw) && raw.every((item) => typeof item === "string"));
+      return ok ? raw : undefined;
+    },
+    IssuePropertyValueSchema.optional(),
+  ),
+}).loose();
+
+export const IssueTypeSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  fields: z.array(IssueTypeFieldSchema).default([]),
+  position: z.number().optional().default(0),
+  archived: z.boolean().optional().default(false),
+  archived_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_ISSUE_TYPE: IssueType = {
+  id: "",
+  workspace_id: "",
+  name: "",
+  fields: [],
+  position: 0,
+  archived: false,
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListIssueTypesResponseSchema = z.object({
+  issue_types: z.array(IssueTypeSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_ISSUE_TYPES_RESPONSE: ListIssueTypesResponse = {
+  issue_types: [],
+  total: 0,
+};
+
 // Value bag: keyed by definition UUID; values are primitives or string
 // arrays (multi_select). The preprocess step drops entries with unknown
 // shapes BEFORE validation — a newer server shipping an object-shaped value
@@ -1717,6 +1776,7 @@ export const IssueSchema = z.object({
   // Older backends predate custom properties; default {} so consumers never
   // nil-guard issue.properties.
   properties: IssuePropertyValuesSchema,
+  issue_type_id: z.string().nullable().default(null),
   reactions: z.array(z.unknown()).optional(),
   labels: z.array(z.unknown()).optional(),
   created_at: z.string(),

@@ -753,6 +753,28 @@
       "cancel": "キャンセル",
       "confirm": "プロパティをアーカイブ",
       "failed": "プロパティをアーカイブできませんでした"
+    },
+    "issue_types": {
+      "title": "タスクタイプ",
+      "new_type": "新しいタスクタイプ",
+      "empty": "タスクタイプはまだありません",
+      "edit": "編集",
+      "archive": "アーカイブ",
+      "restore": "復元",
+      "actions_aria": "{{name}} の操作",
+      "create_title": "新しいタスクタイプ",
+      "edit_title": "タスクタイプを編集",
+      "name": "名前",
+      "name_placeholder": "例: 調査、納品",
+      "fields": "フィールド",
+      "add_field": "フィールドを追加",
+      "no_fields": "既存のカスタムプロパティを追加してこのタスクタイプを定義します。",
+      "required": "必須",
+      "default_label": "デフォルト",
+      "no_default": "なし",
+      "move_up": "フィールドを上に移動",
+      "move_down": "フィールドを下に移動",
+      "remove_field": "フィールドを削除"
     }
   },
   "labels": {

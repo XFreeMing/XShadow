@@ -152,6 +152,7 @@ func fullyPopulatedIssue(t *testing.T) db.Issue {
 		LastActivityAt: pgtype.Timestamptz{Time: utcDate(2026, time.January, 3), Valid: true},
 		Metadata:       []byte(`{"pr_url":"https://example.test/pr/1"}`),
 		Properties:     []byte(`{"77777777-7777-7777-7777-777777777777":"done"}`),
+		IssueTypeID:    parseUUID("88888888-8888-8888-8888-888888888888"),
 	}
 }
 

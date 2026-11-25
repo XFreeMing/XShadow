@@ -56,6 +56,9 @@ export interface IssueCreateManual {
    *  a plain id list rather than full Label objects. */
   labelIds: string[];
   propertyValues: IssuePropertyValues;
+  issueTypeId?: string;
+  /** Fields still holding an automatic default from the selected type. */
+  issueTypeDefaultIds?: string[];
 }
 
 export interface IssueCreateAgent {
@@ -87,6 +90,7 @@ const emptyManual = (): IssueCreateManual => ({
   assigneeId: undefined,
   labelIds: [],
   propertyValues: {},
+  issueTypeId: undefined,
 });
 
 const emptyAgent = (): IssueCreateAgent => ({
@@ -201,6 +205,7 @@ function hasDraftContent(draft: IssueCreateDraft): boolean {
   return !!(
     manual.title ||
     manual.description ||
+    manual.issueTypeId ||
     agent.prompt ||
     Object.keys(manual.propertyValues).length > 0 ||
     // Recoverable uploads only; failed/interrupted remnants do not pin a draft.

@@ -21,6 +21,7 @@ import { autopilotKeys } from "../autopilots/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { labelKeys } from "../labels/queries";
 import { propertyKeys } from "../properties/queries";
+import { issueTypeKeys } from "../issue-types/queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
 import { issueWorkflowKeys } from "../issue-workflows/queries";
 import { issueViewKeys } from "../issue-views/queries";
@@ -1308,6 +1309,13 @@ export function useRealtimeSync(
       }),
     );
 
+    const unsubIssueTypeChanged = ws.on("issue_type:changed", () => {
+      const wsId = getCurrentWsId();
+      if (wsId) {
+        qc.invalidateQueries({ queryKey: issueTypeKeys.all(wsId) });
+      }
+    });
+
     const unsubInboxNew = ws.on("inbox:new", async (p) => {
       const { item } = p as InboxNewPayload;
       if (!item) return;
@@ -1998,6 +2006,7 @@ export function useRealtimeSync(
       unsubIssueReactionRemoved();
       unsubSubscriberAdded();
       unsubSubscriberRemoved();
+      unsubIssueTypeChanged();
       unsubWsUpdated();
       unsubWsDeleted();
       unsubMemberRemoved();

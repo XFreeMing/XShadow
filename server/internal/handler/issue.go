@@ -99,6 +99,7 @@ type IssueResponse struct {
 	// Properties is the custom-property value bag keyed by property definition
 	// UUID (see property.go). Always emitted, mirroring Metadata.
 	Properties  map[string]any          `json:"properties"`
+	IssueTypeID *string                 `json:"issue_type_id"`
 	Reactions   []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments []AttachmentResponse    `json:"attachments,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
@@ -508,6 +509,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		LastActivityAt:     timestampToNanoPtr(i.LastActivityAt),
 		Metadata:           parseIssueMetadata(i.Metadata),
 		Properties:         parseIssueProperties(i.Properties),
+		IssueTypeID:        uuidToPtr(i.IssueTypeID),
 	}
 }
 
@@ -547,6 +549,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		LastActivityAt:     timestampToNanoPtr(i.LastActivityAt),
 		Metadata:           parseIssueMetadata(i.Metadata),
 		Properties:         parseIssueProperties(i.Properties),
+		IssueTypeID:        uuidToPtr(i.IssueTypeID),
 	}
 }
 
@@ -618,6 +621,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		LastActivityAt:     timestampToNanoPtr(i.LastActivityAt),
 		Metadata:           parseIssueMetadata(i.Metadata),
 		Properties:         parseIssueProperties(i.Properties),
+		IssueTypeID:        uuidToPtr(i.IssueTypeID),
 	}
 }
 
@@ -1834,7 +1838,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 
 	query := fmt.Sprintf(`SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.requester_user_id,
-       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
+       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties, i.issue_type_id,
 	   i.revision, i.duplicate_of_issue_id
 FROM issue i
 WHERE %s
@@ -1876,6 +1880,7 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 			&row.Metadata,
 			&row.Stage,
 			&row.Properties,
+			&row.IssueTypeID,
 			&row.Revision,
 			&row.DuplicateOfIssueID,
 		); err != nil {
@@ -2451,7 +2456,7 @@ WITH ranked AS (
 		i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 		i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.requester_user_id,
 		i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at,
-		i.number, i.project_id, i.metadata, i.stage, i.properties, i.revision, i.duplicate_of_issue_id,
+		i.number, i.project_id, i.metadata, i.stage, i.properties, i.issue_type_id, i.revision, i.duplicate_of_issue_id,
 		COUNT(*) OVER (PARTITION BY i.assignee_type, i.assignee_id) AS group_total,
 		ROW_NUMBER() OVER (
 			PARTITION BY i.assignee_type, i.assignee_id
@@ -2464,7 +2469,7 @@ SELECT
 	id, workspace_id, title, description, status, priority,
 	assignee_type, assignee_id, creator_type, creator_id, requester_user_id,
 	parent_issue_id, position, start_date, due_date, created_at, updated_at, last_activity_at,
-	number, project_id, metadata, stage, properties, revision, duplicate_of_issue_id, group_total
+	number, project_id, metadata, stage, properties, issue_type_id, revision, duplicate_of_issue_id, group_total
 FROM ranked
 WHERE rn > %s AND rn <= %s + %s
 ORDER BY
@@ -2513,6 +2518,7 @@ ORDER BY
 			&row.Metadata,
 			&row.Stage,
 			&row.Properties,
+			&row.IssueTypeID,
 			&row.Revision,
 			&row.DuplicateOfIssueID,
 			&row.GroupTotal,
@@ -3217,6 +3223,8 @@ type CreateIssueRequest struct {
 	// Properties is an ID-keyed bag whose values use the same typed wire shape
 	// as Issue.properties and the standalone property PUT endpoint.
 	Properties map[string]json.RawMessage `json:"properties,omitempty"`
+	// IssueTypeID optionally binds the new issue to a workspace issue_type.
+	IssueTypeID *string `json:"issue_type_id,omitempty"`
 	// OriginType / OriginID stamp the new issue with its provenance so
 	// platform-internal flows can deterministically locate it later. Only
 	// trusted callers should set these — currently the daemon CLI passes
@@ -3547,6 +3555,14 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var issueTypeID pgtype.UUID
+	if req.IssueTypeID != nil && strings.TrimSpace(*req.IssueTypeID) != "" {
+		parsedTypeID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(*req.IssueTypeID), "issue_type_id")
+		if !ok {
+			return
+		}
+		issueTypeID = parsedTypeID
+	}
 
 	var startDate pgtype.Date
 	if req.StartDate != nil && *req.StartDate != "" {
@@ -3674,6 +3690,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		AttachmentIDs:          attachmentIDs,
 		LabelIDs:               labelIDs,
 		Properties:             properties,
+		IssueTypeID:            issueTypeID,
 		AllowDuplicate:         req.AllowDuplicate,
 		PRAutoCompleteDisabled: req.PRAutoCompleteDisabled,
 	}, service.IssueCreateOpts{
@@ -3725,6 +3742,13 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, service.ErrIssueStatusUnavailable) {
 		writeError(w, http.StatusConflict,
 			"the target status was archived while this request was in flight; reload the status list and retry")
+		return
+	}
+	if errors.Is(err, service.ErrIssueTypeNotFound) || errors.Is(err, service.ErrIssueTypeArchived) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"code":  "invalid_issue_type",
+			"error": err.Error(),
+		})
 		return
 	}
 	if writeIssueCreatePropertyError(w, err) {

@@ -723,7 +723,8 @@
     "workdir_path_unavailable": "暫無本地 workdir — 這個任務還沒被本地 AI 代理執行過",
     "unsubscribe_subtree_succeeded": "已取消訂閱此任務及其子任務。",
     "subscription_update_failed": "無法更新訂閱狀態，請重試。",
-    "pull_requests_empty_title": "暫無關聯 PR。"
+    "pull_requests_empty_title": "暫無關聯 PR。",
+    "prop_type": "類型"
   },
   "timeline": {
     "loading": "載入中…",

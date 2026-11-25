@@ -236,6 +236,8 @@ export interface Issue {
   // Custom property values keyed by property definition id. Always present
   // in responses (empty object when unset), mirroring `metadata`.
   properties: IssuePropertyValues;
+  /** Optional workspace issue type id; null for untyped legacy issues. */
+  issue_type_id?: string | null;
   reactions?: IssueReaction[];
   labels?: Label[];
   created_at: string;

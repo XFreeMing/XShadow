@@ -164,6 +164,7 @@ import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
 import { propertyListOptions } from "@multica/core/properties";
+import { issueTypeListOptions } from "@multica/core/issue-types";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import {
   selectExpandedResolved,
@@ -2808,6 +2809,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // still carry a value written before the archive, and that row must stay
   // renderable (read-only) until someone clears it.
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId, true));
+  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(wsId, true));
+  const currentIssueType = useMemo(
+    () =>
+      issue?.issue_type_id
+        ? workspaceIssueTypes.find((it) => it.id === issue.issue_type_id) ?? null
+        : null,
+    [issue?.issue_type_id, workspaceIssueTypes],
+  );
 
   // Sub-issue rows only surface live definitions: the display picker offers
   // non-archived properties, and chips render only ids that resolve here.
@@ -3209,24 +3218,58 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             </PropRow>
           )}
 
-          {/* Custom properties — same progressive disclosure as the
-              built-in optional props: a row renders when the issue has a
-              value OR the user added the property this session. Archived
-              definitions render read-only until their value is cleared. */}
-          {workspaceProperties
-            .filter(
-              (p) =>
+          {/* Task type — rendered when the issue belongs to a configured workspace task type. */}
+          {currentIssueType && (
+            <PropRow label={t(($) => $.detail.prop_type)}>
+              <span
+                data-testid="issue-detail-type"
+                className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-caption font-medium text-foreground"
+              >
+                {currentIssueType.name}
+              </span>
+            </PropRow>
+          )}
+
+          {/* Custom properties — when the issue has a task type, show its
+              configured fields first in exact order (with required protection),
+              then any other stored or newly added properties so previously
+              stored attributes are never hidden or deleted. */}
+          {(() => {
+            const propById = new Map(workspaceProperties.map((p) => [p.id, p]));
+            const ordered: Array<{ property: IssueProperty; required: boolean }> = [];
+            const seen = new Set<string>();
+            if (currentIssueType) {
+              for (const field of currentIssueType.fields) {
+                const prop = propById.get(field.property_id);
+                if (!prop) continue;
+                seen.add(prop.id);
+                ordered.push({ property: prop, required: field.required });
+              }
+            }
+            for (const p of workspaceProperties) {
+              if (seen.has(p.id)) continue;
+              if (
                 issue.properties?.[p.id] !== undefined ||
-                (!p.archived && visibleCustomProps.has(p.id)),
-            )
-            .map((p) => (
+                (!p.archived && visibleCustomProps.has(p.id))
+              ) {
+                ordered.push({ property: p, required: false });
+              }
+            }
+            return ordered.map(({ property: p, required }) => (
               <PropRow
                 key={p.id}
                 label={
                   <>
                     <PropertyIcon property={p} className="size-3.5 text-caption" />
                     <TruncatedTooltip content={p.name} focusable>
-                      <span className="line-clamp-2 min-w-0 break-words [overflow-wrap:anywhere]">{p.name}</span>
+                      <span className="line-clamp-2 min-w-0 break-words [overflow-wrap:anywhere]">
+                        {p.name}
+                        {required && (
+                          <span className="ml-0.5 text-destructive" aria-hidden="true">
+                            *
+                          </span>
+                        )}
+                      </span>
                     </TruncatedTooltip>
                   </>
                 }
@@ -3234,10 +3277,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 <CustomPropertyValueEditor
                   issue={issue}
                   property={p}
+                  required={required}
                   defaultOpen={autoOpenCustomProp === p.id}
                 />
               </PropRow>
-            ))}
+            ));
+          })()}
 
           {addPropertyRow}
         </IssueSidebarPropertyGrid>}

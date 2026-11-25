@@ -276,6 +276,9 @@ deleted_labels AS (
 deleted_properties AS (
     DELETE FROM issue_property WHERE issue_property.workspace_id = $1
 ),
+deleted_issue_types AS (
+    DELETE FROM issue_type WHERE issue_type.workspace_id = $1
+),
 deleted_issue_views AS (
     DELETE FROM issue_view WHERE issue_view.workspace_id = $1
 ),

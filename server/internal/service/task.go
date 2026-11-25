@@ -8204,6 +8204,7 @@ func IssueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"revision":         issue.Revision,
 		"metadata":         util.JSONObjectOrEmpty(issue.Metadata),
 		"properties":       util.JSONObjectOrEmpty(issue.Properties),
+		"issue_type_id":    util.UUIDToPtr(issue.IssueTypeID),
 	}
 }
 

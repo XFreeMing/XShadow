@@ -274,7 +274,11 @@
       "error_daemon_version": "Le CLI du daemon de cet agent ({{current}}) est inférieur au minimum requis {{min}}. Mettez le daemon à jour pour utiliser la création avec un agent.",
       "error_unknown": "Échec de l'envoi. Réessayez.",
       "sub_issue_of": "Sous-tâche de {{identifier}}"
-    }
+    },
+    "task_type_aria": "Type de tâche",
+    "task_type_default": "Par défaut",
+    "required_badge": "Requis",
+    "required_fields_missing": "Remplissez les champs requis avant de créer : {{fields}}"
   },
   "mark_duplicate": {
     "title": "Marquer comme doublon",

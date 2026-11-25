@@ -663,4 +663,115 @@ describe("MultidimensionalGridView", () => {
     expect(grid.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
     expect(grid.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
   });
+
+  it("displays saved task types and custom property values in the multidimensional grid alongside untyped legacy tasks", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const researchIssue = makeIssue({
+      id: "issue-research",
+      title: "Research task",
+      issue_type_id: "type-research",
+      properties: {
+        "prop-url": "https://example.com/paper",
+        "prop-reads": 0,
+      },
+    });
+    const legacyIssue = makeIssue({
+      id: "issue-legacy",
+      number: 2,
+      identifier: "XSH-2",
+      title: "Legacy untyped task",
+      issue_type_id: null,
+      properties: {
+        "prop-reads": 0,
+      },
+    });
+    setupApi({
+      listIssueTableRows: vi.fn().mockResolvedValue({
+        rows: [
+          { issue: researchIssue, direct_child_count: 0 },
+          { issue: legacyIssue, direct_child_count: 0 },
+        ],
+        total: 2,
+        branch_total: 2,
+        next_cursor: null,
+        group_key: null,
+        parent_id: null,
+        query_fingerprint: "fp-typed",
+      }),
+      listIssueTypes: vi.fn().mockResolvedValue({
+        issue_types: [
+          {
+            id: "type-research",
+            workspace_id: "ws-1",
+            name: "Research",
+            fields: [
+              { property_id: "prop-url", required: true },
+              { property_id: "prop-reads", required: false, default_value: 0 },
+            ],
+            position: 1,
+            archived: false,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+        total: 1,
+      }),
+      listProperties: vi.fn().mockResolvedValue({
+        properties: [
+          {
+            id: "prop-url",
+            workspace_id: "ws-1",
+            name: "Source URL",
+            type: "url",
+            description: "",
+            icon: "link",
+            config: {},
+            position: 1,
+            archived: false,
+            usage_count: 1,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "prop-reads",
+            workspace_id: "ws-1",
+            name: "Read Count",
+            type: "number",
+            description: "",
+            icon: "hash",
+            config: {},
+            position: 2,
+            archived: false,
+            usage_count: 2,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+        total: 2,
+      }),
+    });
+
+    const surfaceKey = "workspace:typed-tasks";
+    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("Research task")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Legacy untyped task")).toBeInTheDocument();
+    const grid = within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    expect(await grid.findByRole("columnheader", { name: "Type" })).toBeInTheDocument();
+    expect(grid.getByRole("columnheader", { name: "Source URL" })).toBeInTheDocument();
+    expect(grid.getByRole("columnheader", { name: "Read Count" })).toBeInTheDocument();
+    expect(grid.getByText("Research")).toBeInTheDocument();
+    expect(grid.getByText(/example\.com\/paper/)).toBeInTheDocument();
+    expect(grid.getAllByText("0").length).toBeGreaterThanOrEqual(2);
+  });
 });

@@ -84,6 +84,7 @@ export type WSEventType =
   | "issue_properties:changed"
   | "property:created"
   | "property:updated"
+  | "issue_type:changed"
   | "issue_status:changed"
   | "issue_workflow:changed"
   | "issue_view:changed"
@@ -648,6 +649,7 @@ export interface WSEventPayloadMap {
   "issue_properties:changed": IssuePropertiesChangedPayload;
   "property:created": PropertyChangedPayload;
   "property:updated": PropertyChangedPayload;
+  "issue_type:changed": { action?: string };
   "issue_status:changed": IssueStatusChangedPayload;
   "issue_workflow:changed": IssueWorkflowChangedPayload;
   "issue_view:changed": IssueViewChangedPayload;

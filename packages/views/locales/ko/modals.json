@@ -272,7 +272,11 @@
       "error_daemon_version": "이 에이전트의 데몬 CLI({{current}})가 필요한 버전 {{min}}보다 낮습니다. 에이전트로 만들기를 사용하려면 데몬을 업그레이드하세요.",
       "error_unknown": "제출하지 못했습니다. 다시 시도하세요.",
       "sub_issue_of": "{{identifier}}의 하위 태스크"
-    }
+    },
+    "task_type_aria": "작업 유형",
+    "task_type_default": "기본값",
+    "required_badge": "필수",
+    "required_fields_missing": "생성하기 전에 필수 필드를 입력하세요: {{fields}}"
   },
   "mark_duplicate": {
     "title": "중복으로 표시",

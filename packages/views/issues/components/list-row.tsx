@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { propertyListOptions } from "@multica/core/properties";
+import { issueTypeListOptions } from "@multica/core/issue-types";
 import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
@@ -73,6 +74,10 @@ function ListRowContent({
   const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
   const rowWsId = useWorkspaceId();
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(rowWsId));
+  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(rowWsId, true));
+  const issueType = issue.issue_type_id
+    ? workspaceIssueTypes.find((it) => it.id === issue.issue_type_id) ?? null
+    : null;
   const cardCustomProperties = cardPropertyIds
     .map((id) => workspaceProperties.find((p) => p.id === id))
     .filter((p): p is IssueProperty => !!p && issue.properties?.[p.id] !== undefined);
@@ -138,6 +143,14 @@ function ListRowContent({
             <span className="truncate">{issue.title}</span>
             {/* Keep custom names visible when this row appears outside a status section. */}
             <CustomStatusChip status={issue.status} className="shrink-0" />
+            {issueType && (
+              <span
+                data-testid="list-row-issue-type"
+                className="inline-flex shrink-0 items-center rounded-full bg-muted/60 px-1.5 py-0.5 text-micro font-medium text-foreground max-w-[120px] truncate"
+              >
+                {issueType.name}
+              </span>
+            )}
             <IssueDuplicateOfMarker issue={issue} insideLink />
             {showChildProgress && (
               <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5">

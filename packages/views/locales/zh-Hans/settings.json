@@ -753,6 +753,28 @@
       "cancel": "取消",
       "confirm": "归档属性",
       "failed": "归档属性失败"
+    },
+    "issue_types": {
+      "title": "任务类型",
+      "new_type": "新建任务类型",
+      "empty": "暂无任务类型",
+      "edit": "编辑",
+      "archive": "归档",
+      "restore": "恢复",
+      "actions_aria": "{{name}} 的操作",
+      "create_title": "新建任务类型",
+      "edit_title": "编辑任务类型",
+      "name": "名称",
+      "name_placeholder": "例如：研究、交付",
+      "fields": "字段",
+      "add_field": "添加字段",
+      "no_fields": "添加已有自定义属性以定义此任务类型。",
+      "required": "必填",
+      "default_label": "默认值",
+      "no_default": "无",
+      "move_up": "上移字段",
+      "move_down": "下移字段",
+      "remove_field": "移除字段"
     }
   },
   "labels": {

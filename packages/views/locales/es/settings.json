@@ -762,6 +762,28 @@
       "cancel": "Cancelar",
       "confirm": "Archivar propiedad",
       "failed": "No se ha podido archivar la propiedad"
+    },
+    "issue_types": {
+      "title": "Tipos de tarea",
+      "new_type": "Nuevo tipo de tarea",
+      "empty": "Sin tipos de tarea todavía",
+      "edit": "Editar",
+      "archive": "Archivar",
+      "restore": "Restaurar",
+      "actions_aria": "Acciones para {{name}}",
+      "create_title": "Nuevo tipo de tarea",
+      "edit_title": "Editar tipo de tarea",
+      "name": "Nombre",
+      "name_placeholder": "p. ej. Investigación, Entrega",
+      "fields": "Campos",
+      "add_field": "Añadir campo",
+      "no_fields": "Añade propiedades personalizadas existentes para definir este tipo de tarea.",
+      "required": "Obligatorio",
+      "default_label": "Predeterminado",
+      "no_default": "Ninguno",
+      "move_up": "Subir campo",
+      "move_down": "Bajar campo",
+      "remove_field": "Quitar campo"
     }
   },
   "labels": {

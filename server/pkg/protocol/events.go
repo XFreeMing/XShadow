@@ -126,6 +126,9 @@ const (
 	EventPropertyUpdated        = "property:updated"
 	EventIssuePropertiesChanged = "issue_properties:changed"
 
+	// Workspace issue type registry events.
+	EventIssueTypeChanged = "issue_type:changed"
+
 	// Issue status catalog events (MUL-6243). ONE event for all four writes
 	// — create, edit, archive, reorder — rather than a verb per write, because
 	// the catalog is read as a whole table and every client answers all four

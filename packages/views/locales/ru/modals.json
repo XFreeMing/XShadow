@@ -272,7 +272,11 @@
       "error_daemon_version": "Версия CLI демона этого агента ({{current}}) ниже требуемой {{min}}. Обновите демон, чтобы использовать создание с агентом.",
       "error_unknown": "Не удалось отправить. Попробуйте ещё раз.",
       "sub_issue_of": "Подзадача для {{identifier}}"
-    }
+    },
+    "task_type_aria": "Тип задачи",
+    "task_type_default": "По умолчанию",
+    "required_badge": "Обязательно",
+    "required_fields_missing": "Заполните обязательные поля перед созданием: {{fields}}"
   },
   "mark_duplicate": {
     "title": "Отметить как дубликат",

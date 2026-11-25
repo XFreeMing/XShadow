@@ -24,6 +24,8 @@ export interface CreateIssueRequest {
   /** ID-keyed custom-property values validated and persisted atomically with
    * the issue. */
   properties?: IssuePropertyValues;
+  /** Optional workspace issue type id; server applies defaults and enforces required fields. */
+  issue_type_id?: string | null;
 }
 
 export interface CreateCommentSubIssueManualRequest {

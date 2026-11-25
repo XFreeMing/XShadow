@@ -47,6 +47,7 @@ import {
   InboxItemListSchema,
   InboxUnreadSummarySchema,
   IssueTriggerPreviewSchema,
+  ListIssueTypesResponseSchema,
   ListIssuesResponseSchema,
   ListPropertiesResponseSchema,
   MALFORMED_RUNTIME_MODEL_LIST_REQUEST,
@@ -504,6 +505,48 @@ describe("IssuePropertySchema (via ListPropertiesResponseSchema)", () => {
     const { icon: _omit, ...withoutIcon } = baseProperty;
     const parsed = ListPropertiesResponseSchema.parse({ properties: [withoutIcon], total: 1 });
     expect(parsed.properties[0]?.icon).toBe("");
+  });
+});
+
+describe("IssueTypeSchema (via ListIssueTypesResponseSchema)", () => {
+  const baseType = {
+    id: "33333333-3333-3333-3333-333333333333",
+    workspace_id: "ws-1",
+    name: "Research",
+    fields: [
+      { property_id: "prop-url", required: true },
+      { property_id: "prop-reads", required: false, default_value: 0 },
+      { property_id: "prop-confirmed", required: false, default_value: false },
+    ],
+    position: 1,
+    archived: false,
+    archived_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+
+  it("parses ordered fields and preserves 0 and false defaults", () => {
+    const parsed = ListIssueTypesResponseSchema.parse({ issue_types: [baseType], total: 1 });
+    expect(parsed.issue_types[0]?.name).toBe("Research");
+    expect(parsed.issue_types[0]?.fields).toEqual([
+      { property_id: "prop-url", required: true, default_value: undefined },
+      { property_id: "prop-reads", required: false, default_value: 0 },
+      { property_id: "prop-confirmed", required: false, default_value: false },
+    ]);
+  });
+
+  it("survives malformed responses and unknown future default shapes", () => {
+    expect(ListIssueTypesResponseSchema.parse({})).toEqual({ issue_types: [], total: 0 });
+    const parsed = ListIssueTypesResponseSchema.parse({
+      issue_types: [
+        {
+          ...baseType,
+          fields: [{ property_id: "prop-future", required: true, default_value: { nested: true } }],
+        },
+      ],
+      total: 1,
+    });
+    expect(parsed.issue_types[0]?.fields[0]?.default_value).toBeUndefined();
   });
 });
 

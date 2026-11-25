@@ -723,7 +723,8 @@
     "project_directory_path_copied_with_branch": "プロジェクトディレクトリのパスをコピーしました — 作業は {{branch}} ブランチにあります",
     "workdir_path_copy_failed": "作業ディレクトリのパスをコピーできませんでした",
     "workdir_path_unavailable": "まだローカルの作業ディレクトリがありません。ローカルエージェントがこのタスクを実行していません",
-    "pull_requests_empty_title": "関連する PR はありません。"
+    "pull_requests_empty_title": "関連する PR はありません。",
+    "prop_type": "タイプ"
   },
   "timeline": {
     "loading": "読み込み中...",

@@ -79,7 +79,7 @@ UPDATE issue AS i SET work_method_run = $1::jsonb,
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
 WHERE i.id = $6 AND i.workspace_id = $7
   AND i.revision = $8
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, requester_user_id, work_method_run, issue_type_id
 `
 
 type SaveIssueWorkMethodRunParams struct {
@@ -138,6 +138,7 @@ func (q *Queries) SaveIssueWorkMethodRun(ctx context.Context, arg SaveIssueWorkM
 		&i.DuplicateOfIssueID,
 		&i.RequesterUserID,
 		&i.WorkMethodRun,
+		&i.IssueTypeID,
 	)
 	return i, err
 }

@@ -2241,6 +2241,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Workspace issue types (ordered selections of custom properties, required flags, and defaults)
+			r.Route("/api/issue-types", func(r chi.Router) {
+				r.Get("/", h.ListIssueTypes)
+				r.Post("/", h.CreateIssueType)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetIssueType)
+					r.Patch("/", h.UpdateIssueType)
+				})
+			})
+
 			// Labels
 			r.Route("/api/labels", func(r chi.Router) {
 				r.Get("/", h.ListLabels)

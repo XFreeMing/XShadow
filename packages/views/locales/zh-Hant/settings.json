@@ -753,6 +753,28 @@
       "cancel": "取消",
       "confirm": "歸檔屬性",
       "failed": "歸檔屬性失敗"
+    },
+    "issue_types": {
+      "title": "任務類型",
+      "new_type": "新增任務類型",
+      "empty": "尚無任務類型",
+      "edit": "編輯",
+      "archive": "封存",
+      "restore": "還原",
+      "actions_aria": "{{name}} 的操作",
+      "create_title": "新增任務類型",
+      "edit_title": "編輯任務類型",
+      "name": "名稱",
+      "name_placeholder": "例如：研究、交付",
+      "fields": "欄位",
+      "add_field": "新增欄位",
+      "no_fields": "新增現有自訂屬性以定義此任務類型。",
+      "required": "必填",
+      "default_label": "預設值",
+      "no_default": "無",
+      "move_up": "上移欄位",
+      "move_down": "下移欄位",
+      "remove_field": "移除欄位"
     }
   },
   "labels": {

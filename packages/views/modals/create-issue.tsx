@@ -83,6 +83,7 @@ import {
 } from "@multica/core/issues/mutations";
 import { useAttachLabelToIssue } from "@multica/core/labels";
 import { propertyListOptions } from "@multica/core/properties";
+import { issueTypeListOptions } from "@multica/core/issue-types";
 import {
   ApiError,
   DuplicateIssueErrorBodySchema,
@@ -310,10 +311,15 @@ export function ManualCreatePanel({
     (data?.due_date as string | undefined) ?? draft.shared.dueDate,
   );
   const [labelIds, setLabelIds] = useState<string[]>(draft.manual.labelIds);
+  const [issueTypeId, setIssueTypeId] = useState<string | undefined>(
+    (data?.issue_type_id as string | undefined) ?? draft.manual.issueTypeId,
+  );
   const [propertyValues, setPropertyValues] = useState(draft.manual.propertyValues ?? {});
   const [customPropertyPickerId, setCustomPropertyPickerId] = useState<string | null>(null);
   const [propertyErrorId, setPropertyErrorId] = useState<string | null>(null);
+  const [missingRequiredError, setMissingRequiredError] = useState<string | null>(null);
   const [unavailablePropertyRemoved, setUnavailablePropertyRemoved] = useState(false);
+  const appliedTypeDefaultsRef = useRef(new Set(draft.manual.issueTypeDefaultIds));
   const [projectId, setProjectId] = useState<string | undefined>(() => {
     if (data && "project_id" in data) {
       return (data.project_id as string | null) ?? undefined;
@@ -359,6 +365,8 @@ export function ManualCreatePanel({
   const queryClient = useQueryClient();
   const { categoryOf: draftStatusCategory, colorOf, iconOf } = useIssueStatuses(wsId);
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
+  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(wsId));
+  const selectedIssueType = workspaceIssueTypes.find((it) => it.id === issueTypeId) ?? null;
   const { data: parentIssue } = useQuery({
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
@@ -441,13 +449,53 @@ export function ManualCreatePanel({
   const updateStartDate = (v: string | null) => { setStartDate(v); setManual({ startDate: v }); };
   const updateDueDate = (v: string | null) => { setDueDate(v); setShared({ dueDate: v }); };
   const updateLabelIds = (ids: string[]) => { setLabelIds(ids); setManual({ labelIds: ids }); };
+  const savePropertyValues = (values: typeof propertyValues) => {
+    setManual({ propertyValues: values, issueTypeDefaultIds: [...appliedTypeDefaultsRef.current] });
+  };
   const updatePropertyValue = (propertyId: string, value: IssuePropertyValue | undefined) => {
+    appliedTypeDefaultsRef.current.delete(propertyId);
     const next = { ...propertyValues };
     if (value === undefined) delete next[propertyId];
     else next[propertyId] = value;
     setPropertyValues(next);
-    setManual({ propertyValues: next });
+    savePropertyValues(next);
     if (propertyErrorId === propertyId) setPropertyErrorId(null);
+    if (missingRequiredError) setMissingRequiredError(null);
+  };
+
+  const selectIssueType = (nextTypeId: string | undefined) => {
+    const nextType = nextTypeId
+      ? workspaceIssueTypes.find((it) => it.id === nextTypeId) ?? null
+      : null;
+    const nextValues = { ...propertyValues };
+    // Remove untouched defaults from the previously selected type without
+    // discarding values the user explicitly entered.
+    for (const defaultPropId of appliedTypeDefaultsRef.current) {
+      delete nextValues[defaultPropId];
+    }
+    const nextAppliedDefaults = new Set<string>();
+    if (nextType) {
+      for (const field of nextType.fields) {
+        if (
+          field.default_value !== undefined &&
+          !Object.prototype.hasOwnProperty.call(nextValues, field.property_id)
+        ) {
+          nextValues[field.property_id] = field.default_value;
+          nextAppliedDefaults.add(field.property_id);
+        }
+      }
+    }
+    appliedTypeDefaultsRef.current = nextAppliedDefaults;
+    setIssueTypeId(nextType?.id);
+    setPropertyValues(nextValues);
+    setManual({
+      issueTypeId: nextType?.id,
+      issueTypeDefaultIds: [...nextAppliedDefaults],
+      propertyValues: nextValues,
+    });
+    setPropertyErrorId(null);
+    setMissingRequiredError(null);
+    setCustomPropertyPickerId(null);
   };
 
   // Inline pill reveal per toolbar field: kept by Settings → Preferences → Issue creation, holding a
@@ -475,9 +523,12 @@ export function ManualCreatePanel({
     setStartDate(null);
     setDueDate(null);
     setLabelIds([]);
+    setIssueTypeId(undefined);
+    appliedTypeDefaultsRef.current = new Set();
     setPropertyValues({});
     setCustomPropertyPickerId(null);
     setPropertyErrorId(null);
+    setMissingRequiredError(null);
     setUnavailablePropertyRemoved(false);
     setProjectId(undefined);
     setChildIssues([]);
@@ -491,6 +542,8 @@ export function ManualCreatePanel({
       assigneeId,
       startDate: null,
       labelIds: [],
+      issueTypeId: undefined,
+      issueTypeDefaultIds: undefined,
       propertyValues: {},
     });
     setShared({
@@ -572,6 +625,7 @@ export function ManualCreatePanel({
               due_date: dueDate || undefined,
               attachment_ids: activeAttachmentIds.length > 0 ? activeAttachmentIds : undefined,
               label_ids: labelIds.length > 0 ? labelIds : undefined,
+              ...(issueTypeId ? { issue_type_id: issueTypeId } : {}),
               ...(Object.keys(propertyValues).length > 0 ? { properties: propertyValues } : {}),
               stage: parentIssueId && stage != null ? stage : undefined,
               project_id: projectId,
@@ -595,6 +649,7 @@ export function ManualCreatePanel({
           // backend that predates this ignores the field — handled by the
           // compatibility fallback below.
           label_ids: labelIds.length > 0 ? labelIds : undefined,
+          ...(issueTypeId ? { issue_type_id: issueTypeId } : {}),
           ...(Object.keys(propertyValues).length > 0 ? { properties: propertyValues } : {}),
           parent_issue_id: parentIssueId,
           // Stage is only meaningful for a sub-issue (relative to its siblings).
@@ -757,7 +812,8 @@ export function ManualCreatePanel({
               });
               const next = { ...currentValues };
               delete next[propertyId];
-              setManual({ propertyValues: next });
+              appliedTypeDefaultsRef.current.delete(propertyId);
+              savePropertyValues(next);
               setPropertyErrorId(null);
               setCustomPropertyPickerId(null);
               setUnavailablePropertyRemoved(true);
@@ -854,6 +910,26 @@ export function ManualCreatePanel({
     if (!title.trim()) {
       titleEditorRef.current?.focus();
       return;
+    }
+    if (selectedIssueType) {
+      const missingFields = selectedIssueType.fields.filter(
+        (field) =>
+          field.required &&
+          !Object.prototype.hasOwnProperty.call(propertyValues, field.property_id),
+      );
+      if (missingFields.length > 0) {
+        const firstMissing = missingFields[0]!;
+        const propById = new Map(workspaceProperties.map((prop) => [prop.id, prop]));
+        const names = missingFields
+          .map((field) => propById.get(field.property_id)?.name ?? field.property_id)
+          .join(", ");
+        setPropertyErrorId(firstMissing.property_id);
+        setCustomPropertyPickerId(firstMissing.property_id);
+        setMissingRequiredError(
+          t(($) => $.create_issue.required_fields_missing, { fields: names }),
+        );
+        return;
+      }
     }
     void composer.submit();
   };
@@ -991,8 +1067,11 @@ export function ManualCreatePanel({
                       if (copy.start_date !== undefined) updateStartDate(copy.start_date);
                       if (copy.due_date !== undefined) updateDueDate(copy.due_date);
                       if (copy.properties) {
+                        for (const propertyId of Object.keys(copy.properties)) {
+                          appliedTypeDefaultsRef.current.delete(propertyId);
+                        }
                         setPropertyValues((current) => ({ ...current, ...copy.properties }));
-                        setManual({ propertyValues: { ...useIssueDraftStore.getState().draft.manual.propertyValues, ...copy.properties } });
+                        savePropertyValues({ ...useIssueDraftStore.getState().draft.manual.propertyValues, ...copy.properties });
                       }
                     }}
                   />
@@ -1089,6 +1168,46 @@ export function ManualCreatePanel({
             {/* Property toolbar — each field renders per the Settings → Preferences → Issue creation
                 selection (see showField above). */}
             <div className="flex items-center gap-1.5 px-4 py-2 shrink-0 flex-wrap">
+              {/* Task type selector — shown whenever the workspace has configured task types. */}
+              {workspaceIssueTypes.length > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <PillButton
+                        data-testid="issue-type-selector"
+                        aria-label={t(($) => $.create_issue.task_type_aria)}
+                      >
+                        <Shapes className="size-3.5 text-muted-foreground" />
+                        <span className="max-w-32 truncate">
+                          {selectedIssueType
+                            ? selectedIssueType.name
+                            : t(($) => $.create_issue.task_type_default)}
+                        </span>
+                      </PillButton>
+                    }
+                  />
+                  <DropdownMenuContent align="start" className="w-52">
+                    <DropdownMenuItem onClick={() => selectIssueType(undefined)}>
+                      <span className="truncate">{t(($) => $.create_issue.task_type_default)}</span>
+                      {!selectedIssueType && <Check className="ml-auto size-3.5" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {workspaceIssueTypes.map((issueType) => (
+                      <DropdownMenuItem
+                        key={issueType.id}
+                        onClick={() => selectIssueType(issueType.id)}
+                      >
+                        <Shapes className="size-3.5 text-muted-foreground" />
+                        <span className="truncate">{issueType.name}</span>
+                        {selectedIssueType?.id === issueType.id && (
+                          <Check className="ml-auto size-3.5" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+
               {/* Status */}
               {showField.status && (
                 <StatusPicker
@@ -1213,19 +1332,41 @@ export function ManualCreatePanel({
               )}
 
               {/* Workspace-defined fields use the same typed editors as issue
-                  detail, but write into the persisted draft until creation. */}
-              {workspaceProperties
-                .filter(
-                  (property) =>
-                    Object.prototype.hasOwnProperty.call(propertyValues, property.id) ||
-                    customPropertyPickerId === property.id,
-                )
-                .map((property) => {
+                  detail, but write into the persisted draft until creation.
+                  When a task type is selected, its fields render first in exact
+                  configured order, followed by any extra populated properties. */}
+              {(() => {
+                const propertyById = new Map(workspaceProperties.map((prop) => [prop.id, prop]));
+                const orderedEntries: Array<{
+                  property: (typeof workspaceProperties)[number];
+                  required: boolean;
+                }> = [];
+                const seenIds = new Set<string>();
+                if (selectedIssueType) {
+                  for (const field of selectedIssueType.fields) {
+                    const prop = propertyById.get(field.property_id);
+                    if (!prop) continue;
+                    seenIds.add(prop.id);
+                    orderedEntries.push({ property: prop, required: field.required });
+                  }
+                }
+                for (const prop of workspaceProperties) {
+                  if (seenIds.has(prop.id)) continue;
+                  if (
+                    Object.prototype.hasOwnProperty.call(propertyValues, prop.id) ||
+                    customPropertyPickerId === prop.id
+                  ) {
+                    orderedEntries.push({ property: prop, required: false });
+                  }
+                }
+                return orderedEntries.map(({ property, required }) => {
                   const value = propertyValues[property.id];
+                  const isMissingRequired = required && value === undefined;
                   return (
                     <div
                       key={property.id}
                       data-property-error={propertyErrorId === property.id || undefined}
+                      data-property-required={required || undefined}
                       className={cn(
                         propertyErrorId === property.id &&
                           "rounded-md ring-2 ring-destructive",
@@ -1234,6 +1375,7 @@ export function ManualCreatePanel({
                       <CustomPropertyValueInput
                         property={property}
                         value={value}
+                        required={required}
                         onChange={(next) => updatePropertyValue(property.id, next)}
                         open={customPropertyPickerId === property.id}
                         onOpenChange={(open) =>
@@ -1243,18 +1385,30 @@ export function ManualCreatePanel({
                         trigger={
                           <>
                             <PropertyIcon property={property} className="size-3.5 text-caption" />
-                            <span className="max-w-32 truncate">{property.name}</span>
-                            {value !== undefined && (
+                            <span className="max-w-32 truncate">
+                              {property.name}
+                              {required && (
+                                <span className="ml-0.5 text-destructive" aria-hidden="true">
+                                  *
+                                </span>
+                              )}
+                            </span>
+                            {value !== undefined ? (
                               <span className="max-w-40 truncate text-muted-foreground">
                                 <CustomPropertyValueDisplay property={property} value={value} />
                               </span>
-                            )}
+                            ) : isMissingRequired ? (
+                              <span className="text-micro text-destructive">
+                                {t(($) => $.create_issue.required_badge)}
+                              </span>
+                            ) : null}
                           </>
                         }
                       />
                     </div>
                   );
-                })}
+                });
+              })()}
 
               {/* Parent chip — appears when parent is set.
                   Placed before the ⋯ so it wraps to a new line with ⋯ if
@@ -1464,6 +1618,12 @@ export function ManualCreatePanel({
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
+
+            {missingRequiredError && (
+              <p role="alert" className="px-5 pb-3 text-caption text-destructive">
+                {missingRequiredError}
+              </p>
+            )}
 
             {unavailablePropertyRemoved && (
               <p role="alert" className="px-5 pb-3 text-caption text-destructive">

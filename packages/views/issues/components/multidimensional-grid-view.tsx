@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { hashKey, useQueries } from "@tanstack/react-query";
+import { hashKey, useQueries, useQuery } from "@tanstack/react-query";
 import {
   ApitableGrid,
   type GridCellRenderContext,
@@ -21,6 +21,8 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import { issueTypeListOptions } from "@multica/core/issue-types";
+import { propertyListOptions } from "@multica/core/properties";
 import { issueTableRowPageOptions } from "@multica/core/issues/queries";
 import { useModalStore } from "@multica/core/modals";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -36,11 +38,11 @@ import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
 import { useIssuePeekClick } from "../surface/peek-context";
 import type { IssueCreateDefaults } from "../surface/types";
 import { AssigneePicker, StatusPicker } from "./pickers";
+import { CustomPropertyValueEditor } from "./pickers/custom-property-picker";
 
 const GRID_PAGE_LIMIT = 50;
 const INITIAL_CURSORS: Array<string | null> = [null];
-
-type OptionalGridColumn = "status" | "assignee";
+const PROPERTY_COLUMN_PREFIX = "property:";
 
 export interface MultidimensionalGridViewProps {
   serverQuery: IssueTableQuerySpec;
@@ -59,6 +61,17 @@ export function MultidimensionalGridView({
   const actions = useIssueSurfaceActionsOptional();
   const openModal = useModalStore((s) => s.open);
   const { entryOf } = useIssueStatuses(wsId);
+  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(wsId, true));
+  const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
+
+  const issueTypeById = useMemo(
+    () => new Map(workspaceIssueTypes.map((it) => [it.id, it])),
+    [workspaceIssueTypes],
+  );
+  const propertyById = useMemo(
+    () => new Map(workspaceProperties.map((p) => [p.id, p])),
+    [workspaceProperties],
+  );
 
   const queryIdentity = useMemo(
     () => hashKey([wsId, serverQuery]),
@@ -270,49 +283,75 @@ export function MultidimensionalGridView({
   const fields = useMemo<GridFieldView[]>(
     () => [
       { id: "title", name: t(($) => $.table.columns.title), kind: "text", cancelOnEscape: true },
+      ...(workspaceIssueTypes.length > 0
+        ? [{ id: "type", name: t(($) => $.detail.prop_type), kind: "text" as const }]
+        : []),
       { id: "status", name: t(($) => $.table.columns.status), kind: "single_select" },
       { id: "assignee", name: t(($) => $.table.columns.assignee), kind: "text" },
+      ...workspaceProperties.map((prop) => ({
+        id: `${PROPERTY_COLUMN_PREFIX}${prop.id}`,
+        name: prop.name,
+        kind: "text" as const,
+      })),
     ],
-    [t],
+    [t, workspaceIssueTypes.length, workspaceProperties],
   );
   // Local to this grid. The issue title is not optional, and other views keep
-  // their own column settings.
-  const [optionalColumns, setOptionalColumns] = useState<
-    Record<OptionalGridColumn, boolean>
-  >({ status: true, assignee: true });
-  const setOptionalColumnVisible = useCallback(
-    (column: OptionalGridColumn, visible: boolean) => {
-      setOptionalColumns((current) =>
-        current[column] === visible ? current : { ...current, [column]: visible },
-      );
-    },
-    [],
+  // their own column settings. Track hidden column IDs so newly added custom
+  // properties or task types appear immediately unless explicitly hidden.
+  const [hiddenColumns, setHiddenColumns] = useState<Record<string, boolean>>({});
+  const isColumnVisible = useCallback(
+    (columnId: string) => hiddenColumns[columnId] !== true,
+    [hiddenColumns],
   );
+  const setColumnVisible = useCallback((columnId: string, visible: boolean) => {
+    setHiddenColumns((current) => {
+      const nextHidden = !visible;
+      if ((current[columnId] === true) === nextHidden) return current;
+      return { ...current, [columnId]: nextHidden };
+    });
+  }, []);
   const visibleFields = useMemo(
     () =>
       fields.filter((field) => {
-        if (field.id === "status") return optionalColumns.status;
-        if (field.id === "assignee") return optionalColumns.assignee;
-        return true;
+        if (field.id === "title") return true;
+        return isColumnVisible(field.id);
       }),
-    [fields, optionalColumns],
+    [fields, isColumnVisible],
   );
 
   const records = useMemo<GridRecordView[]>(
     () =>
-      issues.map((issue) => ({
-        id: issue.id,
-        revision: issue.revision ?? 0,
-        values: {
-          title: issue.title,
-          status: issue.status,
-          assignee:
-            issue.assignee_type && issue.assignee_id
-              ? `${issue.assignee_type}:${issue.assignee_id}`
-              : null,
-        },
-      })),
-    [issues],
+      issues.map((issue) => {
+        const typeName = issue.issue_type_id
+          ? issueTypeById.get(issue.issue_type_id)?.name ?? null
+          : null;
+        const propValues: Record<string, GridCellValue> = {};
+        for (const prop of workspaceProperties) {
+          const val = issue.properties?.[prop.id];
+          propValues[`${PROPERTY_COLUMN_PREFIX}${prop.id}`] =
+            val === undefined
+              ? null
+              : Array.isArray(val)
+                ? val.join(", ")
+                : val;
+        }
+        return {
+          id: issue.id,
+          revision: issue.revision ?? 0,
+          values: {
+            title: issue.title,
+            ...(workspaceIssueTypes.length > 0 ? { type: typeName } : {}),
+            status: issue.status,
+            assignee:
+              issue.assignee_type && issue.assignee_id
+                ? `${issue.assignee_type}:${issue.assignee_id}`
+                : null,
+            ...propValues,
+          },
+        };
+      }),
+    [issues, issueTypeById, workspaceIssueTypes.length, workspaceProperties],
   );
 
   const labels = useMemo<GridLabels>(
@@ -332,6 +371,25 @@ export function MultidimensionalGridView({
     ({ record, field, onActivate }: GridCellRenderContext) => {
       const issue = issueById.get(record.id);
       if (!issue) return undefined;
+      if (field.id === "type") {
+        const issueType = issue.issue_type_id
+          ? issueTypeById.get(issue.issue_type_id)
+          : undefined;
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-2 text-caption"
+            onFocus={onActivate}
+          >
+            {issueType ? (
+              <span className="inline-flex max-w-full items-center truncate rounded-full bg-muted/60 px-2 py-0.5 text-micro font-medium text-foreground">
+                {issueType.name}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">{t(($) => $.table.empty_value)}</span>
+            )}
+          </div>
+        );
+      }
       if (field.id === "status") {
         return (
           <div
@@ -363,9 +421,32 @@ export function MultidimensionalGridView({
           </div>
         );
       }
+      if (field.id.startsWith(PROPERTY_COLUMN_PREFIX)) {
+        const propertyId = field.id.slice(PROPERTY_COLUMN_PREFIX.length);
+        const property = propertyById.get(propertyId);
+        if (!property) return undefined;
+        const issueType = issue.issue_type_id
+          ? issueTypeById.get(issue.issue_type_id)
+          : undefined;
+        const isRequired = Boolean(
+          issueType?.fields.some((f) => f.property_id === propertyId && f.required),
+        );
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-2"
+            onFocus={onActivate}
+          >
+            <CustomPropertyValueEditor
+              issue={issue}
+              property={property}
+              required={isRequired}
+            />
+          </div>
+        );
+      }
       return undefined;
     },
-    [issueById, updateIssue],
+    [issueById, issueTypeById, propertyById, t, updateIssue],
   );
 
   return (
@@ -386,22 +467,19 @@ export function MultidimensionalGridView({
               <DropdownMenuCheckboxItem checked disabled>
                 {t(($) => $.table.columns.title)}
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={optionalColumns.status}
-                onCheckedChange={(checked) =>
-                  setOptionalColumnVisible("status", checked)
-                }
-              >
-                {t(($) => $.table.columns.status)}
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={optionalColumns.assignee}
-                onCheckedChange={(checked) =>
-                  setOptionalColumnVisible("assignee", checked)
-                }
-              >
-                {t(($) => $.table.columns.assignee)}
-              </DropdownMenuCheckboxItem>
+              {fields
+                .filter((field) => field.id !== "title")
+                .map((field) => (
+                  <DropdownMenuCheckboxItem
+                    key={field.id}
+                    checked={isColumnVisible(field.id)}
+                    onCheckedChange={(checked) =>
+                      setColumnVisible(field.id, checked)
+                    }
+                  >
+                    {field.name}
+                  </DropdownMenuCheckboxItem>
+                ))}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button size="sm" variant="outline" onClick={() => onCreateIssue()}>

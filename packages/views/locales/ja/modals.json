@@ -272,7 +272,11 @@
       "error_daemon_version": "このエージェントのデーモン CLI（{{current}}）が必要なバージョン {{min}} を下回っています。エージェントで作成を使用するには、デーモンをアップグレードしてください。",
       "error_unknown": "送信できませんでした。再試行してください。",
       "sub_issue_of": "{{identifier}} のサブタスク"
-    }
+    },
+    "task_type_aria": "タスクタイプ",
+    "task_type_default": "デフォルト",
+    "required_badge": "必須",
+    "required_fields_missing": "作成前に必須項目を入力してください: {{fields}}"
   },
   "mark_duplicate": {
     "title": "重複としてマーク",

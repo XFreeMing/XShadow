@@ -762,6 +762,28 @@
       "cancel": "Annuler",
       "confirm": "Archiver la propriété",
       "failed": "Impossible d'archiver la propriété"
+    },
+    "issue_types": {
+      "title": "Types de tâche",
+      "new_type": "Nouveau type de tâche",
+      "empty": "Aucun type de tâche pour le moment",
+      "edit": "Modifier",
+      "archive": "Archiver",
+      "restore": "Restaurer",
+      "actions_aria": "Actions pour {{name}}",
+      "create_title": "Nouveau type de tâche",
+      "edit_title": "Modifier le type de tâche",
+      "name": "Nom",
+      "name_placeholder": "ex. Recherche, Livraison",
+      "fields": "Champs",
+      "add_field": "Ajouter un champ",
+      "no_fields": "Ajoutez des propriétés personnalisées existantes pour définir ce type de tâche.",
+      "required": "Requis",
+      "default_label": "Défaut",
+      "no_default": "Aucun",
+      "move_up": "Monter le champ",
+      "move_down": "Descendre le champ",
+      "remove_field": "Retirer le champ"
     }
   },
   "labels": {

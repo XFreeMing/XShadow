@@ -9,6 +9,7 @@ import type { Issue, IssueProperty, Project, UpdateIssueRequest } from "@multica
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { propertyListOptions } from "@multica/core/properties";
+import { issueTypeListOptions } from "@multica/core/issue-types";
 import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
 import { descriptionPreview } from "./description-preview";
 import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
@@ -84,6 +85,10 @@ export const BoardCardContent = memo(function BoardCardContent({
     : null;
   const cardWsId = useWorkspaceId();
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(cardWsId));
+  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(cardWsId, true));
+  const issueType = issue.issue_type_id
+    ? workspaceIssueTypes.find((it) => it.id === issue.issue_type_id) ?? null
+    : null;
   // Custom properties toggled on in Display options, in toggle order, only
   // when this issue actually carries a value.
   const cardCustomProperties = cardPropertyIds
@@ -232,9 +237,17 @@ export const BoardCardContent = memo(function BoardCardContent({
       {/* Chip row: status + project + labels + custom property values.
           The status chip renders only for a CUSTOM status — the column header
           already names the category. (MUL-6243) */}
-      {(showCustomStatus || showProject || showLabels || cardCustomProperties.length > 0) && (
+      {(showCustomStatus || issueType || showProject || showLabels || cardCustomProperties.length > 0) && (
         <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
           <CustomStatusChip status={issue.status} />
+          {issueType && (
+            <span
+              data-testid="board-card-issue-type"
+              className="inline-flex items-center rounded-full bg-muted/60 px-1.5 py-0.5 text-micro font-medium text-foreground max-w-[140px] truncate"
+            >
+              {issueType.name}
+            </span>
+          )}
           {showProject && (
             <span className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground max-w-[160px]">
               <ProjectIcon project={project} size="sm" />
