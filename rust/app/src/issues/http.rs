@@ -18,8 +18,8 @@ use super::store::{
 use super::store::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
     IssueCommentCreate, IssueCommentCreateError, IssueCreateError, IssueCreateRequest,
-    IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
-    OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueStatusEdit, IssueStatusEditError,
+    IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{
     IssueBatchDeleteWrite, IssueDeleteWrite, IssueDeleteWriteError, IssuePropertyWrite,
@@ -186,6 +186,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/issues/{id}/acceptance",
             put(write_issue_acceptance).layer(DefaultBodyLimit::disable()),
         )
+        .route(
+            "/internal/issues/{id}/work-method-adopt",
+            put(write_issue_method_adopt).layer(DefaultBodyLimit::disable()),
+        )
         .route("/internal/issues/{id}/status", put(update_issue_status))
         .route(
             "/internal/issues/{id}/workflow-squad-handoff",
@@ -198,6 +202,52 @@ pub fn router(pool: PgPool, token: String) -> Router {
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn write_issue_method_adopt(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueMethodAdoptWrite>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::write_issue_method_adopt(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request)
+        .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueMethodAdoptWriteError::RevisionConflict)
+        | Err(IssueMethodAdoptWriteError::RunConflict)
+        | Err(IssueMethodAdoptWriteError::CatalogConflict)
+        | Err(IssueMethodAdoptWriteError::ProjectConflict) => {
+            error_response(StatusCode::CONFLICT, "事项已变化，请重新读取")
+        }
+        Err(IssueMethodAdoptWriteError::Access(error)) => {
+            issue_request_error(error, "failed to commit method adoption")
+        }
+        Err(IssueMethodAdoptWriteError::Database(error)) => {
+            eprintln!("rust issue method adopt write failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to commit method adoption",
+            )
+        }
+        Err(IssueMethodAdoptWriteError::Snapshot(error)) => {
+            eprintln!("rust issue method adopt snapshot failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to commit method adoption",
+            )
+        }
+        Err(IssueMethodAdoptWriteError::InvalidCommitProof) => {
+            eprintln!("rust issue method adopt commit proof invalid; rolling back");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to commit method adoption",
+            )
+        }
+    }
 }
 
 async fn write_issue_acceptance(

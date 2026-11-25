@@ -32,6 +32,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_BATCH_ASSIGN_PILOT` 为 `POST /api/issues/batch-update` 的普通成员批量指派至本人拥有的直接智能体独立指定试点工作区，且须与 `XSHADOW_ISSUES_RUST_ASSIGN_PILOT` 同时作用于同一工作区。Go 先校验仅含完整的 `assignee_type=agent` 与 `assignee_id` 对及可选 `suppress_run`，再按可见行逐条预计算队列归因，复用单任务 assign 事务写入与运行态通知外盒。隐藏/缺失、无权限、形态不适用或持锁冲突的行被跳过且不计数；传输或回执异常时中止后续行。标量批量试点、单任务 assign 试点与其他字段仍走各自既有路径。
 
+`XSHADOW_ISSUES_RUST_METHOD_ADOPT_PILOT` 为 `POST /api/issues/{id}/work-method` 中 `adopt_revision` 的普通成员采用试点。Go 沿用 `run.Adopt` 域计算与视图/事件组装，并向 Rust 提交同一工作区模板快照与计划运行。Rust 锁模板目录与事项行，核对修订与原始 `work_method_run`，仅在计划要求时写入新方法快照并推进事项修订。目标计划交付、项目交付绑定与军团执行绑定仍走 Go。试点上游不可用返回 `503`，回执异常返回 `502`，失败闭集不回退 Go 二次写入。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

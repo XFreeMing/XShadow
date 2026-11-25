@@ -14,16 +14,25 @@ import (
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
+// WorkMethodCatalogFromOverrides merges workspace-stored template overrides with
+// builtins. Callers that already read overrides once should use this helper rather
+// than issuing a second catalog read.
+func WorkMethodCatalogFromOverrides(raw []byte) ([]workmethod.Template, error) {
+	var custom []workmethod.Template
+	if len(raw) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := json.Unmarshal(raw, &custom); err != nil {
+			return nil, err
+		}
+	}
+	return workmethod.Catalog(custom), nil
+}
+
 func WorkMethodCatalog(ctx context.Context, q *db.Queries, ws pgtype.UUID) ([]workmethod.Template, error) {
 	raw, err := q.ListWorkMethodTemplates(ctx, ws)
 	if err != nil {
 		return nil, err
 	}
-	var custom []workmethod.Template
-	if err := json.Unmarshal(raw, &custom); err != nil {
-		return nil, err
-	}
-	return workmethod.Catalog(custom), nil
+	return WorkMethodCatalogFromOverrides(raw)
 }
 
 func WorkMethodGoalText(title, intent, criteria string) string {

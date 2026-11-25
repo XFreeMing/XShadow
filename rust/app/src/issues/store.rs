@@ -22,6 +22,10 @@ mod acceptance_write;
 pub use acceptance_write::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, write_issue_acceptance_trace,
 };
+mod method_adopt_write;
+pub use method_adopt_write::{
+    IssueMethodAdoptWrite, IssueMethodAdoptWriteError, write_issue_method_adopt,
+};
 mod assign_write;
 mod batch_delete_write;
 mod comment_write;
