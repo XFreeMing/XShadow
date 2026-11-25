@@ -21,11 +21,11 @@ use super::store::{
 };
 use super::store::{
     CommentResolutionError, IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit,
-    IssueAssignEditError, IssueCommentCreate, IssueCommentCreateError, IssueCommentEdit,
-    IssueCommentEditError, IssueCreateError, IssueCreateRequest, IssueMethodAdoptWrite,
-    IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError, IssueStatusEdit,
-    IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit,
-    OrdinaryIssueEditError,
+    IssueAssignEditError, IssueCommentCreate, IssueCommentCreateError, IssueCommentDeleteError,
+    IssueCommentEdit, IssueCommentEditError, IssueCreateError, IssueCreateRequest,
+    IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError,
+    IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
+    OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -218,7 +218,9 @@ pub fn router(pool: PgPool, token: String) -> Router {
         )
         .route(
             "/internal/comments/{id}",
-            put(update_comment_handler).layer(DefaultBodyLimit::disable()),
+            put(update_comment_handler)
+                .delete(delete_comment_handler)
+                .layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/internal/comments/{id}/resolve",
@@ -829,6 +831,35 @@ async fn remove_issue_reaction_handler(
             error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to remove reaction",
+            )
+        }
+    }
+}
+
+async fn delete_comment_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "comment not found");
+    }
+    match store::delete_issue_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id).await {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueCommentDeleteError::Access(error)) => {
+            issue_request_error(error, "failed to delete comment")
+        }
+        Err(IssueCommentDeleteError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid comment delete request")
+        }
+        Err(IssueCommentDeleteError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(IssueCommentDeleteError::Database(error)) => {
+            eprintln!("rust comment delete failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to delete comment",
             )
         }
     }

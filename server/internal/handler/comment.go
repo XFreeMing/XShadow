@@ -3772,6 +3772,24 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var useRustDelete bool
+	if pilotOn, pilotErr := h.commentDeletePilotEnabled(r.Context(), comment.WorkspaceID); pilotErr != nil {
+		slog.Warn("comment delete rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	} else if pilotOn && hasIssue && isAuthor && actorType == "member" {
+		useRustDelete, pilotErr = h.commentDeleteUsesRust(r, issue, comment, actorType, actorID)
+		if pilotErr != nil {
+			slog.Warn("comment delete rust plan failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
+			writeError(w, http.StatusInternalServerError, "failed to delete comment")
+			return
+		}
+	}
+	if useRustDelete {
+		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID)
+		return
+	}
+
 	// Cancel any active task whose planned batch contains this comment so the
 	// agent does not run with the now-deleted content already embedded. Must
 	// run before the delete: a removed row would nullify trigger_comment_id

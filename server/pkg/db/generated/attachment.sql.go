@@ -53,6 +53,25 @@ func (q *Queries) BindChatAttachmentsToMessage(ctx context.Context, arg BindChat
 	return items, nil
 }
 
+const commentHasFileAttachments = `-- name: CommentHasFileAttachments :one
+SELECT EXISTS (
+    SELECT 1 FROM attachment
+    WHERE comment_id = $1 AND workspace_id = $2
+) AS exists
+`
+
+type CommentHasFileAttachmentsParams struct {
+	CommentID   pgtype.UUID `json:"comment_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CommentHasFileAttachments(ctx context.Context, arg CommentHasFileAttachmentsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, commentHasFileAttachments, arg.CommentID, arg.WorkspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const countUnboundChatAttachmentsForTask = `-- name: CountUnboundChatAttachmentsForTask :one
 SELECT COUNT(*) FROM attachment
 WHERE workspace_id = $1

@@ -86,6 +86,12 @@ WHERE a.issue_id = $1
 SELECT url FROM attachment
 WHERE comment_id = $1;
 
+-- name: CommentHasFileAttachments :one
+SELECT EXISTS (
+    SELECT 1 FROM attachment
+    WHERE comment_id = @comment_id AND workspace_id = @workspace_id
+) AS exists;
+
 -- name: DeleteCommentAttachments :many
 -- Part of the comment delete transaction: removes the deleted comment's
 -- attachments and returns their storage URLs for cleanup after commit.

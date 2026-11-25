@@ -9,6 +9,10 @@ use super::{
     CallerActor, IssueReadError,
     comment_resolution_write::{COMMENT_VERSION_COLUMNS, map_comment_version},
     comment_write::IssueCommentRow,
+    comment_write::{
+        comment_has_active_trigger_task, lock_comment_write_member, lock_issue_for_comment,
+        touch_issue_activity,
+    },
     is_uuid,
     ordinary::set_write_session,
     resolve_caller_access_on,
@@ -91,54 +95,6 @@ fn comment_route_allowed(assignee_type: Option<&str>) -> bool {
     matches!(assignee_type, None | Some("") | Some("member"))
 }
 
-async fn lock_workspace_member(
-    tx: &mut PgConnection,
-    workspace_id: &str,
-    user_id: &str,
-) -> Result<(), IssueCommentEditError> {
-    sqlx::query("SELECT 1 FROM workspace WHERE id = $1::uuid FOR SHARE")
-        .bind(workspace_id)
-        .execute(&mut *tx)
-        .await?;
-    let locked = sqlx::query(
-        "SELECT 1 FROM member WHERE user_id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
-    )
-    .bind(user_id)
-    .bind(workspace_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if locked.is_none() {
-        return Err(IssueCommentEditError::Access(IssueReadError::NotFound(
-            "workspace not found",
-        )));
-    }
-    Ok(())
-}
-
-async fn lock_issue_for_comment(
-    tx: &mut PgConnection,
-    comment_id: &str,
-    workspace_id: &str,
-) -> Result<String, IssueCommentEditError> {
-    let issue_id: Option<String> = sqlx::query_scalar(
-        "SELECT i.id::text
-         FROM issue i
-         WHERE i.id = (
-             SELECT c.issue_id FROM comment c
-             WHERE c.id = $1::uuid AND c.workspace_id = $2::uuid
-         )
-           AND i.workspace_id = $2::uuid
-         FOR UPDATE",
-    )
-    .bind(comment_id)
-    .bind(workspace_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    issue_id.ok_or(IssueCommentEditError::Access(IssueReadError::NotFound(
-        "comment not found",
-    )))
-}
-
 async fn lock_comment_shape(
     tx: &mut PgConnection,
     comment_id: &str,
@@ -178,27 +134,6 @@ async fn lock_comment_shape(
         )));
     };
     map_locked_comment_shape(&row).map_err(IssueCommentEditError::from)
-}
-
-async fn comment_has_active_trigger_task(
-    tx: &mut PgConnection,
-    comment_id: &str,
-    issue_id: &str,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM agent_task_queue q
-            WHERE (q.trigger_comment_id = $1::uuid OR $1::uuid = ANY(q.coalesced_comment_ids))
-              AND q.issue_id = $2::uuid
-              AND q.status IN (
-                  'queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred'
-              )
-        )",
-    )
-    .bind(comment_id)
-    .bind(issue_id)
-    .fetch_one(tx)
-    .await
 }
 
 fn validate_route(
@@ -272,24 +207,6 @@ async fn apply_comment_edit(
     map_comment_version(&row)
 }
 
-async fn touch_issue_activity(
-    tx: &mut PgConnection,
-    issue_id: &str,
-    workspace_id: &str,
-) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar(
-        "UPDATE issue SET
-            revision = issue.revision + 1,
-            last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now())
-         WHERE id = $1::uuid AND workspace_id = $2::uuid
-         RETURNING revision",
-    )
-    .bind(issue_id)
-    .bind(workspace_id)
-    .fetch_one(tx)
-    .await
-}
-
 pub async fn update_issue_comment(
     pool: &PgPool,
     workspace_id: &str,
@@ -297,7 +214,7 @@ pub async fn update_issue_comment(
     comment_id: &str,
     edit: IssueCommentEdit,
 ) -> Result<IssueCommentEditResult, IssueCommentEditError> {
-    let CallerActor::Member { user_id: _ } = actor else {
+    let CallerActor::Member { user_id } = actor else {
         return Err(IssueCommentEditError::InvalidInput);
     };
     if !is_uuid(comment_id)
@@ -313,17 +230,17 @@ pub async fn update_issue_comment(
     }
 
     let mut tx = pool.begin().await?;
-    lock_workspace_member(
-        &mut tx,
-        workspace_id,
-        match actor {
-            CallerActor::Member { user_id } => user_id,
-            _ => unreachable!(),
-        },
-    )
-    .await?;
+    if !lock_comment_write_member(&mut tx, workspace_id, user_id).await? {
+        return Err(IssueCommentEditError::Access(IssueReadError::NotFound(
+            "workspace not found",
+        )));
+    }
 
-    let issue_id = lock_issue_for_comment(&mut tx, comment_id, workspace_id).await?;
+    let issue_id = lock_issue_for_comment(&mut tx, comment_id, workspace_id)
+        .await?
+        .ok_or(IssueCommentEditError::Access(IssueReadError::NotFound(
+            "comment not found",
+        )))?;
     let shape = lock_comment_shape(&mut tx, comment_id, workspace_id).await?;
     if shape.issue_id != issue_id {
         return Err(IssueCommentEditError::Access(IssueReadError::NotFound(

@@ -49,6 +49,7 @@ type IssueReadBridge struct {
 	CommentPilotScopes                   []string
 	CommentResolutionPilotScopes         []string
 	CommentEditPilotScopes               []string
+	CommentDeletePilotScopes             []string
 	ReactionPilotScopes                  []string
 	CreatePilotScopes                    []string
 	CreateDispatchPilotScopes            []string
@@ -105,6 +106,9 @@ type IssueReadBridge struct {
 //   - XSHADOW_ISSUES_RUST_COMMENT_EDIT_PILOT: comma-separated workspace slugs
 //     or UUIDs for native member strict text edits on plain top-level projectless
 //     task comments. Disabled by default.
+//   - XSHADOW_ISSUES_RUST_COMMENT_DELETE_PILOT: comma-separated workspace slugs
+//     or UUIDs for native member leaf deletes on plain top-level projectless task
+//     comments without file attachments. Disabled by default.
 //   - XSHADOW_ISSUES_RUST_REACTION_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member task reaction writes on POST/DELETE …/reactions
 //     on projectless tasks. Disabled by default; agent and project-scoped tasks
@@ -227,6 +231,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	commentScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_COMMENT_PILOT"))
 	commentResolutionScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_COMMENT_RESOLUTION_PILOT"))
 	commentEditScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_COMMENT_EDIT_PILOT"))
+	commentDeleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_COMMENT_DELETE_PILOT"))
 	reactionScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_REACTION_PILOT"))
 	createScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_PILOT"))
 	createDispatchScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_DISPATCH_PILOT"))
@@ -277,6 +282,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		CommentPilotScopes:                   commentScopes,
 		CommentResolutionPilotScopes:         commentResolutionScopes,
 		CommentEditPilotScopes:               commentEditScopes,
+		CommentDeletePilotScopes:             commentDeleteScopes,
 		ReactionPilotScopes:                  reactionScopes,
 		CreatePilotScopes:                    createScopes,
 		CreateDispatchPilotScopes:            createDispatchScopes,
@@ -305,7 +311,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		BatchWorkflowPilotScopes:             batchWorkflowScopes,
 		MethodAdoptPilotScopes:               methodAdoptScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(commentResolutionScopes)+len(commentEditScopes)+len(reactionScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(createSourceProjectScopes)+len(createSourceFilesScopes)+len(createAgentSourceScopes)+len(createAgentSourceFilesScopes)+len(retryAgentSourceScopes)+len(attachAgentSourceScopes)+len(agentSourceFilesLifecycleScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(deleteSourceContextScopes)+len(deleteSourceContextFilesScopes)+len(deleteSourceProjectScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(commentResolutionScopes)+len(commentEditScopes)+len(commentDeleteScopes)+len(reactionScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(createSourceProjectScopes)+len(createSourceFilesScopes)+len(createAgentSourceScopes)+len(createAgentSourceFilesScopes)+len(retryAgentSourceScopes)+len(attachAgentSourceScopes)+len(agentSourceFilesLifecycleScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(deleteSourceContextScopes)+len(deleteSourceContextFilesScopes)+len(deleteSourceProjectScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}

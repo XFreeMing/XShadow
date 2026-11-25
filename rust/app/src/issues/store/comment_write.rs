@@ -280,6 +280,81 @@ pub async fn create_issue_comment(
     })
 }
 
+pub(super) async fn lock_comment_write_member(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query("SELECT 1 FROM workspace WHERE id = $1::uuid FOR KEY SHARE")
+        .bind(workspace_id)
+        .execute(&mut *conn)
+        .await?;
+    let member = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM member WHERE user_id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(member.is_some())
+}
+
+pub(super) async fn lock_issue_for_comment(
+    conn: &mut PgConnection,
+    comment_id: &str,
+    workspace_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT i.id::text FROM issue i
+         WHERE i.id = (
+             SELECT c.issue_id FROM comment c
+             WHERE c.id = $1::uuid AND c.workspace_id = $2::uuid
+         ) AND i.workspace_id = $2::uuid
+         FOR UPDATE OF i",
+    )
+    .bind(comment_id)
+    .bind(workspace_id)
+    .fetch_optional(conn)
+    .await
+}
+
+pub(super) async fn comment_has_active_trigger_task(
+    conn: &mut PgConnection,
+    comment_id: &str,
+    issue_id: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM agent_task_queue q
+            WHERE q.issue_id = $2::uuid
+              AND (q.trigger_comment_id = $1::uuid OR $1::uuid = ANY(q.coalesced_comment_ids))
+              AND q.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+        )",
+    )
+    .bind(comment_id)
+    .bind(issue_id)
+    .fetch_one(conn)
+    .await
+}
+
+pub(super) async fn touch_issue_activity(
+    conn: &mut PgConnection,
+    issue_id: &str,
+    workspace_id: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "UPDATE issue SET
+            revision = revision + 1,
+            last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+         WHERE id = $1::uuid AND workspace_id = $2::uuid
+         RETURNING revision",
+    )
+    .bind(issue_id)
+    .bind(workspace_id)
+    .fetch_one(conn)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
