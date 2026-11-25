@@ -32,16 +32,15 @@ var rustIssueReadClient = &http.Client{
 	},
 }
 
-// IssueReadBridge routes GET /api/issues/{id} for explicitly configured pilot
-// workspaces to the Rust service over trusted loopback HTTP. Workspaces outside
-// the pilot stay on the default Go handler; workspaces inside the pilot never
-// silently fall back to Go if the Rust service is unconfigured or errors.
+// IssueReadBridge selects issue operations for the Rust service over trusted
+// loopback HTTP. Selected operations fail closed when Rust is unavailable.
 type IssueReadBridge struct {
 	Upstream         string
 	Token            string
 	PilotScopes      []string
 	ListPilotScopes  []string
 	TablePilotScopes []string
+	WritePilotScopes []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -56,6 +55,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	scopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_READ_PILOT"))
 	listScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_LIST_PILOT"))
 	tableScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_TABLE_PILOT"))
+	writeScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_WRITE_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
 	if upstream == "" {
 		upstream = strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_TABLES_UPSTREAM")), "/")
@@ -70,10 +70,11 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		PilotScopes:      scopes,
 		ListPilotScopes:  listScopes,
 		TablePilotScopes: tableScopes,
+		WritePilotScopes: writeScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
-			log.Error("rust issue read pilot configured without a valid loopback upstream and internal token")
+			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}
 		bridge.Upstream = ""
 		bridge.Token = ""
@@ -219,8 +220,12 @@ func (h *Handler) getIssueViaRust(w http.ResponseWriter, r *http.Request, worksp
 }
 
 func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, method, path, workspaceID, userID string, payload []byte) (*http.Response, bool) {
+	unavailable := "rust issue read service unavailable"
+	if method == http.MethodPut {
+		unavailable = "rust issue write service unavailable"
+	}
 	if !h.IssueReadBridge.Enabled() {
-		writeError(w, http.StatusServiceUnavailable, "rust issue read service unavailable")
+		writeError(w, http.StatusServiceUnavailable, unavailable)
 		return nil, false
 	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
@@ -257,8 +262,8 @@ func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, metho
 			writeIssueTableQueryFailure(w, r, "failed to list table rows")
 			return nil, false
 		}
-		slog.Warn("rust issue read upstream failed", append(logger.RequestAttrs(r), "workspace_id", workspaceID, "error", err)...)
-		writeError(w, http.StatusServiceUnavailable, "rust issue read service unavailable")
+		slog.Warn("rust issue upstream failed", append(logger.RequestAttrs(r), "workspace_id", workspaceID, "method", method, "error", err)...)
+		writeError(w, http.StatusServiceUnavailable, unavailable)
 		return nil, false
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {

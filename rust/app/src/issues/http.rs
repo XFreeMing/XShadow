@@ -12,6 +12,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use super::store::{self, CallerActor, IssueListQuery, IssueReadError, IssueTableQuery, is_uuid};
+use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
 
 struct Issues {
     pool: PgPool,
@@ -129,9 +130,49 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/issues/table/rows",
             post(table_rows).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
-        .route("/internal/issues/{id}", get(get_issue))
+        .route(
+            "/internal/issues/{id}",
+            get(get_issue).put(update_ordinary_issue),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn update_ordinary_issue(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(edit): Json<OrdinaryIssueEdit>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::update_ordinary_issue(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
+        Ok(write) => Json(write).into_response(),
+        Err(OrdinaryIssueEditError::Access(IssueReadError::NotFound(message))) => {
+            error_response(StatusCode::NOT_FOUND, message)
+        }
+        Err(OrdinaryIssueEditError::Access(IssueReadError::Forbidden(message))) => {
+            error_response(StatusCode::FORBIDDEN, message)
+        }
+        Err(OrdinaryIssueEditError::RevisionConflict(actual_revision)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(error) => {
+            match error {
+                OrdinaryIssueEditError::Database(error) => {
+                    eprintln!("rust ordinary issue edit failed: {error}");
+                }
+                OrdinaryIssueEditError::Snapshot(error) => {
+                    eprintln!("rust ordinary issue edit snapshot failed: {error}");
+                }
+                _ => {}
+            }
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+    }
 }
 
 async fn table_rows(

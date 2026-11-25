@@ -7,6 +7,8 @@ use sqlx::{PgConnection, PgPool, Row};
 
 mod list;
 pub use list::{IssueListQuery, IssueTableQuery, list_issues, table_rows};
+mod ordinary;
+pub use ordinary::{OrdinaryIssueEdit, OrdinaryIssueEditError, update_ordinary_issue};
 
 #[derive(Debug)]
 pub enum IssueReadError {

@@ -4383,7 +4383,20 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 	var issue db.Issue
 	attachmentsChanged := false
-	if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
+	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params)
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust ordinary issue edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
+		}
+		return
+	}
+	if rustEdit {
+		issue, prevIssue, ok = h.updateOrdinaryIssueViaRust(w, r, userID, prevIssue, params, rawFields)
+		if !ok {
+			return
+		}
+	} else if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
 		var lockedPrev db.Issue
 		issue, lockedPrev, attachmentsChanged, err = h.updateIssueAtomically(
 			writeCtx, prevIssue.WorkspaceID, params, rawFields, req.TitleBase, req.DescriptionBase, attachmentIDs, statusKeyForGuard, handoff != nil,
