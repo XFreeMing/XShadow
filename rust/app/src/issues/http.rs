@@ -144,7 +144,11 @@ pub fn router(pool: PgPool, token: String) -> Router {
         )
         .route(
             "/internal/issues/{id}",
-            get(get_issue).put(update_ordinary_issue),
+            // The gateway accepted the public text and supplies its editor
+            // baseline and catalog seed in this authenticated request.
+            get(get_issue)
+                .put(update_ordinary_issue)
+                .layer(DefaultBodyLimit::disable()),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
@@ -170,6 +174,11 @@ async fn update_ordinary_issue(
         Err(OrdinaryIssueEditError::RevisionConflict(actual_revision)) => (
             StatusCode::CONFLICT,
             Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(OrdinaryIssueEditError::FieldConflict) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "field_conflict": true })),
         )
             .into_response(),
         Err(error) => {

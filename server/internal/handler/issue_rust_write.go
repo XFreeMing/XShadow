@@ -10,20 +10,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
-func (h *Handler) ordinaryIssueEditUsesRust(r *http.Request, workspaceID pgtype.UUID, fields map[string]json.RawMessage, params db.UpdateIssueParams) (bool, error) {
+func (h *Handler) ordinaryIssueEditUsesRust(r *http.Request, workspaceID pgtype.UUID, fields map[string]json.RawMessage, params db.UpdateIssueParams, attachmentIDs []pgtype.UUID) (bool, error) {
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.WritePilotScopes) == 0 {
 		return false, nil
 	}
 	_, startDate := fields["start_date"]
 	_, dueDate := fields["due_date"]
-	if !params.Priority.Valid && !params.Position.Valid && !startDate && !dueDate {
+	if !params.Title.Valid && !params.Description.Valid && len(attachmentIDs) == 0 &&
+		!params.Priority.Valid && !params.Position.Valid && !startDate && !dueDate {
 		return false, nil
 	}
 	for key := range fields {
 		switch key {
-		case "priority", "position", "start_date", "due_date", "expected_revision":
+		case "title", "title_base", "description", "description_base", "attachment_ids",
+			"priority", "position", "start_date", "due_date", "expected_revision":
 		default:
 			return false, nil
 		}
@@ -32,12 +35,23 @@ func (h *Handler) ordinaryIssueEditUsesRust(r *http.Request, workspaceID pgtype.
 }
 
 type ordinaryIssueEdit struct {
-	ExpectedRevision *int64            `json:"expected_revision,omitempty"`
-	Priority         *string           `json:"priority,omitempty"`
-	Position         *float64          `json:"position,omitempty"`
-	StartDate        *ordinaryDateEdit `json:"start_date,omitempty"`
-	DueDate          *ordinaryDateEdit `json:"due_date,omitempty"`
-	SourceTaskID     *string           `json:"source_task_id,omitempty"`
+	ExpectedRevision *int64                     `json:"expected_revision,omitempty"`
+	Title            *string                    `json:"title,omitempty"`
+	TitleBase        *string                    `json:"title_base,omitempty"`
+	Description      *string                    `json:"description,omitempty"`
+	DescriptionBase  *string                    `json:"description_base,omitempty"`
+	AttachmentIDs    []string                   `json:"attachment_ids,omitempty"`
+	MethodCatalog    *ordinaryWorkMethodCatalog `json:"method_catalog,omitempty"`
+	Priority         *string                    `json:"priority,omitempty"`
+	Position         *float64                   `json:"position,omitempty"`
+	StartDate        *ordinaryDateEdit          `json:"start_date,omitempty"`
+	DueDate          *ordinaryDateEdit          `json:"due_date,omitempty"`
+	SourceTaskID     *string                    `json:"source_task_id,omitempty"`
+}
+
+type ordinaryWorkMethodCatalog struct {
+	Builtins    []workmethod.Template `json:"builtins"`
+	LegacyAgile []workmethod.Template `json:"legacy_agile"`
 }
 
 type ordinaryDateEdit struct {
@@ -102,10 +116,22 @@ func (s ordinaryIssueSnapshot) issue() db.Issue {
 	return i
 }
 
-func (h *Handler) updateOrdinaryIssueViaRust(w http.ResponseWriter, r *http.Request, userID string, current db.Issue, params db.UpdateIssueParams, fields map[string]json.RawMessage) (after, before db.Issue, ok bool) {
+func (h *Handler) updateOrdinaryIssueViaRust(w http.ResponseWriter, r *http.Request, userID string, current db.Issue, params db.UpdateIssueParams, req UpdateIssueRequest, fields map[string]json.RawMessage, attachmentIDs []pgtype.UUID) (after, before db.Issue, attachmentsChanged, ok bool) {
 	edit := ordinaryIssueEdit{
-		Priority:     textToPtr(params.Priority),
-		SourceTaskID: uuidToPtr(params.SourceTaskID),
+		Title:           textToPtr(params.Title),
+		TitleBase:       req.TitleBase,
+		Description:     textToPtr(params.Description),
+		DescriptionBase: req.DescriptionBase,
+		Priority:        textToPtr(params.Priority),
+		SourceTaskID:    uuidToPtr(params.SourceTaskID),
+	}
+	for _, id := range attachmentIDs {
+		edit.AttachmentIDs = append(edit.AttachmentIDs, uuidToString(id))
+	}
+	if edit.Title != nil || edit.Description != nil {
+		edit.MethodCatalog = &ordinaryWorkMethodCatalog{
+			Builtins: workmethod.Builtins(), LegacyAgile: workmethod.LegacyAgileTemplates(),
+		}
 	}
 	if params.Position.Valid {
 		edit.Position = &params.Position.Float64
@@ -122,44 +148,52 @@ func (h *Handler) updateOrdinaryIssueViaRust(w http.ResponseWriter, r *http.Requ
 	payload, err := json.Marshal(edit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode issue edit")
-		return after, before, false
+		return after, before, false, false
 	}
 	resp, requested := h.requestRustIssue(w, r, http.MethodPut, "/internal/issues/"+uuidToString(current.ID), uuidToString(current.WorkspaceID), userID, payload)
 	if !requested {
-		return after, before, false
+		return after, before, false, false
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRustIssueReadBody+1))
-	if err != nil || len(body) > maxRustIssueReadBody {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
 			writeError(w, http.StatusBadGateway, "failed to read rust issue edit response")
 		}
-		return after, before, false
+		return after, before, false, false
 	}
-	if resp.StatusCode == http.StatusConflict && edit.ExpectedRevision != nil {
+	if resp.StatusCode == http.StatusConflict {
 		var conflict struct {
 			ActualRevision int64 `json:"actual_revision"`
+			FieldConflict  bool  `json:"field_conflict"`
 		}
-		if json.Unmarshal(body, &conflict) == nil && conflict.ActualRevision > 0 {
-			writeRevisionConflict(w, "issue", current.ID, *edit.ExpectedRevision, conflict.ActualRevision)
-			return after, before, false
+		if json.Unmarshal(body, &conflict) == nil {
+			if conflict.FieldConflict {
+				writeEditConflict(w, "issue", current.ID)
+				return after, before, false, false
+			}
+			if edit.ExpectedRevision != nil && conflict.ActualRevision > 0 {
+				writeRevisionConflict(w, "issue", current.ID, *edit.ExpectedRevision, conflict.ActualRevision)
+				return after, before, false, false
+			}
 		}
 		writeError(w, http.StatusBadGateway, "invalid rust issue revision conflict")
-		return after, before, false
+		return after, before, false, false
 	}
 	if resp.StatusCode != http.StatusOK {
 		writeRustIssueResponse(w, resp, bytes.NewReader(body))
-		return after, before, false
+		return after, before, false, false
 	}
 	var snapshots struct {
-		Before ordinaryIssueSnapshot `json:"before"`
-		After  ordinaryIssueSnapshot `json:"after"`
+		Before             ordinaryIssueSnapshot `json:"before"`
+		After              ordinaryIssueSnapshot `json:"after"`
+		AttachmentsChanged bool                  `json:"attachments_changed"`
 	}
 	if json.Unmarshal(body, &snapshots) != nil ||
 		snapshots.Before.ID != current.ID || snapshots.Before.WorkspaceID != current.WorkspaceID ||
 		snapshots.After.ID != current.ID || snapshots.After.WorkspaceID != current.WorkspaceID {
 		writeError(w, http.StatusBadGateway, "invalid rust issue edit snapshots")
-		return after, before, false
+		return after, before, false, false
 	}
-	return snapshots.After.issue(), snapshots.Before.issue(), true
+	return snapshots.After.issue(), snapshots.Before.issue(), snapshots.AttachmentsChanged, true
 }

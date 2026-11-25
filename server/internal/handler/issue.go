@@ -4383,7 +4383,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 	var issue db.Issue
 	attachmentsChanged := false
-	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params)
+	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params, attachmentIDs)
 	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
 			slog.Warn("resolve rust ordinary issue edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -4392,7 +4392,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rustEdit {
-		issue, prevIssue, ok = h.updateOrdinaryIssueViaRust(w, r, userID, prevIssue, params, rawFields)
+		issue, prevIssue, attachmentsChanged, ok = h.updateOrdinaryIssueViaRust(w, r, userID, prevIssue, params, req, rawFields, attachmentIDs)
 		if !ok {
 			return
 		}

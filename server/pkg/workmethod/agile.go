@@ -135,9 +135,15 @@ func agileTemplate() Template {
 	return m
 }
 
+// LegacyAgileTemplates supplies the historical procedure definitions for
+// catalog readers that apply the same assignment-preserving upgrade.
+func LegacyAgileTemplates() []Template {
+	return []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile(), storyArtifactAgile()}
+}
+
 func upgradeAgile(m Template) Template {
 	current := agileTemplate()
-	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile(), storyArtifactAgile()} {
+	for _, previous := range LegacyAgileTemplates() {
 		if m.Kind != previous.Kind || len(m.Steps) != len(previous.Steps) {
 			continue
 		}
