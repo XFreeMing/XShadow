@@ -12,6 +12,8 @@ pub use list::{
 };
 mod ordinary;
 pub use ordinary::{OrdinaryIssueEdit, OrdinaryIssueEditError, update_ordinary_issue};
+mod property_write;
+pub use property_write::{IssuePropertyWrite, IssuePropertyWriteError, write_issue_property};
 
 #[derive(Debug)]
 pub enum IssueReadError {

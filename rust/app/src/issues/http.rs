@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -15,6 +15,7 @@ use super::store::{
     self, CallerActor, IssueListQuery, IssueReadError, IssueTableFacetsQuery,
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
+use super::store::{IssuePropertyWrite, IssuePropertyWriteError};
 use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
 
 struct Issues {
@@ -150,8 +151,72 @@ pub fn router(pool: PgPool, token: String) -> Router {
                 .put(update_ordinary_issue)
                 .layer(DefaultBodyLimit::disable()),
         )
+        .route(
+            "/internal/issues/{id}/properties/{property_id}",
+            put(write_issue_property),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn write_issue_property(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path((id, property_id)): Path<(String, String)>,
+    Json(request): Json<IssuePropertyWrite>,
+) -> Response {
+    if !is_uuid(&id) || !is_uuid(&property_id) {
+        return error_response(StatusCode::NOT_FOUND, "issue or property not found");
+    }
+    let failure = if request.is_unset() {
+        "failed to unset property"
+    } else {
+        "failed to set property"
+    };
+    let property_id = property_id.to_ascii_lowercase();
+    match store::write_issue_property(
+        &app.pool,
+        &ctx.workspace_id,
+        &ctx.actor,
+        &id,
+        &property_id,
+        request,
+    )
+    .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(IssuePropertyWriteError::Access(error)) => issue_request_error(error, failure),
+        Err(IssuePropertyWriteError::PropertyNotFound) => {
+            error_response(StatusCode::NOT_FOUND, "property not found")
+        }
+        Err(IssuePropertyWriteError::Archived(name)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "code": "archived", "name": name })),
+        )
+            .into_response(),
+        Err(IssuePropertyWriteError::Required(name)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "code": "required", "name": name })),
+        )
+            .into_response(),
+        Err(IssuePropertyWriteError::DefinitionChanged) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "code": "definition_changed" })),
+        )
+            .into_response(),
+        Err(IssuePropertyWriteError::SizeLimit) => error_response(
+            StatusCode::BAD_REQUEST,
+            "issue properties exceed the 16KB size limit",
+        ),
+        Err(IssuePropertyWriteError::Database(error)) => {
+            eprintln!("rust issue property write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+        Err(IssuePropertyWriteError::Json(error)) => {
+            eprintln!("rust issue property write returned invalid JSON: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+    }
 }
 
 async fn update_ordinary_issue(
@@ -203,7 +268,7 @@ async fn table_rows(
 ) -> Response {
     match store::table_rows(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(error) => table_read_error(error, "failed to list table rows"),
+        Err(error) => issue_request_error(error, "failed to list table rows"),
     }
 }
 
@@ -214,7 +279,7 @@ async fn table_groups(
 ) -> Response {
     match store::table_groups(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => table_read_error(error, "failed to list table groups"),
+        Err(error) => issue_request_error(error, "failed to list table groups"),
     }
 }
 
@@ -225,11 +290,11 @@ async fn table_facets(
 ) -> Response {
     match store::table_facets(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
         Ok(response) => Json(response).into_response(),
-        Err(error) => table_read_error(error, "failed to list table facets"),
+        Err(error) => issue_request_error(error, "failed to list table facets"),
     }
 }
 
-fn table_read_error(error: IssueReadError, database_message: &'static str) -> Response {
+fn issue_request_error(error: IssueReadError, database_message: &'static str) -> Response {
     match error {
         IssueReadError::NotFound(message) => error_response(StatusCode::NOT_FOUND, message),
         IssueReadError::Forbidden(message) => error_response(StatusCode::FORBIDDEN, message),

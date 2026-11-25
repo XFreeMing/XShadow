@@ -175,20 +175,7 @@ pub async fn update_ordinary_issue(
         }
     }
 
-    let (actor_type, actor_id) = match actor {
-        CallerActor::Member { user_id } => ("member", user_id),
-        CallerActor::Agent { agent_id, .. } => ("agent", agent_id),
-    };
-    sqlx::query(
-        "SELECT set_config('multica.actor_type',$1,true),
-                set_config('multica.actor_id',$2,true),
-                set_config('multica.source_task_id',$3,true)",
-    )
-    .bind(actor_type)
-    .bind(actor_id)
-    .bind(edit.source_task_id.as_deref().unwrap_or(""))
-    .execute(&mut *tx)
-    .await?;
+    set_write_actor(&mut tx, actor, edit.source_task_id.as_deref()).await?;
 
     // Keep PostgreSQL's activity and duplicate rules. A position-only change
     // orders the issue without marking it recently active. Assigning status to
@@ -273,6 +260,28 @@ pub async fn update_ordinary_issue(
     };
     tx.commit().await?;
     Ok(write)
+}
+
+pub(super) async fn set_write_actor(
+    conn: &mut PgConnection,
+    actor: &CallerActor,
+    source_task_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let (actor_type, actor_id) = match actor {
+        CallerActor::Member { user_id } => ("member", user_id),
+        CallerActor::Agent { agent_id, .. } => ("agent", agent_id),
+    };
+    sqlx::query(
+        "SELECT set_config('multica.actor_type',$1,true),
+                set_config('multica.actor_id',$2,true),
+                set_config('multica.source_task_id',$3,true)",
+    )
+    .bind(actor_type)
+    .bind(actor_id)
+    .bind(source_task_id.unwrap_or(""))
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 async fn merge_description(

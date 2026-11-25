@@ -685,10 +685,6 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validation and write share the property advisory lock with definition
-	// updates: the value written is guaranteed to reference the definition
-	// state that a concurrent config edit's usage census will see (TOCTOU,
-	// clean-room review F1).
 	var updated db.Issue
 	var httpStatus int
 	var httpMsg string
@@ -696,20 +692,20 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
 	}
-	err := h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(q *db.Queries) error {
+	validate := func(q *db.Queries) (db.IssueProperty, json.RawMessage, error) {
 		def, err := q.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: propertyID, WorkspaceID: issue.WorkspaceID})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return fail(http.StatusNotFound, "property not found")
+				err = fail(http.StatusNotFound, "property not found")
 			}
-			return err
+			return def, nil, err
 		}
 		if def.ArchivedAt.Valid {
-			return fail(http.StatusBadRequest, fmt.Sprintf("property %q is archived and cannot receive new values", def.Name))
+			return def, nil, fail(http.StatusBadRequest, fmt.Sprintf("property %q is archived and cannot receive new values", def.Name))
 		}
 		value, err := validatePropertyValue(def, req.Value)
 		if err != nil {
-			return fail(http.StatusBadRequest, err.Error())
+			return def, nil, fail(http.StatusBadRequest, err.Error())
 		}
 		// Actor values point at another entity, so shape validation isn't
 		// enough: resolve each reference against this workspace before the
@@ -717,26 +713,61 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		if propertyTypeIsActor(def.Type) {
 			refs, err := actorRefsInValue(def.Type, value)
 			if err != nil {
-				return fail(http.StatusBadRequest, err.Error())
+				return def, nil, fail(http.StatusBadRequest, err.Error())
 			}
 			if status, msg := h.resolveActorRefs(r, uuidToString(issue.WorkspaceID), refs); status != 0 {
-				return fail(status, msg)
+				return def, nil, fail(status, msg)
 			}
 		}
-		updated, err = q.SetIssuePropertyValue(r.Context(), db.SetIssuePropertyValueParams{
-			ID:          issue.ID,
-			WorkspaceID: issue.WorkspaceID,
-			Key:         uuidToString(def.ID),
-			Value:       value,
-		})
-		if err != nil {
+		return def, value, nil
+	}
+	pilot, ok := h.rustIssuePropertyPilot(w, r, issue.WorkspaceID)
+	if !ok {
+		return
+	}
+	var err error
+	if pilot {
+		for range 3 {
+			var def db.IssueProperty
+			var value json.RawMessage
+			def, value, err = validate(h.Queries)
+			if err != nil {
+				break
+			}
+			var operation rustIssuePropertySet
+			operation.Set.Type, operation.Set.Config, operation.Set.Value = def.Type, def.Config, value
+			changed, retry, ok := h.writeIssuePropertyViaRust(w, r, issue, propertyID, userID, operation)
+			if !retry {
+				if ok {
+					h.writeIssuePropertyChange(w, r, changed, userID)
+				}
+				return
+			}
+		}
+		if err == nil {
+			writeError(w, http.StatusConflict, "property definition changed; retry the edit")
+			return
+		}
+	} else {
+		// Validation and write share the advisory lock across both backends.
+		// Rust checks that the validated config is still current under that lock.
+		err = h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(q *db.Queries) error {
+			def, value, err := validate(q)
+			if err != nil {
+				return err
+			}
+			updated, err = q.SetIssuePropertyValue(r.Context(), db.SetIssuePropertyValueParams{
+				ID:          issue.ID,
+				WorkspaceID: issue.WorkspaceID,
+				Key:         uuidToString(def.ID),
+				Value:       value,
+			})
 			if isCheckViolation(err) {
 				return fail(http.StatusBadRequest, "issue properties exceed the 16KB size limit")
 			}
 			return err
-		}
-		return nil
-	})
+		})
+	}
 	if err != nil {
 		if errors.Is(err, errClientRejected) {
 			writeError(w, httpStatus, httpMsg)
@@ -747,15 +778,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspaceID := uuidToString(updated.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	properties := parseIssueProperties(updated.Properties)
-	h.publish(protocol.EventIssuePropertiesChanged, workspaceID, actorType, actorID, map[string]any{
-		"issue_id":       uuidToString(updated.ID),
-		"properties":     properties,
-		"issue_revision": updated.Revision,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"properties": properties, "issue_revision": updated.Revision})
+	h.writeIssuePropertyChange(w, r, updated, userID)
 }
 
 func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
@@ -772,6 +795,19 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	pilot, ok := h.rustIssuePropertyPilot(w, r, issue.WorkspaceID)
+	if !ok {
+		return
+	}
+	if pilot {
+		updated, retry, ok := h.writeIssuePropertyViaRust(w, r, issue, propertyID, userID, "unset")
+		if retry {
+			writeError(w, http.StatusBadGateway, "invalid rust issue property response")
+		} else if ok {
+			h.writeIssuePropertyChange(w, r, updated, userID)
+		}
 		return
 	}
 
@@ -826,6 +862,10 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.writeIssuePropertyChange(w, r, updated, userID)
+}
+
+func (h *Handler) writeIssuePropertyChange(w http.ResponseWriter, r *http.Request, updated db.Issue, userID string) {
 	workspaceID := uuidToString(updated.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	properties := parseIssueProperties(updated.Properties)
