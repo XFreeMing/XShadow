@@ -74,8 +74,9 @@ pub async fn batch_delete_issues(
     let mut goal_links_changed = false;
     let excluded = issue_ids.clone();
     for issue_id in &issue_ids {
-        let (detached, cleared, goal_changed, _) =
-            execute_issue_delete_steps(&mut tx, workspace_id, issue_id, &excluded, None).await?;
+        let (detached, cleared, goal_changed, _, _) =
+            execute_issue_delete_steps(&mut tx, workspace_id, issue_id, &excluded, None, None)
+                .await?;
         detached_children.extend(detached);
         cleared_duplicates.extend(cleared);
         goal_links_changed = goal_links_changed || goal_changed;

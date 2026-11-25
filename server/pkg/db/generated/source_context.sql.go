@@ -617,6 +617,51 @@ func (q *Queries) ListSourceContextObjectIntentURLsByWorkspace(ctx context.Conte
 	return items, nil
 }
 
+const listUnreferencedSourceContextDeleteIntents = `-- name: ListUnreferencedSourceContextDeleteIntents :many
+SELECT intent.storage_key, intent.attachment_id, intent.object_url
+FROM issue_source_context_object_intent intent
+WHERE intent.workspace_id = $1
+  AND intent.source_context_id = $2
+  AND intent.state = 'pending'
+  AND intent.lease_token IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM attachment a
+    WHERE a.workspace_id = intent.workspace_id
+      AND (a.id = intent.attachment_id OR a.url = intent.object_url)
+  )
+`
+
+type ListUnreferencedSourceContextDeleteIntentsParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	SourceContextID pgtype.UUID `json:"source_context_id"`
+}
+
+type ListUnreferencedSourceContextDeleteIntentsRow struct {
+	StorageKey   string      `json:"storage_key"`
+	AttachmentID pgtype.UUID `json:"attachment_id"`
+	ObjectUrl    string      `json:"object_url"`
+}
+
+func (q *Queries) ListUnreferencedSourceContextDeleteIntents(ctx context.Context, arg ListUnreferencedSourceContextDeleteIntentsParams) ([]ListUnreferencedSourceContextDeleteIntentsRow, error) {
+	rows, err := q.db.Query(ctx, listUnreferencedSourceContextDeleteIntents, arg.WorkspaceID, arg.SourceContextID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnreferencedSourceContextDeleteIntentsRow{}
+	for rows.Next() {
+		var i ListUnreferencedSourceContextDeleteIntentsRow
+		if err := rows.Scan(&i.StorageKey, &i.AttachmentID, &i.ObjectUrl); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordSourceContextDeletionObjectIntent = `-- name: RecordSourceContextDeletionObjectIntent :one
 INSERT INTO issue_source_context_object_intent (
     storage_key, workspace_id, source_context_id, attachment_id, object_url
@@ -744,26 +789,18 @@ const sourceContextObjectIntentIsReferenced = `-- name: SourceContextObjectInten
 SELECT EXISTS (
     SELECT 1 FROM attachment
     WHERE workspace_id = $1
-      AND source_context_id = $2
-      AND id = $3
-      AND url = $4
+      AND (id = $2 OR url = $3)
 ) AS referenced
 `
 
 type SourceContextObjectIntentIsReferencedParams struct {
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	SourceContextID pgtype.UUID `json:"source_context_id"`
-	AttachmentID    pgtype.UUID `json:"attachment_id"`
-	ObjectUrl       string      `json:"object_url"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	AttachmentID pgtype.UUID `json:"attachment_id"`
+	ObjectUrl    string      `json:"object_url"`
 }
 
 func (q *Queries) SourceContextObjectIntentIsReferenced(ctx context.Context, arg SourceContextObjectIntentIsReferencedParams) (bool, error) {
-	row := q.db.QueryRow(ctx, sourceContextObjectIntentIsReferenced,
-		arg.WorkspaceID,
-		arg.SourceContextID,
-		arg.AttachmentID,
-		arg.ObjectUrl,
-	)
+	row := q.db.QueryRow(ctx, sourceContextObjectIntentIsReferenced, arg.WorkspaceID, arg.AttachmentID, arg.ObjectUrl)
 	var referenced bool
 	err := row.Scan(&referenced)
 	return referenced, err

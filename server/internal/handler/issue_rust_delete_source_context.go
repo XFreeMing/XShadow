@@ -10,17 +10,17 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func (h *Handler) sourceContextHasNoDeleteSideEffects(ctx context.Context, source db.IssueSourceContext) (bool, error) {
+func (h *Handler) sourceContextFilesForDelete(ctx context.Context, source db.IssueSourceContext) ([]db.Attachment, bool, error) {
 	attachments, err := h.Queries.ListAttachmentsBySourceContext(ctx, db.ListAttachmentsBySourceContextParams{
 		WorkspaceID: source.WorkspaceID, SourceContextID: source.ID,
 	})
-	if err != nil || len(attachments) != 0 {
-		return false, err
+	if err != nil {
+		return nil, false, err
 	}
 	intentCount, err := h.Queries.CountSourceContextObjectIntents(ctx, db.CountSourceContextObjectIntentsParams{
 		WorkspaceID: source.WorkspaceID, SourceContextID: source.ID,
 	})
-	return intentCount == 0 && err == nil, err
+	return attachments, intentCount == 0 && err == nil, err
 }
 
 func (h *Handler) sourceContextDeleteCommitted(ctx context.Context, issue db.Issue, contextID pgtype.UUID) bool {

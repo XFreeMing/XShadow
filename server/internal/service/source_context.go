@@ -676,7 +676,7 @@ func (s *TaskService) CleanupSourceContextObjectIntents(ctx context.Context, lim
 			return cleaned, fmt.Errorf("claim source context object intent: %w", err)
 		}
 		referenced, err := s.Queries.SourceContextObjectIntentIsReferenced(ctx, db.SourceContextObjectIntentIsReferencedParams{
-			WorkspaceID: intent.WorkspaceID, SourceContextID: intent.SourceContextID,
+			WorkspaceID:  intent.WorkspaceID,
 			AttachmentID: intent.AttachmentID, ObjectUrl: intent.ObjectUrl,
 		})
 		if err != nil {

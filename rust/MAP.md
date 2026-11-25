@@ -32,6 +32,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_DELETE_SOURCE_CONTEXT_PILOT` 须在同一工作区启用单任务删除试点。首批覆盖无项目、仅有一条无文件手动附着来源上下文的普通成员任务。Go 从数据库读取权威上下文标识并作为可信计划下发。Rust 持锁复核项目形态、上下文归属、手动来源、`origin_task_id` 为空及无文件/意图后，在删除事务内消费精确匹配的来源上下文行。不触及来源任务、评论或其他上下文。批量、智能体来源、来源文件及混合形态继续走 Go。
 
+`XSHADOW_ISSUES_RUST_DELETE_SOURCE_CONTEXT_FILES_PILOT` 须在同一工作区同时启用单任务删除与无文件来源删除试点。覆盖无项目、仅有一条手动附着来源上下文且冻结首方副本上传的普通成员任务。Go 一次性读取上下文与其副本行并下发不可变计划。Rust 持锁复核完整副本集合、无既有对象意图后，在删除事务内写入持久清理意图、删除副本与上下文并删除任务。Go 只根据已校验回执对可信副本 URL 做即时物理删除，失败仍由既有定时回收处理。项目来源、直接上传、混合形态及非规范存储继续走 Go。
+
 `XSHADOW_ISSUES_RUST_BATCH_DELETE_PILOT` 为 `POST /api/issues/batch-delete` 的普通成员批量删除独立指定试点工作区，与单任务删除试点无关。Go 先解析试点，再判断可见选中项是否全部为普通可删形态；任一项不适用则整批走 Go。Rust 在单事务内按确定性顺序持锁、复核权限与形态，再按与 Go 相同的排除规则解除子任务与重复关联、清理目标链接并删除各行；已列入本批的子/重复任务不会被提前解绑。选定工作区在上游不可用或回执不明确时返回 `503`/`502`，不在失败后静默回退 Go。
 
 `XSHADOW_ISSUES_RUST_BATCH_ASSIGN_PILOT` 为 `POST /api/issues/batch-update` 的普通成员批量指派至本人拥有的直接智能体独立指定试点工作区，且须与 `XSHADOW_ISSUES_RUST_ASSIGN_PILOT` 同时作用于同一工作区。Go 先校验仅含完整的 `assignee_type=agent` 与 `assignee_id` 对及可选 `suppress_run`，再按可见行逐条预计算队列归因，复用单任务 assign 事务写入与运行态通知外盒。隐藏/缺失、无权限、形态不适用或持锁冲突的行被跳过且不计数；传输或回执异常时中止后续行。标量批量试点、单任务 assign 试点与其他字段仍走各自既有路径。

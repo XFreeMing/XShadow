@@ -18,9 +18,10 @@ import (
 )
 
 type rustIssueDeleteWrite struct {
-	SourceTaskID      *string                             `json:"source_task_id,omitempty"`
-	AttachmentCleanup []rustIssueDeleteAttachmentPlanItem `json:"attachment_cleanup,omitempty"`
-	SourceContextID   *string                             `json:"source_context_id,omitempty"`
+	SourceTaskID              *string                             `json:"source_task_id,omitempty"`
+	AttachmentCleanup         []rustIssueDeleteAttachmentPlanItem `json:"attachment_cleanup,omitempty"`
+	SourceContextID           *string                             `json:"source_context_id,omitempty"`
+	SourceContextCloneCleanup []rustIssueDeleteAttachmentPlanItem `json:"source_context_clone_cleanup,omitempty"`
 }
 
 type rustIssueDeleteClearedDuplicate struct {
@@ -29,13 +30,14 @@ type rustIssueDeleteClearedDuplicate struct {
 }
 
 type rustIssueDeleteResult struct {
-	Deleted                    bool                              `json:"deleted"`
-	IssueID                    string                            `json:"issue_id"`
-	DetachedChildren           []string                          `json:"detached_children"`
-	ClearedDuplicates          []rustIssueDeleteClearedDuplicate `json:"cleared_duplicates"`
-	GoalLinksChanged           bool                              `json:"goal_links_changed"`
-	ObjectCleanupAttachmentIDs []string                          `json:"object_cleanup_attachment_ids,omitempty"`
-	DeletedSourceContextID     string                            `json:"deleted_source_context_id,omitempty"`
+	Deleted                      bool                              `json:"deleted"`
+	IssueID                      string                            `json:"issue_id"`
+	DetachedChildren             []string                          `json:"detached_children"`
+	ClearedDuplicates            []rustIssueDeleteClearedDuplicate `json:"cleared_duplicates"`
+	GoalLinksChanged             bool                              `json:"goal_links_changed"`
+	ObjectCleanupAttachmentIDs   []string                          `json:"object_cleanup_attachment_ids,omitempty"`
+	DeletedSourceContextID       string                            `json:"deleted_source_context_id,omitempty"`
+	DeletedSourceContextCloneIDs []string                          `json:"deleted_source_context_clone_ids,omitempty"`
 }
 
 // issueOrdinaryDeleteMemberRuntimeBaseline reports member-created tasks without
@@ -102,9 +104,10 @@ func (h *Handler) issueOrdinaryDeleteEligible(ctx context.Context, issue db.Issu
 }
 
 type rustIssueDeleteSelection struct {
-	UseRust         bool
-	AttachmentPlan  []rustIssueDeleteAttachmentPlanItem
-	SourceContextID pgtype.UUID
+	UseRust                bool
+	AttachmentPlan         []rustIssueDeleteAttachmentPlanItem
+	SourceContextID        pgtype.UUID
+	SourceContextClonePlan []rustIssueDeleteAttachmentPlanItem
 }
 
 // selectRustIssueDelete selects member-authenticated deletes of member-created
@@ -142,11 +145,29 @@ func (h *Handler) selectRustIssueDelete(r *http.Request, issue db.Issue) (rustIs
 		if err != nil || !inSourcePilot {
 			return none, err
 		}
-		fileFreeContext, err := h.sourceContextHasNoDeleteSideEffects(ctx, source)
-		if err != nil || !fileFreeContext {
+		contextFiles, noPendingCleanup, err := h.sourceContextFilesForDelete(ctx, source)
+		if err != nil || !noPendingCleanup {
 			return none, err
 		}
-		return rustIssueDeleteSelection{UseRust: true, SourceContextID: source.ID}, nil
+		if len(contextFiles) == 0 {
+			return rustIssueDeleteSelection{UseRust: true, SourceContextID: source.ID}, nil
+		}
+		if len(h.IssueReadBridge.DeleteSourceContextFilesPilotScopes) == 0 {
+			return none, nil
+		}
+		inFilesPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeleteSourceContextFilesPilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
+		if err != nil || !inFilesPilot {
+			return none, err
+		}
+		clonePlan := h.buildRustIssueDeleteSourceContextClonePlan(source, contextFiles)
+		if len(clonePlan) == 0 {
+			return none, nil
+		}
+		return rustIssueDeleteSelection{
+			UseRust:                true,
+			SourceContextID:        source.ID,
+			SourceContextClonePlan: clonePlan,
+		}, nil
 	}
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.DeleteAttachPilotScopes) == 0 {
 		return none, nil
@@ -171,8 +192,12 @@ func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, iss
 		SourceContextID: uuidToPtr(selection.SourceContextID),
 	}
 	withAttachments := len(selection.AttachmentPlan) > 0
+	withSourceClones := len(selection.SourceContextClonePlan) > 0
 	if withAttachments {
 		request.AttachmentCleanup = selection.AttachmentPlan
+	}
+	if withSourceClones {
+		request.SourceContextCloneCleanup = selection.SourceContextClonePlan
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {
@@ -235,6 +260,20 @@ func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, iss
 		writeError(w, http.StatusBadGateway, "invalid rust issue delete response")
 		return
 	}
+	if withSourceClones {
+		if !rustIssueDeleteAttachmentIDsMatchPlan(selection.SourceContextClonePlan, reply.DeletedSourceContextCloneIDs) ||
+			!h.sourceContextCloneCleanupCommitted(r.Context(), issue.WorkspaceID, selection.SourceContextID, selection.SourceContextClonePlan) {
+			writeError(w, http.StatusBadGateway, "invalid rust issue delete source context clone receipt")
+			return
+		}
+		if len(reply.ObjectCleanupAttachmentIDs) > 0 {
+			writeError(w, http.StatusBadGateway, "invalid rust issue delete response")
+			return
+		}
+	} else if len(reply.DeletedSourceContextCloneIDs) > 0 {
+		writeError(w, http.StatusBadGateway, "invalid rust issue delete response")
+		return
+	}
 	detached, cleared, ok := rustIssueDeleteSnapshots(issue, reply)
 	if !ok {
 		writeError(w, http.StatusBadGateway, "invalid rust issue delete snapshots")
@@ -247,6 +286,9 @@ func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, iss
 	h.publishClearedDuplicates(r.Context(), cleared, actorType, actorID)
 	if reply.GoalLinksChanged {
 		h.publishGoalChanged(uuidToString(issue.WorkspaceID), actorType, actorID)
+	}
+	if withSourceClones {
+		h.deleteS3Objects(r.Context(), planSourceContextCloneURLs(selection.SourceContextClonePlan))
 	}
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", resolvedID, "workspace_id", uuidToString(issue.WorkspaceID), "backend", "rust")...)
 	w.WriteHeader(http.StatusNoContent)

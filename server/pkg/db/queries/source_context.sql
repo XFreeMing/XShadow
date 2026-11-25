@@ -162,10 +162,21 @@ RETURNING intent.*;
 SELECT EXISTS (
     SELECT 1 FROM attachment
     WHERE workspace_id = sqlc.arg(workspace_id)
-      AND source_context_id = sqlc.arg(source_context_id)
-      AND id = sqlc.arg(attachment_id)
-      AND url = sqlc.arg(object_url)
+      AND (id = sqlc.arg(attachment_id) OR url = sqlc.arg(object_url))
 ) AS referenced;
+
+-- name: ListUnreferencedSourceContextDeleteIntents :many
+SELECT intent.storage_key, intent.attachment_id, intent.object_url
+FROM issue_source_context_object_intent intent
+WHERE intent.workspace_id = sqlc.arg(workspace_id)
+  AND intent.source_context_id = sqlc.arg(source_context_id)
+  AND intent.state = 'pending'
+  AND intent.lease_token IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM attachment a
+    WHERE a.workspace_id = intent.workspace_id
+      AND (a.id = intent.attachment_id OR a.url = intent.object_url)
+  );
 
 -- name: ReleaseSourceContextObjectIntent :execrows
 UPDATE issue_source_context_object_intent

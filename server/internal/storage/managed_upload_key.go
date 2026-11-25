@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"fmt"
+	"path"
 	"strings"
 
 	"github.com/google/uuid"
@@ -60,4 +62,53 @@ func ScopedWorkspaceAttachmentKeyValid(workspaceID, attachmentID, key string) bo
 		}
 	}
 	return true
+}
+
+// ScopedSourceContextCloneKeyValid checks workspaces/<ws>/source-context/<clone>
+// or workspaces/<ws>/source-context/<clone>.<single-ext> with no extra segments.
+func ScopedSourceContextCloneKeyValid(workspaceID, cloneID, key string) bool {
+	prefix := fmt.Sprintf("workspaces/%s/source-context/%s", workspaceID, cloneID)
+	if key == prefix {
+		return true
+	}
+	dot := prefix + "."
+	if !strings.HasPrefix(key, dot) {
+		return false
+	}
+	ext := strings.TrimPrefix(key, dot)
+	if ext == "" {
+		return false
+	}
+	for _, c := range ext {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// ManagedSourceContextCloneKey derives the canonical first-party clone object key
+// when KeyFromURL(storedURL) and ObjectURL(key) round-trip with the adapter.
+func ManagedSourceContextCloneKey(store UploadKeyAdapter, workspaceID, cloneID, filename, storedURL string) (string, bool) {
+	if store == nil || storedURL == "" || workspaceID == "" || cloneID == "" {
+		return "", false
+	}
+	if _, err := uuid.Parse(workspaceID); err != nil {
+		return "", false
+	}
+	if _, err := uuid.Parse(cloneID); err != nil {
+		return "", false
+	}
+	derived := strings.TrimSpace(store.KeyFromURL(storedURL))
+	if derived == "" || !ScopedSourceContextCloneKeyValid(workspaceID, cloneID, derived) {
+		return "", false
+	}
+	if store.ObjectURL(derived) != storedURL {
+		return "", false
+	}
+	canonical := fmt.Sprintf("workspaces/%s/source-context/%s%s", workspaceID, cloneID, path.Ext(filename))
+	if derived != canonical {
+		return "", false
+	}
+	return derived, true
 }
