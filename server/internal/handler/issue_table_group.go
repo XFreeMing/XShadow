@@ -719,6 +719,10 @@ func (group resolvedIssueTableGroup) descriptor(raw string, count int64, context
 }
 
 func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string, addArg func(any) string) (string, bool) {
+	return group.rowPredicate(w, key, addArg, &rustIssueTableGroup{})
+}
+
+func (group resolvedIssueTableGroup) rowPredicate(w http.ResponseWriter, key string, addArg func(any) string, native *rustIssueTableGroup) (string, bool) {
 	if group.kind == "compound" && group.primary != nil {
 		const prefix = "compound:"
 		if !strings.HasPrefix(key, prefix) {
@@ -748,13 +752,17 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 			writeError(w, http.StatusBadRequest, "invalid group_key")
 			return "", false
 		}
-		primaryPredicate, ok := group.primary.predicate(w, string(decoded), addArg)
+		primaryPredicate, ok := group.primary.rowPredicate(w, string(decoded), addArg, native)
 		if !ok {
 			return "", false
 		}
 		if group.secondaryCategory {
-			return fmt.Sprintf("(%s) AND i.status = ANY(%s::text[])", primaryPredicate, addArg(group.categoryKeysFor(status))), true
+			keys := group.categoryKeysFor(status)
+			normalized := append([]string{}, keys...)
+			native.Statuses = &normalized
+			return fmt.Sprintf("(%s) AND i.status = ANY(%s::text[])", primaryPredicate, addArg(keys)), true
 		}
+		native.Statuses = &[]string{status}
 		return fmt.Sprintf("(%s) AND i.status = %s::text", primaryPredicate, addArg(status)), true
 	}
 	switch group.kind {
@@ -774,6 +782,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 			writeError(w, http.StatusBadRequest, "invalid group_key")
 			return "", false
 		}
+		native.Statuses = &[]string{status}
 		return fmt.Sprintf("i.status = %s::text", addArg(status)), true
 	case "status_category":
 		category, ok := parseStatusCategoryGroupKey(key)
@@ -788,7 +797,10 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 		// Expanded to concrete keys rather than wrapping the column in a
 		// category function: `status = ANY(...)` keeps the (workspace_id,
 		// status) index, a function wrapper would force a workspace scan.
-		return fmt.Sprintf("i.status = ANY(%s::text[])", addArg(group.categoryKeysFor(category))), true
+		keys := group.categoryKeysFor(category)
+		normalized := append([]string{}, keys...)
+		native.Statuses = &normalized
+		return fmt.Sprintf("i.status = ANY(%s::text[])", addArg(keys)), true
 	case "assignee":
 		const prefix = "assignee:"
 		if !strings.HasPrefix(key, prefix) {
@@ -797,6 +809,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 		}
 		raw := strings.TrimPrefix(key, prefix)
 		if raw == "unassigned" {
+			native.Unassigned = true
 			return "i.assignee_type IS NULL AND i.assignee_id IS NULL", true
 		}
 		parts := strings.SplitN(raw, ":", 2)
@@ -809,6 +822,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 			writeError(w, http.StatusBadRequest, "invalid group_key")
 			return "", false
 		}
+		native.Assignee = &rustIssueActor{Type: parts[0], ID: uuidToString(id)}
 		return fmt.Sprintf("i.assignee_type = %s::text AND i.assignee_id = %s::uuid", addArg(parts[0]), addArg(id)), true
 	case "project":
 		const prefix = "project:"
@@ -818,6 +832,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 		}
 		raw := strings.TrimPrefix(key, prefix)
 		if raw == "none" {
+			native.NoProject = true
 			return "i.project_id IS NULL", true
 		}
 		id, err := util.ParseUUID(raw)
@@ -825,6 +840,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 			writeError(w, http.StatusBadRequest, "invalid group_key")
 			return "", false
 		}
+		native.ProjectID = uuidToPtr(id)
 		return fmt.Sprintf("i.project_id = %s::uuid", addArg(id)), true
 	case "parent":
 		const prefix = "parent:"
@@ -834,6 +850,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 		}
 		raw := strings.TrimPrefix(key, prefix)
 		if raw == "none" {
+			native.NoParent = true
 			return "i.parent_issue_id IS NULL", true
 		}
 		id, err := util.ParseUUID(raw)
@@ -841,6 +858,7 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 			writeError(w, http.StatusBadRequest, "invalid group_key")
 			return "", false
 		}
+		native.ParentID = uuidToPtr(id)
 		return fmt.Sprintf("i.parent_issue_id = %s::uuid", addArg(id)), true
 	case "property":
 		prefix := "property:" + group.propertyID + ":"
@@ -861,12 +879,15 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 		}
 		value := string(decoded)
 		keySQL := "'" + group.propertyID + "'"
+		jsonType := map[string]string{"select": "string", "checkbox": "boolean"}[group.propertyType]
+		property := &rustIssueGroupProperty{ID: group.propertyID, JSONType: jsonType, Value: value, State: state}
 		switch state {
 		case "unset":
 			if value != "" {
 				writeError(w, http.StatusBadRequest, "invalid group_key")
 				return "", false
 			}
+			native.Property = property
 			return fmt.Sprintf("NOT (i.properties ? %s)", keySQL), true
 		case "value":
 			if group.propertyType == "select" {
@@ -874,18 +895,23 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 					writeError(w, http.StatusBadRequest, "invalid group_key")
 					return "", false
 				}
+				native.Property = property
 				return fmt.Sprintf("jsonb_typeof(i.properties -> %s) = 'string' AND i.properties ->> %s = %s::text", keySQL, keySQL, addArg(value)), true
 			}
 			if value != "true" && value != "false" {
 				writeError(w, http.StatusBadRequest, "invalid group_key")
 				return "", false
 			}
+			native.Property = property
 			return fmt.Sprintf("jsonb_typeof(i.properties -> %s) = 'boolean' AND i.properties ->> %s = %s::text", keySQL, keySQL, addArg(value)), true
 		case "unavailable":
 			if group.propertyType == "select" && value != "" {
+				property.State = "value"
+				native.Property = property
 				return fmt.Sprintf("jsonb_typeof(i.properties -> %s) = 'string' AND i.properties ->> %s = %s::text", keySQL, keySQL, addArg(value)), true
 			}
-			return fmt.Sprintf("i.properties ? %s AND jsonb_typeof(i.properties -> %s) <> %s::text", keySQL, keySQL, addArg(map[string]string{"select": "string", "checkbox": "boolean"}[group.propertyType])), true
+			native.Property = property
+			return fmt.Sprintf("i.properties ? %s AND jsonb_typeof(i.properties -> %s) <> %s::text", keySQL, keySQL, addArg(jsonType)), true
 		default:
 			writeError(w, http.StatusBadRequest, "invalid group_key")
 			return "", false

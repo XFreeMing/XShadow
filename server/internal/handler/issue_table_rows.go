@@ -331,9 +331,23 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 	if groupKey != nil {
 		predicateKey = *groupKey
 	}
-	groupPredicate, ok := group.predicate(w, predicateKey, addArg)
+	var nativeGroup rustIssueTableGroup
+	groupPredicate, ok := group.rowPredicate(w, predicateKey, addArg, &nativeGroup)
 	if !ok {
 		return issueTableRowsResponse{}, false
+	}
+	var promotedStatuses *[]string
+	if !request.Hierarchy.Enabled && group.kind == "compound" && group.primary != nil &&
+		group.primary.kind == "parent" && group.secondaryFiltered {
+		keys := append([]string{}, group.secondaryValues...)
+		if group.secondaryCategory {
+			keys = keys[:0]
+			for _, category := range group.secondaryValues {
+				keys = append(keys, group.categoryKeysFor(category)...)
+			}
+		}
+		promotedStatuses = &keys
+		nativeGroup.PromotedParentStatuses = promotedStatuses
 	}
 	branchPredicate := "TRUE"
 	if request.Hierarchy.Enabled {
@@ -361,9 +375,13 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 		return issueTableRowsResponse{}, false
 	}
 	if pilot {
-		var cursorTimeZone string
+		var groupFilter *rustIssueTableGroup
+		if group.kind != "none" {
+			groupFilter = &nativeGroup
+		}
+		query := prepareRustIssueTableQuery(compiled.native, request, resolvedSort, cursor, limit, groupFilter)
 		if resolvedSort.castType == "timestamptz" {
-			if err := tx.QueryRow(r.Context(), "SHOW TimeZone").Scan(&cursorTimeZone); err != nil {
+			if err := tx.QueryRow(r.Context(), "SHOW TimeZone").Scan(&query.CursorTimeZone); err != nil {
 				writeIssueTableQueryFailure(w, r, "failed to resolve table sort")
 				return issueTableRowsResponse{}, false
 			}
@@ -373,7 +391,7 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 			return issueTableRowsResponse{}, false
 		}
 		committed = true
-		return baseHandler.queryRustIssueTableRows(w, r, compiled, request, resolvedSort, cursor, limit, branchIdentity, cursorTimeZone)
+		return baseHandler.queryRustIssueTableRows(w, r, compiled, request, query, groupKey, branchIdentity)
 	}
 	limitRef := addArg(limit + 1)
 
@@ -393,18 +411,8 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 ), `, compiled.where, groupPredicate)
 		pageSource = "membership"
 		pagePredicate = branchPredicate
-	} else if group.kind == "compound" &&
-		group.primary != nil &&
-		group.primary.kind == "parent" &&
-		group.secondaryFiltered {
-		visibleKeys := group.secondaryValues
-		if group.secondaryCategory {
-			visibleKeys = nil
-			for _, category := range group.secondaryValues {
-				visibleKeys = append(visibleKeys, group.categoryKeysFor(category)...)
-			}
-		}
-		visibleRef := addArg(visibleKeys)
+	} else if promotedStatuses != nil {
+		visibleRef := addArg(*promotedStatuses)
 		ctePrefix += fmt.Sprintf(`membership AS NOT MATERIALIZED (
   SELECT i.*
   FROM issue i
