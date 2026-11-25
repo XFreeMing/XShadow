@@ -5315,6 +5315,17 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	batchStatusPilot := false
+	if batchStatusKey != "" {
+		batchStatusPilot, err = h.batchOrdinaryActiveStatusPilotActive(r, wsUUID, rawUpdates, req.Updates, batchStatusKey)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				slog.Warn("resolve rust batch ordinary active status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
+			}
+			return
+		}
+	}
 
 	rustBatch, err := h.batchOrdinaryIssueEditUsesRust(r, wsUUID, rawUpdates)
 	if err != nil {
@@ -5519,6 +5530,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		var issue db.Issue
 		var nativeAssignment rustAssignWriteResult
+		var nativeStatus rustStatusWriteResult
 		if batchAssignPilot && handoff == nil &&
 			h.batchAssignIssueUsesOwnedNative(r.Context(), userID, prevIssue, params) {
 			actorType, actorID := h.resolveActor(r, userID, workspaceID)
@@ -5535,7 +5547,21 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				prevIssue, issue = result.before, result.after
 			}
 		}
-		if !nativeAssignment.after.ID.Valid {
+		if batchStatusPilot && h.batchStatusIssueUsesRust(r.Context(), prevIssue, issueStatusGuard, handoff, req.Updates.SuppressRun) {
+			outcome, result := h.tryBatchUpdateIssueStatusViaRust(
+				w, r, userID, prevIssue, issueStatusGuard, req.Updates.SuppressRun,
+			)
+			switch outcome {
+			case batchStatusRustAbort:
+				return
+			case batchStatusRustSkipRow:
+				continue
+			case batchStatusRustDone:
+				nativeStatus = result
+				prevIssue, issue = result.before, result.after
+			}
+		}
+		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid {
 			writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 			if req.Updates.Description != nil {
 				// One batch-level base cannot describe multiple issue documents.
@@ -5605,7 +5631,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if handoff != nil {
 			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 		}
-		h.publishIssueUpdated(workspaceID, actorType, actorID, batchPayload, nativeAssignment.assignActivityID)
+		batchActivityReceipt := nativeAssignment.assignActivityID
+		if batchActivityReceipt == "" {
+			batchActivityReceipt = nativeStatus.statusActivityID
+		}
+		h.publishIssueUpdated(workspaceID, actorType, actorID, batchPayload, batchActivityReceipt)
 
 		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
 		// mirrors UpdateIssue. See that handler for the rationale.
@@ -5620,7 +5650,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			if taskID, parseErr := util.ParseUUID(nativeAssignment.queuedTaskID); parseErr == nil {
 				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
 			}
-		} else if willRun {
+		} else if !nativeStatus.after.ID.Valid && willRun {
 			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
 

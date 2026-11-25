@@ -675,6 +675,7 @@ async fn update_issue_status(
     if !is_uuid(&id) {
         return error_response(StatusCode::NOT_FOUND, "issue not found");
     }
+    let batch_scope = edit.ordinary_active_batch.is_some();
     match store::update_issue_status(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
         Ok(write) => Json(write).into_response(),
         Err(IssueStatusEditError::Access(error)) => {
@@ -693,8 +694,22 @@ async fn update_issue_status(
             Json(json!({ "actual_revision": actual_revision })),
         )
             .into_response(),
+        Err(error @ (IssueStatusEditError::Database(_) | IssueStatusEditError::Snapshot(_)))
+            if batch_scope =>
+        {
+            eprintln!("rust issue batch status rolled back: {error:?}");
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "batch_rollback": true })),
+            )
+                .into_response()
+        }
         Err(IssueStatusEditError::Database(error)) => {
             eprintln!("rust issue status write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+        Err(IssueStatusEditError::CommitFailed(error)) => {
+            eprintln!("rust issue status commit failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
         }
         Err(IssueStatusEditError::Snapshot(error)) => {

@@ -18,6 +18,13 @@ const ACTIVE_BUILTINS: &[&str] = &["backlog", "todo", "in_progress", "in_review"
 const TERMINAL_BUILTINS: &[&str] = &["done", "cancelled"];
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OrdinaryActiveBatchTrust {
+    #[serde(default)]
+    pub expected_project_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueStatusEdit {
     pub expected_revision: i64,
     pub status: String,
@@ -28,6 +35,8 @@ pub struct IssueStatusEdit {
     pub activity_id: String,
     pub prepared_enqueue: Option<PreparedStatusEnqueue>,
     pub terminal_scope: Option<TerminalScope>,
+    #[serde(default)]
+    pub ordinary_active_batch: Option<OrdinaryActiveBatchTrust>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +67,7 @@ pub enum IssueStatusEditError {
     DispatchSensitive,
     RevisionConflict(i64),
     Database(sqlx::Error),
+    CommitFailed(sqlx::Error),
     Snapshot(serde_json::Error),
 }
 
@@ -130,6 +140,7 @@ pub async fn update_issue_status(
     let terminal = is_terminal_builtin_status(&edit.status);
     let terminal_scope = edit.terminal_scope.as_ref();
     let prepared = edit.prepared_enqueue.as_ref();
+    let batch_trust = edit.ordinary_active_batch.as_ref();
     if !is_grid_builtin_status(&edit.status)
         || !is_uuid(&edit.activity_id)
         || terminal != terminal_scope.is_some()
@@ -140,6 +151,14 @@ pub async fn update_issue_status(
     if terminal && prepared.is_some() {
         return Err(IssueStatusEditError::DispatchSensitive);
     }
+    if batch_trust.is_some()
+        && (!is_active_builtin_status(&edit.status)
+            || !matches!(actor, CallerActor::Member { .. })
+            || prepared.is_some()
+            || terminal)
+    {
+        return Err(IssueStatusEditError::InvalidStatus);
+    }
     let (actor_type, actor_id) = actor_refs(actor);
     if !is_uuid(actor_id) {
         return Err(IssueStatusEditError::InvalidStatus);
@@ -149,7 +168,10 @@ pub async fn update_issue_status(
         .bind(workspace_id)
         .execute(&mut *tx)
         .await?;
-    if let Some(project) = terminal_scope.and_then(|scope| scope.project_id.as_deref()) {
+    let scoped_project = batch_trust
+        .and_then(|scope| scope.expected_project_id.as_deref())
+        .or_else(|| terminal_scope.and_then(|scope| scope.project_id.as_deref()));
+    if let Some(project) = scoped_project {
         if !is_uuid(project) {
             return Err(IssueStatusEditError::InvalidStatus);
         }
@@ -212,18 +234,32 @@ pub async fn update_issue_status(
     let assignee_id: Option<String> = locked.try_get("assignee_id")?;
     let triage_state_present: bool = locked.try_get("triage_state_present")?;
     let has_duplicate: bool = locked.try_get("has_duplicate")?;
-    if !is_grid_builtin_status(prev_status) || (prev_status == "cancelled" && has_duplicate) {
-        return Err(IssueStatusEditError::DispatchSensitive);
-    }
-    if let Some(scope) = terminal_scope {
-        let has_work_method: bool = locked.try_get("has_work_method")?;
+    let has_work_method: bool = locked.try_get("has_work_method")?;
+    if let Some(trust) = batch_trust {
+        if project_id.as_deref() != trust.expected_project_id.as_deref() {
+            return Err(IssueStatusEditError::DispatchSensitive);
+        }
         if triage_state_present
             || has_work_method
-            || has_duplicate
-            || scope.project_id.as_deref() != project_id.as_deref()
+            || !is_active_builtin_status(prev_status)
+            || !matches!(
+                assignee_type.as_deref(),
+                None | Some("member" | "agent" | "squad")
+            )
         {
             return Err(IssueStatusEditError::DispatchSensitive);
         }
+    }
+    if !is_grid_builtin_status(prev_status) || (prev_status == "cancelled" && has_duplicate) {
+        return Err(IssueStatusEditError::DispatchSensitive);
+    }
+    if let Some(scope) = terminal_scope
+        && (triage_state_present
+            || has_work_method
+            || has_duplicate
+            || scope.project_id.as_deref() != project_id.as_deref())
+    {
+        return Err(IssueStatusEditError::DispatchSensitive);
     }
     let promotion_sensitive = dispatch_sensitive_locked(
         prev_status,
@@ -232,6 +268,9 @@ pub async fn update_issue_status(
         &edit.status,
         edit.suppress_run,
     );
+    if batch_trust.is_some() && promotion_sensitive {
+        return Err(IssueStatusEditError::DispatchSensitive);
+    }
     if promotion_sensitive != prepared.is_some() {
         return Err(IssueStatusEditError::DispatchSensitive);
     }
@@ -327,7 +366,9 @@ pub async fn update_issue_status(
         coalesced_queued_task_id,
         cancelled_tasks,
     };
-    tx.commit().await?;
+    tx.commit()
+        .await
+        .map_err(IssueStatusEditError::CommitFailed)?;
     Ok(write)
 }
 

@@ -54,6 +54,7 @@ type IssueReadBridge struct {
 	BatchPilotScopes          []string
 	BatchAssignPilotScopes    []string
 	BatchDeletePilotScopes    []string
+	BatchStatusPilotScopes    []string
 	MethodAdoptPilotScopes    []string
 }
 
@@ -94,6 +95,9 @@ type IssueReadBridge struct {
 //   - XSHADOW_ISSUES_RUST_BATCH_ASSIGN_PILOT: comma-separated workspace slugs
 //     or UUIDs for native member owned-direct agent batch assigns on POST
 //     …/batch-update (requires the assign pilot on the same workspace).
+//   - XSHADOW_ISSUES_RUST_BATCH_STATUS_PILOT: comma-separated workspace slugs
+//     or UUIDs for native member builtin active status batch updates on POST
+//     …/batch-update (requires the status pilot on the same workspace).
 //   - XSHADOW_ISSUES_RUST_BATCH_DELETE_PILOT: comma-separated workspace slugs
 //     or UUIDs for native member batch deletes on POST …/batch-delete
 //     (independent of the single-task delete pilot).
@@ -117,6 +121,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	deleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_PILOT"))
 	batchScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_PILOT"))
 	batchAssignScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_ASSIGN_PILOT"))
+	batchStatusScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_STATUS_PILOT"))
 	batchDeleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_DELETE_PILOT"))
 	methodAdoptScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_METHOD_ADOPT_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
@@ -147,9 +152,10 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		BatchPilotScopes:          batchScopes,
 		BatchAssignPilotScopes:    batchAssignScopes,
 		BatchDeletePilotScopes:    batchDeleteScopes,
+		BatchStatusPilotScopes:    batchStatusScopes,
 		MethodAdoptPilotScopes:    methodAdoptScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(deleteScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(deleteScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}

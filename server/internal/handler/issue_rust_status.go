@@ -15,15 +15,20 @@ import (
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
+type ordinaryActiveBatchTrust struct {
+	ExpectedProjectID *string `json:"expected_project_id,omitempty"`
+}
+
 type issueStatusEdit struct {
-	ExpectedRevision int64               `json:"expected_revision"`
-	Status           string              `json:"status"`
-	Position         *float64            `json:"position,omitempty"`
-	SourceTaskID     *string             `json:"source_task_id,omitempty"`
-	SuppressRun      bool                `json:"suppress_run"`
-	ActivityID       string              `json:"activity_id"`
-	PreparedEnqueue  *json.RawMessage    `json:"prepared_enqueue,omitempty"`
-	TerminalScope    *issueTerminalScope `json:"terminal_scope,omitempty"`
+	ExpectedRevision    int64                     `json:"expected_revision"`
+	Status              string                    `json:"status"`
+	Position            *float64                  `json:"position,omitempty"`
+	SourceTaskID        *string                   `json:"source_task_id,omitempty"`
+	SuppressRun         bool                      `json:"suppress_run"`
+	ActivityID          string                    `json:"activity_id"`
+	PreparedEnqueue     *json.RawMessage          `json:"prepared_enqueue,omitempty"`
+	TerminalScope       *issueTerminalScope       `json:"terminal_scope,omitempty"`
+	OrdinaryActiveBatch *ordinaryActiveBatchTrust `json:"ordinary_active_batch,omitempty"`
 }
 
 func isActiveBuiltInIssueStatus(key string) bool {
@@ -143,10 +148,8 @@ func (h *Handler) updateIssueStatusViaRust(
 	if terminalClose {
 		edit.TerminalScope = &issueTerminalScope{ProjectID: uuidToPtr(current.ProjectID)}
 	}
-	var explicitPosition *float64
 	if params.Position.Valid {
 		edit.Position = &params.Position.Float64
-		explicitPosition = edit.Position
 	}
 	if prepared != nil {
 		raw, err := marshalIssueStatusPreparedEnqueue(*prepared)
@@ -157,38 +160,12 @@ func (h *Handler) updateIssueStatusViaRust(
 		rawMsg := json.RawMessage(raw)
 		edit.PreparedEnqueue = &rawMsg
 	}
-	payload, err := json.Marshal(edit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encode issue status edit")
-		return after, before, "", "", nil, false
-	}
-	path := "/internal/issues/" + uuidToString(current.ID) + "/status"
-	resp, requested := h.requestRustIssue(w, r, http.MethodPut, path, uuidToString(current.WorkspaceID), userID, payload)
-	if !requested {
-		return after, before, "", "", nil, false
-	}
-	defer resp.Body.Close()
-	limit := int64(maxRustIssueReadBody)
-	if resp.StatusCode == http.StatusOK {
-		limit += int64(len(current.Description.String)+len(current.AcceptanceCriteria)) * 2
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil || int64(len(body)) > limit {
-		if !writeQueryCancellation(w, r, err) {
-			if err != nil {
-				writeError(w, http.StatusServiceUnavailable, "rust issue write service unavailable")
-			} else {
-				writeError(w, http.StatusBadGateway, "failed to read rust issue status response")
-			}
-		}
+	resp, body, transportOK := h.callRustIssueStatusPUT(w, r, userID, current, edit)
+	if !transportOK {
 		return after, before, "", "", nil, false
 	}
 	if resp.StatusCode == http.StatusConflict {
-		var conflict struct {
-			ActualRevision    int64 `json:"actual_revision"`
-			DispatchSensitive bool  `json:"dispatch_sensitive"`
-		}
-		if json.Unmarshal(body, &conflict) == nil {
+		if conflict, recognized := parseRustIssueStatusConflict(body); recognized {
 			if conflict.DispatchSensitive {
 				writeErrorCode(w, http.StatusConflict, "status_route_changed", "task status requirements changed; reload before moving the task")
 				return after, before, "", "", nil, false
@@ -205,48 +182,172 @@ func (h *Handler) updateIssueStatusViaRust(
 		writeRustIssueResponse(w, resp, bytes.NewReader(body))
 		return after, before, "", "", nil, false
 	}
-	var snapshots struct {
-		Before                ordinaryIssueSnapshot       `json:"before"`
-		After                 ordinaryIssueSnapshot       `json:"after"`
-		StatusActivityID      *string                     `json:"status_activity_id"`
-		QueuedTaskID          *string                     `json:"queued_task_id"`
-		CoalescedQueuedTaskID *string                     `json:"coalesced_queued_task_id"`
-		CancelledTasks        *[]rustCancelledTaskReceipt `json:"cancelled_tasks"`
-	}
-	if json.Unmarshal(body, &snapshots) != nil ||
-		snapshots.Before.ID != current.ID || snapshots.Before.WorkspaceID != current.WorkspaceID ||
-		snapshots.After.ID != current.ID || snapshots.After.WorkspaceID != current.WorkspaceID ||
-		!rustStatusWriteSnapshotsValid(*req.ExpectedRevision, params.Status.String, explicitPosition, snapshots.Before, snapshots.After) {
+	receipt, decoded := decodeRustIssueStatusWriteReceipt(body, current.ID, current.WorkspaceID)
+	if !decoded {
 		writeError(w, http.StatusBadGateway, "invalid rust issue status snapshots")
 		return after, before, "", "", nil, false
 	}
-	beforeIssue := snapshots.Before.issue()
-	afterIssue := snapshots.After.issue()
-	statusChanged := beforeIssue.Status != afterIssue.Status
-	receipt := derefString(snapshots.StatusActivityID)
-	if !rustStatusActivityReceiptValid(r.Context(), h.Queries, plannedActivityID, current.WorkspaceID, current.ID, beforeIssue.Status, afterIssue.Status, statusChanged, receipt) {
-		writeError(w, http.StatusBadGateway, "invalid rust issue status activity receipt")
+	result, valid := h.checkRustIssueStatusReceipt(w, r.Context(), current, edit, plannedActivityID, receipt)
+	if !valid {
 		return after, before, "", "", nil, false
 	}
-	taskReceipt := derefString(snapshots.QueuedTaskID)
-	coalescedReceipt := derefString(snapshots.CoalescedQueuedTaskID)
+	return h.finishRustIssueStatusSingleWrite(
+		w, r.Context(), current, result, receipt, prepared, terminalClose,
+	)
+}
+
+type rustIssueStatusWriteReceipt struct {
+	Before                ordinaryIssueSnapshot `json:"before"`
+	After                 ordinaryIssueSnapshot `json:"after"`
+	StatusActivityID      *string               `json:"status_activity_id"`
+	QueuedTaskID          *string               `json:"queued_task_id"`
+	CoalescedQueuedTaskID *string               `json:"coalesced_queued_task_id"`
+	CancelledTasks        json.RawMessage       `json:"cancelled_tasks"`
+}
+
+type rustStatusWriteResult struct {
+	before, after    db.Issue
+	statusActivityID string
+}
+
+type rustIssueStatusConflict struct {
+	ActualRevision    int64 `json:"actual_revision"`
+	DispatchSensitive bool  `json:"dispatch_sensitive"`
+	BatchRollback     bool  `json:"batch_rollback"`
+}
+
+func rustIssueStatusReadBodyLimit(issue db.Issue, statusCode int) int64 {
+	limit := int64(maxRustIssueReadBody)
+	if statusCode == http.StatusOK {
+		limit += int64(len(issue.Description.String)+len(issue.AcceptanceCriteria)) * 2
+	}
+	return limit
+}
+
+func (h *Handler) callRustIssueStatusPUT(
+	w http.ResponseWriter,
+	r *http.Request,
+	userID string,
+	issue db.Issue,
+	edit issueStatusEdit,
+) (*http.Response, []byte, bool) {
+	payload, err := json.Marshal(edit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode issue status edit")
+		return nil, nil, false
+	}
+	path := "/internal/issues/" + uuidToString(issue.ID) + "/status"
+	resp, requested := h.requestRustIssue(w, r, http.MethodPut, path, uuidToString(issue.WorkspaceID), userID, payload)
+	if !requested {
+		return nil, nil, false
+	}
+	defer resp.Body.Close()
+	limit := rustIssueStatusReadBodyLimit(issue, resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil || int64(len(body)) > limit {
+		if writeQueryCancellation(w, r, err) {
+			return nil, nil, false
+		}
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "rust issue write service unavailable")
+		} else {
+			writeError(w, http.StatusBadGateway, "failed to read rust issue status response")
+		}
+		return nil, nil, false
+	}
+	return resp, body, true
+}
+
+func decodeRustIssueStatusWriteReceipt(body []byte, issueID, workspaceID pgtype.UUID) (rustIssueStatusWriteReceipt, bool) {
+	var wire rustIssueStatusWriteReceipt
+	if json.Unmarshal(body, &wire) != nil ||
+		wire.Before.ID != issueID || wire.Before.WorkspaceID != workspaceID ||
+		wire.After.ID != issueID || wire.After.WorkspaceID != workspaceID {
+		return rustIssueStatusWriteReceipt{}, false
+	}
+	return wire, true
+}
+
+func parseRustIssueStatusConflict(body []byte) (conflict rustIssueStatusConflict, recognized bool) {
+	if json.Unmarshal(body, &conflict) != nil {
+		return conflict, false
+	}
+	switch {
+	case conflict.DispatchSensitive:
+		return conflict, conflict.ActualRevision == 0 && !conflict.BatchRollback
+	case conflict.BatchRollback:
+		return conflict, conflict.ActualRevision == 0
+	default:
+		return conflict, conflict.ActualRevision > 0
+	}
+}
+
+func rustIssueStatusTrustedProjectMatch(before, after ordinaryIssueSnapshot, trusted pgtype.UUID) bool {
+	return before.ProjectID == trusted && after.ProjectID == trusted
+}
+
+func rustIssueStatusReceiptHasBatchScopeExclusives(receipt rustIssueStatusWriteReceipt) bool {
+	return len(receipt.CancelledTasks) > 0 ||
+		derefString(receipt.QueuedTaskID) != "" || derefString(receipt.CoalescedQueuedTaskID) != ""
+}
+
+func (h *Handler) checkRustIssueStatusReceipt(
+	w http.ResponseWriter,
+	ctx context.Context,
+	issue db.Issue,
+	edit issueStatusEdit,
+	plannedID pgtype.UUID,
+	receipt rustIssueStatusWriteReceipt,
+) (rustStatusWriteResult, bool) {
+	if !rustStatusWriteSnapshotsValid(edit.ExpectedRevision, edit.Status, edit.Position, receipt.Before, receipt.After) ||
+		(edit.OrdinaryActiveBatch != nil && !rustIssueStatusTrustedProjectMatch(receipt.Before, receipt.After, issue.ProjectID)) {
+		writeError(w, http.StatusBadGateway, "invalid rust issue status snapshots")
+		return rustStatusWriteResult{}, false
+	}
+	beforeIssue := receipt.Before.issue()
+	afterIssue := receipt.After.issue()
+	statusChanged := beforeIssue.Status != afterIssue.Status
+	statusReceipt := derefString(receipt.StatusActivityID)
+	if !rustStatusActivityReceiptValid(ctx, h.Queries, plannedID, issue.WorkspaceID, issue.ID, beforeIssue.Status, afterIssue.Status, statusChanged, statusReceipt) {
+		writeError(w, http.StatusBadGateway, "invalid rust issue status activity receipt")
+		return rustStatusWriteResult{}, false
+	}
+	return rustStatusWriteResult{before: beforeIssue, after: afterIssue, statusActivityID: statusReceipt}, true
+}
+
+func (h *Handler) finishRustIssueStatusSingleWrite(
+	w http.ResponseWriter,
+	ctx context.Context,
+	current db.Issue,
+	result rustStatusWriteResult,
+	receipt rustIssueStatusWriteReceipt,
+	prepared *service.IssuePreparedAgentEnqueue,
+	terminalClose bool,
+) (after, before db.Issue, statusActivityID, queuedTaskID string, cancelled []db.AgentTaskQueue, ok bool) {
+	taskReceipt := derefString(receipt.QueuedTaskID)
+	coalescedReceipt := derefString(receipt.CoalescedQueuedTaskID)
+	var cancelledTasks *[]rustCancelledTaskReceipt
+	if len(receipt.CancelledTasks) > 0 && json.Unmarshal(receipt.CancelledTasks, &cancelledTasks) != nil {
+		writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
+		return after, before, "", "", nil, false
+	}
 	if terminalClose {
 		if prepared != nil || taskReceipt != "" || coalescedReceipt != "" {
 			writeError(w, http.StatusBadGateway, "unexpected rust issue status queue receipt")
 			return after, before, "", "", nil, false
 		}
-		if snapshots.CancelledTasks == nil {
+		if cancelledTasks == nil {
 			writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
 			return after, before, "", "", nil, false
 		}
-		cancelled, ok := rustTerminalCancelledTasksValid(r.Context(), h.Queries, current.ID, current.WorkspaceID, *snapshots.CancelledTasks)
+		cancelled, ok := rustTerminalCancelledTasksValid(ctx, h.Queries, current.ID, current.WorkspaceID, *cancelledTasks)
 		if !ok {
 			writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
 			return after, before, "", "", nil, false
 		}
-		return afterIssue, beforeIssue, receipt, "", cancelled, true
+		return result.after, result.before, result.statusActivityID, "", cancelled, true
 	}
-	if snapshots.CancelledTasks != nil {
+	if cancelledTasks != nil {
 		writeError(w, http.StatusBadGateway, "unexpected rust issue terminal cancellation receipt")
 		return after, before, "", "", nil, false
 	}
@@ -256,12 +357,12 @@ func (h *Handler) updateIssueStatusViaRust(
 			writeError(w, http.StatusBadGateway, "invalid rust issue status queue receipt")
 			return after, before, "", "", nil, false
 		case taskReceipt != "":
-			if !rustStatusQueuedTaskValid(r.Context(), h.Queries, taskReceipt, *prepared) {
+			if !rustStatusQueuedTaskValid(ctx, h.Queries, taskReceipt, *prepared) {
 				writeError(w, http.StatusBadGateway, "invalid rust issue status queue receipt")
 				return after, before, "", "", nil, false
 			}
 		case coalescedReceipt != "":
-			if !rustStatusCoalescedTaskValid(r.Context(), h.Queries, coalescedReceipt, *prepared) {
+			if !rustStatusCoalescedTaskValid(ctx, h.Queries, coalescedReceipt, *prepared) {
 				writeError(w, http.StatusBadGateway, "invalid rust issue status queue receipt")
 				return after, before, "", "", nil, false
 			}
@@ -273,7 +374,7 @@ func (h *Handler) updateIssueStatusViaRust(
 		writeError(w, http.StatusBadGateway, "unexpected rust issue status queue receipt")
 		return after, before, "", "", nil, false
 	}
-	return afterIssue, beforeIssue, receipt, taskReceipt, nil, true
+	return result.after, result.before, result.statusActivityID, taskReceipt, nil, true
 }
 
 func derefString(s *string) string {
