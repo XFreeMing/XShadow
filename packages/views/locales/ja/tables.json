@@ -50,6 +50,10 @@
     "directions": {
       "asc": "昇順",
       "desc": "降順"
-    }
+    },
+    "group": "グループ",
+    "empty_group": "空",
+    "online": "オンライン",
+    "recent": "最近の編集"
   }
 }

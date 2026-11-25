@@ -50,6 +50,10 @@
     "directions": {
       "asc": "Ascendente",
       "desc": "Descendente"
-    }
+    },
+    "group": "Grupo",
+    "empty_group": "Vacío",
+    "online": "En línea",
+    "recent": "Reciente"
   }
 }

@@ -50,6 +50,10 @@
     "directions": {
       "asc": "오름차순",
       "desc": "내림차순"
-    }
+    },
+    "group": "그룹",
+    "empty_group": "비어 있음",
+    "online": "온라인",
+    "recent": "최근 편집"
   }
 }

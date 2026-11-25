@@ -50,6 +50,10 @@
     "directions": {
       "asc": "Ascending",
       "desc": "Descending"
-    }
+    },
+    "group": "Group",
+    "empty_group": "Empty",
+    "online": "Online",
+    "recent": "Recent"
   }
 }

@@ -35,6 +35,32 @@ export interface GridLabels {
   emptyValue: string;
   checked: string;
   unchecked: string;
+  emptyGroup?: string;
+  online?: string;
+  recent?: string;
+}
+
+export interface GridCollaborator {
+  actorId: string;
+  label: string;
+  color: string;
+  kind: "online" | "recent";
+  recordId: string | null;
+  fieldId: string | null;
+}
+
+export interface GridActor {
+  id: string;
+  label: string;
+  color: string;
+}
+
+export interface GridGroup {
+  key: string;
+  label: string;
+  count: number;
+  collapsed: boolean;
+  records: readonly GridRecordView[];
 }
 
 export type GridCellValue = string | number | boolean | null;

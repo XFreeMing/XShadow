@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { setActiveCell, setEditStatus } from "../third-party/actions";
 import { optionColor } from "../third-party/option-colors";
 import { getActiveCell, getEditingCell, getGridSnapshot } from "../third-party/selectors";
 import type { GridRootState } from "../third-party/state";
-import type { GridCellValue, GridFieldView, GridLabels } from "./types";
+import type { GridCellValue, GridCollaborator, GridFieldView, GridLabels } from "./types";
 
 function shown(value: string | number | boolean | null | undefined): string {
   if (value == null || typeof value === "boolean") return "";
@@ -21,7 +21,10 @@ export function GridCell({
   rowIndex,
   recordIds,
   labels,
+  collaborator,
   onCommit,
+  onActive,
+  onEditEnd,
 }: {
   datasheetId: string;
   field: GridFieldView;
@@ -29,7 +32,10 @@ export function GridCell({
   rowIndex: number;
   recordIds: readonly string[];
   labels: GridLabels;
-  onCommit: (value: GridCellValue) => void;
+  collaborator?: GridCollaborator | null;
+  onCommit: (value: GridCellValue, baseRevision: number) => void;
+  onActive?: (recordId: string, fieldId: string, revision: number) => void;
+  onEditEnd?: () => void;
 }) {
   const dispatch = useDispatch();
   const value = useSelector((state: GridRootState) => {
@@ -47,6 +53,10 @@ export function GridCell({
     const cell = getEditingCell(state, datasheetId);
     return cell?.recordId === recordId && cell.fieldId === field.id;
   });
+  const revision = useSelector((state: GridRootState) => {
+    return getGridSnapshot(state, datasheetId)?.records[recordId]?.revision ?? 0;
+  });
+  const origin = useRef<{ value: GridCellValue; revision: number }>({ value: null, revision: 0 });
   const [text, setText] = useState(shown(value));
   useEffect(() => {
     if (editing) return;
@@ -54,15 +64,18 @@ export function GridCell({
   }, [editing, value]);
 
   const focusCell = () => {
+    origin.current = { value: value ?? null, revision };
     dispatch(setActiveCell(datasheetId, { recordId, fieldId: field.id }));
     dispatch(setEditStatus(datasheetId, { recordId, fieldId: field.id }));
+    onActive?.(recordId, field.id, revision);
   };
   const blurCell = () => {
     dispatch(setEditStatus(datasheetId, null));
+    onEditEnd?.();
   };
   const commit = (next: GridCellValue) => {
-    if (next === value) return;
-    onCommit(next);
+    if (Object.is(next, origin.current.value)) return;
+    onCommit(next, origin.current.revision);
   };
   const moveVertical = (event: KeyboardEvent<HTMLElement>, delta: number) => {
     const next = recordIds[rowIndex + delta];
@@ -81,7 +94,17 @@ export function GridCell({
     "apitable-grid__cell",
     active ? "apitable-grid__selected apitable-grid__active" : "",
     conflict ? "apitable-grid__conflict" : "",
+    collaborator ? `apitable-grid__${collaborator.kind}` : "",
   ].filter(Boolean).join(" ");
+  const mark = collaborator ? (
+    <span
+      className={`apitable-grid__mark apitable-grid__mark--${collaborator.kind}`}
+      style={{ color: collaborator.color, borderColor: collaborator.color }}
+      data-collaborator={collaborator.kind}
+    >
+      {collaborator.label}
+    </span>
+  ) : null;
   const options = field.config?.options ?? [];
   const selectedIndex = options.findIndex((option) => option.id === value);
   const selected = selectedIndex >= 0 ? options[selectedIndex] : null;
@@ -91,16 +114,22 @@ export function GridCell({
       ? undefined
       : shown(value) || undefined;
 
+  const cellProps = {
+    className,
+    "aria-label": cellName,
+    "data-active": active ? "true" : "false",
+    "data-conflict": conflict ? "true" : undefined,
+    "data-collaborator": collaborator?.kind,
+    "data-collaborator-name": collaborator?.label,
+    title: conflict ?? undefined,
+    style: collaborator ? { boxShadow: `inset 0 0 0 2px ${collaborator.color}` } : undefined,
+  };
+
   if (field.kind === "checkbox") {
     const checked = value === true;
     return (
-      <td
-        className={className}
-        aria-label={cellName}
-        data-active={active ? "true" : "false"}
-        data-conflict={conflict ? "true" : undefined}
-        title={conflict ?? undefined}
-      >
+      <td {...cellProps}>
+        {mark}
         <div className="apitable-grid__checkboxCell">
           <input
             type="checkbox"
@@ -125,13 +154,8 @@ export function GridCell({
 
   if (field.kind === "single_select") {
     return (
-      <td
-        className={className}
-        aria-label={cellName}
-        data-active={active ? "true" : "false"}
-        data-conflict={conflict ? "true" : undefined}
-        title={conflict ?? undefined}
-      >
+      <td {...cellProps}>
+        {mark}
         <div className="apitable-grid__optionCell">
           {selected ? (
             <span className="apitable-grid__tabItem" style={{ background: optionColor(selectedIndex) }} aria-hidden="true">
@@ -158,13 +182,8 @@ export function GridCell({
 
   const date = field.kind === "date";
   return (
-    <td
-      className={className}
-      aria-label={cellName}
-      data-active={active ? "true" : "false"}
-      data-conflict={conflict ? "true" : undefined}
-      title={conflict ?? undefined}
-    >
+    <td {...cellProps}>
+      {mark}
       <input
         className={date ? "apitable-grid__dateTime" : `apitable-grid__cellText${field.kind === "number" ? " apitable-grid__numberCell" : ""}`}
         data-cell={`${recordId}:${field.id}`}

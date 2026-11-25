@@ -50,6 +50,10 @@
     "directions": {
       "asc": "Croissant",
       "desc": "Décroissant"
-    }
+    },
+    "group": "Groupe",
+    "empty_group": "Vide",
+    "online": "En ligne",
+    "recent": "Récent"
   }
 }

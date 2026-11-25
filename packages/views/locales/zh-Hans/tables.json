@@ -50,6 +50,10 @@
     "directions": {
       "asc": "升序",
       "desc": "降序"
-    }
+    },
+    "group": "分组",
+    "empty_group": "空值",
+    "online": "在线",
+    "recent": "最近编辑"
   }
 }
