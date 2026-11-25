@@ -641,6 +641,56 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
 }
 
+type PreparedIssueCreateProperties struct {
+	Values           json.RawMessage
+	TypeVersion      string
+	PropertyVersions map[string]string
+}
+
+// PrepareCreateProperties captures the versions of the definitions used by the
+// validator before releasing its catalog locks. The native writer rechecks
+// them under those same locks before storing the canonical values.
+func (s *IssueService) PrepareCreateProperties(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	issueTypeID pgtype.UUID,
+	values map[pgtype.UUID]json.RawMessage,
+) (PreparedIssueCreateProperties, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return PreparedIssueCreateProperties{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	encoded, err := resolveIssueCreateTypeAndProperties(ctx, tx, qtx, workspaceID, issueTypeID, values)
+	if err != nil {
+		return PreparedIssueCreateProperties{}, err
+	}
+	prepared := PreparedIssueCreateProperties{Values: encoded}
+	if issueTypeID.Valid {
+		err := tx.QueryRow(ctx, `SELECT xmin::text FROM issue_type WHERE id=$1 AND workspace_id=$2`,
+			issueTypeID, workspaceID).Scan(&prepared.TypeVersion)
+		if err != nil {
+			return PreparedIssueCreateProperties{}, fmt.Errorf("read issue type version: %w", err)
+		}
+	}
+	var canonical map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &canonical); err != nil {
+		return PreparedIssueCreateProperties{}, fmt.Errorf("read prepared property keys: %w", err)
+	}
+	prepared.PropertyVersions = make(map[string]string, len(canonical))
+	for id := range canonical {
+		var version string
+		err := tx.QueryRow(ctx, `SELECT xmin::text FROM issue_property WHERE id=$1 AND workspace_id=$2`,
+			util.MustParseUUID(id), workspaceID).Scan(&version)
+		if err != nil {
+			return PreparedIssueCreateProperties{}, fmt.Errorf("read issue property version: %w", err)
+		}
+		prepared.PropertyVersions[id] = version
+	}
+	return prepared, nil
+}
+
 // resolveIssueCreateTypeAndProperties validates the optional issue_type_id,
 // merges any configured field defaults for fields not explicitly provided by
 // the caller, runs the canonical property validator on every resulting value,
@@ -968,6 +1018,11 @@ func (s *IssueService) publishIssueAttachmentsChanged(issue db.Issue, actorID pg
 		ActorID:     util.UUIDToString(actorID),
 		Payload:     payload,
 	})
+}
+
+// CapturePlainCreateAnalytics records a member create handled outside IssueService.Create.
+func (s *IssueService) CapturePlainCreateAnalytics(issue db.Issue, creatorType, actorID, platform string) {
+	s.captureCreatedAnalytics(issue, creatorType, actorID, IssueCreateOpts{Platform: platform})
 }
 
 func (s *IssueService) captureCreatedAnalytics(issue db.Issue, creatorType, actorID string, opts IssueCreateOpts) {

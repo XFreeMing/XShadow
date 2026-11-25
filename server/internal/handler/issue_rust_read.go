@@ -46,6 +46,7 @@ type IssueReadBridge struct {
 	WorkflowPilotScopes   []string
 	AssignPilotScopes     []string
 	CommentPilotScopes    []string
+	CreatePilotScopes     []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -66,6 +67,8 @@ type IssueReadBridge struct {
 //     for native direct-agent assignment on PUT /api/issues/{id}.
 //   - XSHADOW_ISSUES_RUST_COMMENT_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member top-level comment creates on POST …/comments.
+//   - XSHADOW_ISSUES_RUST_CREATE_PILOT: comma-separated workspace slugs or
+//     UUIDs for native member issue creates on POST /api/issues.
 func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	scopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_READ_PILOT"))
 	listScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_LIST_PILOT"))
@@ -76,6 +79,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	workflowScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_WORKFLOW_PILOT"))
 	assignScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ASSIGN_PILOT"))
 	commentScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_COMMENT_PILOT"))
+	createScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
 	if upstream == "" {
 		upstream = strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_TABLES_UPSTREAM")), "/")
@@ -96,8 +100,9 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		WorkflowPilotScopes:   workflowScopes,
 		AssignPilotScopes:     assignScopes,
 		CommentPilotScopes:    commentScopes,
+		CreatePilotScopes:     createScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}
@@ -246,7 +251,8 @@ func (h *Handler) getIssueViaRust(w http.ResponseWriter, r *http.Request, worksp
 
 func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, method, path, workspaceID, userID string, payload []byte) (*http.Response, bool) {
 	unavailable := "rust issue read service unavailable"
-	if method == http.MethodPut {
+	switch method {
+	case http.MethodPut, http.MethodPost:
 		unavailable = "rust issue write service unavailable"
 	}
 	return h.requestRustIssueWithUnavailable(w, r, method, path, workspaceID, userID, payload, unavailable)

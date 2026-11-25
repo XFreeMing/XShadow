@@ -61,6 +61,11 @@ func RefreshReadyWorkMethod(ctx context.Context, q *db.Queries, issue db.Issue, 
 	return q.SaveIssueWorkMethodRun(ctx, db.SaveIssueWorkMethodRunParams{WorkspaceID: issue.WorkspaceID, ID: issue.ID, IssueRevision: issue.Revision, Run: raw})
 }
 
+// ReadyWorkMethodJSON seeds a new issue's work_method_run from the workspace catalog.
+func ReadyWorkMethodJSON(ctx context.Context, q *db.Queries, ws pgtype.UUID, status, title, description, goalText string) ([]byte, error) {
+	return readyWorkMethodJSON(ctx, q, ws, status, title, description, goalText)
+}
+
 func readyWorkMethodJSON(ctx context.Context, q *db.Queries, ws pgtype.UUID, status, title, description, goalText string) ([]byte, error) {
 	category, err := issuestatus.CategoryWithError(ctx, q, ws, status)
 	if err != nil {

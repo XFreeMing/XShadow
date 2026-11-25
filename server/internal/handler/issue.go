@@ -3571,6 +3571,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve project workflow")
 		return
 	}
+	workflowNeedsGo := createWorkflowProject.WorkflowID.Valid
 	// Outside any project the issue takes the Default's statuses. (MUL-8250)
 	if !workflowProjectID.Valid {
 		outside, err := issueworkflow.OutsideProject(r.Context(), h.Queries, wsUUID)
@@ -3591,6 +3592,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.AssigneeType == nil && req.AssigneeID == nil {
 			if step, ok := createWorkflow.Step(status); ok && step.HandsOff() {
+				workflowNeedsGo = true
 				handoffCreatorType, handoffCreatorID := h.resolveActor(r, creatorID, workspaceID)
 				handoff, err := h.createHandoffAssignee(r.Context(), createWorkflowProject, step, req.Title, ptrToTextOrEmpty(req.Description), handoffCreatorType, parseUUID(handoffCreatorID))
 				if err != nil {
@@ -3721,6 +3723,18 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// response below, so a custom-status create reads the catalog once per
 	// request rather than once per payload. (MUL-6243)
 	fillCreated := h.newStatusCategoryFiller(r.Context(), wsUUID, projectaccess.Hidden{})
+
+	if usesRust, err := h.createIssueUsesRust(r, wsUUID, req, creatorType, assigneeType, status, originType, attachmentIDs, workflowNeedsGo); err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust issue create route failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue create route")
+		}
+		return
+	} else if usesRust {
+		h.createIssueViaRust(w, r, workspaceID, wsUUID, creatorID, creatorType, actualCreatorID, req, status, priority,
+			assigneeType, assigneeID, parentIssueID, projectID, startDate, dueDate, issueTypeID, properties, labelIDs, fillCreated)
+		return
+	}
 
 	// Analytics agent ID: assignee agent when the issue is being assigned
 	// to an agent, otherwise the creator agent for agent-authored issues.

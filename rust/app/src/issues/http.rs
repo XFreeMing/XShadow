@@ -17,8 +17,9 @@ use super::store::{
 };
 use super::store::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
-    IssueCommentCreate, IssueCommentCreateError, IssueStatusEdit, IssueStatusEditError,
-    IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueCommentCreate, IssueCommentCreateError, IssueCreateError, IssueCreateRequest,
+    IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
+    OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -137,6 +138,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
     let table_body_limit = DefaultBodyLimit::max(16 * 1024 * 1024);
     Router::new()
         .route("/internal/issues", post(list_issues))
+        .route(
+            "/internal/issues/create",
+            post(create_issue).layer(DefaultBodyLimit::disable()),
+        )
         .route(
             "/internal/issues/table/rows",
             post(table_rows).layer(table_body_limit),
@@ -404,6 +409,93 @@ async fn update_issue_assign(
         Err(IssueAssignEditError::Snapshot(error)) => {
             eprintln!("rust issue assign write snapshot failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+    }
+}
+
+async fn create_issue(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(request): Json<IssueCreateRequest>,
+) -> Response {
+    match store::create_issue(&app.pool, &ctx.workspace_id, &ctx.actor, request).await {
+        Ok(result) => (StatusCode::CREATED, Json(result)).into_response(),
+        Err(IssueCreateError::ActiveDuplicate(payload)) => (
+            StatusCode::CONFLICT,
+            Json(payload),
+        )
+            .into_response(),
+        Err(IssueCreateError::Access(error)) => issue_request_error(error, "failed to create issue"),
+        Err(IssueCreateError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid issue create request")
+        }
+        Err(IssueCreateError::ConfigurationChanged) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "issue_create_configuration_changed",
+                "error": "task configuration changed while creating the task; reload and retry",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::ParentNotFound) => {
+            error_response(StatusCode::BAD_REQUEST, "parent issue not found in this workspace")
+        }
+        Err(IssueCreateError::ProjectNotFound) => {
+            error_response(StatusCode::BAD_REQUEST, "project not found in this workspace")
+        }
+        Err(IssueCreateError::LabelNotFound) => error_response(
+            StatusCode::BAD_REQUEST,
+            "one or more labels not found in this workspace",
+        ),
+        Err(IssueCreateError::InvalidIssueType(message)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "code": "invalid_issue_type",
+                "error": message,
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::InvalidIssueProperty { property_id, message }) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "code": "invalid_issue_property",
+                "property_id": property_id,
+                "error": message,
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::InvalidAssignee) => error_response(
+            StatusCode::BAD_REQUEST,
+            "assignee_id does not refer to a member of this workspace",
+        ),
+        Err(IssueCreateError::PropertiesTooLarge) => error_response(
+            StatusCode::BAD_REQUEST,
+            "issue properties exceed the 16KB size limit",
+        ),
+        Err(IssueCreateError::IssueLimit { limit, policy_revision }) => (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({
+                "code": "issue_limit_reached",
+                "error": "workspace has reached its issue limit",
+                "limit": limit,
+                "policy_revision": policy_revision
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::NumberCollision { allocated }) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "issue_number_collision",
+                "error": "workspace issue counter is behind its highest issue number, so card creation cannot allocate a free number",
+                "allocated": allocated,
+                "constraint": "uq_issue_workspace_number",
+                "repair": "Ask a workspace administrator to repair the issue counter, then retry.",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::Database(error)) => {
+            eprintln!("rust issue create failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to create issue")
         }
     }
 }
