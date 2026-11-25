@@ -121,8 +121,27 @@ func TestStatusIssueEditUsesRustRejectsDispatchSensitivePromotion(t *testing.T) 
 		issuestatus.Todo,
 		nil,
 	)
+	if err != nil || !ok {
+		t.Fatalf("backlog promotion with agent uses rust = %v err=%v, want true", ok, err)
+	}
+
+	squadBacklog := db.Issue{
+		Status:       issuestatus.Backlog,
+		AssigneeType: pgtype.Text{String: "squad", Valid: true},
+		AssigneeID:   util.MustParseUUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+	}
+	ok, err = h.statusIssueEditUsesRust(
+		req,
+		squadBacklog.WorkspaceID,
+		squadBacklog,
+		raw,
+		UpdateIssueRequest{ExpectedRevision: &rev, Status: strPtr(issuestatus.Todo)},
+		nil,
+		issuestatus.Todo,
+		nil,
+	)
 	if err != nil || ok {
-		t.Fatalf("backlog promotion with agent uses rust = %v err=%v, want false", ok, err)
+		t.Fatalf("backlog promotion with squad uses rust = %v err=%v, want false", ok, err)
 	}
 
 	run := &db.AgentTaskQueue{WorkflowStep: pgtype.Text{String: "todo", Valid: true}}

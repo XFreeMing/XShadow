@@ -10,6 +10,7 @@ use super::{
     CallerActor, IssueReadError, is_uuid,
     ordinary::{self, ISSUE_ROW_SNAPSHOT},
     resolve_caller_access_on,
+    status_dispatch::{self, PreparedStatusEnqueue, PromotionEnqueueOutcome, StatusPromotionError},
 };
 
 const ACTIVE_BUILTINS: &[&str] = &["backlog", "todo", "in_progress", "in_review", "blocked"];
@@ -24,6 +25,7 @@ pub struct IssueStatusEdit {
     #[serde(default)]
     pub suppress_run: bool,
     pub activity_id: String,
+    pub prepared_enqueue: Option<PreparedStatusEnqueue>,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +34,10 @@ pub struct IssueStatusWrite {
     pub after: Box<RawValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_activity_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coalesced_queued_task_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -53,6 +59,15 @@ impl From<sqlx::Error> for IssueStatusEditError {
 impl From<serde_json::Error> for IssueStatusEditError {
     fn from(error: serde_json::Error) -> Self {
         Self::Snapshot(error)
+    }
+}
+
+impl From<StatusPromotionError> for IssueStatusEditError {
+    fn from(error: StatusPromotionError) -> Self {
+        match error {
+            StatusPromotionError::RouteChanged => Self::DispatchSensitive,
+            StatusPromotionError::Database(error) => Self::Database(error),
+        }
     }
 }
 
@@ -101,8 +116,18 @@ pub async fn update_issue_status(
         return Err(IssueStatusEditError::InvalidStatus);
     }
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT 1 FROM workspace WHERE id = $1::uuid FOR KEY SHARE")
+        .bind(workspace_id)
+        .execute(&mut *tx)
+        .await?;
+    let prepared = edit.prepared_enqueue.as_ref();
+    let agent_owner = match prepared {
+        Some(plan) => status_dispatch::lock_prepared_agent(&mut tx, workspace_id, plan).await?,
+        None => None,
+    };
     let locked = sqlx::query(&format!(
         "SELECT i.project_id::text, i.revision, i.status, i.assignee_type, i.assignee_id::text,
+                i.triage_state IS NOT NULL AS triage_state_present,
                 i.duplicate_of_issue_id IS NOT NULL AS has_duplicate,
                 {ISSUE_ROW_SNAPSHOT} AS snapshot
          FROM issue i WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid FOR UPDATE"
@@ -130,18 +155,41 @@ pub async fn update_issue_status(
     let prev_status: &str = locked.try_get("status")?;
     let assignee_type: Option<String> = locked.try_get("assignee_type")?;
     let assignee_id: Option<String> = locked.try_get("assignee_id")?;
+    let triage_state_present: bool = locked.try_get("triage_state_present")?;
     let has_duplicate: bool = locked.try_get("has_duplicate")?;
+    let promotion_sensitive = dispatch_sensitive_locked(
+        prev_status,
+        assignee_type.as_deref(),
+        assignee_id.as_deref(),
+        &edit.status,
+        edit.suppress_run,
+    );
     if (!is_active_builtin_status(prev_status) && !matches!(prev_status, "done" | "cancelled"))
         || (prev_status == "cancelled" && has_duplicate)
-        || dispatch_sensitive_locked(
-            prev_status,
-            assignee_type.as_deref(),
-            assignee_id.as_deref(),
-            &edit.status,
-            edit.suppress_run,
-        )
     {
         return Err(IssueStatusEditError::DispatchSensitive);
+    }
+    if promotion_sensitive != prepared.is_some() {
+        return Err(IssueStatusEditError::DispatchSensitive);
+    }
+    if let Some(plan) = prepared {
+        if assignee_type.as_deref() != Some("agent")
+            || assignee_id.as_deref() != Some(plan.agent_id.as_str())
+            || triage_state_present
+            || issue_id != plan.issue_id
+            || edit.status != plan.workflow_step
+        {
+            return Err(IssueStatusEditError::DispatchSensitive);
+        }
+        status_dispatch::validate_prepared_status_enqueue(
+            &mut tx,
+            workspace_id,
+            issue_id,
+            project_id.as_deref(),
+            agent_owner,
+            plan,
+        )
+        .await?;
     }
 
     ordinary::set_write_actor(&mut tx, actor, edit.source_task_id.as_deref()).await?;
@@ -181,10 +229,26 @@ pub async fn update_issue_status(
             "unexpected status activity receipt".into(),
         )));
     }
+    let (queued_task_id, coalesced_queued_task_id) = match prepared {
+        Some(plan) => match status_dispatch::apply_prepared_status_enqueue(
+            &mut tx,
+            issue_id,
+            &plan.head_sha,
+            plan,
+        )
+        .await?
+        {
+            PromotionEnqueueOutcome::Inserted(id) => (Some(id), None),
+            PromotionEnqueueOutcome::Coalesced(id) => (None, Some(id)),
+        },
+        None => (None, None),
+    };
     let write = IssueStatusWrite {
         before: serde_json::from_str(locked.try_get("snapshot")?)?,
         after: serde_json::from_str(&after_text)?,
         status_activity_id,
+        queued_task_id,
+        coalesced_queued_task_id,
     };
     tx.commit().await?;
     Ok(write)

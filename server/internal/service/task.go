@@ -1257,48 +1257,56 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 	return s.enqueueIssueTaskWithCommentPlan(ctx, issue, triggerCommentID, nil, forceFreshSession, handoffNote, actorUserID, rerunOfTaskID, fireAt, origin, false)
 }
 
-func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, coalescedCommentIDs []pgtype.UUID, forceFreshSession bool, handoffNote string, actorUserID pgtype.UUID, rerunOfTaskID pgtype.UUID, fireAt pgtype.Timestamptz, origin RunOrigin, freshRerun bool) (db.AgentTaskQueue, error) {
+// prepareIssueAssigneeEnqueueParams loads assignee readiness and attribution
+// for an issue-backed enqueue without persisting the task row. Shared by the
+// write path and the native status promotion pilot.
+func (s *TaskService) prepareIssueAssigneeEnqueueParams(
+	ctx context.Context,
+	issue db.Issue,
+	triggerCommentID pgtype.UUID,
+	coalescedCommentIDs []pgtype.UUID,
+	forceFreshSession bool,
+	handoffNote string,
+	actorUserID pgtype.UUID,
+	rerunOfTaskID pgtype.UUID,
+	origin RunOrigin,
+	freshRerun bool,
+) (db.CreateAgentTaskParams, string, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
-		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
+		return db.CreateAgentTaskParams{}, "", fmt.Errorf("issue has no assignee")
 	}
 	if err := guardIssueNotInTriage(ctx, s.Queries, issue.ID, origin); err != nil {
-		return db.AgentTaskQueue{}, err
+		return db.CreateAgentTaskParams{}, "", err
 	}
 
 	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+		return db.CreateAgentTaskParams{}, "", fmt.Errorf("load agent: %w", err)
 	}
 	if agent.ArchivedAt.Valid {
 		slog.Debug("task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+		return db.CreateAgentTaskParams{}, "", fmt.Errorf("agent is archived")
 	}
 	if !agent.RuntimeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+		return db.CreateAgentTaskParams{}, "", fmt.Errorf("agent has no runtime")
 	}
 
-	// The issue assignee reacting to an agent-authored comment is a
-	// comment_source attribution (a special case of delegation); a member
-	// comment or direct member assignment is direct_human. attr.UserID is the
-	// same value the pre-MUL-4302 resolver produced, so overlay/authorization
-	// are unchanged; the extra fields are audit provenance.
 	attr := s.attributionForIssueTask(ctx, issue, triggerCommentID, attribution.SourceCommentSource, actorUserID)
-	// No precise human resolved → owner_fallback (accountable = agent owner), or
-	// refuse the enqueue if the workspace is fail-closed (MUL-4302 §3.5).
 	attr, err = s.applyAttributionFallback(ctx, attr, agent)
 	if err != nil {
 		slog.Warn("task enqueue refused: attribution fail-closed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(issue.AssigneeID))
-		return db.AgentTaskQueue{}, err
+		return db.CreateAgentTaskParams{}, "", err
 	}
 	if err := s.guardRunProjectAccess(ctx, issue, agent, attr.UserID, attr.AccountableUserID); err != nil {
-		return db.AgentTaskQueue{}, err
+		return db.CreateAgentTaskParams{}, "", err
 	}
 	originatorUserID := attr.UserID
 	runtimeMCPOverlay := s.buildRuntimeMCPOverlay(ctx, originatorUserID, agent)
 	attrSource, attrDelegatedFrom, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
+	headSha := s.ResolveIssueReviewSHA(ctx, issue.ID)
 	createParams := db.CreateAgentTaskParams{
 		ID:                   dbid.NewV7(),
 		AgentID:              issue.AssigneeID,
@@ -1321,9 +1329,18 @@ func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue
 		DelegatedFromTaskID:  attrDelegatedFrom,
 		TriggerEvidenceKind:  attrEvidenceKind,
 		TriggerEvidenceRefID: attrEvidenceRef,
-		// Stamp the reviewed head so dedup can distinguish this run's target
-		// from a later request against a new HEAD (TEN-356).
-		HeadSha: headShaText(s.ResolveIssueReviewSHA(ctx, issue.ID)),
+		HeadSha:              headShaText(headSha),
+	}
+	return createParams, headSha, nil
+}
+
+func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, coalescedCommentIDs []pgtype.UUID, forceFreshSession bool, handoffNote string, actorUserID pgtype.UUID, rerunOfTaskID pgtype.UUID, fireAt pgtype.Timestamptz, origin RunOrigin, freshRerun bool) (db.AgentTaskQueue, error) {
+	createParams, _, err := s.prepareIssueAssigneeEnqueueParams(
+		ctx, issue, triggerCommentID, coalescedCommentIDs, forceFreshSession,
+		handoffNote, actorUserID, rerunOfTaskID, origin, freshRerun,
+	)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
 	}
 	var task db.AgentTaskQueue
 	if fireAt.Valid {

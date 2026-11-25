@@ -4382,8 +4382,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// The agent this write hands the issue to gets the change as its own run,
 	// not also through its event wakeups.
 	writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	var issue db.Issue
 	var statusActivityReceipt string
+	var queuedTaskReceipt string
 	attachmentsChanged := false
 	rustStatus, err := h.statusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
 	if err != nil {
@@ -4401,8 +4403,36 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	var statusPromotionPrepared *service.IssueStatusPromotionEnqueue
+	dispatchSensitiveAgent := rustStatus && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) && prevIssue.AssigneeType.String == "agent"
+	if dispatchSensitiveAgent && !req.SuppressRun {
+		projected := prevIssue
+		projected.Status = statusKeyForGuard
+		_, promotionWillRun := h.IssueService.WillEnqueueRun(r.Context(),
+			service.IssueTriggerInput{
+				Issue:         projected,
+				PrevStatus:    prevIssue.Status,
+				StatusChanged: true,
+			},
+			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
+		)
+		if !promotionWillRun {
+			rustStatus = false
+		} else {
+			prep, prepErr := h.TaskService.PrepareIssueStatusPromotionEnqueue(
+				r.Context(), projected, req.HandoffNote, memberActorUserID(actorType, actorID),
+			)
+			if prepErr != nil {
+				rustStatus = false
+			} else {
+				statusPromotionPrepared = &prep
+			}
+		}
+	}
 	if rustStatus {
-		issue, prevIssue, statusActivityReceipt, ok = h.updateIssueStatusViaRust(w, r, userID, prevIssue, params, req)
+		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, ok = h.updateIssueStatusViaRust(
+			w, r, userID, prevIssue, params, req, statusPromotionPrepared,
+		)
 		if !ok {
 			return
 		}
@@ -4445,8 +4475,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine actor identity: agent (via X-Agent-ID header) or member.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	h.advanceRunStep(r.Context(), callerRun, prevIssue, issue)
 
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
@@ -4566,8 +4594,12 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil && req.StopPreviousAssigneeRuns {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if willRun {
+	if willRun && statusPromotionPrepared == nil {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
+	} else if queuedTaskReceipt != "" {
+		if taskID, err := util.ParseUUID(queuedTaskReceipt); err == nil {
+			h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
+		}
 	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
