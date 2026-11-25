@@ -183,7 +183,34 @@ func runDelegatedFailureRecoverySweeper(ctx context.Context, taskSvc *service.Ta
 func runQueueNotificationSweeper(ctx context.Context, taskSvc *service.TaskService) {
 	runPeriodicSweep(ctx, queueNotificationSweepInterval, func() {
 		sweepPendingQueueNotifications(ctx, taskSvc)
+		sweepPendingCancelledClientNotifications(ctx, taskSvc)
 	})
+}
+
+func sweepPendingCancelledClientNotifications(ctx context.Context, taskSvc *service.TaskService) (stats runtimeSweepStageStats) {
+	startedAt := time.Now()
+	defer func() {
+		observeRuntimeSweepStage(taskServiceMetrics(taskSvc), obsmetrics.RuntimeSweepStageCancelledClientNotification, startedAt, stats)
+	}()
+	if ctx.Err() != nil {
+		return
+	}
+	result, err := taskSvc.RecoverPendingCancelledClientNotifications(ctx, service.CancelledClientNotificationSweepBatchSize)
+	stats.candidates = result.Scanned
+	stats.changed = result.Delivered + result.Settled
+	if err != nil {
+		slog.Warn("cancelled client notification sweeper: replay failed",
+			"delivered", result.Delivered,
+			"settled", result.Settled,
+			"retried", result.Retried,
+			"error", err,
+		)
+		return
+	}
+	if result.Delivered > 0 {
+		slog.Debug("cancelled client notification sweeper: delivered pending events", "count", result.Delivered)
+	}
+	return
 }
 
 func sweepPendingQueueNotifications(ctx context.Context, taskSvc *service.TaskService) (stats runtimeSweepStageStats) {

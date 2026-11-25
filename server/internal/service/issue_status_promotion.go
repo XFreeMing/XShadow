@@ -144,17 +144,20 @@ func (s *TaskService) CompleteWorkflowSquadHandoffAfterNativeWrite(ctx context.C
 	}
 }
 
-// CompleteNativeTerminalCloseAfterWrite emits post-commit cancellation client
-// effects and replays durable runtime invalidation through
-// agent_task_queue_notify_outbox for rows the native terminal transaction
-// cancelled. Runtime wakeups use an empty task hint so daemons never execute
-// the cancelled run.
+// CompleteNativeTerminalCloseAfterWrite delivers post-commit task:cancelled
+// client notifications and runtime invalidation obligations recorded by the
+// native terminal transaction. Client delivery is durable via
+// agent_task_queue_cancelled_client_outbox; runtime wakeups use an empty task
+// hint so daemons never execute the cancelled run.
 func (s *TaskService) CompleteNativeTerminalCloseAfterWrite(ctx context.Context, workspaceID string, cancelled []db.AgentTaskQueue) {
 	if len(cancelled) == 0 {
 		return
 	}
-	s.broadcastCancelledTaskEvents(ctx, workspaceID, cancelled)
 	for _, task := range cancelled {
+		if _, err := s.deliverNativeCancelledClientNotification(ctx, workspaceID, task.ID); err != nil {
+			slog.Warn("native terminal close: cancelled client notification delivery failed",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		}
 		if !task.RuntimeID.Valid {
 			continue
 		}

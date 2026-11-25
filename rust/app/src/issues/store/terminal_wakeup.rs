@@ -1,5 +1,6 @@
 //! Close-rule cleanup after a status write lands on a terminal builtin state.
-//! Mirrors `service.StopClosedIssueWakeups` SQL in the same transaction.
+//! Mirrors `service.StopClosedIssueWakeups` SQL in the same transaction and
+//! records durable client/runtime notification obligations for post-commit replay.
 
 use serde::Serialize;
 use sqlx::{Error, PgConnection, Row};
@@ -32,6 +33,15 @@ notified AS (
     WHERE runtime_id IS NOT NULL
     ON CONFLICT (task_id) DO UPDATE SET
         next_attempt_at = LEAST(agent_task_queue_notify_outbox.next_attempt_at, EXCLUDED.next_attempt_at)
+    RETURNING task_id
+),
+client_notified AS (
+    INSERT INTO agent_task_queue_cancelled_client_outbox (task_id, next_attempt_at)
+    SELECT id, now()
+    FROM cancelled
+    ON CONFLICT (task_id) DO UPDATE SET
+        next_attempt_at = LEAST(agent_task_queue_cancelled_client_outbox.next_attempt_at, EXCLUDED.next_attempt_at)
+    WHERE agent_task_queue_cancelled_client_outbox.delivery_lease_token IS NULL
     RETURNING task_id
 )
 SELECT id::text, issue_id::text, agent_id::text, status, COALESCE(error, '')

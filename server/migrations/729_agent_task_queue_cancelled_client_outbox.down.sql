@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS agent_task_queue_cancelled_client_outbox;
