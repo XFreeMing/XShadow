@@ -92,6 +92,34 @@ func textToString(t pgtype.Text) string {
 	return t.String
 }
 
+func rustWorkflowPreparedTaskMatches(row db.AgentTaskQueue, prep service.IssuePreparedWorkflowHandoffEnqueue) bool {
+	want := prep.Task
+	if row.AgentID != want.AgentID || row.IssueID != want.IssueID || row.RuntimeID != want.RuntimeID {
+		return false
+	}
+	if !row.IsLeaderTask || row.SquadID != want.SquadID {
+		return false
+	}
+	if row.WorkflowStep.String != want.WorkflowStep.String {
+		return false
+	}
+	var runContext struct {
+		Revision int64  `json:"workflow_handoff_revision"`
+		HeadSHA  string `json:"head_sha"`
+	}
+	if json.Unmarshal(row.Context, &runContext) != nil ||
+		runContext.Revision != prep.WorkflowHandoffRevision || runContext.HeadSHA != prep.QueueKeyHeadSha {
+		return false
+	}
+	if row.OriginatorUserID != want.OriginatorUserID || row.AccountableUserID != want.AccountableUserID {
+		return false
+	}
+	if want.OriginatorSource.Valid && row.OriginatorSource.String != want.OriginatorSource.String {
+		return false
+	}
+	return true
+}
+
 func rustStatusQueuedTaskValid(
 	ctx context.Context,
 	q *db.Queries,
@@ -129,6 +157,65 @@ func rustStatusQueuedTaskValid(
 		return false
 	}
 	return true
+}
+
+func marshalIssueWorkflowHandoffEnqueue(prep service.IssuePreparedWorkflowHandoffEnqueue) ([]byte, error) {
+	base, err := marshalIssueStatusPreparedEnqueue(service.IssuePreparedAgentEnqueue{
+		Task: prep.Task, QueueKeyHeadSha: prep.QueueKeyHeadSha,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(base, &wire); err != nil {
+		return nil, err
+	}
+	wire["workflow_handoff_revision"] = prep.WorkflowHandoffRevision
+	return json.Marshal(wire)
+}
+
+func rustWorkflowDeferredTaskValid(
+	ctx context.Context,
+	q *db.Queries,
+	receipt string,
+	prep service.IssuePreparedWorkflowHandoffEnqueue,
+) bool {
+	if receipt == "" {
+		return false
+	}
+	taskID, err := util.ParseUUID(receipt)
+	if err != nil {
+		return false
+	}
+	row, err := q.GetAgentTask(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	want := prep.Task
+	if row.ID != want.ID {
+		return false
+	}
+	return rustWorkflowPreparedTaskMatches(row, prep)
+}
+
+func rustWorkflowCoalescedDeferredTaskValid(
+	ctx context.Context,
+	q *db.Queries,
+	receipt string,
+	prep service.IssuePreparedWorkflowHandoffEnqueue,
+) bool {
+	taskID, err := util.ParseUUID(receipt)
+	if err != nil {
+		return false
+	}
+	row, err := q.GetAgentTask(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	if row.ID == prep.Task.ID {
+		return false
+	}
+	return rustWorkflowPreparedTaskMatches(row, prep)
 }
 
 func rustStatusCoalescedTaskValid(

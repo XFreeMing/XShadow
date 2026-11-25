@@ -4418,7 +4418,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var statusPromotionPrepared *service.IssuePreparedAgentEnqueue
-	dispatchSensitivePromotion := rustStatus && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) &&
+	var workflowHandoffPrepared *service.IssuePreparedWorkflowHandoffEnqueue
+	var workflowHandoffWillRun bool
+	dispatchSensitivePromotion := rustStatus && handoff == nil && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) &&
 		(prevIssue.AssigneeType.String == "agent" || prevIssue.AssigneeType.String == "squad")
 	if dispatchSensitivePromotion && !req.SuppressRun {
 		projected := prevIssue
@@ -4464,19 +4466,59 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			prep, prepErr := h.prepareNativeIssueEnqueue(
 				r.Context(), projected, req.HandoffNote, actorType, actorID,
 			)
-			switch {
-			case errors.Is(prepErr, errNativeSquadLeaderGate):
+			if prepErr != nil {
 				rustAssign = false
-			case prepErr != nil:
-				rustAssign = false
-			default:
+			} else {
 				assignPrepared = prep
 			}
 		} else {
 			rustAssign = false
 		}
 	}
-	if rustStatus {
+	if rustStatus && handoff != nil {
+		projected := prevIssue
+		projected.Status = statusKeyForGuard
+		projected.AssigneeType = params.AssigneeType
+		projected.AssigneeID = params.AssigneeID
+		_, workflowHandoffWillRun = h.IssueService.WillEnqueueRun(r.Context(),
+			service.IssueTriggerInput{
+				Issue:              projected,
+				PrevStatus:         prevIssue.Status,
+				StatusChanged:      true,
+				AssigneeChanged:    true,
+				EnteredHandoffStep: true,
+			},
+			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
+		)
+		workflowHandoffWillRun = workflowHandoffWillRun && !req.SuppressRun
+		if workflowHandoffWillRun {
+			squad, squadErr := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
+				ID: params.AssigneeID, WorkspaceID: prevIssue.WorkspaceID,
+			})
+			if squadErr != nil {
+				rustStatus = false
+			} else {
+				postRevision := *req.ExpectedRevision + 1
+				prep, prepErr := h.prepareWorkflowSquadHandoffNativeEnqueue(
+					r.Context(), projected, squad, req.HandoffNote, actorType, actorID, postRevision,
+				)
+				if prepErr != nil {
+					rustStatus = false
+				} else {
+					workflowHandoffPrepared = prep
+				}
+			}
+		}
+	}
+	rustWorkflow := rustStatus && handoff != nil
+	if rustWorkflow {
+		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, ok = h.updateIssueWorkflowSquadHandoffViaRust(
+			w, r, userID, prevIssue, params, req, handoff, workflowHandoffPrepared, workflowHandoffWillRun,
+		)
+		if !ok {
+			return
+		}
+	} else if rustStatus {
 		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, ok = h.updateIssueStatusViaRust(
 			w, r, userID, prevIssue, params, req, statusPromotionPrepared,
 		)
@@ -4571,6 +4613,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 	)
 	willRun = willRun && !req.SuppressRun
+	if rustWorkflow {
+		willRun = workflowHandoffPrepared != nil
+	}
 
 	updatedPayload := map[string]any{
 		"issue":                resp,
@@ -4637,11 +4682,16 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil && req.StopPreviousAssigneeRuns {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if willRun && statusPromotionPrepared == nil && !rustAssign {
+	if willRun && statusPromotionPrepared == nil && !rustAssign && !rustWorkflow {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
 	} else if queuedTaskReceipt != "" {
 		if taskID, err := util.ParseUUID(queuedTaskReceipt); err == nil {
-			h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
+			switch {
+			case workflowHandoffPrepared != nil && taskID == workflowHandoffPrepared.Task.ID:
+				h.TaskService.CompleteWorkflowSquadHandoffAfterNativeWrite(r.Context(), taskID)
+			case statusPromotionPrepared != nil:
+				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
+			}
 		}
 	}
 

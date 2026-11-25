@@ -83,8 +83,13 @@ func (h *Handler) statusIssueEditUsesRust(
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.StatusPilotScopes) == 0 {
 		return false, nil
 	}
-	if req.ExpectedRevision == nil || req.Status == nil || handoff != nil {
+	if req.ExpectedRevision == nil || req.Status == nil {
 		return false, nil
+	}
+	if handoff != nil {
+		return h.statusWorkflowSquadHandoffUsesRust(
+			r, workspaceID, prev, rawFields, req, handoff, statusKeyForGuard, callerRun,
+		)
 	}
 	if _, dup := rawFields["duplicate_of_issue_id"]; dup {
 		return false, nil

@@ -43,6 +43,7 @@ type IssueReadBridge struct {
 	WritePilotScopes      []string
 	AcceptancePilotScopes []string
 	StatusPilotScopes     []string
+	WorkflowPilotScopes   []string
 	AssignPilotScopes     []string
 	CommentPilotScopes    []string
 }
@@ -59,6 +60,8 @@ type IssueReadBridge struct {
 //     UUIDs for native acceptance trace persistence (independent of write pilot).
 //   - XSHADOW_ISSUES_RUST_STATUS_PILOT: comma-separated workspace slugs or UUIDs
 //     for native status/rank writes on PUT /api/issues/{id} (independent pilots).
+//   - XSHADOW_ISSUES_RUST_WORKFLOW_PILOT: comma-separated workspace slugs or UUIDs
+//     for native squad workflow handoffs on status writes (requires status pilot).
 //   - XSHADOW_ISSUES_RUST_ASSIGN_PILOT: comma-separated workspace slugs or UUIDs
 //     for native direct-agent assignment on PUT /api/issues/{id}.
 //   - XSHADOW_ISSUES_RUST_COMMENT_PILOT: comma-separated workspace slugs or
@@ -70,6 +73,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	writeScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_WRITE_PILOT"))
 	acceptanceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT"))
 	statusScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_STATUS_PILOT"))
+	workflowScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_WORKFLOW_PILOT"))
 	assignScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ASSIGN_PILOT"))
 	commentScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_COMMENT_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
@@ -89,10 +93,11 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		WritePilotScopes:      writeScopes,
 		AcceptancePilotScopes: acceptanceScopes,
 		StatusPilotScopes:     statusScopes,
+		WorkflowPilotScopes:   workflowScopes,
 		AssignPilotScopes:     assignScopes,
 		CommentPilotScopes:    commentScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(assignScopes)+len(commentScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}

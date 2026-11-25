@@ -18,7 +18,7 @@ use super::store::{
 use super::store::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
     IssueCommentCreate, IssueCommentCreateError, IssueStatusEdit, IssueStatusEditError,
-    OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -174,6 +174,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
             put(write_issue_acceptance).layer(DefaultBodyLimit::disable()),
         )
         .route("/internal/issues/{id}/status", put(update_issue_status))
+        .route(
+            "/internal/issues/{id}/workflow-squad-handoff",
+            put(update_issue_workflow_squad_handoff),
+        )
         .route("/internal/issues/{id}/assign", put(update_issue_assign))
         .route(
             "/internal/issues/{id}/comments",
@@ -445,6 +449,53 @@ async fn create_issue_comment(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to create comment",
             )
+        }
+    }
+}
+
+async fn update_issue_workflow_squad_handoff(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(edit): Json<IssueWorkflowSquadEdit>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::update_issue_workflow_squad_handoff(
+        &app.pool,
+        &ctx.workspace_id,
+        &ctx.actor,
+        &id,
+        edit,
+    )
+    .await
+    {
+        Ok(write) => Json(write).into_response(),
+        Err(IssueWorkflowSquadEditError::Access(error)) => {
+            issue_request_error(error, "failed to update issue")
+        }
+        Err(IssueWorkflowSquadEditError::InvalidInput) => error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid workflow squad handoff for status pilot",
+        ),
+        Err(IssueWorkflowSquadEditError::DispatchSensitive) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "dispatch_sensitive": true })),
+        )
+            .into_response(),
+        Err(IssueWorkflowSquadEditError::RevisionConflict(actual_revision)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(IssueWorkflowSquadEditError::Database(error)) => {
+            eprintln!("rust issue workflow squad write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+        Err(IssueWorkflowSquadEditError::Snapshot(error)) => {
+            eprintln!("rust issue workflow squad write snapshot failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
         }
     }
 }

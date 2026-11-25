@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -22,6 +23,14 @@ var errIssueNotSquadAssignee = fmt.Errorf("issue is not assigned to a squad")
 type IssuePreparedAgentEnqueue struct {
 	Task            db.CreateAgentTaskParams
 	QueueKeyHeadSha string
+}
+
+// IssuePreparedWorkflowHandoffEnqueue is the trusted deferred queue insert for a
+// squad workflow handoff the Rust writer commits with the issue row.
+type IssuePreparedWorkflowHandoffEnqueue struct {
+	Task                    db.CreateAgentTaskParams
+	QueueKeyHeadSha         string
+	WorkflowHandoffRevision int64
 }
 
 // PrepareIssueAgentEnqueue mirrors the direct-agent assign/promote enqueue plan
@@ -75,6 +84,64 @@ func (s *TaskService) PrepareIssueSquadLeaderEnqueue(
 	}
 	params.WorkflowStep = pgtype.Text{String: issue.Status, Valid: true}
 	return IssuePreparedAgentEnqueue{Task: params, QueueKeyHeadSha: params.HeadSha.String}, nil
+}
+
+// PrepareIssueWorkflowSquadHandoffEnqueue mirrors EnqueueTaskForWorkflowSquadLeader
+// without writing the deferred queue row.
+func (s *TaskService) PrepareIssueWorkflowSquadHandoffEnqueue(
+	ctx context.Context,
+	issue db.Issue,
+	squad db.Squad,
+	handoffNote string,
+	actorUserID pgtype.UUID,
+	postRevision int64,
+) (IssuePreparedWorkflowHandoffEnqueue, error) {
+	if !issue.AssigneeID.Valid || issue.AssigneeType.String != "squad" ||
+		squad.ID != issue.AssigneeID || squad.WorkspaceID != issue.WorkspaceID {
+		return IssuePreparedWorkflowHandoffEnqueue{}, errIssueNotSquadAssignee
+	}
+	if squad.ArchivedAt.Valid {
+		return IssuePreparedWorkflowHandoffEnqueue{}, fmt.Errorf("squad is archived")
+	}
+	attr := s.attributionForIssueTask(ctx, issue, pgtype.UUID{}, attribution.SourceDelegation, actorUserID)
+	params, err := s.prepareMentionTask(
+		ctx, issue, squad.LeaderID, pgtype.UUID{}, nil, true, issue.AssigneeID,
+		false, handoffNote, attr, pgtype.UUID{}, OriginDerived, false,
+	)
+	if err != nil {
+		return IssuePreparedWorkflowHandoffEnqueue{}, err
+	}
+	params.WorkflowStep = pgtype.Text{String: issue.Status, Valid: true}
+	params.WorkflowHandoffRevision = pgtype.Int8{Int64: postRevision, Valid: true}
+	params.FireAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	return IssuePreparedWorkflowHandoffEnqueue{
+		Task:                    params,
+		QueueKeyHeadSha:         params.HeadSha.String,
+		WorkflowHandoffRevision: postRevision,
+	}, nil
+}
+
+// CompleteWorkflowSquadHandoffAfterNativeWrite performs post-commit wakeups for a
+// newly inserted deferred squad handoff, matching the Go enqueue path.
+func (s *TaskService) CompleteWorkflowSquadHandoffAfterNativeWrite(ctx context.Context, taskID pgtype.UUID) {
+	if !taskID.Valid {
+		return
+	}
+	task, err := s.Queries.GetAgentTask(ctx, taskID)
+	if err != nil {
+		slog.Warn("native workflow handoff: load deferred task failed",
+			"task_id", util.UUIDToString(taskID), "error", err)
+		return
+	}
+	if task.Status != "deferred" {
+		return
+	}
+	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.notifyTaskAvailable(task)
+	if err := s.PromoteDueDeferredTasksForRuntime(ctx, task.RuntimeID); err != nil {
+		slog.Warn("promote native workflow squad handoff failed",
+			"task_id", util.UUIDToString(taskID), "error", err)
+	}
 }
 
 // CompleteIssueStatusPromotionAfterNativeWrite performs post-commit wakeups only
