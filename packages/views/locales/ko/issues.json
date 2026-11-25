@@ -24,6 +24,15 @@
     "chat_draft": "다음 요청에 따라 작업 {{issue}} ({{id}})의 프로토타입을 수정해 주세요.\n\n{{request}}\n\n기존 이미지와 순서\n{{originals}}\n\n작업과 원본을 확인하고 범위가 불분명하면 질문해 주세요. 수정안을 `multica attachment upload`로 첨부하고 ID를 보관한 뒤 명시적 승인을 기다려 주세요. 승인되면 `multica issue get`으로 최신 설명과 리비전을 확인해 주세요. 원본 참조가 바뀌었다면 차이를 알려 주세요. 승인된 이미지를 내려받고 해당 참조만 상대 경로로 변경하며 나머지 설명과 첨부를 보존해 주세요. {{command}}로 게시하고 이미지마다 --attachment를 사용해 주세요. 충돌 시 다시 읽고 알려 주며 게시 후 새 참조를 확인해 주세요."
   },
   "method": {
+    "coverage_receipt": "커버리지 사전 검증 기록(JSON)",
+    "coverage_invalid": "유효한 사전 검증 기록 목록을 입력하세요.",
+    "github_delivery": "GitHub 전달",
+    "waiting_delivery": "전달 시작 대기 중",
+    "setup_required": "GitHub 인증 또는 작업 디렉터리 설정 필요",
+    "waiting_actions": "GitHub Actions 대기 중",
+    "merge_blocked": "병합 차단됨",
+    "cleanup_pending": "병합됨, 정리 대기 중",
+    "reclaimed": "병합 및 정리 완료",
     "closeout": "완료 요약",
     "closeout_passed": "{{passed}}/{{total}} 통과",
     "closeout_reconstructed": "이전 기록 기준",

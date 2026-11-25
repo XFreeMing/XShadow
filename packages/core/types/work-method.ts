@@ -20,6 +20,7 @@ const handler = z.union([
   z.object({ kind: z.enum(["creator", "project_lead"]) }),
 ]);
 const step = z.object({
+  require_preflight: z.boolean().optional(),
   self_claim: z.boolean().optional(),
   acceptance_gate: z.enum(["criteria", "coverage", "candidate", "delivery"]).optional(),
   name: nonEmpty,
@@ -45,6 +46,10 @@ export const WorkMethodSchema = z
     steps: z.array(step).min(1),
     review: nonEmpty,
     rework_step: index,
+    github_delivery: z.object({
+      repository: z.string().regex(/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/),
+      base_ref: nonEmpty,
+    }).optional().catch(undefined),
   })
   .refine((method) => method.rework_step < method.steps.length);
 export const WorkMethodListSchema = z.object({
@@ -57,6 +62,27 @@ const finding = z.object({
   actual: nonEmpty,
   evidence: nonEmpty,
 });
+const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+const coverageRun = z.object({
+  commit: sha,
+  result: z.enum(["pass", "fail"]),
+  evidence: nonEmpty,
+});
+export const CoveragePreflightSchema = z.array(z.object({
+  criterion_id: nonEmpty,
+  criterion_version: z.number().int().positive(),
+  case_id: nonEmpty,
+  case_version: z.number().int().positive(),
+  command: nonEmpty,
+  baseline: coverageRun,
+  reference: coverageRun.optional(),
+}));
+const pullRequest = z.number().int().positive();
+const deliveryReceipt = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("setup_required") }),
+  z.object({ state: z.enum(["waiting_actions", "merge_blocked"]), pull_request: pullRequest, base: sha }),
+  z.object({ state: z.enum(["cleanup_pending", "reclaimed"]), pull_request: pullRequest, merge: sha }),
+]);
 export const WorkMethodRunSchema = z
   .object({
     revision: index,
@@ -68,6 +94,7 @@ export const WorkMethodRunSchema = z
     can_act: z.boolean().optional(),
     source: z.string().optional(),
     planned_delivery: GoalPlanDeliverySchema.nullish().catch(null),
+    project_delivery: z.object({ resource_id: nonEmpty }).optional().catch(undefined),
     history: z
       .array(
         z.object({
@@ -79,6 +106,8 @@ export const WorkMethodRunSchema = z
             trace_revision: z.number().int().positive(),
           }).optional(),
           closeout: AcceptanceCloseoutSchema.optional().catch(undefined),
+          coverage_preflight: CoveragePreflightSchema.optional().catch(undefined),
+          delivery_receipt: deliveryReceipt.optional().catch(undefined),
           step: index,
           from_step: index.optional(),
           previous_method: WorkMethodSchema.optional(),
@@ -114,6 +143,7 @@ export type WorkMethodAction = { base_revision: number } & (
       evidence: string;
       method_id?: string;
       method_revision?: number;
+      coverage_preflight?: z.infer<typeof CoveragePreflightSchema>;
     }
   | { action: "approve"; evidence: string; checked_items?: number[] }
   | {

@@ -103,7 +103,7 @@ func testFirstAgile() Template {
 	return m
 }
 
-func agileTemplate() Template {
+func storyArtifactAgile() Template {
 	m := testFirstAgile()
 	m.Revision++
 	criteria, coverage, candidate, delivery := &m.Steps[0], &m.Steps[1], &m.Steps[2], &m.Steps[3]
@@ -122,20 +122,35 @@ func agileTemplate() Template {
 	return m
 }
 
+func agileTemplate() Template {
+	m := storyArtifactAgile()
+	m.Revision++
+	criteria, coverage, candidate, delivery := &m.Steps[0], &m.Steps[1], &m.Steps[2], &m.Steps[3]
+	criteria.Instructions += " 并行派工前核对用例和实现可能同时修改的目录及共享文件，写明负责人或合并顺序。"
+	coverage.RequirePreflight = true
+	coverage.Instructions += " 提交前实跑并附覆盖预检回执。新增行为记录预期断言处失败的旧版基线和通过的参照，既有行为记录通过的旧版基线。评审集中记录阻塞项；返审优先复跑改动与受影响的用例，引用同一修订的有效回执。"
+	coverage.Checks[2] += "。按回执核验目标断言与基线，集中记录阻塞项"
+	candidate.Instructions += " 按冻结用例和预检回执接手，只补充候选变化、新结果及首个失败用例。"
+	delivery.Instructions += " 若项目启用 GitHub 交付，核对候选与目标分支的差异只包含本故事获准交付的内容。平台以复验过的完整 SHA 发起自动交付。"
+	return m
+}
+
 func upgradeAgile(m Template) Template {
 	current := agileTemplate()
-	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile()} {
+	for _, previous := range []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile(), storyArtifactAgile()} {
 		if m.Kind != previous.Kind || len(m.Steps) != len(previous.Steps) {
 			continue
 		}
 		for i, s := range m.Steps {
 			previous.Steps[i].Owner, previous.Steps[i].Reviewer = s.Owner, s.Reviewer
+			previous.Steps[i].SelfClaim = s.SelfClaim
 		}
 		if !reflect.DeepEqual(m.Steps, previous.Steps) {
 			continue
 		}
 		for i, s := range m.Steps {
 			current.Steps[i].Owner, current.Steps[i].Reviewer = s.Owner, s.Reviewer
+			current.Steps[i].SelfClaim = s.SelfClaim
 		}
 		m.Steps = current.Steps
 		if m.Review == previous.Review {

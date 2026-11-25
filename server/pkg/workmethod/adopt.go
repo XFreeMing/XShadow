@@ -30,7 +30,7 @@ func (r Run) AcceptsTaskRevision(revision int) bool {
 
 func (r *Run) Adopt(c Change, catalog []Template, actor, at string) error {
 	if c.Action != AdoptRevision || c.BaseRevision == nil || *c.BaseRevision < 1 || c.MethodRevision == nil || *c.MethodRevision < 1 || c.MethodID == "" ||
-		c.TargetStep != nil || len(c.CheckedItems) != 0 || !validText(c.Evidence, 12000) {
+		c.TargetStep != nil || len(c.CheckedItems) != 0 || len(c.CoveragePreflight) != 0 || !validText(c.Evidence, 12000) {
 		return errors.New("采用新版须提供实例修订、方法编号、目标模板修订及变更依据")
 	}
 	if r.State != "working" || r.Method == nil || r.Step < 0 || r.Step >= len(r.Method.Steps) || c.MethodID != r.Method.ID {
@@ -50,21 +50,24 @@ func (r *Run) Adopt(c Change, catalog []Template, actor, at string) error {
 		return nil
 	}
 	next := catalog[i]
-	if err := Validate(next); err != nil {
-		return err
-	}
 	old := r.Method
 	if next.Kind != old.Kind || next.ReworkStep != old.ReworkStep || len(next.Steps) != len(old.Steps) {
 		return fmt.Errorf("%w：工作方法的类型、步骤数或返工目标发生改变", ErrConflict)
 	}
 	for i, prior := range old.Steps {
 		s := next.Steps[i]
-		if prior.Name != s.Name || prior.Gate != s.Gate || prior.SelfClaim != s.SelfClaim || !reflect.DeepEqual(prior.Owner, s.Owner) ||
+		if prior.Name != s.Name || prior.Gate != s.Gate || (i <= r.Step && prior.RequirePreflight != s.RequirePreflight) || prior.SelfClaim != s.SelfClaim || !reflect.DeepEqual(prior.Owner, s.Owner) ||
 			!reflect.DeepEqual(prior.Reviewer, s.Reviewer) || len(prior.Checks) != len(s.Checks) {
 			return fmt.Errorf("%w：第 %d 步的顺序、门槛、分工或验收项结构不兼容", ErrConflict, i+1)
 		}
 	}
+	if err := Validate(next); err != nil {
+		return err
+	}
 	r.Method = snapshot(next)
+	if r.ProjectDelivery != nil {
+		r.Method.GitHubDelivery = old.GitHubDelivery
+	}
 	r.History = append(r.History, Event{Action: AdoptRevision, Step: r.Step, Actor: actor, At: at,
 		PreviousMethod: old, MethodRevision: next.Revision, Evidence: strings.TrimSpace(c.Evidence)})
 	r.Revision++

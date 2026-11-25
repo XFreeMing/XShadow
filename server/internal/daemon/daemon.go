@@ -2184,6 +2184,7 @@ func (d *Daemon) run(ctx context.Context, healthLn net.Listener) error {
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
 	go d.gcLoop(ctx)
+	go d.projectDeliveryLoop(ctx)
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.environments.run(ctx)

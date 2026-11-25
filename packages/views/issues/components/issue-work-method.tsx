@@ -7,9 +7,10 @@ import {
   issueWorkMethodOptions,
   workMethodCatalogOptions,
 } from "@multica/core/issue-workflows/queries";
-import type {
-  WorkMethodAction,
-  WorkMethodRun,
+import {
+  CoveragePreflightSchema,
+  type WorkMethodAction,
+  type WorkMethodRun,
 } from "@multica/core/types/work-method";
 import {
   WorkMethodSteps,
@@ -22,6 +23,17 @@ import { useLocale, useT } from "../../i18n";
 import { PlannedDeliverySummary } from "../../goals/components/goal-plan-delivery";
 import { IssueCloseout } from "./issue-closeout";
 import { useActorName } from "@multica/core/workspace/hooks";
+
+function parsePreflight(text: string) {
+  if (!text.trim()) return [];
+  try {
+    const value: unknown = JSON.parse(text);
+    const result = CoveragePreflightSchema.safeParse(value);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
 
 export function IssueWorkMethod({
   wsId,
@@ -112,6 +124,7 @@ function MethodCard({
     methodRevision: number;
   } | null>(null);
   const [returnStep, setReturnStep] = useState<number | null>(null);
+  const [preflightDraft, setPreflightDraft] = useState<{ revision: number; text: string }>();
   const catalog = useQuery({
     ...workMethodCatalogOptions(wsId),
     enabled: choosing,
@@ -129,6 +142,7 @@ function MethodCard({
       setChoosing(false);
       setSelected("");
       setReturnStep(null);
+      setPreflightDraft(undefined);
     },
     onError: () => {
       void qc.invalidateQueries({ queryKey });
@@ -136,13 +150,15 @@ function MethodCard({
   });
   const { method } = run;
   const step = method?.steps[run.step];
+  const preflightText = preflightDraft?.revision === run.revision ? preflightDraft.text : "";
+  const preflight = parsePreflight(preflightText);
   const stale =
     draft !== null &&
     (draft.revision !== run.revision ||
       draft.methodId !== method?.id ||
       draft.methodRevision !== method?.revision);
   const evidence = draft?.value.trim() ?? "";
-  const disabled = stale || mutation.isPending || !evidence;
+  const disabled = stale || mutation.isPending || !evidence || (step?.require_preflight && preflight === null);
   const reviewed = run.state === "review";
   const lastStep = !!method && run.step === method.steps.length - 1;
   const startsHandoff = run.state === "ready" && !!step?.owner;
@@ -155,6 +171,8 @@ function MethodCard({
   const latest = [...run.history].reverse();
   const failedCandidateReview = reviewed && !!latest[0]?.candidate_failure;
   const closeout = run.state === "closed" ? latest[0]?.closeout : undefined;
+  const receipt = run.state === "closed" ? latest[0]?.delivery_receipt : undefined;
+  const deliveryTarget = run.project_delivery && method?.github_delivery;
   const delivery = latest.find((event) => event.action === "advance");
   const returned = latest.find(
     (event) => event.action === "rework" && event.step === run.step,
@@ -181,6 +199,7 @@ function MethodCard({
       mutation.mutate({
         ...base,
         action,
+        ...(step?.require_preflight && preflight?.length ? { coverage_preflight: preflight } : {}),
         ...(run.state === "ready"
           ? { method_id: method.id, method_revision: method.revision }
           : {}),
@@ -315,6 +334,20 @@ function MethodCard({
         {method && (
           <>
             {closeout && <IssueCloseout closeout={closeout} actorName={actorName} />}
+            {deliveryTarget && run.state === "closed" && (
+              <div className="flex flex-wrap items-center gap-x-2" role="status">
+                <span>{t(($) => $.method.github_delivery)}</span>
+                <span className="text-muted-foreground">
+                  {t(($) => $.method[receipt?.state ?? "waiting_delivery"])}
+                </span>
+                {receipt && "pull_request" in receipt && (
+                  <a className="underline" href={`https://github.com/${deliveryTarget.repository}/pull/${receipt.pull_request}`} target="_blank" rel="noreferrer">
+                    {`PR #${receipt.pull_request}`}
+                  </a>
+                )}
+                {receipt && "merge" in receipt && <code title={receipt.merge}>{receipt.merge.slice(0, 12)}</code>}
+              </div>
+            )}
             {acceptance}
             {run.state !== "closed" && step && (
               <>
@@ -428,6 +461,18 @@ function MethodCard({
                         }
                       />
                     </label>
+                    {!reviewed && step.require_preflight && (
+                      <label className="grid gap-1.5">
+                        {t(($) => $.method.coverage_receipt)}
+                        <textarea
+                          className="min-h-16 rounded-md border border-input bg-background p-2 font-mono"
+                          value={preflightText}
+                          onChange={(event) => setPreflightDraft({ revision: run.revision, text: event.target.value })}
+                          aria-invalid={preflight === null}
+                        />
+                        {preflight === null && <span role="alert">{t(($) => $.method.coverage_invalid)}</span>}
+                      </label>
+                    )}
                     {stale && (
                       <div role="alert">
                         {t(($) => $.method.stale)}{" "}
@@ -521,7 +566,7 @@ function MethodCard({
                       <p>
                         {actionText(entry.action)}
                         {entry.previous_method && entry.method_revision && (
-                          <> v{entry.previous_method.revision} → v{entry.method_revision}</>
+                          ` v${entry.previous_method.revision} → v${entry.method_revision}`
                         )} ·{" "}
                         {entry.from_step !== undefined &&
                           entry.from_step !== entry.step && (
@@ -557,6 +602,14 @@ function MethodCard({
                           {entry.evidence}
                         </p>
                       )}
+                      {entry.coverage_preflight?.map((proof) => (
+                        <div key={proof.case_id} className="break-words text-caption">
+                          <p className="font-medium">{`${proof.case_id} v${proof.case_version}`}</p>
+                          <code>{proof.command}</code>
+                          <p>{proof.baseline.commit.slice(0, 12)} · {proof.baseline.evidence}</p>
+                          {proof.reference && <p>{proof.reference.commit.slice(0, 12)} · {proof.reference.evidence}</p>}
+                        </div>
+                      ))}
                       <p className="break-words text-caption text-muted-foreground">
                         <span title={entry.actor}>
                           {actorName(entry.actor)}

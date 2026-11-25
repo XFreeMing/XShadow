@@ -17,6 +17,7 @@ import (
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 // ProjectResourceResponse is the JSON shape returned by the project resource API.
@@ -143,10 +144,11 @@ const (
 // keeps the historical one-task-at-a-time behavior, worktree gives each task an
 // isolated git worktree so tasks run concurrently.
 type localDirectoryRef struct {
-	LocalPath     string `json:"local_path"`
-	DaemonID      string `json:"daemon_id"`
-	Label         string `json:"label,omitempty"`
-	ExecutionMode string `json:"execution_mode,omitempty"`
+	ActionsDelivery *workmethod.GitHubDelivery `json:"github_actions_delivery,omitempty"`
+	LocalPath       string                     `json:"local_path"`
+	DaemonID        string                     `json:"daemon_id"`
+	Label           string                     `json:"label,omitempty"`
+	ExecutionMode   string                     `json:"execution_mode,omitempty"`
 }
 
 // requireWorktreeCapableDaemon rejects saving a local_directory ref that asks
@@ -310,6 +312,9 @@ func validateLocalDirectoryRef(ref json.RawMessage) (json.RawMessage, error) {
 	case "", localDirectoryModeInPlace, localDirectoryModeWorktree, localDirectoryModeAuto:
 	default:
 		return nil, fmt.Errorf("local_directory: unsupported execution_mode %q (expected in_place, worktree, or auto)", payload.ExecutionMode)
+	}
+	if target := payload.ActionsDelivery; target != nil && (!target.Valid() || target.BaseRef != "dev") {
+		return nil, errors.New("local_directory: GitHub Actions delivery requires a repository slug and base_ref dev")
 	}
 	out, err := json.Marshal(payload)
 	if err != nil {
@@ -587,6 +592,10 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.ResourceType == "local_directory" && localActionsTarget(normalizedRef) != nil &&
+		!h.canConfigureActionsDelivery(w, r, project.WorkspaceID) {
+		return
+	}
 
 	if conflict, err := findLocalDirectoryConflict(r.Context(), h.Queries, project.ID, req.ResourceType, normalizedRef, pgtype.UUID{}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check existing resources")
@@ -707,6 +716,21 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		nextRef = normalized
+		if existing.ResourceType == "local_directory" {
+			var incoming map[string]json.RawMessage
+			_ = json.Unmarshal(rawRef, &incoming) // already validated above
+			prior := localActionsTarget(existing.ResourceRef)
+			if _, sent := incoming["github_actions_delivery"]; sent {
+				if !reflect.DeepEqual(prior, localActionsTarget(nextRef)) && !h.canConfigureActionsDelivery(w, r, project.WorkspaceID) {
+					return
+				}
+			} else if prior != nil {
+				var retained localDirectoryRef
+				_ = json.Unmarshal(nextRef, &retained)
+				retained.ActionsDelivery = prior
+				nextRef, _ = json.Marshal(retained)
+			}
+		}
 	}
 
 	// Both checks read through the transaction (qtx) rather than the handler's
@@ -849,6 +873,26 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 		map[string]any{"resource": resp, "project_id": uuidToString(project.ID)},
 	)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func localActionsTarget(raw []byte) *workmethod.GitHubDelivery {
+	var ref localDirectoryRef
+	_ = json.Unmarshal(raw, &ref)
+	return ref.ActionsDelivery
+}
+
+func (h *Handler) canConfigureActionsDelivery(w http.ResponseWriter, r *http.Request, workspace pgtype.UUID) bool {
+	ws := uuidToString(workspace)
+	member, ok := h.workspaceMember(w, r, ws)
+	if !ok {
+		return false
+	}
+	kind, _ := h.resolveActor(r, requestUserID(r), ws)
+	if kind != "member" || !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "only a workspace owner or admin may configure GitHub Actions delivery")
+		return false
+	}
+	return true
 }
 
 // findLocalDirectoryConflict enforces "at most one local_directory resource

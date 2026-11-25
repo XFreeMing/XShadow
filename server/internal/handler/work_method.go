@@ -129,7 +129,7 @@ func developmentReview(trace acceptance.Trace, gate string) error {
 		if gate == "criteria" {
 			continue
 		}
-		if len(criterion.Cases) == 0 {
+		if !slices.ContainsFunc(criterion.Cases, func(tc acceptance.TestCase) bool { return tc.Retired == nil }) {
 			return errors.New(criterion.ID + " 缺少关联测试用例")
 		}
 		if gate == "coverage" {
@@ -266,6 +266,9 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			acceptanceTrace, err := acceptance.Decode(criteria)
 			if err == nil {
 				err = developmentReview(acceptanceTrace, gate)
+				if err == nil && run.RequiresCoveragePreflight() {
+					err = run.CheckCoveragePreflight(acceptanceTrace, change.CoveragePreflight)
+				}
 				if err != nil && gate == "candidate" && change.Action == "advance" && binding.ID.Valid &&
 					run.CanDelegateCandidate() && run.Method.Steps[run.Step].Reviewer != nil {
 					candidateFailure = workmethod.FailedCandidate(acceptanceTrace)
@@ -318,8 +321,20 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, err.Error())
 		return
 	}
+	if change.Action == "select" || run.Revision == 1 {
+		if err := h.bindProjectDelivery(r.Context(), issue, &run); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	if closeout != nil {
 		run.History[len(run.History)-1].Closeout = closeout
+		if run.ProjectDelivery != nil {
+			if _, err := projectDeliveryJob(issue, run); err != nil {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+		}
 	}
 	if candidateFailure != nil {
 		event := &run.History[len(run.History)-1]

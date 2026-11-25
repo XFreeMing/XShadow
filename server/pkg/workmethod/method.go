@@ -30,48 +30,57 @@ type GitHubDelivery struct {
 	BaseRef    string `json:"base_ref"`
 }
 
+func (d GitHubDelivery) Valid() bool {
+	return githubRepository.MatchString(d.Repository) && githubBranch.MatchString(d.BaseRef) &&
+		!strings.Contains(d.BaseRef, "..")
+}
+
 type Actor struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id,omitempty"`
 }
 
 type Step struct {
-	SelfClaim    bool     `json:"self_claim,omitempty"`
-	Gate         string   `json:"acceptance_gate,omitempty"`
-	Name         string   `json:"name"`
-	Output       string   `json:"output"`
-	Instructions string   `json:"instructions,omitempty"`
-	Inputs       string   `json:"inputs,omitempty"`
-	Checks       []string `json:"checks,omitempty"`
-	Owner        *Actor   `json:"owner,omitempty"`
-	Reviewer     *Actor   `json:"reviewer,omitempty"`
+	RequirePreflight bool     `json:"require_preflight,omitempty"`
+	SelfClaim        bool     `json:"self_claim,omitempty"`
+	Gate             string   `json:"acceptance_gate,omitempty"`
+	Name             string   `json:"name"`
+	Output           string   `json:"output"`
+	Instructions     string   `json:"instructions,omitempty"`
+	Inputs           string   `json:"inputs,omitempty"`
+	Checks           []string `json:"checks,omitempty"`
+	Owner            *Actor   `json:"owner,omitempty"`
+	Reviewer         *Actor   `json:"reviewer,omitempty"`
 }
 
 type Run struct {
-	GoalExecution bool      `json:"goal_execution,omitempty"`
-	CurrentActor  *Actor    `json:"current_actor,omitempty"`
-	Source        string    `json:"source,omitempty"`
-	Revision      int       `json:"revision"`
-	State         string    `json:"state"`
-	Method        *Template `json:"method"`
-	Step          int       `json:"step"`
-	Reason        string    `json:"reason"`
-	History       []Event   `json:"history"`
+	ProjectDelivery *ProjectDelivery `json:"project_delivery,omitempty"`
+	GoalExecution   bool             `json:"goal_execution,omitempty"`
+	CurrentActor    *Actor           `json:"current_actor,omitempty"`
+	Source          string           `json:"source,omitempty"`
+	Revision        int              `json:"revision"`
+	State           string           `json:"state"`
+	Method          *Template        `json:"method"`
+	Step            int              `json:"step"`
+	Reason          string           `json:"reason"`
+	History         []Event          `json:"history"`
 }
 
 type Event struct {
-	CandidateFailure *CandidateFailure    `json:"candidate_failure,omitempty"`
-	Closeout         *acceptance.Closeout `json:"closeout,omitempty"`
-	PreviousMethod   *Template            `json:"previous_method,omitempty"`
-	MethodRevision   int                  `json:"method_revision,omitempty"`
-	CheckedItems     []int                `json:"checked_items,omitempty"`
-	FromStep         *int                 `json:"from_step,omitempty"`
-	Action           string               `json:"action"`
-	Step             int                  `json:"step"`
-	Evidence         string               `json:"evidence"`
-	Findings         []ReviewFinding      `json:"findings,omitempty"`
-	Actor            string               `json:"actor"`
-	At               string               `json:"at"`
+	DeliveryReceipt   *DeliveryReceipt     `json:"delivery_receipt,omitempty"`
+	CoveragePreflight []CoveragePreflight  `json:"coverage_preflight,omitempty"`
+	CandidateFailure  *CandidateFailure    `json:"candidate_failure,omitempty"`
+	Closeout          *acceptance.Closeout `json:"closeout,omitempty"`
+	PreviousMethod    *Template            `json:"previous_method,omitempty"`
+	MethodRevision    int                  `json:"method_revision,omitempty"`
+	CheckedItems      []int                `json:"checked_items,omitempty"`
+	FromStep          *int                 `json:"from_step,omitempty"`
+	Action            string               `json:"action"`
+	Step              int                  `json:"step"`
+	Evidence          string               `json:"evidence"`
+	Findings          []ReviewFinding      `json:"findings,omitempty"`
+	Actor             string               `json:"actor"`
+	At                string               `json:"at"`
 }
 
 type ReviewFinding struct {
@@ -83,16 +92,17 @@ type ReviewFinding struct {
 }
 
 type Change struct {
-	MethodRevision  *int            `json:"method_revision,omitempty"`
-	CheckedItems    []int           `json:"checked_items,omitempty"`
-	Action          string          `json:"action"`
-	DelegateAgentID string          `json:"delegate_agent_id,omitempty"`
-	BaseRevision    *int            `json:"base_revision"`
-	MethodID        string          `json:"method_id,omitempty"`
-	Evidence        string          `json:"evidence,omitempty"`
-	Findings        []ReviewFinding `json:"findings,omitempty"`
-	TargetStep      *int            `json:"target_step,omitempty"`
-	ProjectLesson   *ProjectLesson  `json:"project_lesson,omitempty"`
+	CoveragePreflight []CoveragePreflight `json:"coverage_preflight,omitempty"`
+	MethodRevision    *int                `json:"method_revision,omitempty"`
+	CheckedItems      []int               `json:"checked_items,omitempty"`
+	Action            string              `json:"action"`
+	DelegateAgentID   string              `json:"delegate_agent_id,omitempty"`
+	BaseRevision      *int                `json:"base_revision"`
+	MethodID          string              `json:"method_id,omitempty"`
+	Evidence          string              `json:"evidence,omitempty"`
+	Findings          []ReviewFinding     `json:"findings,omitempty"`
+	TargetStep        *int                `json:"target_step,omitempty"`
+	ProjectLesson     *ProjectLesson      `json:"project_lesson,omitempty"`
 }
 
 var (
@@ -129,8 +139,7 @@ func Validate(m Template) error {
 	default:
 		return errors.New("未知任务类型")
 	}
-	if target := m.GitHubDelivery; target != nil && (m.Kind != "development" || !githubRepository.MatchString(target.Repository) ||
-		!githubBranch.MatchString(target.BaseRef) || strings.Contains(target.BaseRef, "..")) {
+	if target := m.GitHubDelivery; target != nil && (m.Kind != "development" || !target.Valid()) {
 		return errors.New("GitHub 交付须配置研发仓库和目标分支")
 	}
 	if len(m.Keywords) > 60 {
@@ -145,6 +154,9 @@ func Validate(m Template) error {
 		return errors.New("方法须包含 1 到 32 个交付步骤")
 	}
 	for i, step := range m.Steps {
+		if step.RequirePreflight && step.Gate != "coverage" {
+			return errors.New("覆盖预检只能用于测试用例设计步骤")
+		}
 		switch step.Gate {
 		case "":
 		case "criteria", "coverage", "candidate", "delivery":
@@ -242,6 +254,12 @@ func (r *Run) Apply(c Change, methods []Template, actor, at string) error {
 		return errors.New("须填写本次交付、评审或退回的证据，最多 12000 个字符")
 	}
 	event := Event{Action: c.Action, Step: r.Step, Evidence: evidence, Actor: actor, At: at}
+	if len(c.CoveragePreflight) > 0 {
+		if c.Action != "advance" || !r.RequiresCoveragePreflight() {
+			return errors.New("覆盖预检回执只能随用例提交评审")
+		}
+		event.CoveragePreflight = slices.Clone(c.CoveragePreflight)
+	}
 	if len(c.Findings) > 0 {
 		if c.Action != "rework" || len(c.Findings) > 10 {
 			return errors.New("只有退回评审可记录发现，最多十条")

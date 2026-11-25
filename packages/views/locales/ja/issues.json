@@ -24,6 +24,15 @@
     "chat_draft": "タスク {{issue}}（{{id}}）のプロトタイプを次の要望に沿って修正してください。\n\n{{request}}\n\n現在の画像と順序\n{{originals}}\n\nタスクと元画像を確認し、必要なら質問してください。差し替え案を `multica attachment upload` で添付し、ID を控えて、明示的な承認を待ちます。承認後は `multica issue get` で最新の本文とリビジョンを取得します。元の参照が変わっていたら知らせてください。承認済み画像をダウンロードし、該当する参照だけローカルの相対パスに置き換えます。残りの本文と添付は保持します。{{command}} で公開し、画像ごとに --attachment を指定します。競合時は読み直して知らせ、公開後は新しい参照を確認してください。"
   },
   "method": {
+    "coverage_receipt": "カバレッジの事前検証記録（JSON）",
+    "coverage_invalid": "有効な事前検証記録の一覧を入力してください。",
+    "github_delivery": "GitHub への納品",
+    "waiting_delivery": "納品開始待ち",
+    "setup_required": "GitHub の認証または作業ディレクトリの設定が必要",
+    "waiting_actions": "GitHub Actions の完了待ち",
+    "merge_blocked": "マージがブロックされました",
+    "cleanup_pending": "マージ済み、クリーンアップ待ち",
+    "reclaimed": "マージとクリーンアップが完了",
     "closeout": "完了サマリー",
     "closeout_passed": "{{passed}}/{{total}} 件合格",
     "closeout_reconstructed": "過去の記録から復元",
