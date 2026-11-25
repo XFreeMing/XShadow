@@ -4,14 +4,16 @@ use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 
+use super::agent_source_queue_lock::{
+    AgentRuntimeShareBindingErrors, insert_queue_notify_outbox,
+    lock_workspace_member_agent_runtime_share,
+};
 use super::create_source_context::{
     SOURCE_CONTEXT_VERSION, SourceContextCreateTrust, reconcile_source_context_project,
     validate_agent_pending_source,
 };
 use super::create_write::IssueCreateError;
 use super::is_uuid;
-
-const SOURCE_CONTEXT_QUICK_CREATE_CAPABILITY: &str = "source_context_quick_create_v1";
 const QUICK_CREATE_HIGH_PRIORITY: i32 = 3;
 
 #[derive(Debug, Deserialize)]
@@ -70,22 +72,6 @@ INSERT INTO issue_source_context (
 FROM workspace WHERE id = $2::uuid AND issue_prefix = $11
 RETURNING id::text
 "#;
-
-const ENQUEUE_NATIVE_QUEUE_NOTIFY: &str = r#"
-INSERT INTO agent_task_queue_notify_outbox (task_id)
-VALUES ($1::uuid)
-ON CONFLICT (task_id) DO NOTHING
-"#;
-
-fn runtime_metadata_has_capability(metadata: &Value, capability: &str) -> bool {
-    metadata
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .any(|item| item == capability)
-}
 
 fn validate_trusted_actor_ids(
     member_id: &str,
@@ -151,65 +137,20 @@ async fn lock_agent_runtime_member(
     member_id: &str,
     request: &AgentSourceQuickCreateWrite,
 ) -> Result<(), IssueCreateError> {
-    sqlx::query("SELECT 1 FROM workspace WHERE id = $1::uuid FOR KEY SHARE")
-        .bind(workspace_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(IssueCreateError::Database)?;
-    let member = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM member WHERE workspace_id = $1::uuid AND user_id = $2::uuid FOR SHARE",
+    lock_workspace_member_agent_runtime_share(
+        tx,
+        workspace_id,
+        member_id,
+        &request.agent_id,
+        &request.runtime_id,
+        &request.runtime_cli_version,
+        AgentRuntimeShareBindingErrors {
+            binding_mismatch: IssueCreateError::SourceContextQuickCreateUnavailable,
+            capability_missing: IssueCreateError::SourceContextQuickCreateUnsupported,
+            version_mismatch: IssueCreateError::SourceContextQuickCreateUnavailable,
+        },
     )
-    .bind(workspace_id)
-    .bind(member_id)
-    .fetch_optional(&mut **tx)
     .await
-    .map_err(IssueCreateError::Database)?;
-    if member.is_none() {
-        return Err(IssueCreateError::InvalidInput);
-    }
-    // SHARE protects the binding while remaining compatible with the task
-    // owner fence used by the legacy writer, which starts at the source row.
-    let agent = sqlx::query_scalar::<_, i32>(
-        "SELECT 1
-           FROM agent
-          WHERE id = $1::uuid AND workspace_id = $2::uuid AND archived_at IS NULL
-            AND owner_id = $3::uuid AND runtime_id = $4::uuid AND runtime_mode = 'local'
-          FOR SHARE",
-    )
-    .bind(&request.agent_id)
-    .bind(workspace_id)
-    .bind(member_id)
-    .bind(&request.runtime_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    if agent.is_none() {
-        return Err(IssueCreateError::SourceContextQuickCreateUnavailable);
-    }
-
-    let metadata: Option<Value> = sqlx::query_scalar(
-        "SELECT COALESCE(metadata, '{}'::jsonb) FROM agent_runtime
-          WHERE id = $1::uuid AND workspace_id = $2::uuid
-            AND status = 'online' AND runtime_mode = 'local' AND owner_id = $3::uuid
-          FOR SHARE",
-    )
-    .bind(&request.runtime_id)
-    .bind(workspace_id)
-    .bind(member_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let metadata = metadata.ok_or(IssueCreateError::SourceContextQuickCreateUnavailable)?;
-    if !runtime_metadata_has_capability(&metadata, SOURCE_CONTEXT_QUICK_CREATE_CAPABILITY) {
-        return Err(IssueCreateError::SourceContextQuickCreateUnsupported);
-    }
-    if metadata
-        .get("cli_version")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        != request.runtime_cli_version
-    {
-        return Err(IssueCreateError::SourceContextQuickCreateUnavailable);
-    }
-    Ok(())
 }
 
 async fn insert_quick_create(
@@ -257,18 +198,6 @@ async fn insert_pending_source(
         .fetch_optional(&mut **tx)
         .await?;
     context_id.ok_or(IssueCreateError::SourceContextChanged)
-}
-
-async fn insert_queue_notify_outbox(
-    tx: &mut Transaction<'_, Postgres>,
-    task_id: &str,
-) -> Result<(), IssueCreateError> {
-    sqlx::query(ENQUEUE_NATIVE_QUEUE_NOTIFY)
-        .bind(task_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(IssueCreateError::Database)?;
-    Ok(())
 }
 
 pub async fn create_agent_source_quick_create(

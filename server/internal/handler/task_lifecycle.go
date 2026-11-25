@@ -294,7 +294,20 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 	canInvoke := func(agent db.Agent) bool {
 		return h.canInvokeAgent(r.Context(), agent, "member", userID, userID, uuidToString(workspaceID))
 	}
-	task, err := h.TaskService.RetrySourceContextQuickCreate(r.Context(), workspaceID, requesterID, taskID, canInvoke)
+	ctx := r.Context()
+	var task *db.AgentTaskQueue
+	var err error
+	if useRust, plan, selectErr := h.prepareRustRetryAgentSourceQuickCreate(ctx, workspaceID, requesterID, taskID); selectErr != nil {
+		err = selectErr
+	} else if useRust {
+		if canInvoke != nil && !canInvoke(plan.Agent) {
+			err = service.ErrRerunInvokeNotAllowed
+		} else {
+			task, err = h.retrySourceContextQuickCreateViaRust(w, r, plan)
+		}
+	} else {
+		task, err = h.TaskService.RetrySourceContextQuickCreate(ctx, workspaceID, requesterID, taskID, canInvoke)
+	}
 	if writeIssueLimitReached(w, err) {
 		return
 	}
@@ -307,6 +320,9 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 			"code":  "source_context_retry_unavailable",
 			"error": "This context can no longer be retried. Start again from the branch point.",
 		})
+		return
+	}
+	if errors.Is(err, errSourceContextResponseWritten) {
 		return
 	}
 	if err != nil {

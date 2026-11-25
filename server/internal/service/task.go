@@ -371,6 +371,12 @@ type runtimeMCPOverlayData struct {
 // buildRuntimeMCPOverlay computes the optional per-task Composio MCP overlay.
 // Enqueue paths call this BEFORE inserting the queued row so the daemon cannot
 // claim a task during the network round-trip to Composio and miss the overlay.
+// BuildRuntimeMCPOverlay computes the per-task Composio overlay for handlers
+// that prepare native quick-create or manual retry writes.
+func (s *TaskService) BuildRuntimeMCPOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) runtimeMCPOverlayData {
+	return s.buildRuntimeMCPOverlay(ctx, originatorUserID, agent)
+}
+
 func (s *TaskService) buildRuntimeMCPOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) runtimeMCPOverlayData {
 	if s == nil || s.Composio == nil {
 		return runtimeMCPOverlayData{}

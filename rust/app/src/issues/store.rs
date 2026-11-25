@@ -26,6 +26,7 @@ mod method_adopt_write;
 pub use method_adopt_write::{
     IssueMethodAdoptWrite, IssueMethodAdoptWriteError, write_issue_method_adopt,
 };
+mod agent_source_queue_lock;
 mod assign_write;
 mod batch_delete_write;
 mod comment_write;
@@ -34,6 +35,7 @@ mod create_source_context;
 mod create_validate;
 mod create_write;
 mod delete_write;
+mod retry_agent_source_context;
 mod status_dispatch;
 mod status_write;
 mod terminal_wakeup;
@@ -46,6 +48,7 @@ pub use create_agent_source_context::{
 };
 pub use create_write::{IssueCreateError, IssueCreateRequest, create_issue};
 pub use delete_write::{IssueDeleteWrite, IssueDeleteWriteError, delete_issue};
+pub use retry_agent_source_context::{AgentSourceRetryWrite, retry_agent_source_quick_create};
 pub use status_write::{IssueStatusEdit, IssueStatusEditError, update_issue_status};
 pub use workflow_squad_write::{
     IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, update_issue_workflow_squad_handoff,

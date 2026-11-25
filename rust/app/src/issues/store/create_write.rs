@@ -129,6 +129,7 @@ pub enum IssueCreateError {
     SourceContextAlreadyAttached,
     SourceContextQuickCreateUnsupported,
     SourceContextQuickCreateUnavailable,
+    SourceContextRetryUnavailable,
     Database(sqlx::Error),
 }
 

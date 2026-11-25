@@ -12,6 +12,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -44,6 +45,16 @@ func (s *TaskService) CompleteQuickCreateAfterNativeWrite(ctx context.Context, t
 	s.captureTaskQueued(ctx, task)
 	if _, err := s.deliverNativeQueueNotification(ctx, task.ID); err != nil {
 		slog.Warn("native quick-create notification delivery failed", "task_id", util.UUIDToString(task.ID), "error", err)
+	}
+}
+
+// CompleteManualSourceContextRetryAfterNativeWrite mirrors the legacy manual
+// retry post-commit path while draining the native outbox row when present.
+func (s *TaskService) CompleteManualSourceContextRetryAfterNativeWrite(ctx context.Context, task db.AgentTaskQueue) {
+	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.captureTaskQueued(ctx, task)
+	if _, err := s.deliverNativeQueueNotification(ctx, task.ID); err != nil {
+		slog.Warn("native source-context retry notification delivery failed", "task_id", util.UUIDToString(task.ID), "error", err)
 	}
 }
 
