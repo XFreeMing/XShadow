@@ -1528,22 +1528,25 @@ func TestGetIssueUsageReportsUsageCoverage(t *testing.T) {
 	})
 	dbfx.Task(t, agentID, testutil.Cols{"issue_id": issueID, "runtime_id": runtimeID})
 	dbfx.Insert(t, "task_usage", testutil.Cols{
-		"task_id":       meteredTaskID,
-		"provider":      "qoderclicn",
-		"model":         "bailian/tp/qwen3.8-max",
-		"input_tokens":  120,
-		"output_tokens": 30,
+		"task_id":                 meteredTaskID,
+		"provider":                "kimi",
+		"model":                   "kimi-code/k3.1-pro",
+		"input_tokens":            120,
+		"output_tokens":           30,
+		"reported_model_requests": 4,
 	})
 
 	req := newRequest("GET", "/api/issues/"+issueID+"/usage", nil)
 	req = withURLParam(req, "id", issueID)
 	var got struct {
-		TotalInputTokens    int64 `json:"total_input_tokens"`
-		TotalOutputTokens   int64 `json:"total_output_tokens"`
-		TaskCount           int32 `json:"task_count"`
-		TerminalTaskCount   int32 `json:"terminal_task_count"`
-		MeteredTaskCount    int32 `json:"metered_task_count"`
-		UnreportedTaskCount int32 `json:"unreported_task_count"`
+		TotalInputTokens              int64 `json:"total_input_tokens"`
+		TotalOutputTokens             int64 `json:"total_output_tokens"`
+		TaskCount                     int32 `json:"task_count"`
+		TerminalTaskCount             int32 `json:"terminal_task_count"`
+		MeteredTaskCount              int32 `json:"metered_task_count"`
+		UnreportedTaskCount           int32 `json:"unreported_task_count"`
+		ReportedModelRequests         int64 `json:"reported_model_requests"`
+		ModelRequestReportedTaskCount int32 `json:"model_request_reported_task_count"`
 	}
 	testutil.Call(t, testHandler.GetIssueUsage, req).Want(http.StatusOK).JSON(&got)
 
@@ -1553,6 +1556,9 @@ func TestGetIssueUsageReportsUsageCoverage(t *testing.T) {
 	if got.TaskCount != 1 || got.TerminalTaskCount != 2 || got.MeteredTaskCount != 1 || got.UnreportedTaskCount != 1 {
 		t.Errorf("coverage = legacy:%d terminal:%d metered:%d unreported:%d, want 1/2/1/1",
 			got.TaskCount, got.TerminalTaskCount, got.MeteredTaskCount, got.UnreportedTaskCount)
+	}
+	if got.ReportedModelRequests != 4 || got.ModelRequestReportedTaskCount != 1 {
+		t.Errorf("request coverage = %d calls in %d runs, want 4 in 1", got.ReportedModelRequests, got.ModelRequestReportedTaskCount)
 	}
 }
 

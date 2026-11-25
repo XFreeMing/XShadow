@@ -10,6 +10,36 @@ import (
 	"testing"
 )
 
+func TestGitHubDeliveryVerifiesMergedHeadAndBase(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	for _, test := range []struct {
+		name   string
+		head   string
+		base   string
+		merged bool
+		valid  bool
+	}{
+		{name: "approved merge", head: head, base: "dev", merged: true, valid: true},
+		{name: "open PR", head: head, base: "dev"},
+		{name: "retargeted PR", head: head, base: "main", merged: true},
+		{name: "unapproved head", head: strings.Repeat("b", 40), base: "dev", merged: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"head": map[string]string{"sha": test.head}, "base": map[string]string{"ref": test.base},
+					"merged": test.merged, "merge_commit_sha": strings.Repeat("c", 40),
+				})
+			}))
+			defer server.Close()
+			err := verifyMergedGitHubPR(t.Context(), server.Client(), server.URL, "test", "/pulls/1", gitHubAutoMergeRequest{HeadSHA: head, BaseRef: "dev"})
+			if (err == nil) != test.valid {
+				t.Fatalf("merge verification returned %v, valid=%v", err, test.valid)
+			}
+		})
+	}
+}
+
 func TestGitHubAutoMergeFixedHeadAndRetry(t *testing.T) {
 	head := strings.Repeat("a", 40)
 	request := gitHubAutoMergeRequest{HeadSHA: head, BaseRef: "dev"}

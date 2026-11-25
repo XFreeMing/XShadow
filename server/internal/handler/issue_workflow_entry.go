@@ -163,6 +163,9 @@ func methodOwnsHandoff(run workmethod.Run) bool {
 // Evidence-gated methods and explicitly authorized goal runs own the board.
 // Recommendations retain the project's status workflow.
 func methodBoardStatus(run workmethod.Run) string {
+	if run.State == "closed" && run.Method != nil && run.Method.GitHubDelivery != nil {
+		return issuestatus.InReview
+	}
 	if (!run.GoalExecution && run.EvidenceGate() == "") || run.State == "ready" {
 		return ""
 	}
@@ -181,8 +184,13 @@ var errMethodOwnsStatus = errors.New("当前看板状态由敏捷工作方法同
 var errMethodStageMoved = errors.New("work method stage moved; end this run")
 
 var errMethodReviewOpen = errors.New("complete the work method review before marking the issue done")
+var errMethodMergePending = errors.New("等待已审核候选合入指定 GitHub 分支")
 
 func (h *Handler) checkMethodCompletion(ctx context.Context, issue db.Issue, status string) error {
+	return h.checkMethodStatus(ctx, issue, status, false)
+}
+
+func (h *Handler) checkMethodStatus(ctx context.Context, issue db.Issue, status string, requestingMerge bool) error {
 	if len(issue.WorkMethodRun) == 0 {
 		return nil
 	}
@@ -207,6 +215,9 @@ func (h *Handler) checkMethodCompletion(ctx context.Context, issue db.Issue, sta
 	}
 	if run.State != "closed" {
 		return errMethodReviewOpen
+	}
+	if !requestingMerge && run.Method != nil && run.Method.GitHubDelivery != nil && h.verifyMethodGitHubDelivery(ctx, issue, run.Method.GitHubDelivery) != nil {
+		return errMethodMergePending
 	}
 	return nil
 }
@@ -247,6 +258,10 @@ func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
 	}
 	if errors.Is(err, errMethodReviewOpen) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "work_method_review_open"})
+		return true
+	}
+	if errors.Is(err, errMethodMergePending) {
+		writeErrorCode(w, http.StatusConflict, "github_delivery_pending", err.Error())
 		return true
 	}
 	var notIn *issueworkflow.NotInWorkflowError
@@ -652,7 +667,7 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 			if n > 1 {
 				anchor = run.History[n-2].At
 			}
-			fmt.Fprintf(&b, "Check new feedback with issue comment list %s --since %s --compact. Expand relevant threads only.\n", issueRef, anchor)
+			fmt.Fprintf(&b, "Check new feedback with issue comment list %s --since %s --compact. Expand only threads that affect this step. Reuse the frozen cases and prior receipts by reference; record the current candidate SHA, new evidence, and any unresolved decision.\n", issueRef, anchor)
 		}
 	}
 	if run.State == "closed" {
@@ -673,7 +688,7 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 		case "criteria":
 			b.WriteString("Use current criterion texts and their user-facing scope.")
 		case "coverage":
-			b.WriteString("Check current criteria and active case specifications against original samples. Retrieve retired cases only for supersession checks.")
+			b.WriteString("Check current criteria and active cases against original samples. Before submitting cases, show which plausible wrong implementation each important case rejects. Where applicable, check object identity alongside status, legacy fields alongside current fields, and actual execution evidence for each request. Retrieve retired cases only for supersession checks.")
 		case "candidate", "delivery":
 			b.WriteString("Use current criteria, active cases, candidate commit and matching run evidence. Verify the original entry points.")
 		}

@@ -785,6 +785,7 @@ func accumulateKimiWireUsage(usage map[string]TokenUsage, path string, scan kimi
 		total.OutputTokens += record.Usage.Output
 		total.CacheReadTokens += record.Usage.InputCacheRead
 		total.CacheWriteTokens += record.Usage.InputCacheCreation
+		total.ReportedModelRequests++
 		usage[model] = total
 	}
 }

@@ -1458,9 +1458,8 @@ func HasUnmergedLocalWorktree(params LocalWorktreeParams) bool {
 	return err == nil && resolveTaskBranch(gitRoot, params, head, nil).continues
 }
 
-// ConfirmDeliveredLocalBranch ends continuation of a branch in a user-owned
-// repository. Keep the branch itself so a user checkout or hidden leftovers
-// cannot be invalidated by a daemon cleanup.
+// ConfirmDeliveredLocalBranch retires the exact merged delivery. The marker
+// keeps the original commit reachable even after a squash merge.
 func ConfirmDeliveredLocalBranch(directory, branch, sha, workspaceID, agentID, issueID string, logger *slog.Logger) (bool, error) {
 	if !strings.HasPrefix(branch, "agent/") {
 		return false, nil
@@ -1474,16 +1473,37 @@ func ConfirmDeliveredLocalBranch(directory, branch, sha, workspaceID, agentID, i
 		return false, err
 	}
 	defer unlock()
+	ref := "refs/heads/" + branch
+	tip, err := runGitTrimmed(root, "rev-parse", "--verify", "--quiet", ref)
+	marker := mergedLocalBranchRef(branch)
+	if err != nil {
+		previous, err := runGitTrimmed(root, "rev-parse", "--verify", "--quiet", marker)
+		return err == nil && previous == sha, nil
+	}
+	if tip != sha {
+		return false, nil
+	}
 	owner := branchOwner{WorkspaceID: workspaceID, AgentID: agentID, ConversationID: issueID}
 	if _, ok := branchOwnedBy(root, branch, owner, logger); !ok {
 		return false, nil
 	}
-	ref := "refs/heads/" + branch
-	tip, err := runGitTrimmed(root, "rev-parse", "--verify", "--quiet", ref)
-	if err != nil || tip != sha {
-		return false, nil
+	worktrees, err := runGitStdout(root, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return false, err
 	}
-	_, err = runGit(root, "update-ref", mergedLocalBranchRef(branch), sha)
+	for _, field := range strings.Split(worktrees, "\x00") {
+		if field == "branch "+ref {
+			return false, nil
+		}
+	}
+	if _, err := runGit(root, "update-ref", "refs/multica/merged-deliveries/"+sha, sha); err != nil {
+		return false, err
+	}
+	if _, err := runGit(root, "update-ref", marker, sha); err != nil {
+		return false, err
+	}
+	// A branch that advanced after the merge belongs to a later delivery.
+	_, err = runGit(root, "update-ref", "-d", ref, sha)
 	return err == nil, err
 }
 

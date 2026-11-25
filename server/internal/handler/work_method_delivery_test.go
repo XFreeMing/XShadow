@@ -124,6 +124,26 @@ func TestAgileApprovalReopensWhenAcceptedCriterionChanges(t *testing.T) {
 	}
 }
 
+func TestGitHubDeliveryKeepsApprovedIssueOpenWithoutMerge(t *testing.T) {
+	method := workmethod.Builtins()[0]
+	method.GitHubDelivery = &workmethod.GitHubDelivery{Repository: "org/reports", BaseRef: "dev"}
+	run := workmethod.Run{Method: &method, State: "closed", Revision: 3}
+	if got := methodBoardStatus(run); got != "in_review" {
+		t.Fatalf("approval must leave the issue waiting for GitHub, got %q", got)
+	}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := dbfx.Issue(t, "Approved GitHub delivery", testutil.Cols{"status": "in_review", "work_method_run": raw})
+	path := "/api/issues/" + id
+	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest(http.MethodPut, path, map[string]any{"status": "done"}), "id", id)).Want(http.StatusConflict)
+	issue, err := testHandler.Queries.GetIssue(t.Context(), util.MustParseUUID(id))
+	if err != nil || issue.Status != "in_review" {
+		t.Fatalf("unmerged work method must remain open: %v, %q", err, issue.Status)
+	}
+}
+
 func TestReopeningRoutedAgileReviewDispatchesOnce(t *testing.T) {
 	agent := seededReadyAgentID(t)
 	m := workmethod.Builtins()[0]

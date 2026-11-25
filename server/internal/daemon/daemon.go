@@ -9762,17 +9762,18 @@ func withPriorTaskUsage(opts agent.ExecOptions, prior map[string]agent.TokenUsag
 func taskUsageEntries(provider string, usage map[string]agent.TokenUsage) []TaskUsageEntry {
 	var entries []TaskUsageEntry
 	for model, u := range usage {
-		if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheReadTokens == 0 && u.CacheWriteTokens == 0 && u.CostUSDTicks <= 0 {
+		if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheReadTokens == 0 && u.CacheWriteTokens == 0 && u.CostUSDTicks <= 0 && u.ReportedModelRequests == 0 {
 			continue
 		}
 		entries = append(entries, TaskUsageEntry{
-			Provider:         provider,
-			Model:            model,
-			InputTokens:      u.InputTokens,
-			OutputTokens:     u.OutputTokens,
-			CacheReadTokens:  u.CacheReadTokens,
-			CacheWriteTokens: u.CacheWriteTokens,
-			CostUSDTicks:     u.CostUSDTicks,
+			Provider:              provider,
+			Model:                 model,
+			InputTokens:           u.InputTokens,
+			OutputTokens:          u.OutputTokens,
+			CacheReadTokens:       u.CacheReadTokens,
+			CacheWriteTokens:      u.CacheWriteTokens,
+			ReportedModelRequests: u.ReportedModelRequests,
+			CostUSDTicks:          u.CostUSDTicks,
 		})
 	}
 	// Stable ordering lets the flush compare snapshots across map iterations.
@@ -10612,6 +10613,7 @@ func mergeUsage(a, b map[string]agent.TokenUsage) map[string]agent.TokenUsage {
 		existing.OutputTokens += u.OutputTokens
 		existing.CacheReadTokens += u.CacheReadTokens
 		existing.CacheWriteTokens += u.CacheWriteTokens
+		existing.ReportedModelRequests += u.ReportedModelRequests
 		existing.CostUSDTicks += u.CostUSDTicks
 		merged[model] = existing
 	}

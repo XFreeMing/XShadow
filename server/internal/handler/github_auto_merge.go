@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
@@ -66,7 +67,7 @@ func (h *Handler) RequestIssueGitHubAutoMerge(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusConflict, "GitHub integration is disabled for this workspace")
 		return
 	}
-	if err := h.checkMethodCompletion(ctx, issue, issuestatus.Done); err != nil {
+	if err := h.checkMethodStatus(ctx, issue, issuestatus.Done, true); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -95,6 +96,15 @@ func (h *Handler) RequestIssueGitHubAutoMerge(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "linked GitHub pull request not found")
 		return
 	}
+	var method workmethod.Run
+	_ = json.Unmarshal(issue.WorkMethodRun, &method) // review validation above rejected malformed runs
+	if method.Method != nil && method.Method.GitHubDelivery != nil {
+		target := method.Method.GitHubDelivery
+		if !strings.EqualFold(target.Repository, pr.RepoOwner+"/"+pr.RepoName) || target.BaseRef != expected.BaseRef {
+			writeError(w, http.StatusConflict, "pull request destination differs from the work method")
+			return
+		}
+	}
 	token, installationID, err := h.issueQoderRepositoryToken(ctx, uuidToString(issue.WorkspaceID), strings.ToLower(pr.RepoOwner), strings.ToLower(pr.RepoName))
 	if err != nil {
 		writeError(w, http.StatusConflict, "the workspace GitHub App needs write access to this repository")
@@ -114,6 +124,50 @@ func (h *Handler) RequestIssueGitHubAutoMerge(w http.ResponseWriter, r *http.Req
 	}
 	h.PRRefresh.Enqueue(pr.InstallationID, pr.RepoOwner, pr.RepoName, pr.PrNumber)
 	writeJSON(w, http.StatusOK, result)
+}
+
+// The mirror selects eligible linked PRs. GitHub is authoritative for their
+// actual merge, target branch, and head since the mirror can lag a retarget.
+func (h *Handler) verifyMethodGitHubDelivery(ctx context.Context, issue db.Issue, target *workmethod.GitHubDelivery) error {
+	prs, err := h.Queries.ListPullRequestsByIssue(ctx, issue.ID)
+	if err != nil {
+		return err
+	}
+	for _, pr := range prs {
+		if !pr.MergedAt.Valid || !strings.EqualFold(target.Repository, pr.RepoOwner+"/"+pr.RepoName) ||
+			!gitHubCommitSHA.MatchString(pr.HeadSha) || verifyAutoMergeReview(issue.WorkMethodRun, pr.HeadSha) != nil {
+			continue
+		}
+		if err := h.verifyGitHubDeliveryPR(ctx, issue.WorkspaceID, pr.RepoOwner, pr.RepoName, pr.InstallationID, pr.PrNumber, pr.HeadSha, target.BaseRef); err == nil {
+			return nil
+		}
+	}
+	return errMethodMergePending
+}
+
+func (h *Handler) verifyGitHubDeliveryPR(ctx context.Context, workspaceID pgtype.UUID, owner, repo string, installationID int64, number int32, head, base string) error {
+	token, installation, err := h.issueQoderRepositoryToken(ctx, uuidToString(workspaceID), strings.ToLower(owner), strings.ToLower(repo))
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer revokeGitHubInstallationToken(client, token)
+	if installation != installationID {
+		return errMethodMergePending
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	return verifyMergedGitHubPR(ctx, client, githubAPIBase, token, path, gitHubAutoMergeRequest{HeadSHA: head, BaseRef: base})
+}
+
+func verifyMergedGitHubPR(ctx context.Context, client *http.Client, apiBase, token, path string, expected gitHubAutoMergeRequest) error {
+	var pr gitHubMergePR
+	if err := gitHubMergeJSON(ctx, client, apiBase, token, http.MethodGet, path, nil, &pr); err != nil {
+		return err
+	}
+	if !pr.Merged || !gitHubCommitSHA.MatchString(pr.MergeCommitSHA) || pr.Head.SHA != expected.HeadSHA || pr.Base.Ref != expected.BaseRef {
+		return errMethodMergePending
+	}
+	return nil
 }
 
 func verifyAutoMergeReview(raw []byte, head string) error {

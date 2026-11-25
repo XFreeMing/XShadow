@@ -7,8 +7,8 @@
 -- when it reports none. It is overwritten like the token counters so a
 -- corrected report replaces the previous figure rather than accumulating.
 -- credits_micros follows the same rule for providers that bill in credits.
-INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_ticks, credits_micros, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, sqlc.narg('cost_usd_ticks'), sqlc.narg('credits_micros'), now())
+INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_ticks, credits_micros, reported_model_requests, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, sqlc.narg('cost_usd_ticks'), sqlc.narg('credits_micros'), sqlc.arg('reported_model_requests'), now())
 ON CONFLICT (task_id, provider, model)
 DO UPDATE SET
     input_tokens = EXCLUDED.input_tokens,
@@ -17,6 +17,7 @@ DO UPDATE SET
     cache_write_tokens = EXCLUDED.cache_write_tokens,
     cost_usd_ticks = EXCLUDED.cost_usd_ticks,
     credits_micros = EXCLUDED.credits_micros,
+    reported_model_requests = GREATEST(task_usage.reported_model_requests, EXCLUDED.reported_model_requests),
     updated_at = now();
 
 -- name: GetTaskUsage :many
@@ -97,7 +98,9 @@ WITH usage AS (
         COALESCE(SUM(tu.output_tokens)      FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_output_tokens,
         COALESCE(SUM(tu.cache_read_tokens)  FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_cache_read_tokens,
         COALESCE(SUM(tu.cache_write_tokens) FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_cache_write_tokens,
-        COUNT(DISTINCT tu.task_id)::int AS task_count
+        COUNT(DISTINCT tu.task_id)::int AS task_count,
+        COALESCE(SUM(tu.reported_model_requests), 0)::bigint AS reported_model_requests,
+        COUNT(DISTINCT tu.task_id) FILTER (WHERE tu.reported_model_requests > 0)::int AS model_request_reported_task_count
     FROM task_usage tu
     JOIN agent_task_queue atq ON atq.id = tu.task_id
     WHERE (atq.issue_id = @issue_id::uuid OR (atq.chat_session_id IS NOT NULL AND atq.context->>'evidence_issue_id' = (sqlc.arg(issue_id)::uuid)::text))

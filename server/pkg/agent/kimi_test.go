@@ -1526,10 +1526,10 @@ func TestScanKimiSessionUsageSplitsByModel(t *testing.T) {
 	if len(byModel) != 2 {
 		t.Fatalf("expected one bucket per model, got %v", byModel)
 	}
-	if got := byModel["moonshot-cn/kimi-k3"]; got.InputTokens != 1000 || got.CacheReadTokens != 2000 {
+	if got := byModel["moonshot-cn/kimi-k3"]; got.InputTokens != 1000 || got.CacheReadTokens != 2000 || got.ReportedModelRequests != 1 {
 		t.Errorf("k3 bucket = %+v", got)
 	}
-	if got := byModel["moonshot-cn/kimi-k2.5"]; got.InputTokens != 30 || got.CacheReadTokens != 40 {
+	if got := byModel["moonshot-cn/kimi-k2.5"]; got.InputTokens != 30 || got.CacheReadTokens != 40 || got.ReportedModelRequests != 1 {
 		t.Errorf("k2.5 bucket = %+v", got)
 	}
 }

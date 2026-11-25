@@ -118,7 +118,7 @@ func (d *Daemon) reclaimMergedLocalBranch(ctx context.Context, meta *execenv.GCM
 		if err != nil {
 			d.logger.Warn("gc: merged local branch cleanup failed", "branch", delivery.Branch, "error", err)
 		} else if confirmed {
-			d.logger.Info("gc: ended continuation of merged local branch", "branch", delivery.Branch, "issue_id", meta.IssueID)
+			d.logger.Info("gc: reclaimed merged local branch", "branch", delivery.Branch, "issue_id", meta.IssueID)
 			return true
 		}
 	}
