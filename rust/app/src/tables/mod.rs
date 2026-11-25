@@ -4,6 +4,7 @@
 //! cross-sheet link. Those stay separate. A later context may store one of
 //! these ids, but it does not add columns or tables here.
 
+mod collab;
 mod http;
 mod store;
 mod validate;

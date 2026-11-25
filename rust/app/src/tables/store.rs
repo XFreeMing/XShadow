@@ -53,6 +53,8 @@ pub struct ViewDto {
     pub columns: Option<Vec<String>>,
     pub filter: Option<StoredFilter>,
     pub sort: Option<StoredSort>,
+    #[serde(rename = "group")]
+    pub group: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -74,7 +76,7 @@ pub struct TableCreated {
 
 const TS: &str = "to_char(%s AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')";
 
-fn ts(column: &str) -> String {
+pub(super) fn ts(column: &str) -> String {
     TS.replace("%s", column)
 }
 
@@ -112,6 +114,7 @@ pub async fn create_table(
             columns: None,
             filter: None,
             sort: None,
+            group: None,
         },
     )
     .await?;
@@ -257,38 +260,23 @@ pub async fn update_record(
     record: &str,
     expected_revision: i64,
     values: &BTreeMap<String, Value>,
+    actor: &super::collab::Actor,
 ) -> Result<RecordDto, StoreError> {
-    let mut tx = begin(pool).await?;
-    let current = lock_record(&mut tx, workspace, table, record).await?;
-    let fields = load_fields(&mut tx, workspace, table).await?;
-    if current.revision != expected_revision {
-        let fresh = load_record(&mut tx, workspace, &fields, record).await?;
-        return Err(StoreError::Conflict {
-            message: "这条记录已在其他窗口更新，刚才的修改没有写入",
-            record: fresh,
-        });
-    }
-    let normalized = normalize_values(&fields, values)?;
-    write_cells(&mut tx, workspace, record, &normalized).await?;
-    let updated = ts("updated_at");
-    let created = ts("created_at");
-    let sql = format!(
-        "UPDATE generic_record
-         SET revision = revision + 1, updated_at = now()
-         WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid
-         RETURNING id::text, revision, {created}, {updated}"
-    );
-    let row = sqlx::query(&sql)
-        .bind(record)
-        .bind(table)
-        .bind(workspace)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(failed)?;
-    let saved = load_record(&mut tx, workspace, &fields, record).await?;
-    let _ = row;
-    commit(tx).await?;
-    Ok(saved)
+    super::collab::update_record(
+        pool,
+        workspace,
+        table,
+        record,
+        expected_revision,
+        values,
+        actor,
+    )
+    .await
+}
+
+pub enum GroupUpdate<'a> {
+    Keep,
+    Set(Option<&'a str>),
 }
 
 pub struct ViewWrite<'a> {
@@ -296,6 +284,7 @@ pub struct ViewWrite<'a> {
     pub columns: Option<&'a [String]>,
     pub filter: Option<&'a StoredFilter>,
     pub sort: Option<&'a StoredSort>,
+    pub group: GroupUpdate<'a>,
 }
 
 pub async fn create_view(
@@ -307,7 +296,11 @@ pub async fn create_view(
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
     let fields = load_field_defs(&mut tx, workspace, table).await?;
-    let view = normalize_write(write, &fields)?;
+    let group = match write.group {
+        GroupUpdate::Set(value) => value,
+        GroupUpdate::Keep => None,
+    };
+    let view = normalize_write(write, group, &fields)?;
     let saved = insert_view(&mut tx, workspace, table, &view).await?;
     commit(tx).await?;
     Ok(saved)
@@ -324,7 +317,11 @@ pub async fn save_view(
     lock_table(&mut tx, workspace, table).await?;
     ensure_view(&mut tx, workspace, table, view).await?;
     let fields = load_field_defs(&mut tx, workspace, table).await?;
-    let spec = normalize_write(write, &fields)?;
+    let group = match write.group {
+        GroupUpdate::Set(value) => value.map(str::to_owned),
+        GroupUpdate::Keep => load_group(&mut tx, workspace, table, view).await?,
+    };
+    let spec = normalize_write(write, group.as_deref(), &fields)?;
     let saved = update_view(&mut tx, workspace, table, view, &spec).await?;
     commit(tx).await?;
     Ok(saved)
@@ -332,10 +329,37 @@ pub async fn save_view(
 
 fn normalize_write(
     write: &ViewWrite<'_>,
+    group: Option<&str>,
     fields: &[FieldDef],
 ) -> Result<validate::StoredView, StoreError> {
-    validate::normalize_view(write.name, write.columns, write.filter, write.sort, fields)
-        .map_err(StoreError::Invalid)
+    validate::normalize_view(
+        write.name,
+        write.columns,
+        write.filter,
+        write.sort,
+        group,
+        fields,
+    )
+    .map_err(StoreError::Invalid)
+}
+
+async fn load_group(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    view: &str,
+) -> Result<Option<String>, StoreError> {
+    let row = sqlx::query(
+        "SELECT group_field FROM generic_view WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid",
+    )
+    .bind(view)
+    .bind(table)
+    .bind(workspace)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(failed)?
+    .ok_or(StoreError::NotFound("找不到这个视图"))?;
+    Ok(row.get(0))
 }
 
 async fn load_sheet(
@@ -418,15 +442,15 @@ fn def_of(field: &FieldDto) -> FieldDef {
     }
 }
 
-async fn begin(pool: &PgPool) -> Result<Transaction<'_, Postgres>, StoreError> {
+pub(super) async fn begin(pool: &PgPool) -> Result<Transaction<'_, Postgres>, StoreError> {
     pool.begin().await.map_err(failed)
 }
 
-async fn commit(tx: Transaction<'_, Postgres>) -> Result<(), StoreError> {
+pub(super) async fn commit(tx: Transaction<'_, Postgres>) -> Result<(), StoreError> {
     tx.commit().await.map_err(failed)
 }
 
-async fn lock_table(
+pub(super) async fn lock_table(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -490,9 +514,9 @@ async fn insert_view(
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
-        "INSERT INTO generic_view (workspace_id, table_id, name, columns, filter, sort)
-         VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb)
-         RETURNING id::text, name, columns::text, filter::text, sort::text, {created}, {updated}"
+        "INSERT INTO generic_view (workspace_id, table_id, name, columns, filter, sort, group_field)
+         VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
+         RETURNING id::text, name, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
     );
     let row = sqlx::query(&sql)
         .bind(workspace)
@@ -501,6 +525,7 @@ async fn insert_view(
         .bind(json_option(&view.columns)?)
         .bind(json_option(&view.filter)?)
         .bind(json_option(&view.sort)?)
+        .bind(&view.group)
         .fetch_one(&mut **tx)
         .await
         .map_err(failed)?;
@@ -518,9 +543,9 @@ async fn update_view(
     let updated = ts("updated_at");
     let sql = format!(
         "UPDATE generic_view
-         SET name = $4, columns = $5::jsonb, filter = $6::jsonb, sort = $7::jsonb, updated_at = now()
+         SET name = $4, columns = $5::jsonb, filter = $6::jsonb, sort = $7::jsonb, group_field = $8, updated_at = now()
          WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid
-         RETURNING id::text, name, columns::text, filter::text, sort::text, {created}, {updated}"
+         RETURNING id::text, name, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
     );
     let row = sqlx::query(&sql)
         .bind(view)
@@ -530,6 +555,7 @@ async fn update_view(
         .bind(json_option(&spec.columns)?)
         .bind(json_option(&spec.filter)?)
         .bind(json_option(&spec.sort)?)
+        .bind(&spec.group)
         .fetch_one(&mut **tx)
         .await
         .map_err(failed)?;
@@ -579,7 +605,7 @@ async fn load_table(
     table_from_row(&row)
 }
 
-async fn load_fields(
+pub(super) async fn load_fields(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -618,7 +644,7 @@ async fn load_views(
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
-        "SELECT id::text, name, columns::text, filter::text, sort::text, {created}, {updated}
+        "SELECT id::text, name, columns::text, filter::text, sort::text, group_field, {created}, {updated}
          FROM generic_view
          WHERE table_id = $1::uuid AND workspace_id = $2::uuid
          ORDER BY created_at, id"
@@ -686,7 +712,7 @@ async fn load_records(
         .collect()
 }
 
-async fn lock_record(
+pub(super) async fn lock_record(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -711,7 +737,7 @@ async fn lock_record(
     Ok(record_from_maps(&row, &[], &HashMap::new()))
 }
 
-async fn load_record(
+pub(super) async fn load_record(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     fields: &[FieldDto],
@@ -751,7 +777,7 @@ async fn load_record(
     Ok(record_from_maps(&row, fields, &values))
 }
 
-async fn write_cells(
+pub(super) async fn write_cells(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     record: &str,
@@ -790,7 +816,7 @@ async fn write_cells(
     Ok(())
 }
 
-fn normalize_values(
+pub(super) fn normalize_values(
     fields: &[FieldDto],
     values: &BTreeMap<String, Value>,
 ) -> Result<BTreeMap<String, Option<Value>>, StoreError> {
@@ -873,8 +899,9 @@ fn view_from_row(row: &sqlx::postgres::PgRow) -> Result<ViewDto, StoreError> {
         columns: parse_json(columns)?,
         filter: parse_json(filter)?,
         sort: parse_json(sort)?,
-        created_at: row.get(5),
-        updated_at: row.get(6),
+        group: row.get(5),
+        created_at: row.get(6),
+        updated_at: row.get(7),
     })
 }
 
@@ -899,7 +926,7 @@ fn json_option<T: Serialize>(value: &Option<T>) -> Result<Option<String>, StoreE
     }
 }
 
-fn failed(err: sqlx::Error) -> StoreError {
+pub(super) fn failed(err: sqlx::Error) -> StoreError {
     eprintln!("generic table query failed: {err}");
     StoreError::Failed
 }

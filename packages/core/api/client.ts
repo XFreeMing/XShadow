@@ -294,12 +294,14 @@ import type {
 } from "../runtimes/cloud-runtime";
 import { type Logger, noopLogger } from "../logger";
 import {
+  EMPTY_GENERIC_CHANGES,
   EMPTY_GENERIC_FIELD,
   EMPTY_GENERIC_RECORD,
   EMPTY_GENERIC_SHEET,
   EMPTY_GENERIC_TABLE_CREATED,
   EMPTY_GENERIC_TABLE_LIST,
   EMPTY_GENERIC_VIEW,
+  genericChangesSchema,
   genericFieldResponseSchema,
   genericRecordResponseSchema,
   genericSheetSchema,
@@ -6386,5 +6388,24 @@ export class ApiClient {
     });
     if (!parsed.view.id) throw new Error("视图响应无法读取");
     return parsed.view;
+  }
+
+  async listGenericChanges(tableId: string, since: number) {
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/changes?since=${encodeURIComponent(String(since))}`,
+    );
+    return parseWithFallback(raw, genericChangesSchema, EMPTY_GENERIC_CHANGES, {
+      endpoint: "GET /api/tables/:id/changes",
+    });
+  }
+
+  async touchGenericPresence(tableId: string, body: { record_id?: string | null; field_id?: string | null }) {
+    const raw = await this.fetch<unknown>(`/api/tables/${encodeURIComponent(tableId)}/presence`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return parseWithFallback(raw, genericChangesSchema, EMPTY_GENERIC_CHANGES, {
+      endpoint: "POST /api/tables/:id/presence",
+    });
   }
 }

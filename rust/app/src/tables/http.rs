@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
+use super::collab::{self, Actor};
 use super::store::{self, RecordDto, StoreError};
 use super::validate::{StoredFilter, StoredSort};
 
@@ -77,6 +78,8 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/tables/{id}/records/{record_id}",
             patch(update_record),
         )
+        .route("/internal/tables/{id}/changes", get(list_changes))
+        .route("/internal/tables/{id}/presence", post(touch_presence))
         .route("/internal/tables/{id}/views", post(create_view))
         .route("/internal/tables/{id}/views/{view_id}", patch(save_view))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
@@ -254,6 +257,7 @@ async fn create_record(
 async fn update_record(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path((id, record_id)): Path<(String, String)>,
     body: Result<Json<RecordPatch>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -268,6 +272,9 @@ async fn update_record(
             return invalid("字段标识无效");
         }
     }
+    let Ok(actor) = require_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
     match store::update_record(
         &app.pool,
         &ws,
@@ -275,6 +282,7 @@ async fn update_record(
         &record_id,
         body.expected_revision,
         &body.values,
+        &actor,
     )
     .await
     {
@@ -284,11 +292,169 @@ async fn update_record(
 }
 
 #[derive(Deserialize)]
+struct SinceQuery {
+    #[serde(default)]
+    since: i64,
+}
+
+async fn list_changes(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+    Query(query): Query<SinceQuery>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    match collab::list_since(&app.pool, &ws, &id, query.since).await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct PresenceBody {
+    #[serde(default)]
+    record_id: Option<String>,
+    #[serde(default)]
+    field_id: Option<String>,
+}
+
+async fn touch_presence(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<PresenceBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    let Ok(Json(body)) = body else {
+        return invalid("请求格式不正确");
+    };
+    let Ok(actor) = require_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    let Ok(record_id) = optional_id(body.record_id) else {
+        return invalid("标识无效");
+    };
+    let Ok(field_id) = optional_id(body.field_id) else {
+        return invalid("标识无效");
+    };
+    match collab::touch_presence(
+        &app.pool,
+        &ws,
+        &id,
+        &actor,
+        record_id.as_deref(),
+        field_id.as_deref(),
+    )
+    .await
+    {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+fn optional_id(value: Option<String>) -> Result<Option<String>, ()> {
+    match value {
+        None => Ok(None),
+        Some(id) if id.is_empty() => Ok(None),
+        Some(id) if is_uuid(&id) => Ok(Some(id)),
+        Some(_) => Err(()),
+    }
+}
+
+fn require_actor(headers: &HeaderMap) -> Result<Actor, ()> {
+    let source = header_str(headers, "x-xshadow-actor-source");
+    let id = header_str(headers, "x-xshadow-actor-id");
+    if (source != "agent" && source != "member") || !is_uuid(id) {
+        return Err(());
+    }
+    let task = header_str(headers, "x-xshadow-task-id");
+    let task_id = if source == "agent" {
+        if !is_uuid(task) {
+            return Err(());
+        }
+        Some(task.to_owned())
+    } else {
+        None
+    };
+    Ok(Actor {
+        source: source.to_owned(),
+        id: id.to_owned(),
+        task_id,
+        label: clean_label(&header_utf8(headers, "x-xshadow-actor-label"), source, id),
+    })
+}
+
+fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim()
+}
+
+/// Labels are UTF-8 names. `HeaderValue::to_str` rejects non-ASCII, so the
+/// nickname is decoded from the raw bytes. Identity headers stay on `to_str`.
+fn header_utf8(headers: &HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+        .unwrap_or("")
+        .trim()
+        .to_owned()
+}
+
+fn clean_label(raw: &str, source: &str, id: &str) -> String {
+    let mut label = String::new();
+    for ch in raw.chars() {
+        if ch.is_control() {
+            continue;
+        }
+        label.push(ch);
+        if label.chars().count() >= 40 {
+            break;
+        }
+    }
+    let label = label.trim();
+    if !label.is_empty() {
+        return label.to_owned();
+    }
+    let tail: String = id
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    if source == "agent" {
+        format!("智能体{tail}")
+    } else {
+        format!("成员{tail}")
+    }
+}
+
+#[derive(Deserialize)]
 struct ViewBody {
     name: String,
     columns: Option<Vec<String>>,
     filter: Option<StoredFilter>,
     sort: Option<StoredSort>,
+    #[serde(default, deserialize_with = "group_field")]
+    group: Option<Option<String>>,
+}
+
+fn group_field<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(Some(value))
 }
 
 fn view_write(body: &ViewBody) -> store::ViewWrite<'_> {
@@ -297,6 +463,10 @@ fn view_write(body: &ViewBody) -> store::ViewWrite<'_> {
         columns: body.columns.as_deref(),
         filter: body.filter.as_ref(),
         sort: body.sort.as_ref(),
+        group: match &body.group {
+            None => store::GroupUpdate::Keep,
+            Some(value) => store::GroupUpdate::Set(value.as_deref()),
+        },
     }
 }
 
@@ -359,6 +529,11 @@ fn bad_view_ids(body: &ViewBody) -> Option<Response> {
         && bad_id(&sort.field_id).is_some()
     {
         return Some(invalid("排序字段标识无效"));
+    }
+    if let Some(Some(group)) = &body.group
+        && bad_id(group).is_some()
+    {
+        return Some(invalid("分组字段标识无效"));
     }
     None
 }
@@ -459,7 +634,9 @@ fn is_uuid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::decide_access;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    use super::{decide_access, require_actor};
 
     #[test]
     fn disabled_token_rejects_before_a_client_could_supply_a_workspace() {
@@ -481,5 +658,26 @@ mod tests {
         assert_eq!(missing.code, "invalid_workspace");
         let wrong = decide_access("secret", Some("other"), Some(workspace)).unwrap_err();
         assert_eq!(wrong.code, "unauthorized");
+    }
+
+    #[test]
+    fn actor_label_keeps_utf8_name() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-xshadow-actor-source", HeaderValue::from_static("agent"));
+        headers.insert(
+            "x-xshadow-actor-id",
+            HeaderValue::from_static("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        );
+        headers.insert(
+            "x-xshadow-task-id",
+            HeaderValue::from_static("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        );
+        headers.insert(
+            "x-xshadow-actor-label",
+            HeaderValue::from_bytes("核对智能体".as_bytes()).unwrap(),
+        );
+        let actor = require_actor(&headers).unwrap();
+        assert_eq!(actor.label, "核对智能体");
+        assert_eq!(actor.id, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     }
 }

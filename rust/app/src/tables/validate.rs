@@ -31,6 +31,7 @@ pub struct StoredView {
     pub columns: Option<Vec<String>>,
     pub filter: Option<StoredFilter>,
     pub sort: Option<StoredSort>,
+    pub group: Option<String>,
 }
 
 pub fn clean_name(raw: &str) -> Result<String, &'static str> {
@@ -142,6 +143,7 @@ pub fn normalize_view(
     columns: Option<&[String]>,
     filter: Option<&StoredFilter>,
     sort: Option<&StoredSort>,
+    group: Option<&str>,
     fields: &[FieldDef],
 ) -> Result<StoredView, &'static str> {
     let by_id: BTreeMap<&str, &FieldDef> = fields
@@ -181,11 +183,21 @@ pub fn normalize_view(
             Some(item.clone())
         }
     };
+    let group = match group {
+        None => None,
+        Some(id) => {
+            if !by_id.contains_key(id) {
+                return Err("分组字段不属于这张表");
+            }
+            Some(id.to_owned())
+        }
+    };
     Ok(StoredView {
         name: clean_name(name)?,
         columns,
         filter,
         sort,
+        group,
     })
 }
 

@@ -6,6 +6,7 @@ import {
   genericCellValueSchema,
   genericRecordSchema,
   genericSheetSchema,
+  genericViewSchema,
 } from "./schema";
 
 describe("generic table values", () => {
@@ -25,6 +26,18 @@ describe("generic table values", () => {
     expect(record.values.confirmed).toBe(false);
     expect(record.values.cleared).toBeNull();
     expect(record.values.count).toBe(0);
+  });
+
+  it("keeps an old view ungrouped when the payload omits group", () => {
+    expect(genericViewSchema.parse({
+      id: "view",
+      name: "全部",
+      columns: null,
+      filter: null,
+      sort: null,
+      created_at: "2026-11-25T00:00:00Z",
+      updated_at: "2026-11-25T00:00:00Z",
+    }).group).toBeNull();
   });
 
   it("falls back when a sheet payload is malformed", () => {

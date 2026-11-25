@@ -28,6 +28,10 @@ type Bridge struct {
 	Upstream string
 	Token    string
 	Client   *http.Client
+	// AgentLabel returns the agent name when it belongs to this workspace.
+	// A miss or another workspace yields an empty label. The actor id still
+	// comes from the stamped task token, never from this lookup.
+	AgentLabel func(ctx context.Context, workspaceID, agentID string) string
 }
 
 func FromEnv(logger *slog.Logger) *Bridge {
@@ -87,6 +91,29 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream.Header.Set("X-XShadow-Internal-Token", b.Token)
 	upstream.Header.Set("X-XShadow-Workspace-Id", workspaceID)
+	actor, ok := trustedActor(r)
+	mutating := r.Method != http.MethodGet && r.Method != http.MethodHead
+	if r.Header.Get("X-Actor-Source") == "task_token" && !ok {
+		writeJSON(w, http.StatusUnauthorized, `{"error":"协作者身份无效","code":"unauthorized"}`)
+		return
+	}
+	if !ok && mutating {
+		writeJSON(w, http.StatusUnauthorized, `{"error":"协作者身份无效","code":"unauthorized"}`)
+		return
+	}
+	if ok {
+		if actor.source == "agent" && b.AgentLabel != nil {
+			actor.label = sanitizeLabel(b.AgentLabel(r.Context(), workspaceID, actor.id))
+		}
+		upstream.Header.Set("X-XShadow-Actor-Source", actor.source)
+		upstream.Header.Set("X-XShadow-Actor-Id", actor.id)
+		if actor.taskID != "" {
+			upstream.Header.Set("X-XShadow-Task-Id", actor.taskID)
+		}
+		if actor.label != "" {
+			upstream.Header.Set("X-XShadow-Actor-Label", actor.label)
+		}
+	}
 	response, err := b.client().Do(upstream)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, `{"error":"表格服务暂时不可用","code":"tables_unavailable"}`)
@@ -109,6 +136,53 @@ func collectionPath(requestPath string) string {
 		return "/internal/tables"
 	}
 	return "/internal/tables" + rest
+}
+
+type trusted struct {
+	source string
+	id     string
+	taskID string
+	label  string
+}
+
+// trustedActor uses the middleware-stamped task token or the verified member.
+// Client actor headers are not a source: task_token is the only agent signal,
+// and a member id comes from the membership context.
+func trustedActor(r *http.Request) (trusted, bool) {
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		agentID := strings.TrimSpace(r.Header.Get("X-Agent-ID"))
+		taskID := strings.TrimSpace(r.Header.Get("X-Task-ID"))
+		if _, err := util.ParseUUID(agentID); err != nil {
+			return trusted{}, false
+		}
+		if _, err := util.ParseUUID(taskID); err != nil {
+			return trusted{}, false
+		}
+		return trusted{source: "agent", id: agentID, taskID: taskID}, true
+	}
+	member, ok := middleware.MemberFromContext(r.Context())
+	if !ok {
+		return trusted{}, false
+	}
+	userID := util.UUIDToString(member.UserID)
+	if _, err := util.ParseUUID(userID); err != nil {
+		return trusted{}, false
+	}
+	return trusted{source: "member", id: userID}, true
+}
+
+func sanitizeLabel(raw string) string {
+	raw = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, raw))
+	runes := []rune(raw)
+	if len(runes) > 40 {
+		raw = string(runes[:40])
+	}
+	return strings.TrimSpace(raw)
 }
 
 func (b *Bridge) client() *http.Client {

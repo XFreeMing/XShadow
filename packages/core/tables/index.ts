@@ -5,11 +5,16 @@ export {
   genericSheetSchema,
   genericTableListSchema,
   revisionConflictSchema,
+  EMPTY_GENERIC_CHANGES,
   EMPTY_GENERIC_SHEET,
   EMPTY_GENERIC_TABLE_LIST,
 } from "./schema";
 export type {
+  GenericActor,
   GenericCellValue,
+  GenericChange,
+  GenericChanges,
+  GenericPresence,
   GenericField,
   GenericFieldKind,
   GenericFieldWrite,

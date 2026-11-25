@@ -52,6 +52,7 @@ export const genericViewSchema = z.object({
   columns: z.array(z.string()).nullable(),
   filter: genericFilterSchema.nullable(),
   sort: genericSortSchema.nullable(),
+  group: z.string().nullable().default(null),
   created_at: z.string(),
   updated_at: z.string(),
 }).loose();
@@ -116,7 +117,42 @@ export interface GenericViewWrite {
   columns: string[] | null;
   filter: GenericFilter | null;
   sort: GenericSort | null;
+  group?: string | null;
 }
+
+export const genericActorSchema = z.object({
+  source: z.string().default("member"),
+  id: z.string().default(""),
+  task_id: z.string().nullable().optional(),
+  label: z.string().default(""),
+  color: z.string().default("#7B67EE"),
+}).loose();
+export type GenericActor = z.infer<typeof genericActorSchema>;
+
+export const genericChangeSchema = z.object({
+  seq: z.number(),
+  record_id: z.string(),
+  record_revision: z.number(),
+  fields: z.record(z.string(), genericCellValueSchema),
+  actor: genericActorSchema,
+}).loose();
+export type GenericChange = z.infer<typeof genericChangeSchema>;
+
+export const genericPresenceSchema = z.object({
+  actor: genericActorSchema,
+  record_id: z.string().nullable().default(null),
+  field_id: z.string().nullable().default(null),
+  online: z.boolean().default(true),
+}).loose();
+export type GenericPresence = z.infer<typeof genericPresenceSchema>;
+
+export const genericChangesSchema = z.object({
+  latest: z.number().default(0),
+  next_since: z.number().default(0),
+  changes: z.array(genericChangeSchema).default([]),
+  presence: z.array(genericPresenceSchema).default([]),
+}).loose();
+export type GenericChanges = z.infer<typeof genericChangesSchema>;
 
 const emptyTable = { id: "", name: "", created_at: "", updated_at: "" };
 const emptyView = {
@@ -125,6 +161,7 @@ const emptyView = {
   columns: null,
   filter: null,
   sort: null,
+  group: null,
   created_at: "",
   updated_at: "",
 };
@@ -148,6 +185,12 @@ export const EMPTY_GENERIC_RECORD: GenericRecord = {
   values: {},
 };
 export const EMPTY_GENERIC_VIEW: GenericView = emptyView;
+export const EMPTY_GENERIC_CHANGES: GenericChanges = {
+  latest: 0,
+  next_since: 0,
+  changes: [],
+  presence: [],
+};
 export const EMPTY_GENERIC_SHEET: GenericSheet = {
   table: emptyTable,
   fields: [],

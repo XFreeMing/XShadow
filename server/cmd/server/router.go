@@ -2316,6 +2316,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Generic tables live in the Rust service. This route only checks
 			// the member already resolved above and forwards that workspace id.
 			tablesBridge := tablesbridge.FromEnv(slog.Default())
+			tablesBridge.AgentLabel = func(ctx context.Context, workspaceID, agentID string) string {
+				id, err := util.ParseUUID(agentID)
+				if err != nil {
+					return ""
+				}
+				agent, err := queries.GetAgent(ctx, id)
+				if err != nil || util.UUIDToString(agent.WorkspaceID) != workspaceID {
+					return ""
+				}
+				return agent.Name
+			}
 			r.Route("/api/tables", func(r chi.Router) {
 				r.HandleFunc("/", tablesBridge.ServeHTTP)
 				r.HandleFunc("/*", tablesBridge.ServeHTTP)
