@@ -567,6 +567,46 @@ async fn create_issue(
             })),
         )
             .into_response(),
+        Err(IssueCreateError::SourceContextChanged) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_context_changed",
+                "error": "source context changed",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::AnchorCommentDeleted) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "anchor_comment_deleted",
+                "error": "anchor comment deleted",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::SourceIssueDeleted) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_issue_deleted",
+                "error": "source issue deleted",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::SourceContextInvalidPath) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_context_invalid_path",
+                "error": "source context invalid comment thread",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::SourceContextAlreadyAttached) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_context_already_attached",
+                "error": "source context is already attached",
+            })),
+        )
+            .into_response(),
         Err(IssueCreateError::Database(error)) => {
             eprintln!("rust issue create failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to create issue")

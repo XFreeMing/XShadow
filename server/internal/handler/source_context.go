@@ -603,7 +603,7 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 
 	switch req.Mode {
 	case "manual":
-		if err := h.createManualCommentSubIssue(w, r, wsUUID, userUUID, *req.Issue, capture, build.Limits); err != nil {
+		if err := h.createManualCommentSubIssue(w, r, wsUUID, userUUID, *req.Issue, capture, build); err != nil {
 			cleanupIfUnpersisted()
 			slog.Warn("source context capture failed", append(sourceContextAuditAttrs(r, capture.ID, capture.Snapshot.SourceIssue.ID, capture.Snapshot.AnchorCommentID, userUUID, req.Mode, build.Limits, "failed"), "error", err)...)
 			if !errors.Is(err, errSourceContextResponseWritten) {
@@ -689,7 +689,8 @@ func (h *Handler) cloneSourceContext(ctx context.Context, workspaceID, userID, c
 	return capture, keys, nil
 }
 
-func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, input CreateIssueRequest, capture service.SourceContextCapture, limits service.SourceContextLimitUsage) error {
+func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, input CreateIssueRequest, capture service.SourceContextCapture, build service.SourceContextBuild) error {
+	limits := build.Limits
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
 		return sourceContextBadRequest("title is required")
@@ -778,6 +779,28 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 		}
 		stage = pgtype.Int4{Int32: *input.Stage, Valid: true}
 	}
+	workspaceIDStr := util.UUIDToString(workspaceID)
+	rustPlan, planErr := h.manualSourceContextCreateRustEligible(
+		r, workspaceID, input, capture, build, status, false,
+	)
+	if planErr != nil {
+		return planErr
+	}
+	if rustPlan.useRust {
+		var issueTypeID pgtype.UUID
+		if input.IssueTypeID != nil && strings.TrimSpace(*input.IssueTypeID) != "" {
+			parsed, err := util.ParseUUID(strings.TrimSpace(*input.IssueTypeID))
+			if err != nil {
+				return sourceContextBadRequest("invalid issue_type_id")
+			}
+			issueTypeID = parsed
+		}
+		return h.createManualCommentSubIssueViaRust(
+			w, r, workspaceIDStr, workspaceID, userID, input, capture, limits, status, priority,
+			labelIDs, properties, issueTypeID, startDate, dueDate, rustPlan,
+		)
+	}
+
 	prefix := h.getIssuePrefix(r.Context(), workspaceID)
 	result, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
 		WorkspaceID: workspaceID, Title: title, Description: ptrToText(input.Description), Status: status, Priority: priority,

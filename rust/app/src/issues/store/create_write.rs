@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sqlx::{Acquire, PgConnection, PgPool, Postgres, Row, Transaction};
 
+use super::create_source_context::{
+    SourceContextCreateTrust, insert_attached_source_context, validate_source_context_create_trust,
+};
 use super::create_validate::{
     guard_parent_projects_and_assignee, revalidate_type_and_properties,
     validate_labels_before_number,
@@ -70,6 +73,7 @@ pub struct IssueCreateRequest {
     pub squad_create_trust: Option<SquadCreateTrust>,
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+    pub source_context_create_trust: Option<SourceContextCreateTrust>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +121,11 @@ pub enum IssueCreateError {
     DispatchSensitive,
     AgentInvokeForbidden,
     SquadInvokeForbidden,
+    SourceContextChanged,
+    AnchorCommentDeleted,
+    SourceIssueDeleted,
+    SourceContextInvalidPath,
+    SourceContextAlreadyAttached,
     Database(sqlx::Error),
 }
 
@@ -473,6 +482,17 @@ async fn create_issue_attempt(
     .bind(workspace_id)
     .execute(&mut *tx)
     .await?;
+    let source_context = if let Some(trust) = request.source_context_create_trust.as_ref() {
+        if request.status != "todo" {
+            return Err(IssueCreateError::InvalidInput);
+        }
+        let prefix =
+            validate_source_context_create_trust(&mut tx, workspace_id, user_id, request, trust)
+                .await?;
+        Some((trust, prefix))
+    } else {
+        None
+    };
     revalidate_type_and_properties(&mut tx, workspace_id, request).await?;
     let effective_project =
         guard_parent_projects_and_assignee(&mut tx, workspace_id, user_id, request).await?;
@@ -722,6 +742,10 @@ async fn create_issue_attempt(
             IssueCreateError::Database(error)
         }
     })?;
+
+    if let Some((trust, prefix)) = source_context {
+        insert_attached_source_context(&mut tx, workspace_id, &request.id, trust, &prefix).await?;
+    }
 
     if request.pr_auto_complete_disabled {
         sqlx::query(

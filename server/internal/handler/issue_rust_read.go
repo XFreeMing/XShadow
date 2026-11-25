@@ -35,31 +35,32 @@ var rustIssueReadClient = &http.Client{
 // IssueReadBridge selects issue operations for the Rust service over trusted
 // loopback HTTP. Selected operations fail closed when Rust is unavailable.
 type IssueReadBridge struct {
-	Upstream                  string
-	Token                     string
-	PilotScopes               []string
-	ListPilotScopes           []string
-	TablePilotScopes          []string
-	WritePilotScopes          []string
-	AcceptancePilotScopes     []string
-	StatusPilotScopes         []string
-	TerminalStatusPilotScopes []string
-	WorkflowPilotScopes       []string
-	AssignPilotScopes         []string
-	CommentPilotScopes        []string
-	CreatePilotScopes         []string
-	CreateDispatchPilotScopes []string
-	CreateSquadPilotScopes    []string
-	CreateAttachPilotScopes   []string
-	DeletePilotScopes         []string
-	DeleteAttachPilotScopes   []string
-	BatchPilotScopes          []string
-	BatchAssignPilotScopes    []string
-	BatchDeletePilotScopes    []string
-	BatchStatusPilotScopes    []string
-	BatchTerminalPilotScopes  []string
-	BatchWorkflowPilotScopes  []string
-	MethodAdoptPilotScopes    []string
+	Upstream                       string
+	Token                          string
+	PilotScopes                    []string
+	ListPilotScopes                []string
+	TablePilotScopes               []string
+	WritePilotScopes               []string
+	AcceptancePilotScopes          []string
+	StatusPilotScopes              []string
+	TerminalStatusPilotScopes      []string
+	WorkflowPilotScopes            []string
+	AssignPilotScopes              []string
+	CommentPilotScopes             []string
+	CreatePilotScopes              []string
+	CreateDispatchPilotScopes      []string
+	CreateSquadPilotScopes         []string
+	CreateAttachPilotScopes        []string
+	CreateSourceContextPilotScopes []string
+	DeletePilotScopes              []string
+	DeleteAttachPilotScopes        []string
+	BatchPilotScopes               []string
+	BatchAssignPilotScopes         []string
+	BatchDeletePilotScopes         []string
+	BatchStatusPilotScopes         []string
+	BatchTerminalPilotScopes       []string
+	BatchWorkflowPilotScopes       []string
+	MethodAdoptPilotScopes         []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -94,6 +95,10 @@ type IssueReadBridge struct {
 //   - XSHADOW_ISSUES_RUST_CREATE_ATTACHMENTS_PILOT: comma-separated workspace
 //     slugs or UUIDs for native member issue creates that bind ordinary free
 //     uploads on POST /api/issues (requires CREATE pilot on the same workspace).
+//   - XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT: comma-separated workspace
+//     slugs or UUIDs for native manual comment sub-issue creates with attached
+//     source context on POST /api/comments/{id}/sub-issues (requires CREATE
+//     pilot on the same workspace).
 //   - XSHADOW_ISSUES_RUST_DELETE_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member issue deletes on DELETE /api/issues/{id}.
 //   - XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT: comma-separated workspace
@@ -135,6 +140,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	createDispatchScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_DISPATCH_PILOT"))
 	createSquadScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SQUAD_PILOT"))
 	createAttachmentsScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_ATTACHMENTS_PILOT"))
+	createSourceContextScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT"))
 	deleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_PILOT"))
 	deleteAttachScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT"))
 	batchScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_PILOT"))
@@ -153,33 +159,34 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		token = strings.TrimSpace(os.Getenv("XSHADOW_TABLES_INTERNAL_TOKEN"))
 	}
 	bridge := &IssueReadBridge{
-		Upstream:                  upstream,
-		Token:                     token,
-		PilotScopes:               scopes,
-		ListPilotScopes:           listScopes,
-		TablePilotScopes:          tableScopes,
-		WritePilotScopes:          writeScopes,
-		AcceptancePilotScopes:     acceptanceScopes,
-		StatusPilotScopes:         statusScopes,
-		TerminalStatusPilotScopes: terminalStatusScopes,
-		WorkflowPilotScopes:       workflowScopes,
-		AssignPilotScopes:         assignScopes,
-		CommentPilotScopes:        commentScopes,
-		CreatePilotScopes:         createScopes,
-		CreateDispatchPilotScopes: createDispatchScopes,
-		CreateSquadPilotScopes:    createSquadScopes,
-		CreateAttachPilotScopes:   createAttachmentsScopes,
-		DeletePilotScopes:         deleteScopes,
-		DeleteAttachPilotScopes:   deleteAttachScopes,
-		BatchPilotScopes:          batchScopes,
-		BatchAssignPilotScopes:    batchAssignScopes,
-		BatchDeletePilotScopes:    batchDeleteScopes,
-		BatchStatusPilotScopes:    batchStatusScopes,
-		BatchTerminalPilotScopes:  batchTerminalStatusScopes,
-		BatchWorkflowPilotScopes:  batchWorkflowScopes,
-		MethodAdoptPilotScopes:    methodAdoptScopes,
+		Upstream:                       upstream,
+		Token:                          token,
+		PilotScopes:                    scopes,
+		ListPilotScopes:                listScopes,
+		TablePilotScopes:               tableScopes,
+		WritePilotScopes:               writeScopes,
+		AcceptancePilotScopes:          acceptanceScopes,
+		StatusPilotScopes:              statusScopes,
+		TerminalStatusPilotScopes:      terminalStatusScopes,
+		WorkflowPilotScopes:            workflowScopes,
+		AssignPilotScopes:              assignScopes,
+		CommentPilotScopes:             commentScopes,
+		CreatePilotScopes:              createScopes,
+		CreateDispatchPilotScopes:      createDispatchScopes,
+		CreateSquadPilotScopes:         createSquadScopes,
+		CreateAttachPilotScopes:        createAttachmentsScopes,
+		CreateSourceContextPilotScopes: createSourceContextScopes,
+		DeletePilotScopes:              deleteScopes,
+		DeleteAttachPilotScopes:        deleteAttachScopes,
+		BatchPilotScopes:               batchScopes,
+		BatchAssignPilotScopes:         batchAssignScopes,
+		BatchDeletePilotScopes:         batchDeleteScopes,
+		BatchStatusPilotScopes:         batchStatusScopes,
+		BatchTerminalPilotScopes:       batchTerminalStatusScopes,
+		BatchWorkflowPilotScopes:       batchWorkflowScopes,
+		MethodAdoptPilotScopes:         methodAdoptScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}

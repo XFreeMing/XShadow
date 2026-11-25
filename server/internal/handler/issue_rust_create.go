@@ -30,32 +30,33 @@ type rustIssueCreateLimit struct {
 }
 
 type rustIssueCreate struct {
-	ID                     string                `json:"id"`
-	Title                  string                `json:"title"`
-	Description            *string               `json:"description,omitempty"`
-	Status                 string                `json:"status"`
-	NormalizedTitle        string                `json:"normalized_title"`
-	Priority               string                `json:"priority"`
-	AssigneeType           *string               `json:"assignee_type,omitempty"`
-	AssigneeID             *string               `json:"assignee_id,omitempty"`
-	CreatorType            string                `json:"creator_type"`
-	CreatorID              string                `json:"creator_id"`
-	ParentIssueID          *string               `json:"parent_issue_id,omitempty"`
-	ProjectID              *string               `json:"project_id,omitempty"`
-	StartDate              *string               `json:"start_date,omitempty"`
-	DueDate                *string               `json:"due_date,omitempty"`
-	LabelIDs               []string              `json:"label_ids,omitempty"`
-	Properties             json.RawMessage       `json:"properties"`
-	PropertyVersions       map[string]string     `json:"property_versions"`
-	IssueTypeID            *string               `json:"issue_type_id,omitempty"`
-	IssueTypeVersion       string                `json:"issue_type_version,omitempty"`
-	AllowDuplicate         bool                  `json:"allow_duplicate"`
-	WorkMethodRun          json.RawMessage       `json:"work_method_run,omitempty"`
-	IssueLimit             rustIssueCreateLimit  `json:"issue_limit"`
-	PRAutoCompleteDisabled bool                  `json:"pr_auto_complete_disabled,omitempty"`
-	PreparedEnqueue        *json.RawMessage      `json:"prepared_enqueue,omitempty"`
-	SquadCreateTrust       *rustSquadCreateTrust `json:"squad_create_trust,omitempty"`
-	AttachmentIDs          []string              `json:"attachment_ids,omitempty"`
+	ID                       string                        `json:"id"`
+	Title                    string                        `json:"title"`
+	Description              *string                       `json:"description,omitempty"`
+	Status                   string                        `json:"status"`
+	NormalizedTitle          string                        `json:"normalized_title"`
+	Priority                 string                        `json:"priority"`
+	AssigneeType             *string                       `json:"assignee_type,omitempty"`
+	AssigneeID               *string                       `json:"assignee_id,omitempty"`
+	CreatorType              string                        `json:"creator_type"`
+	CreatorID                string                        `json:"creator_id"`
+	ParentIssueID            *string                       `json:"parent_issue_id,omitempty"`
+	ProjectID                *string                       `json:"project_id,omitempty"`
+	StartDate                *string                       `json:"start_date,omitempty"`
+	DueDate                  *string                       `json:"due_date,omitempty"`
+	LabelIDs                 []string                      `json:"label_ids,omitempty"`
+	Properties               json.RawMessage               `json:"properties"`
+	PropertyVersions         map[string]string             `json:"property_versions"`
+	IssueTypeID              *string                       `json:"issue_type_id,omitempty"`
+	IssueTypeVersion         string                        `json:"issue_type_version,omitempty"`
+	AllowDuplicate           bool                          `json:"allow_duplicate"`
+	WorkMethodRun            json.RawMessage               `json:"work_method_run,omitempty"`
+	IssueLimit               rustIssueCreateLimit          `json:"issue_limit"`
+	PRAutoCompleteDisabled   bool                          `json:"pr_auto_complete_disabled,omitempty"`
+	PreparedEnqueue          *json.RawMessage              `json:"prepared_enqueue,omitempty"`
+	SquadCreateTrust         *rustSquadCreateTrust         `json:"squad_create_trust,omitempty"`
+	AttachmentIDs            []string                      `json:"attachment_ids,omitempty"`
+	SourceContextCreateTrust *rustSourceContextCreateTrust `json:"source_context_create_trust,omitempty"`
 }
 
 type rustSquadCreateTrust struct {
@@ -406,11 +407,8 @@ func (h *Handler) createIssueViaRust(
 		return
 	}
 	defer resp.Body.Close()
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxRustIssueReadBody+1))
-	if err != nil || int64(len(bodyBytes)) > maxRustIssueReadBody {
-		if !writeQueryCancellation(w, r, err) {
-			writeError(w, http.StatusBadGateway, "failed to read rust issue create response")
-		}
+	bodyBytes, ok := readRustIssueCreateResponseBody(w, r, resp)
+	if !ok {
 		return
 	}
 	if resp.StatusCode == http.StatusConflict {
@@ -544,6 +542,89 @@ func (h *Handler) createIssueViaRust(
 		}
 	}
 	writeJSON(w, http.StatusCreated, CreateIssueResponse{IssueResponse: respIssue, PRAutoCompleteDisabled: req.PRAutoCompleteDisabled})
+}
+
+func readRustIssueCreateResponseBody(w http.ResponseWriter, r *http.Request, resp *http.Response) ([]byte, bool) {
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxRustIssueReadBody+1))
+	if err != nil || int64(len(bodyBytes)) > maxRustIssueReadBody {
+		if !writeQueryCancellation(w, r, err) {
+			writeError(w, http.StatusBadGateway, "failed to read rust issue create response")
+		}
+		return nil, false
+	}
+	return bodyBytes, true
+}
+
+func writeRustIssueCreateConflictForSourceContext(w http.ResponseWriter, body []byte) bool {
+	var conflict struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &conflict) != nil || conflict.Code == "" {
+		return false
+	}
+	switch conflict.Code {
+	case "active_duplicate_issue", "source_context_changed", "anchor_comment_deleted",
+		"source_issue_deleted", "source_context_invalid_path", "source_context_already_attached",
+		"source_context_too_large":
+		writeJSON(w, http.StatusConflict, map[string]any{"code": conflict.Code, "error": conflict.Error})
+		return true
+	default:
+		return false
+	}
+}
+
+func assembleRustIssueCreate(
+	issueID pgtype.UUID,
+	req CreateIssueRequest,
+	creatorType, creatorID, status, priority string,
+	parentIssueID, projectID, issueTypeID pgtype.UUID,
+	startDate, dueDate pgtype.Date,
+	labelIDs []pgtype.UUID,
+	properties json.RawMessage,
+	propertyVersions map[string]string,
+	issueTypeVersion string,
+	workMethod json.RawMessage,
+	limit rustIssueCreateLimit,
+) rustIssueCreate {
+	payload := rustIssueCreate{
+		ID:                     uuidToString(issueID),
+		Title:                  req.Title,
+		Status:                 status,
+		NormalizedTitle:        issueguard.NormalizeTitle(req.Title),
+		Priority:               priority,
+		CreatorType:            creatorType,
+		CreatorID:              creatorID,
+		Properties:             properties,
+		PropertyVersions:       propertyVersions,
+		IssueTypeVersion:       issueTypeVersion,
+		AllowDuplicate:         req.AllowDuplicate,
+		PRAutoCompleteDisabled: req.PRAutoCompleteDisabled,
+		IssueLimit:             limit,
+	}
+	if req.Description != nil {
+		payload.Description = req.Description
+	}
+	if parentIssueID.Valid {
+		payload.ParentIssueID = uuidToPtr(parentIssueID)
+	}
+	if projectID.Valid {
+		payload.ProjectID = uuidToPtr(projectID)
+	}
+	payload.StartDate = dateToPtr(startDate)
+	payload.DueDate = dateToPtr(dueDate)
+	if issueTypeID.Valid {
+		payload.IssueTypeID = uuidToPtr(issueTypeID)
+	}
+	for _, id := range labelIDs {
+		if id.Valid {
+			payload.LabelIDs = append(payload.LabelIDs, uuidToString(id))
+		}
+	}
+	if len(workMethod) > 0 {
+		payload.WorkMethodRun = workMethod
+	}
+	return payload
 }
 
 func rustIssueCreateReceiptValid(plannedID pgtype.UUID, workspaceID pgtype.UUID, receipt rustIssueCreatePayload) bool {
