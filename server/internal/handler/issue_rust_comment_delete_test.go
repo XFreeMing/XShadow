@@ -52,6 +52,7 @@ func TestCommentDeleteUsesRustTombstoneNeedsReplies(t *testing.T) {
 func TestIssueReadBridgeCommentDeletePilotEnv(t *testing.T) {
 	t.Setenv("XSHADOW_ISSUES_RUST_COMMENT_DELETE_PILOT", "comment-delete-pilot")
 	t.Setenv("XSHADOW_ISSUES_RUST_COMMENT_DELETE_TOMBSTONE_PILOT", "comment-delete-tombstone-pilot")
+	t.Setenv("XSHADOW_ISSUES_RUST_COMMENT_DELETE_REPLY_PILOT", "comment-delete-reply-pilot")
 	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
 	t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
 	bridge := NewIssueReadBridgeFromEnv(nil)
@@ -60,5 +61,28 @@ func TestIssueReadBridgeCommentDeletePilotEnv(t *testing.T) {
 	}
 	if !reflect.DeepEqual(bridge.CommentDeleteTombstonePilotScopes, []string{"comment-delete-tombstone-pilot"}) {
 		t.Fatalf("CommentDeleteTombstonePilotScopes = %v, want [comment-delete-tombstone-pilot]", bridge.CommentDeleteTombstonePilotScopes)
+	}
+	if !reflect.DeepEqual(bridge.CommentDeleteReplyPilotScopes, []string{"comment-delete-reply-pilot"}) {
+		t.Fatalf("CommentDeleteReplyPilotScopes = %v, want [comment-delete-reply-pilot]", bridge.CommentDeleteReplyPilotScopes)
+	}
+}
+
+func TestReplyRemovedIDsMatchPath(t *testing.T) {
+	t.Parallel()
+	path := []string{"leaf", "child", "root"}
+	if !replyRemovedIDsMatchPath([]string{"leaf", "child", "root"}, path) {
+		t.Fatal("expected full path to match")
+	}
+	if !replyRemovedIDsMatchPath([]string{"leaf", "child"}, path) {
+		t.Fatal("expected leaf+child prefix to match")
+	}
+	if !replyRemovedIDsMatchPath([]string{"leaf"}, path) {
+		t.Fatal("expected leaf-only prefix to match")
+	}
+	if replyRemovedIDsMatchPath([]string{"leaf", "forged"}, path) {
+		t.Fatal("expected foreign id to fail")
+	}
+	if replyRemovedIDsMatchPath(nil, path) {
+		t.Fatal("expected empty removed ids to fail")
 	}
 }

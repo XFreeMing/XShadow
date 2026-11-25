@@ -26,9 +26,18 @@ type rustCommentDeleteReceipt struct {
 	IssueID       string           `json:"issue_id"`
 	IssueRevision int64            `json:"issue_revision"`
 	Tombstone     *CommentResponse `json:"tombstone,omitempty"`
+	RemovedIDs    []string         `json:"removed_ids,omitempty"`
 }
 
-func (h *Handler) commentDeleteRustEligible(
+type rustCommentDeleteRoute int
+
+const (
+	rustCommentDeleteRouteLeaf rustCommentDeleteRoute = iota
+	rustCommentDeleteRouteTombstone
+	rustCommentDeleteRouteReplyLeaf
+)
+
+func (h *Handler) commentDeleteRustSharedEligible(
 	r *http.Request,
 	issue db.Issue,
 	existing db.Comment,
@@ -40,7 +49,7 @@ func (h *Handler) commentDeleteRustEligible(
 	if !isAuthorMember(existing, actorType, actorID) {
 		return false, nil
 	}
-	if existing.ParentID.Valid || existing.Type != "comment" {
+	if existing.Type != "comment" {
 		return false, nil
 	}
 	if existing.DeletedAt.Valid {
@@ -84,6 +93,30 @@ func (h *Handler) commentDeleteRustEligible(
 		return false, nil
 	}
 	return true, nil
+}
+
+func (h *Handler) commentDeleteRustEligible(
+	r *http.Request,
+	issue db.Issue,
+	existing db.Comment,
+	actorType, actorID string,
+) (bool, error) {
+	if existing.ParentID.Valid {
+		return false, nil
+	}
+	return h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+}
+
+func (h *Handler) commentDeleteRustReplyEligible(
+	r *http.Request,
+	issue db.Issue,
+	existing db.Comment,
+	actorType, actorID string,
+) (bool, error) {
+	if !existing.ParentID.Valid {
+		return false, nil
+	}
+	return h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
 }
 
 func (h *Handler) commentDeleteUsesRust(
@@ -132,19 +165,107 @@ func (h *Handler) commentDeleteTombstonePilotEnabled(
 	return matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.CommentDeleteTombstonePilotScopes, uuidToString(workspaceID), workspaceID)
 }
 
+func (h *Handler) commentDeleteReplyPilotEnabled(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+) (bool, error) {
+	if h.IssueReadBridge == nil || len(h.IssueReadBridge.CommentDeleteReplyPilotScopes) == 0 {
+		return false, nil
+	}
+	return matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.CommentDeleteReplyPilotScopes, uuidToString(workspaceID), workspaceID)
+}
+
+// commentDeleteReplyBranchScope loads the bounded leaf→root comment chain for this
+// issue in one query. IDs are immutable across tombstone transitions; only prune
+// extent varies at commit time.
+type commentDeleteReplyBranchScope struct {
+	PathLeafToRoot []string
+}
+
+func (h *Handler) commentDeleteReplyBranchScope(
+	ctx context.Context,
+	leaf db.Comment,
+) (commentDeleteReplyBranchScope, error) {
+	var out commentDeleteReplyBranchScope
+	rows, err := h.Queries.ListCommentAncestorPath(ctx, db.ListCommentAncestorPathParams{
+		CommentID: leaf.ID, WorkspaceID: leaf.WorkspaceID, IssueID: leaf.IssueID,
+	})
+	if err != nil {
+		return out, err
+	}
+	if len(rows) == 0 {
+		return out, pgx.ErrNoRows
+	}
+	if len(rows) > commentTombstonePruneDepth+1 {
+		return out, errors.New("reply branch exceeds prune depth")
+	}
+	out.PathLeafToRoot = make([]string, len(rows))
+	for _, row := range rows {
+		if row.Cycle {
+			return out, errors.New("reply branch cycle")
+		}
+		if row.IssueID != leaf.IssueID || row.WorkspaceID != leaf.WorkspaceID {
+			return out, errors.New("reply branch scope mismatch")
+		}
+		// depth 1 is the leaf; larger depth is closer to the root.
+		idx := int(row.Depth) - 1
+		if idx < 0 || idx >= len(out.PathLeafToRoot) {
+			return out, errors.New("reply branch depth out of range")
+		}
+		out.PathLeafToRoot[idx] = uuidToString(row.ID)
+	}
+	if out.PathLeafToRoot[0] != uuidToString(leaf.ID) {
+		return out, errors.New("reply branch anchor mismatch")
+	}
+	return out, nil
+}
+
+func replyRemovedIDsMatchPath(removed, pathLeafToRoot []string) bool {
+	if len(removed) == 0 || len(removed) > len(pathLeafToRoot) {
+		return false
+	}
+	for i, id := range removed {
+		if id != pathLeafToRoot[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func commentDeleteRemovedUUIDs(ids []string) ([]pgtype.UUID, bool) {
+	out := make([]pgtype.UUID, len(ids))
+	for i, id := range ids {
+		parsed, err := util.ParseUUID(id)
+		if err != nil {
+			return nil, false
+		}
+		out[i] = parsed
+	}
+	return out, true
+}
+
 func (h *Handler) deleteCommentViaRust(
 	w http.ResponseWriter,
 	r *http.Request,
 	existing db.Comment,
 	previousIssueRevision int64,
 	workspaceID, actorType, actorID string,
-	tombstone bool,
+	route rustCommentDeleteRoute,
+	replyBranch commentDeleteReplyBranchScope,
 ) {
 	path := "/internal/comments/" + uuidToString(existing.ID)
 	var payload []byte
-	if tombstone {
+	switch route {
+	case rustCommentDeleteRouteTombstone:
 		var err error
 		payload, err = json.Marshal(rustCommentDeleteRequest{GoMode: "tombstone"})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encode comment delete")
+			return
+		}
+	case rustCommentDeleteRouteReplyLeaf:
+		var err error
+		payload, err = json.Marshal(rustCommentDeleteRequest{GoMode: "reply_leaf"})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to encode comment delete")
 			return
@@ -175,7 +296,7 @@ func (h *Handler) deleteCommentViaRust(
 		writeError(w, http.StatusBadGateway, "invalid rust comment delete response")
 		return
 	}
-	if tombstone {
+	if route == rustCommentDeleteRouteTombstone {
 		tombstoneRow, ok := h.confirmRustCommentDeleteTombstoneReceipt(r.Context(), existing, previousIssueRevision, receipt)
 		if !ok {
 			writeError(w, http.StatusBadGateway, "invalid rust comment delete response")
@@ -197,6 +318,28 @@ func (h *Handler) deleteCommentViaRust(
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	if route == rustCommentDeleteRouteReplyLeaf {
+		if !h.confirmRustCommentDeleteReplyReceipt(r.Context(), existing, previousIssueRevision, receipt, replyBranch) {
+			writeError(w, http.StatusBadGateway, "invalid rust comment delete response")
+			return
+		}
+		slog.Info("comment deleted", append(logger.RequestAttrs(r),
+			"comment_id", uuidToString(existing.ID),
+			"issue_id", uuidToString(existing.IssueID),
+			"tombstoned", false,
+			"removed_count", len(receipt.RemovedIDs),
+		)...)
+		for _, removedID := range receipt.RemovedIDs {
+			eventPayload := map[string]any{
+				"comment_id":     removedID,
+				"issue_id":       receipt.IssueID,
+				"issue_revision": receipt.IssueRevision,
+			}
+			h.publish(protocol.EventCommentDeleted, workspaceID, actorType, actorID, eventPayload)
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if !h.confirmRustCommentDeleteReceipt(r.Context(), existing, previousIssueRevision, receipt) {
 		writeError(w, http.StatusBadGateway, "invalid rust comment delete response")
 		return
@@ -214,6 +357,72 @@ func (h *Handler) deleteCommentViaRust(
 	}
 	h.publish(protocol.EventCommentDeleted, workspaceID, actorType, actorID, eventPayload)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) commentDeleteUsesRustReply(
+	r *http.Request,
+	issue db.Issue,
+	existing db.Comment,
+	actorType, actorID string,
+	hasReplies bool,
+) (bool, error) {
+	if hasReplies {
+		return false, nil
+	}
+	return h.commentDeleteRustReplyEligible(r, issue, existing, actorType, actorID)
+}
+
+func (h *Handler) confirmRustCommentDeleteReplyReceipt(
+	ctx context.Context,
+	scope db.Comment,
+	previousIssueRevision int64,
+	receipt rustCommentDeleteReceipt,
+	branch commentDeleteReplyBranchScope,
+) bool {
+	if receipt.Tombstone != nil {
+		return false
+	}
+	if receipt.CommentID != uuidToString(scope.ID) || receipt.IssueID != uuidToString(scope.IssueID) {
+		return false
+	}
+	if receipt.IssueRevision <= previousIssueRevision {
+		return false
+	}
+	path := branch.PathLeafToRoot
+	if !replyRemovedIDsMatchPath(receipt.RemovedIDs, path) {
+		return false
+	}
+	removedCount := len(receipt.RemovedIDs)
+	checkCount := removedCount
+	if checkCount < len(path) {
+		checkCount++
+	}
+	checkedIDs, ok := commentDeleteRemovedUUIDs(path[:checkCount])
+	if !ok {
+		return false
+	}
+	stillPresent, err := h.Queries.ListCommentsByIDsForIssue(ctx, db.ListCommentsByIDsForIssueParams{
+		Ids: checkedIDs, IssueID: scope.IssueID, WorkspaceID: scope.WorkspaceID,
+	})
+	if err != nil {
+		return false
+	}
+	if len(stillPresent) > 1 || (len(stillPresent) == 1 &&
+		(checkCount == removedCount || stillPresent[0].ID != checkedIDs[removedCount])) {
+		return false
+	}
+	issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+		ID: scope.IssueID, WorkspaceID: scope.WorkspaceID,
+	})
+	if err != nil {
+		return false
+	}
+	if issue.Revision < receipt.IssueRevision {
+		return false
+	}
+	// An unclaimed ancestor missing at the same revision is evidence of an
+	// incomplete receipt. A later request may legitimately prune it.
+	return issue.Revision > receipt.IssueRevision || checkCount == removedCount || len(stillPresent) == 1
 }
 
 func (h *Handler) readRustCommentDeleteResponse(

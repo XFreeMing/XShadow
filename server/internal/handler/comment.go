@@ -3774,6 +3774,8 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 
 	var useRustDelete bool
 	var useRustTombstone bool
+	var useRustReply bool
+	var replyBranch commentDeleteReplyBranchScope
 	var hasReplies bool
 	if pilotOn, pilotErr := h.commentDeletePilotEnabled(r.Context(), comment.WorkspaceID); pilotErr != nil {
 		slog.Warn("comment delete rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
@@ -3798,6 +3800,24 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 			if tombstoneOn {
 				useRustDelete, pilotErr = h.commentDeleteUsesRustTombstone(r, issue, comment, actorType, actorID, hasReplies)
 			}
+		} else if comment.ParentID.Valid {
+			replyOn, replyErr := h.commentDeleteReplyPilotEnabled(r.Context(), comment.WorkspaceID)
+			if replyErr != nil {
+				slog.Warn("comment delete rust reply pilot lookup failed", append(logger.RequestAttrs(r), "error", replyErr, "comment_id", commentId)...)
+				writeError(w, http.StatusInternalServerError, "failed to delete comment")
+				return
+			}
+			if replyOn {
+				useRustDelete, pilotErr = h.commentDeleteUsesRustReply(r, issue, comment, actorType, actorID, hasReplies)
+				if pilotErr == nil && useRustDelete {
+					replyBranch, pilotErr = h.commentDeleteReplyBranchScope(r.Context(), comment)
+					if errors.Is(pilotErr, pgx.ErrNoRows) {
+						writeError(w, http.StatusNotFound, "comment not found")
+						return
+					}
+				}
+				useRustReply = useRustDelete
+			}
 		} else {
 			useRustDelete, pilotErr = h.commentDeleteUsesRust(r, issue, comment, actorType, actorID, hasReplies)
 		}
@@ -3809,7 +3829,13 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		useRustTombstone = useRustDelete && hasReplies
 	}
 	if useRustDelete {
-		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID, useRustTombstone)
+		route := rustCommentDeleteRouteLeaf
+		if useRustTombstone {
+			route = rustCommentDeleteRouteTombstone
+		} else if useRustReply {
+			route = rustCommentDeleteRouteReplyLeaf
+		}
+		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID, route, replyBranch)
 		return
 	}
 

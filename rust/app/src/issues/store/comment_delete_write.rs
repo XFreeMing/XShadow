@@ -30,6 +30,8 @@ pub struct IssueCommentDeleteResult {
     pub issue_revision: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tombstone: Option<IssueCommentRow>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub removed_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -52,6 +54,35 @@ enum CommentDeleteGoMode {
     #[default]
     Leaf,
     Tombstone,
+    ReplyLeaf,
+}
+
+const COMMENT_TOMBSTONE_PRUNE_DEPTH: usize = 256;
+
+const DELETE_LEAF_COMMENT_SQL: &str = "
+    DELETE FROM comment
+     WHERE id = $1::uuid AND workspace_id = $2::uuid AND issue_id = $3::uuid
+       AND deleted_at IS NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM comment child WHERE child.parent_id = comment.id
+       )
+     RETURNING id::text, parent_id::text";
+
+const DELETE_REPLYLESS_TOMBSTONE_SQL: &str = "
+    DELETE FROM comment
+     WHERE comment.id = $1::uuid AND comment.workspace_id = $2::uuid AND comment.issue_id = $3::uuid
+       AND comment.deleted_at IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM comment child WHERE child.parent_id = comment.id
+       )
+     RETURNING comment.id::text, comment.parent_id::text";
+
+fn decode_deleted_comment_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<(String, Option<String>), sqlx::Error> {
+    let id: String = row.try_get(0)?;
+    let parent: Option<String> = row.try_get(1)?;
+    Ok((id, parent))
 }
 
 #[derive(Debug)]
@@ -120,8 +151,7 @@ async fn lock_comment_delete_shape(
                     WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
                 ) AS has_supplement,
                 EXISTS(
-                    SELECT 1 FROM comment child
-                    WHERE child.parent_id = c.id AND child.workspace_id = c.workspace_id
+                    SELECT 1 FROM comment child WHERE child.parent_id = c.id
                 ) AS has_replies,
                 EXISTS(
                     SELECT 1 FROM attachment a
@@ -163,8 +193,7 @@ fn validate_delete_shape(
             "comment not found",
         )));
     }
-    if shape.is_reply
-        || shape.author_type != "member"
+    if shape.author_type != "member"
         || shape.author_id != *user_id
         || shape.comment_type != "comment"
         || shape.has_source
@@ -179,15 +208,85 @@ fn validate_delete_shape(
         return Err(IssueCommentDeleteError::RouteChanged);
     }
     match mode {
-        CommentDeleteGoMode::Leaf if shape.has_replies => {
-            return Err(IssueCommentDeleteError::RouteChanged);
+        CommentDeleteGoMode::Leaf => {
+            if shape.is_reply || shape.has_replies {
+                return Err(IssueCommentDeleteError::RouteChanged);
+            }
         }
-        CommentDeleteGoMode::Tombstone if !shape.has_replies => {
-            return Err(IssueCommentDeleteError::RouteChanged);
+        CommentDeleteGoMode::Tombstone => {
+            if shape.is_reply || !shape.has_replies {
+                return Err(IssueCommentDeleteError::RouteChanged);
+            }
         }
-        _ => {}
+        CommentDeleteGoMode::ReplyLeaf => {
+            if !shape.is_reply || shape.has_replies {
+                return Err(IssueCommentDeleteError::RouteChanged);
+            }
+        }
     }
     Ok(())
+}
+
+async fn delete_replyless_tombstone(
+    tx: &mut PgConnection,
+    comment_id: &str,
+    workspace_id: &str,
+    issue_id: &str,
+) -> Result<Option<(String, Option<String>)>, sqlx::Error> {
+    let row = sqlx::query(DELETE_REPLYLESS_TOMBSTONE_SQL)
+        .bind(comment_id)
+        .bind(workspace_id)
+        .bind(issue_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    match row {
+        None => Ok(None),
+        Some(row) => decode_deleted_comment_row(&row).map(Some),
+    }
+}
+
+async fn delete_reply_leaf(
+    tx: &mut PgConnection,
+    comment_id: &str,
+    workspace_id: &str,
+    issue_id: &str,
+) -> Result<(Vec<String>, String), IssueCommentDeleteError> {
+    let (removed_id, mut parent_id) =
+        delete_leaf_comment(tx, comment_id, workspace_id, issue_id).await?;
+    let mut removed_ids = vec![removed_id.clone()];
+    for _ in 0..COMMENT_TOMBSTONE_PRUNE_DEPTH {
+        let Some(parent) = parent_id else {
+            break;
+        };
+        let Some((pruned_id, next_parent)) =
+            delete_replyless_tombstone(tx, &parent, workspace_id, issue_id).await?
+        else {
+            break;
+        };
+        removed_ids.push(pruned_id);
+        parent_id = next_parent;
+    }
+    Ok((removed_ids, removed_id))
+}
+
+async fn delete_leaf_comment(
+    tx: &mut PgConnection,
+    comment_id: &str,
+    workspace_id: &str,
+    issue_id: &str,
+) -> Result<(String, Option<String>), IssueCommentDeleteError> {
+    let deleted = sqlx::query(DELETE_LEAF_COMMENT_SQL)
+        .bind(comment_id)
+        .bind(workspace_id)
+        .bind(issue_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(row) = deleted else {
+        return Err(IssueCommentDeleteError::Access(IssueReadError::NotFound(
+            "comment not found",
+        )));
+    };
+    Ok(decode_deleted_comment_row(&row)?)
 }
 
 pub async fn delete_issue_comment(
@@ -249,28 +348,16 @@ pub async fn delete_issue_comment(
     .execute(&mut *tx)
     .await?;
 
-    let (comment_id_out, tombstone_row) = match mode {
+    let (comment_id_out, tombstone_row, removed_ids) = match mode {
+        CommentDeleteGoMode::ReplyLeaf => {
+            let (removed_ids, removed_id) =
+                delete_reply_leaf(&mut tx, comment_id, workspace_id, &issue_id).await?;
+            (removed_id, None, removed_ids)
+        }
         CommentDeleteGoMode::Leaf => {
-            let deleted = sqlx::query(
-                "DELETE FROM comment
-                 WHERE id = $1::uuid AND workspace_id = $2::uuid AND deleted_at IS NULL
-                   AND NOT EXISTS (
-                       SELECT 1 FROM comment child
-                       WHERE child.parent_id = comment.id AND child.workspace_id = comment.workspace_id
-                   )
-                 RETURNING id::text",
-            )
-            .bind(comment_id)
-            .bind(workspace_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some(row) = deleted else {
-                return Err(IssueCommentDeleteError::Access(IssueReadError::NotFound(
-                    "comment not found",
-                )));
-            };
-            let removed_id: String = row.try_get(0)?;
-            (removed_id, None)
+            let (removed_id, _) =
+                delete_leaf_comment(&mut tx, comment_id, workspace_id, &issue_id).await?;
+            (removed_id, None, Vec::new())
         }
         CommentDeleteGoMode::Tombstone => {
             let tombstone_sql = format!(
@@ -296,7 +383,7 @@ pub async fn delete_issue_comment(
                 )));
             };
             let tombstone = map_comment_version(&row).map_err(IssueCommentDeleteError::from)?;
-            (tombstone.id.clone(), Some(tombstone))
+            (tombstone.id.clone(), Some(tombstone), Vec::new())
         }
     };
 
@@ -307,5 +394,6 @@ pub async fn delete_issue_comment(
         issue_id,
         issue_revision,
         tombstone: tombstone_row,
+        removed_ids,
     })
 }
