@@ -30,6 +30,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_BATCH_DELETE_PILOT` 为 `POST /api/issues/batch-delete` 的普通成员批量删除独立指定试点工作区，与单任务删除试点无关。Go 先解析试点，再判断可见选中项是否全部为普通可删形态；任一项不适用则整批走 Go。Rust 在单事务内按确定性顺序持锁、复核权限与形态，再按与 Go 相同的排除规则解除子任务与重复关联、清理目标链接并删除各行；已列入本批的子/重复任务不会被提前解绑。选定工作区在上游不可用或回执不明确时返回 `503`/`502`，不在失败后静默回退 Go。
 
+`XSHADOW_ISSUES_RUST_BATCH_ASSIGN_PILOT` 为 `POST /api/issues/batch-update` 的普通成员批量指派至本人拥有的直接智能体独立指定试点工作区，且须与 `XSHADOW_ISSUES_RUST_ASSIGN_PILOT` 同时作用于同一工作区。Go 先校验仅含完整的 `assignee_type=agent` 与 `assignee_id` 对及可选 `suppress_run`，再按可见行逐条预计算队列归因，复用单任务 assign 事务写入与运行态通知外盒。隐藏/缺失、无权限、形态不适用或持锁冲突的行被跳过且不计数；传输或回执异常时中止后续行。标量批量试点、单任务 assign 试点与其他字段仍走各自既有路径。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

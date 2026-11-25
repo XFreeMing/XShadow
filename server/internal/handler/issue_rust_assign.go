@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -15,14 +16,19 @@ import (
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
+type ownedDirectBatchTrust struct {
+	ExpectedProjectID *string `json:"expected_project_id,omitempty"`
+}
+
 type issueAssignEdit struct {
-	ExpectedRevision int64            `json:"expected_revision"`
-	AssigneeType     string           `json:"assignee_type"`
-	AssigneeID       string           `json:"assignee_id"`
-	SourceTaskID     *string          `json:"source_task_id,omitempty"`
-	SuppressRun      bool             `json:"suppress_run"`
-	ActivityID       string           `json:"activity_id"`
-	PreparedEnqueue  *json.RawMessage `json:"prepared_enqueue,omitempty"`
+	ExpectedRevision int64                  `json:"expected_revision"`
+	AssigneeType     string                 `json:"assignee_type"`
+	AssigneeID       string                 `json:"assignee_id"`
+	SourceTaskID     *string                `json:"source_task_id,omitempty"`
+	SuppressRun      bool                   `json:"suppress_run"`
+	ActivityID       string                 `json:"activity_id"`
+	PreparedEnqueue  *json.RawMessage       `json:"prepared_enqueue,omitempty"`
+	OwnedDirectBatch *ownedDirectBatchTrust `json:"owned_direct_batch,omitempty"`
 }
 
 func issueHasStaleDuplicateMark(issue db.Issue) bool {
@@ -100,6 +106,14 @@ func (h *Handler) assignIssueEditUsesRust(
 	return matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.AssignPilotScopes, uuidToString(workspaceID), workspaceID)
 }
 
+func rustAssignResponseLimit(current db.Issue, status int) int64 {
+	limit := int64(maxRustIssueReadBody)
+	if status == http.StatusOK {
+		limit += int64(len(current.Description.String)+len(current.AcceptanceCriteria)) * 2
+	}
+	return limit
+}
+
 func (h *Handler) updateIssueAssignViaRust(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -138,10 +152,7 @@ func (h *Handler) updateIssueAssignViaRust(
 		return after, before, "", "", false
 	}
 	defer resp.Body.Close()
-	limit := int64(maxRustIssueReadBody)
-	if resp.StatusCode == http.StatusOK {
-		limit += int64(len(current.Description.String)+len(current.AcceptanceCriteria)) * 2
-	}
+	limit := rustAssignResponseLimit(current, resp.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil || int64(len(body)) > limit {
 		if !writeQueryCancellation(w, r, err) {
@@ -175,6 +186,33 @@ func (h *Handler) updateIssueAssignViaRust(
 		writeRustIssueResponse(w, resp, bytes.NewReader(body))
 		return after, before, "", "", false
 	}
+	result, receiptErr := h.validateRustAssignWriteReceipt(
+		r.Context(), plannedActivityID, current, *req.ExpectedRevision,
+		params.AssigneeType, params.AssigneeID, prepared, body,
+	)
+	if receiptErr != nil {
+		writeError(w, http.StatusBadGateway, receiptErr.Error())
+		return after, before, "", "", false
+	}
+	return result.after, result.before, result.assignActivityID, result.queuedTaskID, true
+}
+
+type rustAssignWriteResult struct {
+	before, after    db.Issue
+	assignActivityID string
+	queuedTaskID     string
+}
+
+func (h *Handler) validateRustAssignWriteReceipt(
+	ctx context.Context,
+	plannedActivityID pgtype.UUID,
+	current db.Issue,
+	expectedRevision int64,
+	assigneeType pgtype.Text,
+	assigneeID pgtype.UUID,
+	prepared *service.IssuePreparedAgentEnqueue,
+	body []byte,
+) (rustAssignWriteResult, error) {
 	var snapshots struct {
 		Before                ordinaryIssueSnapshot `json:"before"`
 		After                 ordinaryIssueSnapshot `json:"after"`
@@ -185,44 +223,42 @@ func (h *Handler) updateIssueAssignViaRust(
 	if json.Unmarshal(body, &snapshots) != nil ||
 		snapshots.Before.ID != current.ID || snapshots.Before.WorkspaceID != current.WorkspaceID ||
 		snapshots.After.ID != current.ID || snapshots.After.WorkspaceID != current.WorkspaceID ||
-		!rustAssignWriteSnapshotsValid(*req.ExpectedRevision, params.AssigneeType, params.AssigneeID, snapshots.Before, snapshots.After, issueHasStaleDuplicateMark(current)) {
-		writeError(w, http.StatusBadGateway, "invalid rust issue assign snapshots")
-		return after, before, "", "", false
+		!rustAssignWriteSnapshotsValid(expectedRevision, assigneeType, assigneeID, snapshots.Before, snapshots.After, issueHasStaleDuplicateMark(current)) {
+		return rustAssignWriteResult{}, errors.New("invalid rust issue assign snapshots")
 	}
 	beforeIssue := snapshots.Before.issue()
 	afterIssue := snapshots.After.issue()
 	assigneeChanged := beforeIssue.AssigneeType != afterIssue.AssigneeType || beforeIssue.AssigneeID != afterIssue.AssigneeID
 	receipt := derefString(snapshots.AssigneeActivityID)
-	if !rustAssignActivityReceiptValid(r.Context(), h.Queries, plannedActivityID, current.WorkspaceID, current.ID, beforeIssue, afterIssue, assigneeChanged, receipt) {
-		writeError(w, http.StatusBadGateway, "invalid rust issue assign activity receipt")
-		return after, before, "", "", false
+	if !rustAssignActivityReceiptValid(ctx, h.Queries, plannedActivityID, current.WorkspaceID, current.ID, beforeIssue, afterIssue, assigneeChanged, receipt) {
+		return rustAssignWriteResult{}, errors.New("invalid rust issue assign activity receipt")
 	}
 	taskReceipt := derefString(snapshots.QueuedTaskID)
 	coalescedReceipt := derefString(snapshots.CoalescedQueuedTaskID)
 	if prepared != nil {
 		switch {
 		case taskReceipt != "" && coalescedReceipt != "":
-			writeError(w, http.StatusBadGateway, "invalid rust issue assign queue receipt")
-			return after, before, "", "", false
+			return rustAssignWriteResult{}, errors.New("invalid rust issue assign queue receipt")
 		case taskReceipt != "":
-			if !rustStatusQueuedTaskValid(r.Context(), h.Queries, taskReceipt, *prepared) {
-				writeError(w, http.StatusBadGateway, "invalid rust issue assign queue receipt")
-				return after, before, "", "", false
+			if !rustStatusQueuedTaskValid(ctx, h.Queries, taskReceipt, *prepared) {
+				return rustAssignWriteResult{}, errors.New("invalid rust issue assign queue receipt")
 			}
 		case coalescedReceipt != "":
-			if !rustStatusCoalescedTaskValid(r.Context(), h.Queries, coalescedReceipt, *prepared) {
-				writeError(w, http.StatusBadGateway, "invalid rust issue assign queue receipt")
-				return after, before, "", "", false
+			if !rustStatusCoalescedTaskValid(ctx, h.Queries, coalescedReceipt, *prepared) {
+				return rustAssignWriteResult{}, errors.New("invalid rust issue assign queue receipt")
 			}
 		default:
-			writeError(w, http.StatusBadGateway, "invalid rust issue assign queue receipt")
-			return after, before, "", "", false
+			return rustAssignWriteResult{}, errors.New("invalid rust issue assign queue receipt")
 		}
 	} else if taskReceipt != "" || coalescedReceipt != "" {
-		writeError(w, http.StatusBadGateway, "unexpected rust issue assign queue receipt")
-		return after, before, "", "", false
+		return rustAssignWriteResult{}, errors.New("unexpected rust issue assign queue receipt")
 	}
-	return afterIssue, beforeIssue, receipt, taskReceipt, true
+	return rustAssignWriteResult{
+		before:           beforeIssue,
+		after:            afterIssue,
+		assignActivityID: receipt,
+		queuedTaskID:     taskReceipt,
+	}, nil
 }
 
 func rustAssignActivityReceiptValid(

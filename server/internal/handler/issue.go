@@ -4728,7 +4728,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case workflowHandoffPrepared != nil && taskID == workflowHandoffPrepared.Task.ID:
 				h.TaskService.CompleteWorkflowSquadHandoffAfterNativeWrite(r.Context(), taskID)
-			case statusPromotionPrepared != nil:
+			case statusPromotionPrepared != nil || assignPrepared != nil:
 				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
 			}
 		}
@@ -5307,6 +5307,15 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		batchProjectID = projectUUID
 	}
 
+	batchAssignPilot, err := h.batchOwnedDirectAgentAssignPilotActive(r, wsUUID, rawUpdates, req.Updates)
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust batch owned-direct assign pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
+		}
+		return
+	}
+
 	rustBatch, err := h.batchOrdinaryIssueEditUsesRust(r, wsUUID, rawUpdates)
 	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
@@ -5508,22 +5517,42 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 		var issue db.Issue
-		if req.Updates.Description != nil {
-			// One batch-level base cannot describe multiple issue documents.
-			// Preserve every marked channel-media block conservatively, matching
-			// legacy single-update clients that omit description_base.
-			var lockedPrev db.Issue
-			issue, lockedPrev, _, err = h.updateIssueAtomically(
-				writeCtx, prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, issueStatusGuard, handoff != nil,
+		var nativeAssignment rustAssignWriteResult
+		if batchAssignPilot && handoff == nil &&
+			h.batchAssignIssueUsesOwnedNative(r.Context(), userID, prevIssue, params) {
+			actorType, actorID := h.resolveActor(r, userID, workspaceID)
+			outcome, result := h.tryBatchUpdateIssueAssignViaRust(
+				w, r, userID, prevIssue, params, req.Updates.SuppressRun, actorType, actorID,
 			)
-			if err == nil {
-				prevIssue = lockedPrev
+			switch outcome {
+			case batchAssignRustAbort:
+				return
+			case batchAssignRustSkipRow:
+				continue
+			case batchAssignRustDone:
+				nativeAssignment = result
+				prevIssue, issue = result.before, result.after
 			}
-		} else {
-			issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params)
 		}
+		if !nativeAssignment.after.ID.Valid {
+			writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
+			if req.Updates.Description != nil {
+				// One batch-level base cannot describe multiple issue documents.
+				// Preserve every marked channel-media block conservatively, matching
+				// legacy single-update clients that omit description_base.
+				var lockedPrev db.Issue
+				issue, lockedPrev, _, err = h.updateIssueAtomically(
+					writeCtx, prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, issueStatusGuard, handoff != nil,
+				)
+				if err == nil {
+					prevIssue = lockedPrev
+				}
+			} else {
+				issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params)
+			}
+		}
+
 		if err != nil {
 			// The archive race is a property of the batch's shared target
 			// status, not of one issue, so every remaining item would fail the
@@ -5576,7 +5605,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if handoff != nil {
 			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 		}
-		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, batchPayload)
+		h.publishIssueUpdated(workspaceID, actorType, actorID, batchPayload, nativeAssignment.assignActivityID)
 
 		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
 		// mirrors UpdateIssue. See that handler for the rationale.
@@ -5587,7 +5616,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if handoff != nil && req.Updates.StopPreviousAssigneeRuns {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 		}
-		if willRun {
+		if nativeAssignment.after.ID.Valid {
+			if taskID, parseErr := util.ParseUUID(nativeAssignment.queuedTaskID); parseErr == nil {
+				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
+			}
+		} else if willRun {
 			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
 

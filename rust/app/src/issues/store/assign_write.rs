@@ -16,6 +16,13 @@ use super::{
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OwnedDirectBatchTrust {
+    #[serde(default)]
+    pub expected_project_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueAssignEdit {
     pub expected_revision: i64,
     pub assignee_type: String,
@@ -25,6 +32,8 @@ pub struct IssueAssignEdit {
     pub suppress_run: bool,
     pub activity_id: String,
     pub prepared_enqueue: Option<PreparedStatusEnqueue>,
+    #[serde(default)]
+    pub owned_direct_batch: Option<OwnedDirectBatchTrust>,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +124,28 @@ pub async fn update_issue_assign(
         .await?;
 
     let prepared = edit.prepared_enqueue.as_ref();
+    let batch_trust = edit.owned_direct_batch.as_ref();
+    if let Some(trust) = batch_trust {
+        if actor_type != "member" || edit.assignee_type != "agent" {
+            return Err(IssueAssignEditError::InvalidAssignee);
+        }
+        if let Some(project_id) = trust.expected_project_id.as_deref() {
+            if !is_uuid(project_id) {
+                return Err(IssueAssignEditError::DispatchSensitive);
+            }
+            let default_project = sqlx::query_scalar::<_, bool>(
+                "SELECT workflow_id IS NULL FROM project
+                 WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+            )
+            .bind(project_id)
+            .bind(workspace_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if default_project != Some(true) {
+                return Err(IssueAssignEditError::DispatchSensitive);
+            }
+        }
+    }
     let (target_agent, agent_owner) = if edit.assignee_type == "agent" {
         let owner = match prepared {
             Some(plan)
@@ -149,6 +180,22 @@ pub async fn update_issue_assign(
         (target.leader_id, target.owner_id)
     };
 
+    if batch_trust.is_some() {
+        if agent_owner.as_deref() != Some(actor_id) {
+            return Err(IssueAssignEditError::DispatchSensitive);
+        }
+        if let Some(plan) = prepared {
+            status_dispatch::validate_runtime_for_active_enqueue(
+                &mut tx,
+                workspace_id,
+                actor_id,
+                &plan.runtime_id,
+                status_dispatch::RuntimeEnqueueCaller::DirectAgent,
+            )
+            .await?;
+        }
+    }
+
     let locked = sqlx::query(&format!(
         "SELECT i.project_id::text, i.revision, i.status, i.assignee_type, i.assignee_id::text,
                 i.triage_state IS NOT NULL AS triage_state_present,
@@ -171,6 +218,11 @@ pub async fn update_issue_assign(
         return Err(IssueAssignEditError::Access(IssueReadError::NotFound(
             "issue not found",
         )));
+    }
+    if let Some(trust) = batch_trust
+        && project_id.as_deref() != trust.expected_project_id.as_deref()
+    {
+        return Err(IssueAssignEditError::DispatchSensitive);
     }
 
     let revision: i64 = locked.try_get("revision")?;

@@ -95,8 +95,8 @@ func TestAssignIssueEditUsesRustAcceptsOrdinarySquadTargets(t *testing.T) {
 	ok, err = h.assignIssueEditUsesRust(req, squadPrev.WorkspaceID, squadPrev, raw,
 		UpdateIssueRequest{ExpectedRevision: &rev, AssigneeType: strPtr("agent"), AssigneeID: strPtr(agent.String())},
 		nil, agentParams)
-	if err != nil || ok {
-		t.Fatalf("squad source reassign to agent uses rust = %v err=%v, want false", ok, err)
+	if err != nil || !ok {
+		t.Fatalf("squad source reassign to agent uses rust = %v err=%v, want true", ok, err)
 	}
 
 	squadRaw := assignPilotRaw(t, map[string]any{
