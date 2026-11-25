@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,9 +37,10 @@ var rustIssueReadClient = &http.Client{
 // the pilot stay on the default Go handler; workspaces inside the pilot never
 // silently fall back to Go if the Rust service is unconfigured or errors.
 type IssueReadBridge struct {
-	Upstream    string
-	Token       string
-	PilotScopes []string
+	Upstream        string
+	Token           string
+	PilotScopes     []string
+	ListPilotScopes []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -51,6 +53,7 @@ type IssueReadBridge struct {
 //     shared internal token verified by the Rust service.
 func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	scopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_READ_PILOT"))
+	listScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_LIST_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
 	if upstream == "" {
 		upstream = strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_TABLES_UPSTREAM")), "/")
@@ -60,11 +63,12 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		token = strings.TrimSpace(os.Getenv("XSHADOW_TABLES_INTERNAL_TOKEN"))
 	}
 	bridge := &IssueReadBridge{
-		Upstream:    upstream,
-		Token:       token,
-		PilotScopes: scopes,
+		Upstream:        upstream,
+		Token:           token,
+		PilotScopes:     scopes,
+		ListPilotScopes: listScopes,
 	}
-	if len(scopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue read pilot configured without a valid loopback upstream and internal token")
 		}
@@ -104,12 +108,13 @@ func (b *IssueReadBridge) Enabled() bool {
 }
 
 func (b *IssueReadBridge) MatchesWorkspace(ctx context.Context, queries *db.Queries, workspaceID string, wsUUID pgtype.UUID) (bool, error) {
-	if !b.HasPilotScopes() {
-		return false, nil
-	}
+	return matchesIssuePilot(ctx, queries, b.PilotScopes, workspaceID, wsUUID)
+}
+
+func matchesIssuePilot(ctx context.Context, queries *db.Queries, scopes []string, workspaceID string, wsUUID pgtype.UUID) (bool, error) {
 	wsLower := strings.ToLower(strings.TrimSpace(workspaceID))
 	needsSlugLookup := false
-	for _, scope := range b.PilotScopes {
+	for _, scope := range scopes {
 		if scope == "*" || scope == "all" {
 			return true, nil
 		}
@@ -128,7 +133,7 @@ func (b *IssueReadBridge) MatchesWorkspace(ctx context.Context, queries *db.Quer
 		return false, err
 	}
 	slugLower := strings.ToLower(strings.TrimSpace(ws.Slug))
-	for _, scope := range b.PilotScopes {
+	for _, scope := range scopes {
 		if scope == slugLower {
 			return true, nil
 		}
@@ -190,22 +195,41 @@ func (h *Handler) GetIssueRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getIssueViaRust(w http.ResponseWriter, r *http.Request, workspaceID string, wsUUID pgtype.UUID, userID string) {
-	if !h.IssueReadBridge.Enabled() {
-		writeError(w, http.StatusServiceUnavailable, "rust issue read service unavailable")
+	path := "/internal/issues/" + url.PathEscape(chi.URLParam(r, "id"))
+	resp, ok := h.requestRustIssue(w, r, http.MethodGet, path, workspaceID, userID, nil)
+	if !ok {
 		return
 	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRustIssueReadBody+1))
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			writeError(w, http.StatusBadGateway, "failed to read rust issue response")
+		}
+		return
+	}
+	if len(body) > maxRustIssueReadBody {
+		writeError(w, http.StatusBadGateway, "rust issue response too large")
+		return
+	}
+	h.writeRustIssueDetail(w, r, workspaceID, wsUUID, resp, body)
+}
 
-	id := chi.URLParam(r, "id")
+func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, method, path, workspaceID, userID string, payload []byte) (*http.Response, bool) {
+	if !h.IssueReadBridge.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "rust issue read service unavailable")
+		return nil, false
+	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
-	target := h.IssueReadBridge.Upstream + "/internal/issues/" + url.PathEscape(id)
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	target := h.IssueReadBridge.Upstream + path
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), method, target, bytes.NewReader(payload))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid issue request")
-		return
+		return nil, false
+	}
+	if len(payload) != 0 {
+		upstreamReq.Header.Set("Content-Type", "application/json")
 	}
 	if requestID := r.Header.Get("X-Request-ID"); requestID != "" {
 		upstreamReq.Header.Set("X-Request-ID", requestID)
@@ -224,48 +248,35 @@ func (h *Handler) getIssueViaRust(w http.ResponseWriter, r *http.Request, worksp
 	resp, err := rustIssueReadClient.Do(upstreamReq)
 	if err != nil {
 		if writeQueryCancellation(w, r, err) {
-			return
+			return nil, false
 		}
 		slog.Warn("rust issue read upstream failed", append(logger.RequestAttrs(r), "workspace_id", workspaceID, "error", err)...)
 		writeError(w, http.StatusServiceUnavailable, "rust issue read service unavailable")
-		return
+		return nil, false
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		_ = resp.Body.Close()
 		writeError(w, http.StatusBadGateway, "unexpected rust issue redirect")
-		return
+		return nil, false
 	}
+	return resp, true
+}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRustIssueReadBody+1))
-	if err != nil {
-		if writeQueryCancellation(w, r, err) {
-			return
-		}
-		writeError(w, http.StatusBadGateway, "failed to read rust issue response")
-		return
+func writeRustIssueResponse(w http.ResponseWriter, resp *http.Response, body io.Reader) {
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
 	}
-	if len(body) > maxRustIssueReadBody {
-		writeError(w, http.StatusBadGateway, "rust issue response too large")
-		return
-	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, body)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		contentType := resp.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/json"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(body)
-		return
-	}
-
+func (h *Handler) writeRustIssueDetail(w http.ResponseWriter, r *http.Request, workspaceID string, wsUUID pgtype.UUID, resp *http.Response, body []byte) {
 	enrichAttachments := resp.Header.Get("X-XShadow-Enrich-Attachments") == "1"
 	enrichSourceContext := resp.Header.Get("X-XShadow-Enrich-Source-Context") == "1"
-	if !enrichAttachments && !enrichSourceContext {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+	if resp.StatusCode != http.StatusOK || (!enrichAttachments && !enrichSourceContext) {
+		writeRustIssueResponse(w, resp, bytes.NewReader(body))
 		return
 	}
 

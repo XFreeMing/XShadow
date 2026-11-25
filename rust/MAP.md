@@ -8,6 +8,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 原生任务详情 `GET /api/issues/{id}` 支持按工作区试点。设置 `XSHADOW_ISSUES_RUST_READ_PILOT` 为工作区 UUID 或 slug 后，Rust 在同一 PostgreSQL 中读取原任务并检查项目可见性，Go 补齐附件 URL 和冻结来源。连接可复用 `XSHADOW_TABLES_UPSTREAM` 与 `XSHADOW_TABLES_INTERNAL_TOKEN`。清空试点设置后，详情回到 Go。试点期间 Rust 不可用时，选定工作区收到 `503`，其他工作区继续经由 Go 提供详情。
 
+原生任务列表 `GET /api/issues` 与 `POST /api/issues/query` 可用 `XSHADOW_ISSUES_RUST_LIST_PILOT` 独立选择工作区。Go 验证请求参数，Rust 筛选任务、检查可见范围、查询分页和总数。该设置只作用于这两个列表入口。清空后，列表回到 Go。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

@@ -1242,18 +1242,23 @@ func propertiesFilterPredicate(groups [][]json.RawMessage, addArg func(any) stri
 // order, mirroring the frontend's stale-persisted-sort fallback rather than
 // breaking installed clients with a 400.
 func (h *Handler) propertySortExpr(r *http.Request, workspaceID string, sortValue string) (expr string, handled bool, err error) {
+	def, handled, err := h.propertySortDefinition(r, workspaceID, sortValue)
+	return propertySortExpression(def), handled, err
+}
+
+func (h *Handler) propertySortDefinition(r *http.Request, workspaceID string, sortValue string) (*db.IssueProperty, bool, error) {
 	const prefix = "property:"
 	if !strings.HasPrefix(sortValue, prefix) {
-		return "", false, nil
+		return nil, false, nil
 	}
 	rawID := strings.TrimPrefix(sortValue, prefix)
 	parsedID, parseErr := uuid.Parse(rawID)
 	if parseErr != nil {
-		return "", true, errors.New("invalid sort value")
+		return nil, true, errors.New("invalid sort value")
 	}
 	wsUUID, wsErr := util.ParseUUID(workspaceID)
 	if wsErr != nil {
-		return "", true, errors.New("invalid workspace id")
+		return nil, true, errors.New("invalid workspace id")
 	}
 	var defUUID pgtype.UUID
 	copy(defUUID.Bytes[:], parsedID[:])
@@ -1261,15 +1266,22 @@ func (h *Handler) propertySortExpr(r *http.Request, workspaceID string, sortValu
 	def, dbErr := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: defUUID, WorkspaceID: wsUUID})
 	if dbErr != nil {
 		if errors.Is(dbErr, pgx.ErrNoRows) {
-			return "", true, nil // stale sort → position order
+			return nil, true, nil // stale sort → position order
 		}
-		return "", true, fmt.Errorf("resolve sort property: %w", dbErr)
+		return nil, true, fmt.Errorf("resolve sort property: %w", dbErr)
 	}
 	// Archived definitions degrade to position order like unknown ones —
 	// their values are hidden from the UI, so sorting by them would order
 	// the list by invisible data.
 	if def.ArchivedAt.Valid {
-		return "", true, nil
+		return nil, true, nil
+	}
+	return &def, true, nil
+}
+
+func propertySortExpression(def *db.IssueProperty) string {
+	if def == nil {
+		return ""
 	}
 	// uuidToString re-serializes the parsed UUID: hex and dashes only, safe
 	// to embed in the ORDER BY string.
@@ -1281,13 +1293,13 @@ func (h *Handler) propertySortExpr(r *http.Request, workspaceID string, sortValu
 	id := uuidToString(def.ID)
 	switch def.Type {
 	case "number":
-		return fmt.Sprintf("CASE WHEN jsonb_typeof(i.properties->'%s') = 'number' THEN (i.properties->>'%s')::numeric END", id, id), true, nil
+		return fmt.Sprintf("CASE WHEN jsonb_typeof(i.properties->'%s') = 'number' THEN (i.properties->>'%s')::numeric END", id, id)
 	case "select":
-		return selectPropertySortExpr(id, parsePropertyConfig(def.Config)), true, nil
+		return selectPropertySortExpr(id, parsePropertyConfig(def.Config))
 	case "date", "text", "url":
-		return fmt.Sprintf("NULLIF(i.properties->>'%s', '')", id), true, nil
+		return fmt.Sprintf("NULLIF(i.properties->>'%s', '')", id)
 	default: // multi_select, checkbox, future types: no meaningful order
-		return "", true, nil
+		return ""
 	}
 }
 
@@ -1307,16 +1319,22 @@ func (h *Handler) propertySortExpr(r *http.Request, workspaceID string, sortValu
 // caller keeps position order, like an unknown definition.
 func selectPropertySortExpr(defID string, cfg PropertyConfig) string {
 	var b strings.Builder
-	rank := 0
-	for _, opt := range cfg.Options {
-		if _, err := uuid.Parse(opt.ID); err != nil {
-			continue
-		}
-		fmt.Fprintf(&b, " WHEN '%s' THEN %d", opt.ID, rank)
-		rank++
+	options := selectPropertySortOptions(cfg)
+	for rank, option := range options {
+		fmt.Fprintf(&b, " WHEN '%s' THEN %d", option, rank)
 	}
-	if rank == 0 {
+	if len(options) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("(CASE i.properties->>'%s'%s END)::numeric", defID, b.String())
+}
+
+func selectPropertySortOptions(cfg PropertyConfig) []string {
+	options := make([]string, 0, len(cfg.Options))
+	for _, option := range cfg.Options {
+		if _, err := uuid.Parse(option.ID); err == nil {
+			options = append(options, option.ID)
+		}
+	}
+	return options
 }

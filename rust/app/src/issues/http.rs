@@ -6,12 +6,12 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde_json::json;
 use sqlx::PgPool;
 
-use super::store::{self, CallerActor, IssueReadError, is_uuid};
+use super::store::{self, CallerActor, IssueListQuery, IssueReadError, is_uuid};
 
 struct Issues {
     pool: PgPool,
@@ -122,9 +122,29 @@ fn parse_actor(headers: &HeaderMap) -> Result<CallerActor, AuthFailure> {
 pub fn router(pool: PgPool, token: String) -> Router {
     let state = Arc::new(Issues { pool, token });
     Router::new()
+        .route("/internal/issues", post(list_issues))
         .route("/internal/issues/{id}", get(get_issue))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn list_issues(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(query): Json<IssueListQuery>,
+) -> Response {
+    match store::list_issues(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(IssueReadError::NotFound(message)) => error_response(StatusCode::NOT_FOUND, message),
+        Err(IssueReadError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
+        Err(IssueReadError::ProjectAccessFailed) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve project access",
+        ),
+        Err(IssueReadError::DatabaseFailed) => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to list issues")
+        }
+    }
 }
 
 async fn authorize(

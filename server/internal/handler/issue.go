@@ -156,17 +156,26 @@ func (h *Handler) issueStatusSortExpression(
 	workspaceID pgtype.UUID,
 	addArg func(any) string,
 ) (string, error) {
+	statusKeys, err := h.issueStatusSortKeys(ctx, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	return issueStatusOrderSQL(addArg(statusKeys)), nil
+}
+
+func (h *Handler) issueStatusSortKeys(ctx context.Context, workspaceID pgtype.UUID) ([]string, error) {
 	entries, err := h.issueStatusCatalog().ListIssueStatusEntries(ctx, db.ListIssueStatusEntriesParams{
 		WorkspaceID:     workspaceID,
 		IncludeArchived: true,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return fmt.Sprintf(
-		"COALESCE(array_position(%s::text[], i.status), 100000)",
-		addArg(issueTableStatusOrder(entries)),
-	), nil
+	return issueTableStatusOrder(entries), nil
+}
+
+func issueStatusOrderSQL(ref string) string {
+	return fmt.Sprintf("COALESCE(array_position(%s::text[], i.status), 100000)", ref)
 }
 
 // resolveIssueStatusKey checks a status against the workspace's catalog and
@@ -1354,6 +1363,10 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	rustPilot, ok := h.isRustIssueListPilot(w, r, workspaceID, wsUUID)
+	if !ok {
+		return
+	}
 
 	// Parse optional filter params. Malformed UUIDs in filters return 400 —
 	// silently coercing them to a zero UUID would mask a client bug and let
@@ -1449,6 +1462,20 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		terminalStatusKeys, err := h.terminalIssueStatusKeys(ctx, wsUUID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
+			return
+		}
+		if rustPilot {
+			var priorities []string
+			if priorityFilter.Valid {
+				priorities = []string{priorityFilter.String}
+			}
+			h.listIssuesViaRust(w, r, workspaceID, rustIssueListQuery{
+				OpenOnly: true, TerminalStatusKeys: terminalStatusKeys, Priorities: priorities,
+				AssigneeID: uuidToPtr(assigneeFilter), AssigneeIDs: assigneeIdsFilter,
+				CreatorID: uuidToPtr(creatorFilter), ProjectID: uuidToPtr(projectFilter),
+				CreatedByUser: r.URL.Query().Get("created_by_user_id"), CreatedByID: uuidToPtr(createdByUserFilter),
+				InvolvesUserID: uuidToPtr(involvesUserFilter), Metadata: metadataFilter, Properties: propertiesFilter,
+			})
 			return
 		}
 		openHidden, ok := h.requestHiddenProjects(w, r, workspaceID)
@@ -1563,6 +1590,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	sortIsExpr := false
 	sortIsProperty := false
 	sortByStatus := false
+	var rustPropertySort *rustIssuePropertySort
 	if s := r.URL.Query().Get("sort"); s != "" {
 		switch s {
 		case "position", "title", "created_at", "updated_at", "start_date", "due_date":
@@ -1580,7 +1608,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			// property:<definitionId> sorts by the custom-property value
 			// (typed expression); unknown/archived definitions degrade to
 			// position order instead of erroring stale clients.
-			expr, handled, sortErr := h.propertySortExpr(r, workspaceID, s)
+			def, handled, sortErr := h.propertySortDefinition(r, workspaceID, s)
 			if !handled {
 				writeError(w, http.StatusBadRequest, "invalid sort value")
 				return
@@ -1594,10 +1622,16 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to resolve sort")
 				return
 			}
-			if expr != "" {
+			if expr := propertySortExpression(def); expr != "" {
 				sortCol = expr
 				sortIsExpr = true
 				sortIsProperty = true
+				if rustPilot {
+					rustPropertySort = &rustIssuePropertySort{ID: uuidToString(def.ID), Kind: def.Type}
+					if def.Type == "select" {
+						rustPropertySort.Options = selectPropertySortOptions(parsePropertyConfig(def.Config))
+					}
+				}
 			}
 		}
 	}
@@ -1626,13 +1660,17 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		args = append(args, v)
 		return "$" + strconv.Itoa(len(args))
 	}
-	hidden, ok := h.requestHiddenProjects(w, r, uuidToString(wsUUID))
-	if !ok {
-		return
+	var hidden projectaccess.Hidden
+	if !rustPilot {
+		hidden, ok = h.requestHiddenProjects(w, r, uuidToString(wsUUID))
+		if !ok {
+			return
+		}
+		if ids := hidden.Param(); ids != nil {
+			where = append(where, hiddenProjectPredicate("i.project_id", addArg(ids)))
+		}
 	}
-	if ids := hidden.Param(); ids != nil {
-		where = append(where, hiddenProjectPredicate("i.project_id", addArg(ids)))
-	}
+	var categoryStatusKeys *[]string
 	if len(statusCategoriesFilter) > 0 {
 		// Expanded to concrete status keys rather than filtered through
 		// issue_effective_status(): wrapping the column in a function makes the
@@ -1644,6 +1682,8 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
 			return
 		}
+		expanded := append([]string{}, keys...)
+		categoryStatusKeys = &expanded
 		where = append(where, fmt.Sprintf("i.status = ANY(%s::text[])", addArg(keys)))
 	}
 	if len(statusesFilter) > 0 {
@@ -1740,6 +1780,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	// agents-working facet sends the live running-issue ids). Presence with an
 	// EMPTY list is meaningful — it must yield an empty window, not degrade to
 	// the unrestricted one, so gate on Has() rather than the parsed length.
+	var selectedIDs *[]pgtype.UUID
 	if r.URL.Query().Has("ids") {
 		idsFilter, ok := parseUUIDParamList(w, r.URL.Query().Get("ids"), "ids")
 		if !ok {
@@ -1748,6 +1789,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		if idsFilter == nil {
 			idsFilter = []pgtype.UUID{}
 		}
+		selectedIDs = &idsFilter
 		where = append(where, fmt.Sprintf("i.id = ANY(%s::uuid[])", addArg(idsFilter)))
 	}
 	if r.URL.Query().Get("top_level_only") == "true" {
@@ -1805,14 +1847,45 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	// Count queries use only filter parameters. Sort-only CASE parameters must
 	// be appended afterwards or COUNT receives unused/untyped bind positions.
 	filterArgCount := len(args)
+	var statusOrder []string
 	if sortByStatus {
 		var err error
-		sortCol, err = h.issueStatusSortExpression(r.Context(), wsUUID, addArg)
+		statusOrder, err = h.issueStatusSortKeys(r.Context(), wsUUID)
 		if err != nil {
 			slog.Warn("resolve status sort failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to resolve sort")
 			return
 		}
+		sortCol = issueStatusOrderSQL(addArg(statusOrder))
+	}
+	if rustPilot {
+		sort := sortCol
+		switch {
+		case sortByStatus:
+			sort = "status"
+		case sortIsProperty:
+			sort = "property"
+		case sortIsExpr:
+			sort = "priority"
+		}
+		query := rustIssueListQuery{
+			CreatedByUser: r.URL.Query().Get("created_by_user_id"), CreatedByID: uuidToPtr(createdByUserFilter),
+			Statuses: statusesFilter, CategoryStatusKeys: categoryStatusKeys, Priorities: prioritiesFilter,
+			AssigneeID: uuidToPtr(assigneeFilter), AssigneeIDs: assigneeIdsFilter, AssigneeTypes: assigneeTypesFilter,
+			AssigneeFilters: rustIssueActors(assigneeFilters), IncludeNoAssignee: includeNoAssignee,
+			CreatorID: uuidToPtr(creatorFilter), CreatorFilters: rustIssueActors(creatorFilters),
+			ProjectID: uuidToPtr(projectFilter), ProjectIDs: projectIDs, IncludeNoProject: includeNoProject,
+			LabelIDs: labelIDs, IDs: selectedIDs, TopLevelOnly: r.URL.Query().Get("top_level_only") == "true",
+			Scheduled: scheduledFilter.Valid, Metadata: metadataFilter, Properties: propertiesFilter,
+			InvolvesUserID: uuidToPtr(involvesUserFilter), Sort: sort, PropertySort: rustPropertySort, Descending: sortDir == "DESC",
+			StatusOrder: statusOrder, Limit: limit, Offset: offset,
+		}
+		query.setSearch(r.URL.Query().Get("q"))
+		if dateFilter != nil {
+			query.Date = &rustIssueDate{Column: dateFilter.column, Start: dateFilter.start, End: dateFilter.end}
+		}
+		h.listIssuesViaRust(w, r, workspaceID, query)
+		return
 	}
 	orderBy := sortCol
 	if !sortIsExpr {

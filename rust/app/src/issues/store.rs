@@ -1,9 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
+
+mod list;
+pub use list::{IssueListQuery, list_issues};
 
 #[derive(Debug)]
 pub enum IssueReadError {
@@ -392,6 +395,45 @@ struct IssueRow {
     acceptance_criteria: Option<String>,
 }
 
+impl IssueRow {
+    fn into_response(self, prefix: &str) -> IssueResponse {
+        IssueResponse {
+            acceptance_trace: None,
+            id: self.id,
+            workspace_id: self.workspace_id,
+            number: self.number,
+            identifier: format!("{prefix}-{}", self.number),
+            title: self.title,
+            description: self.description,
+            status: self.status,
+            status_category: None,
+            status_name: String::new(),
+            priority: self.priority,
+            assignee_type: self.assignee_type,
+            assignee_id: self.assignee_id,
+            creator_type: self.creator_type,
+            creator_id: self.creator_id,
+            requester_id: self.requester_user_id,
+            parent_issue_id: self.parent_issue_id,
+            duplicate_of: None,
+            project_id: self.project_id,
+            position: self.position,
+            stage: self.stage,
+            start_date: self.start_date,
+            due_date: self.due_date,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            revision: self.revision,
+            last_activity_at: self.last_activity_at,
+            metadata: json_object_or_empty(self.metadata.as_deref()),
+            properties: json_object_or_empty(self.properties.as_deref()),
+            issue_type_id: self.issue_type_id,
+            reactions: None,
+            labels: Vec::new(),
+        }
+    }
+}
+
 const ISSUE_SELECT_COLUMNS: &str = "\
     id::text, \
     workspace_id::text, \
@@ -756,31 +798,51 @@ async fn resolve_duplicate_of(
     if status != "cancelled" {
         return None;
     }
-    let dup_id = duplicate_of_issue_id?;
-    let row = sqlx::query(
+    let id = duplicate_of_issue_id?;
+    duplicate_issue_refs(pool, workspace_id, prefix, &[id.to_owned()], hidden)
+        .await
+        .remove(id)
+}
+
+async fn duplicate_issue_refs(
+    pool: &PgPool,
+    workspace_id: &str,
+    prefix: &str,
+    ids: &[String],
+    hidden: &HiddenProjects,
+) -> HashMap<String, IssueRefResponse> {
+    if ids.is_empty() {
+        return HashMap::new();
+    }
+    let rows = sqlx::query(
         "SELECT id::text, number, title, status, project_id::text
          FROM issue
-         WHERE workspace_id = $1::uuid AND id = $2::uuid",
+         WHERE workspace_id = $1::uuid AND id = ANY($2::uuid[])",
     )
     .bind(workspace_id)
-    .bind(dup_id)
-    .fetch_optional(pool)
-    .await
-    .ok()??;
-    let project_id: Option<String> = row.try_get(4).ok()?;
-    if !hidden.can_see(project_id.as_deref()) {
-        return None;
-    }
-    let id: String = row.try_get(0).ok()?;
-    let number: i32 = row.try_get(1).ok()?;
-    let title: String = row.try_get(2).ok()?;
-    let dup_status: String = row.try_get(3).ok()?;
-    Some(IssueRefResponse {
-        id,
-        identifier: format!("{prefix}-{number}"),
-        title,
-        status: dup_status,
-    })
+    .bind(ids)
+    .fetch_all(pool)
+    .await;
+    let Ok(rows) = rows else {
+        return HashMap::new();
+    };
+    rows.into_iter()
+        .filter_map(|row| {
+            let project_id: Option<String> = row.try_get(4).ok()?;
+            if !hidden.can_see(project_id.as_deref()) {
+                return None;
+            }
+            let id: String = row.try_get(0).ok()?;
+            let number: i32 = row.try_get(1).ok()?;
+            let reference = IssueRefResponse {
+                id: id.clone(),
+                identifier: format!("{prefix}-{number}"),
+                title: row.try_get(2).ok()?,
+                status: row.try_get(3).ok()?,
+            };
+            Some((id, reference))
+        })
+        .collect()
 }
 
 async fn list_labels_for_issue(
@@ -788,6 +850,20 @@ async fn list_labels_for_issue(
     workspace_id: &str,
     issue_id: &str,
 ) -> Vec<LabelResponse> {
+    labels_by_issue(pool, workspace_id, &[issue_id.to_owned()])
+        .await
+        .remove(issue_id)
+        .unwrap_or_default()
+}
+
+async fn labels_by_issue(
+    pool: &PgPool,
+    workspace_id: &str,
+    issue_ids: &[String],
+) -> HashMap<String, Vec<LabelResponse>> {
+    if issue_ids.is_empty() {
+        return HashMap::new();
+    }
     let rows = sqlx::query(
         "SELECT
              l.id::text,
@@ -797,36 +873,42 @@ async fn list_labels_for_issue(
              COALESCE(l.description, ''),
              l.color,
              to_char(l.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
-             to_char(l.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+             to_char(l.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
+             il.issue_id::text
          FROM issue_label l
          JOIN issue_to_label il ON il.label_id = l.id
-         WHERE il.issue_id = $1::uuid
+         WHERE il.issue_id = ANY($1::uuid[])
            AND l.workspace_id = $2::uuid
            AND l.resource_type = 'issue'
          ORDER BY LOWER(l.name) ASC",
     )
-    .bind(issue_id)
+    .bind(issue_ids)
     .bind(workspace_id)
     .fetch_all(pool)
     .await;
     let Ok(rows) = rows else {
-        return Vec::new();
+        return HashMap::new();
     };
-    rows.into_iter()
-        .filter_map(|row| {
-            Some(LabelResponse {
-                id: row.try_get(0).ok()?,
-                workspace_id: row.try_get(1).ok()?,
-                resource_type: row.try_get(2).ok()?,
-                name: row.try_get(3).ok()?,
-                description: row.try_get(4).ok()?,
-                color: row.try_get(5).ok()?,
-                usage_count: 0,
-                created_at: format_issue_timestamp(row.try_get(6).ok()?),
-                updated_at: format_issue_timestamp(row.try_get(7).ok()?),
-            })
-        })
-        .collect()
+    let mut by_issue = HashMap::<String, Vec<LabelResponse>>::new();
+    let labels = rows.into_iter().filter_map(|row| {
+        let issue_id = row.try_get(8).ok()?;
+        let label = LabelResponse {
+            id: row.try_get(0).ok()?,
+            workspace_id: row.try_get(1).ok()?,
+            resource_type: row.try_get(2).ok()?,
+            name: row.try_get(3).ok()?,
+            description: row.try_get(4).ok()?,
+            color: row.try_get(5).ok()?,
+            usage_count: 0,
+            created_at: format_issue_timestamp(row.try_get(6).ok()?),
+            updated_at: format_issue_timestamp(row.try_get(7).ok()?),
+        };
+        Some((issue_id, label))
+    });
+    for (issue_id, label) in labels {
+        by_issue.entry(issue_id).or_default().push(label);
+    }
+    by_issue
 }
 
 async fn list_reactions_for_issue(
@@ -919,41 +1001,14 @@ pub async fn get_issue_detail(
     .await
     .map_err(|_| IssueReadError::DatabaseFailed)?;
 
-    let identifier = format!("{prefix}-{}", row.number);
-    let issue = IssueResponse {
-        acceptance_trace: decode_acceptance_trace(row.acceptance_criteria.as_deref()),
-        id: row.id,
-        workspace_id: row.workspace_id,
-        number: row.number,
-        identifier,
-        title: row.title,
-        description: row.description,
-        status: row.status,
-        status_category,
-        status_name,
-        priority: row.priority,
-        assignee_type: row.assignee_type,
-        assignee_id: row.assignee_id,
-        creator_type: row.creator_type,
-        creator_id: row.creator_id,
-        requester_id: row.requester_user_id,
-        parent_issue_id: row.parent_issue_id,
-        duplicate_of,
-        project_id: row.project_id,
-        position: row.position,
-        stage: row.stage,
-        start_date: row.start_date,
-        due_date: row.due_date,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        revision: row.revision,
-        last_activity_at: row.last_activity_at,
-        metadata: json_object_or_empty(row.metadata.as_deref()),
-        properties: json_object_or_empty(row.properties.as_deref()),
-        issue_type_id: row.issue_type_id,
-        reactions,
-        labels,
-    };
+    let acceptance_trace = decode_acceptance_trace(row.acceptance_criteria.as_deref());
+    let mut issue = row.into_response(&prefix);
+    issue.acceptance_trace = acceptance_trace;
+    issue.status_category = status_category;
+    issue.status_name = status_name;
+    issue.duplicate_of = duplicate_of;
+    issue.reactions = reactions;
+    issue.labels = labels;
 
     Ok(IssueDetailProjection {
         issue,
