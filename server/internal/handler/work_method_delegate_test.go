@@ -19,19 +19,24 @@ import (
 	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T) {
-	testGoalCandidateHandoff(t, false, false)
+	testGoalCandidateHandoff(t, candidateHandoffScenario{})
 }
 
 func TestGoalCandidateSelfClaimRequiresTheCandidatesOwnDecision(t *testing.T) {
-	testGoalCandidateHandoff(t, true, false)
+	testGoalCandidateHandoff(t, candidateHandoffScenario{selfClaim: true})
 }
 
 func TestGoalCandidateFailureReachesIndependentReviewerAfterResumption(t *testing.T) {
-	testGoalCandidateHandoff(t, true, true)
+	testGoalCandidateHandoff(t, candidateHandoffScenario{selfClaim: true, candidateFails: true})
+}
+
+func TestGoalCandidateCheckoutFailureContinuesToSquadLeaderOnce(t *testing.T) {
+	testGoalCandidateHandoff(t, candidateHandoffScenario{selfClaim: true, checkoutFailure: true})
 }
 
 func TestReworkUsesCurrentImplementerAfterSquadRetirement(t *testing.T) {
@@ -68,8 +73,15 @@ func TestReworkUsesCurrentImplementerAfterSquadRetirement(t *testing.T) {
 	}
 }
 
-func testGoalCandidateHandoff(t *testing.T, selfClaim, candidateFails bool) {
+type candidateHandoffScenario struct {
+	selfClaim       bool
+	candidateFails  bool
+	checkoutFailure bool
+}
+
+func testGoalCandidateHandoff(t *testing.T, scenario candidateHandoffScenario) {
 	t.Helper()
+	selfClaim, candidateFails := scenario.selfClaim, scenario.candidateFails
 	ctx := context.Background()
 	seedTestCatalog(t)
 	runtime := dbfx.Runtime(t, "Goal candidate runtime")
@@ -410,6 +422,10 @@ func testGoalCandidateHandoff(t *testing.T, selfClaim, candidateFails bool) {
 	if next.ID == implementer.ID {
 		t.Fatal("an independent rework must have its own candidate run")
 	}
+	checkout := service.ReadGoalExecutionTask(next).CandidateCheckout
+	if checkout == nil || checkout.Commit != sha || checkout.Branch != "dev" || checkout.Repository != "org/reports" {
+		t.Fatalf("rework must keep the candidate that was reviewed: %+v", checkout)
+	}
 	check := service.IssueWakeupService{Tasks: testHandler.TaskService}
 	dbfx.Exec(t, "DELETE FROM squad_member WHERE squad_id=$1 AND member_type='agent' AND member_id=$2", squad, worker)
 	if err := check.CheckClaim(ctx, next); !errors.Is(err, service.ErrWakeupForbidden) {
@@ -418,6 +434,27 @@ func testGoalCandidateHandoff(t *testing.T, selfClaim, candidateFails bool) {
 	dbfx.SquadMember(t, squad, "agent", worker)
 	if err := check.CheckClaim(ctx, next); err != nil {
 		t.Fatalf("the restored member must still be able to claim: %v", err)
+	}
+	if scenario.checkoutFailure {
+		dbfx.Exec(t, "UPDATE agent_task_queue SET status='dispatched',dispatched_at=now() WHERE id=$1", next.ID)
+		reason := taskfailure.ReasonCandidateCheckoutUnavailable.String()
+		failed, err := testHandler.TaskService.FailTask(ctx, next.ID, "candidate missing in the local repository", "", "", "", reason, false, "", "")
+		if err != nil || failed.Status != "failed" || failed.FailureReason.String != reason || failed.StartedAt.Valid {
+			t.Fatalf("checkout failure must be recorded before launching the implementer: %+v, %v", failed, err)
+		}
+		dbfx.Exec(t, "UPDATE agent_task_queue SET completed_at=now()-interval '2 minutes' WHERE id=$1", next.ID)
+		before := taskCountFor(t, issue, lead)
+		tick()
+		coordinator := start(latest(lead))
+		if !strings.Contains(coordinator.HandoffNote.String, sha) || !strings.Contains(coordinator.HandoffNote.String, "候选工作树准备失败") {
+			t.Fatalf("the formal successor must receive the actual failure and candidate: %q", coordinator.HandoffNote.String)
+		}
+		finish(coordinator)
+		tick()
+		if taskCountFor(t, issue, lead) != before+1 || taskCountFor(t, issue, reviewer) != 1 {
+			t.Fatal("checkout failure redelivered the escalation or started a code review")
+		}
+		return
 	}
 	authorize(false)
 	if err := check.CheckClaim(ctx, next); !errors.Is(err, service.ErrWakeupForbidden) {

@@ -59,6 +59,7 @@ const (
 	// work, so such a daemon keeps getting a fresh directory and the parent's
 	// stays untouched on disk.
 	DaemonCapabilityCheckoutKeepsWorkV1 = "checkout-keeps-work-v1"
+	DaemonCapabilityCandidateCheckoutV1 = "candidate-checkout-v1"
 	// DaemonCapabilityJoinedWakeupsV1 advertises that the daemon renders the
 	// claim's wakeup_joined field into the prompt. Only such a claim takes
 	// along the inputs of wakeup rules that waited for this run; for any other

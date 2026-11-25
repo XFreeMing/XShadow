@@ -128,8 +128,13 @@ func localDirectoryAssignmentForTask(task Task, daemonID string) (*localDirector
 		return nil, nil
 	}
 	assignment, err := findLocalDirectoryAssignment(task.ProjectResources, daemonID)
+	if task.CandidateCheckout != nil {
+		if err != nil || assignment == nil || (assignment.Ref.ExecutionMode != localDirectoryModeAuto && assignment.Ref.ExecutionMode != localDirectoryModeWorktree) {
+			return nil, fmt.Errorf("%w: no matching local worktree resource for %s", execenv.ErrCandidateCheckoutUnavailable, task.CandidateCheckout.Repository)
+		}
+	}
 	if assignment != nil {
-		assignment.CommittedOnly = assignment.Ref.ExecutionMode == localDirectoryModeAuto && task.localDirectoryConcurrent
+		assignment.CommittedOnly = task.CandidateCheckout != nil || (assignment.Ref.ExecutionMode == localDirectoryModeAuto && task.localDirectoryConcurrent)
 		assignment.GitRoot = execenv.LocalCheckoutRoot(assignment.RealPath)
 		if assignment.GitRoot != "" {
 			assignment.RealPath = assignment.GitRoot

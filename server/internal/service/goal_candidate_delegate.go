@@ -11,7 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
@@ -173,7 +175,7 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 	}
 	scoped := &TaskService{Queries: q, Composio: s.Composio, FeatureFlags: s.FeatureFlags}
 	attr := attribution.DelegatedIssueRun(issue.ID, source.ID, pgtype.UUID{}, source.AccountableUserID)
-	note := "Implement the current candidate on the original issue. Read its work method and acceptance ledger. Record evidence there for the squad leader to verify and submit for independent review.\n\n" + brief
+	note := "Implement the current candidate on the original issue. Read its work method and acceptance ledger. Record evidence or blockers there. The workflow will wake the squad leader after this run.\n\n" + brief
 	summary := "Work method candidate delegation"
 	switch action {
 	case workmethod.OfferCandidate:
@@ -183,6 +185,13 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 	case workmethod.ClaimCandidate:
 		summary = "Self-claimed candidate implementation"
 		note = "You claimed this implementation. Read the original issue and the assessment run linked to this implementation for context.\n\n" + note
+	}
+	var checkout *protocol.CandidateCheckout
+	if action != workmethod.OfferCandidate {
+		checkout = reworkCandidateCheckout(issue, run)
+		if checkout != nil {
+			note = fmt.Sprintf("Resume the recorded candidate %s@%s. The assigned worktree can use a different branch name. Verify that HEAD contains that commit and the frozen cases, then record the actual assignment's branch and new commit.\n\n", checkout.Repository, checkout.Commit) + note
+		}
 	}
 	params, err := scoped.prepareMentionTask(ctx, issue, workerID, pgtype.UUID{}, nil, false, source.SquadID, action != workmethod.Delegate, note, attr, pgtype.UUID{}, OriginDerived, false)
 	if err != nil {
@@ -197,6 +206,15 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 	if err != nil {
 		return empty, err
 	}
+	if checkout != nil {
+		raw, err := json.Marshal(checkout)
+		if err != nil {
+			return empty, err
+		}
+		if err := tx.QueryRow(ctx, `UPDATE agent_task_queue SET context=coalesce(context,'{}')||jsonb_build_object('candidate_checkout',$2::jsonb) WHERE id=$1 RETURNING context`, task.ID, raw).Scan(&task.Context); err != nil {
+			return empty, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return empty, err
 	}
@@ -205,4 +223,31 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 
 func IsGoalCandidateOffer(task db.AgentTaskQueue) bool {
 	return ReadGoalExecutionTask(task).CandidateOffer
+}
+
+func reworkCandidateCheckout(issue db.Issue, run workmethod.Run) *protocol.CandidateCheckout {
+	transition := len(run.History) - 1 - (run.Revision - run.SlotRevision())
+	if transition < 0 || run.History[transition].Action != "rework" {
+		return nil
+	}
+	trace, err := acceptance.Decode(issue.AcceptanceCriteria)
+	if err != nil {
+		return nil
+	}
+	var checkout *protocol.CandidateCheckout
+	for _, criterion := range trace.Criteria {
+		for index := len(criterion.Implementations) - 1; index >= 0; index-- {
+			link := criterion.Implementations[index]
+			if link.Version != len(criterion.Versions) {
+				continue
+			}
+			ref := protocol.CandidateCheckout{Repository: link.Repository, Branch: link.Branch, Commit: link.Commit}
+			if checkout != nil && *checkout != ref {
+				return nil
+			}
+			checkout = &ref
+			break
+		}
+	}
+	return checkout
 }

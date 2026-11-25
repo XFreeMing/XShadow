@@ -4199,6 +4199,14 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 	}
 
+	if checkout := service.ReadGoalExecutionTask(*task).CandidateCheckout; checkout != nil && candidateUsesLocalWorktree(resp.ProjectResources, runtime) {
+		if !requestHasClientCapability(r, protocol.DaemonCapabilityCandidateCheckoutV1) {
+			return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount,
+				h.failClaimedTaskBeforeLaunch(r.Context(), task, "Update the local runtime before resuming this candidate worktree.", taskfailure.ReasonCandidateCheckoutUnavailable,
+					"candidate_checkout_unavailable", http.StatusConflict, "candidate worktree binding is unavailable")
+		}
+		resp.CandidateCheckout = checkout
+	}
 	// Last gate before dispatch: refuse to hand a worktree-mode local_directory
 	// task to a daemon that cannot implement the mode.
 	//
@@ -4350,6 +4358,23 @@ func worktreeClaimBlockReason(resources []ProjectResourceData, runtime db.AgentR
 			ref.LocalPath)
 	}
 	return ""
+}
+
+func candidateUsesLocalWorktree(resources []ProjectResourceData, runtime db.AgentRuntime) bool {
+	if !runtime.DaemonID.Valid || runtime.DaemonID.String == "" {
+		return false
+	}
+	for _, resource := range resources {
+		if resource.ResourceType != "local_directory" {
+			continue
+		}
+		var ref localDirectoryRef
+		if json.Unmarshal(resource.ResourceRef, &ref) == nil && ref.DaemonID == runtime.DaemonID.String &&
+			(ref.ExecutionMode == localDirectoryModeWorktree || ref.ExecutionMode == localDirectoryModeAuto) {
+			return true
+		}
+	}
+	return false
 }
 
 // ClaimTaskByRuntime atomically claims the next queued task for a runtime.

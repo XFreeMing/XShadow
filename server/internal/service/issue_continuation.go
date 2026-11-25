@@ -281,7 +281,12 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 		if method.CanDelegateCandidate() {
 			worker, err := GoalCandidateWorker(ctx, q, issue, method, execution.ID)
 			if err == nil {
-				note = fmt.Sprintf("本步骤的实现运行 %s 已结束，状态为 %s。先读取该运行交付回执和验收台账的当前候选，核对 SHA、已运行用例与待审核差异。引用已有证据后送独立评审；把复跑和新反例留给独立评审者。", util.UUIDToString(worker.ID), worker.Status)
+				checkout := ReadGoalExecutionTask(worker).CandidateCheckout
+				if worker.Status == "failed" && worker.FailureReason.String == taskfailure.ReasonCandidateCheckoutUnavailable.String() && checkout != nil {
+					note = fmt.Sprintf("候选工作树准备失败。实现运行 %s 未启动，固定候选为 %s@%s（分支 %s）。核对该运行的环境失败详情，并在原卡记录候选缺失或运行时版本阻塞。保留候选和冻结用例，恢复可验证的工作树后再续派。此运行由平台交给当前小队负责人，无需在评论中 @ 任何人。", util.UUIDToString(worker.ID), checkout.Repository, checkout.Commit, checkout.Branch)
+				} else {
+					note = fmt.Sprintf("本步骤的实现运行 %s 已结束，状态为 %s。先读取该运行交付回执和验收台账的当前候选，核对 SHA、已运行用例与待审核差异。引用已有证据后送独立评审；把复跑和新反例留给独立评审者。", util.UUIDToString(worker.ID), worker.Status)
+				}
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
