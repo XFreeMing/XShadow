@@ -2,11 +2,14 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use super::agent_source_queue_lock::{
     AgentRuntimeShareBindingErrors, insert_queue_notify_outbox,
     lock_workspace_member_agent_runtime_share,
+};
+use super::create_source_context::{
+    SourceContextCloneTrust, validate_locked_pending_source_clones,
 };
 use super::create_write::IssueCreateError;
 use super::is_uuid;
@@ -23,6 +26,8 @@ pub struct AgentSourceRetryWrite {
     pub expected_runtime_id: String,
     pub expected_task_context: Value,
     pub expected_capture_digest: String,
+    #[serde(default)]
+    pub expected_clones: Vec<SourceContextCloneTrust>,
     #[serde(default)]
     pub runtime_mcp_overlay: Option<Value>,
     #[serde(default)]
@@ -188,7 +193,7 @@ async fn lock_pending_source_context(
     member_id: &str,
 ) -> Result<(), IssueCreateError> {
     let row = sqlx::query(
-        "SELECT 1
+        "SELECT snapshot
            FROM issue_source_context
           WHERE workspace_id = $1::uuid
             AND id = $2::uuid
@@ -208,21 +213,20 @@ async fn lock_pending_source_context(
     .bind(&request.expected_capture_digest)
     .fetch_optional(&mut **tx)
     .await?;
-    if row.is_none() {
+    let Some(row) = row else {
         return Err(IssueCreateError::SourceContextRetryUnavailable);
-    }
-    let has_clone = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM attachment
-          WHERE workspace_id = $1::uuid AND source_context_id = $2::uuid LIMIT 1",
+    };
+    let snapshot: serde_json::Value = row.try_get(0).map_err(IssueCreateError::Database)?;
+    validate_locked_pending_source_clones(
+        tx,
+        workspace_id,
+        &request.expected_context_id,
+        member_id,
+        &snapshot,
+        &request.expected_clones,
+        IssueCreateError::SourceContextRetryUnavailable,
     )
-    .bind(workspace_id)
-    .bind(&request.expected_context_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    if has_clone.is_some() {
-        return Err(IssueCreateError::SourceContextRetryUnavailable);
-    }
-    Ok(())
+    .await
 }
 
 async fn insert_manual_retry_task(

@@ -2,10 +2,13 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use sqlx::{Postgres, Transaction};
+use sqlx::{Postgres, Row, Transaction};
 
 use super::agent_source_queue_lock::{
     AgentRuntimeShareBindingErrors, lock_workspace_member_agent_runtime_share,
+};
+use super::create_source_context::{
+    SourceContextCloneTrust, validate_locked_pending_source_clones,
 };
 use super::create_write::IssueCreateError;
 use super::{CallerActor, IssueCreateRequest, is_uuid};
@@ -21,6 +24,8 @@ pub struct PendingAgentOriginTrust {
     pub expected_capture_digest: String,
     pub expected_source_issue_id: String,
     pub expected_requester_id: String,
+    #[serde(default)]
+    pub expected_clones: Vec<SourceContextCloneTrust>,
 }
 
 pub fn validate_pending_agent_origin_request(
@@ -204,8 +209,8 @@ pub async fn lock_pending_agent_origin_context(
     workspace_id: &str,
     trust: &PendingAgentOriginTrust,
 ) -> Result<(), IssueCreateError> {
-    let digest: Option<String> = sqlx::query_scalar(
-        "SELECT capture_digest
+    let row = sqlx::query(
+        "SELECT capture_digest, snapshot
            FROM issue_source_context
           WHERE workspace_id = $1::uuid
             AND id = $2::uuid
@@ -223,24 +228,24 @@ pub async fn lock_pending_agent_origin_context(
     .bind(&trust.expected_requester_id)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some(digest) = digest else {
+    let Some(row) = row else {
         return Err(IssueCreateError::SourceContextAlreadyAttached);
     };
+    let digest: String = row.try_get(0).map_err(IssueCreateError::Database)?;
+    let snapshot: Value = row.try_get(1).map_err(IssueCreateError::Database)?;
     if digest != trust.expected_capture_digest {
         return Err(IssueCreateError::SourceContextChanged);
     }
-    let has_clone = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM attachment
-          WHERE workspace_id = $1::uuid AND source_context_id = $2::uuid LIMIT 1",
+    validate_locked_pending_source_clones(
+        tx,
+        workspace_id,
+        &trust.expected_context_id,
+        &trust.expected_requester_id,
+        &snapshot,
+        &trust.expected_clones,
+        IssueCreateError::ConfigurationChanged,
     )
-    .bind(workspace_id)
-    .bind(&trust.expected_context_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    if has_clone.is_some() {
-        return Err(IssueCreateError::ConfigurationChanged);
-    }
-    Ok(())
+    .await
 }
 
 pub async fn attach_pending_agent_origin_context(

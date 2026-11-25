@@ -963,6 +963,135 @@ pub async fn insert_attached_source_context(
     persist_source_context_clones(tx, workspace_id, trust).await
 }
 
+fn validate_locked_pending_snapshot_clones(
+    snapshot: &serde_json::Value,
+    workspace_id: &str,
+    expected: &[SourceContextCloneTrust],
+) -> Result<(), ()> {
+    let snap: TrustSnapshot = match serde_json::from_value(snapshot.clone()) {
+        Ok(value) => value,
+        Err(_) => return Err(()),
+    };
+    let frozen_by_source = match index_attachments_by_source(&snap.body, true) {
+        Ok(index) => index,
+        Err(_) => return Err(()),
+    };
+    if expected.is_empty() {
+        if !frozen_by_source.is_empty() {
+            return Err(());
+        }
+        return Ok(());
+    }
+    if frozen_by_source.len() != expected.len() {
+        return Err(());
+    }
+    for trust in expected {
+        let Some(att) = frozen_by_source.get(trust.source_attachment_id.as_str()) else {
+            return Err(());
+        };
+        if att.id != trust.clone_id
+            || att.filename != trust.filename
+            || att.content_type != trust.content_type
+            || att.size_bytes != trust.size_bytes
+        {
+            return Err(());
+        }
+        if canonical_clone_storage_key(workspace_id, &trust.clone_id, &trust.filename)
+            != trust.storage_key
+        {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+pub async fn validate_locked_pending_source_clones(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace_id: &str,
+    context_id: &str,
+    captured_by_user_id: &str,
+    snapshot: &serde_json::Value,
+    expected: &[SourceContextCloneTrust],
+    mismatch: IssueCreateError,
+) -> Result<(), IssueCreateError> {
+    if validate_locked_pending_snapshot_clones(snapshot, workspace_id, expected).is_err() {
+        return Err(mismatch);
+    }
+    let pending_intent = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM issue_source_context_object_intent
+          WHERE workspace_id = $1::uuid AND source_context_id = $2::uuid
+          LIMIT 1",
+    )
+    .bind(workspace_id)
+    .bind(context_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if pending_intent.is_some() {
+        return Err(mismatch);
+    }
+    let rows = sqlx::query(
+        "SELECT id::text, filename, url, content_type, size_bytes, uploader_type, uploader_id::text,
+                issue_id IS NOT NULL OR comment_id IS NOT NULL OR chat_session_id IS NOT NULL
+                    OR chat_message_id IS NOT NULL OR task_id IS NOT NULL AS has_association
+           FROM attachment
+          WHERE workspace_id = $1::uuid AND source_context_id = $2::uuid
+          ORDER BY id
+          FOR SHARE",
+    )
+    .bind(workspace_id)
+    .bind(context_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    if rows.len() != expected.len() {
+        return Err(mismatch);
+    }
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let mut by_id: HashMap<_, _> = expected
+        .iter()
+        .map(|clone| (clone.clone_id.as_str(), clone))
+        .collect();
+    if by_id.len() != expected.len() {
+        return Err(IssueCreateError::InvalidInput);
+    }
+    for row in rows {
+        let clone_id: String = row.try_get(0)?;
+        let filename: String = row.try_get(1)?;
+        let url: String = row.try_get(2)?;
+        let content_type: String = row.try_get(3)?;
+        let size_bytes: i64 = row.try_get(4)?;
+        let uploader_type: String = row.try_get(5)?;
+        let uploader_id: Option<String> = row.try_get(6)?;
+        if row.try_get::<bool, _>("has_association")? {
+            return Err(mismatch);
+        }
+        let Some(trust) = by_id.remove(clone_id.as_str()) else {
+            return Err(mismatch);
+        };
+        let Some(uploader_id) = uploader_id else {
+            return Err(mismatch);
+        };
+        if uploader_type != "member" || uploader_id != captured_by_user_id {
+            return Err(mismatch);
+        }
+        if trust.filename != filename
+            || trust.url != url
+            || trust.content_type != content_type
+            || trust.size_bytes != size_bytes
+        {
+            return Err(mismatch);
+        }
+        if canonical_clone_storage_key(workspace_id, &clone_id, &filename) != trust.storage_key {
+            return Err(mismatch);
+        }
+    }
+    if !by_id.is_empty() {
+        return Err(mismatch);
+    }
+    Ok(())
+}
+
 pub async fn persist_source_context_clones(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: &str,
@@ -986,6 +1115,47 @@ pub async fn persist_source_context_clones(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn locked_pending_snapshot_rejects_clone_id_drift() {
+        let workspace = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let snapshot = json!({
+            "version": 1,
+            "captured_by_user_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "captured_at": "2026-11-26T03:00:00Z",
+            "source_issue": {
+                "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "title": "Source",
+                "created_at": "2026-11-26T03:00:00Z",
+                "attachments": [{
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "source_attachment_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+                    "owner_type": "issue",
+                    "owner_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    "filename": "a.txt",
+                    "content_type": "text/plain",
+                    "size_bytes": 3,
+                    "created_at": "2026-11-26T03:00:00Z"
+                }]
+            },
+            "anchor_comment_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "comment_thread": []
+        });
+        let expected = vec![SourceContextCloneTrust {
+            clone_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee".to_owned(),
+            source_attachment_id: "ffffffff-ffff-4fff-8fff-ffffffffffff".to_owned(),
+            filename: "a.txt".to_owned(),
+            url: "".to_owned(),
+            content_type: "text/plain".to_owned(),
+            size_bytes: 3,
+            storage_key: canonical_clone_storage_key(
+                workspace,
+                "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                "a.txt",
+            ),
+        }];
+        assert!(validate_locked_pending_snapshot_clones(&snapshot, workspace, &expected).is_err());
+    }
 
     #[test]
     fn clone_storage_key_keeps_dotfile_suffix() {

@@ -16,14 +16,15 @@ import (
 )
 
 type rustPendingAgentOriginTrust struct {
-	ExpectedOriginTaskID      string `json:"expected_origin_task_id"`
-	ExpectedAgentID           string `json:"expected_agent_id"`
-	ExpectedRuntimeID         string `json:"expected_runtime_id"`
-	ExpectedRuntimeCLIVersion string `json:"expected_runtime_cli_version"`
-	ExpectedContextID         string `json:"expected_context_id"`
-	ExpectedCaptureDigest     string `json:"expected_capture_digest"`
-	ExpectedSourceIssueID     string `json:"expected_source_issue_id"`
-	ExpectedRequesterID       string `json:"expected_requester_id"`
+	ExpectedOriginTaskID      string                        `json:"expected_origin_task_id"`
+	ExpectedAgentID           string                        `json:"expected_agent_id"`
+	ExpectedRuntimeID         string                        `json:"expected_runtime_id"`
+	ExpectedRuntimeCLIVersion string                        `json:"expected_runtime_cli_version"`
+	ExpectedContextID         string                        `json:"expected_context_id"`
+	ExpectedCaptureDigest     string                        `json:"expected_capture_digest"`
+	ExpectedSourceIssueID     string                        `json:"expected_source_issue_id"`
+	ExpectedRequesterID       string                        `json:"expected_requester_id"`
+	ExpectedClones            []rustSourceContextCloneTrust `json:"expected_clones,omitempty"`
 }
 
 type preparedAgentQuickCreateAttach struct {
@@ -35,6 +36,7 @@ type preparedAgentQuickCreateAttach struct {
 	AgentID       pgtype.UUID
 	OriginTaskID  pgtype.UUID
 	CaptureDigest string
+	FilePlan      rustAgentSourceContextFilePlan
 	Trust         rustPendingAgentOriginTrust
 }
 
@@ -172,8 +174,23 @@ func (h *Handler) prepareAgentQuickCreateAttachRust(
 	clones, err := h.Queries.ListAttachmentsBySourceContext(ctx, db.ListAttachmentsBySourceContextParams{
 		WorkspaceID: wsUUID, SourceContextID: contextID,
 	})
-	if err != nil || len(clones) > 0 {
+	if err != nil {
 		return false, none, err
+	}
+	filePlan, planOK := h.buildAgentSourceContextFilePlan(wsUUID, contextID, requesterID, pending.Snapshot, clones)
+	if !planOK {
+		return false, none, nil
+	}
+	if filePlan.HasFiles {
+		if len(h.IssueReadBridge.AgentSourceFilesLifecyclePilotScopes) == 0 {
+			return false, none, nil
+		}
+		inLifecycle, lifeErr := matchesIssuePilot(
+			ctx, h.Queries, h.IssueReadBridge.AgentSourceFilesLifecyclePilotScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if lifeErr != nil || !inLifecycle {
+			return false, none, lifeErr
+		}
 	}
 	sourceIssue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: sourceIssueID, WorkspaceID: wsUUID,
@@ -206,6 +223,7 @@ func (h *Handler) prepareAgentQuickCreateAttachRust(
 		ExpectedCaptureDigest:     pending.CaptureDigest,
 		ExpectedSourceIssueID:     uuidToString(sourceIssueID),
 		ExpectedRequesterID:       uuidToString(requesterID),
+		ExpectedClones:            filePlan.Clones,
 	}
 	return true, preparedAgentQuickCreateAttach{
 		WorkspaceID:   wsUUID,
@@ -216,6 +234,7 @@ func (h *Handler) prepareAgentQuickCreateAttachRust(
 		AgentID:       agentID,
 		OriginTaskID:  originID,
 		CaptureDigest: pending.CaptureDigest,
+		FilePlan:      filePlan,
 		Trust:         trust,
 	}, nil
 }
@@ -258,5 +277,5 @@ func (h *Handler) agentQuickCreateAttachCommitted(
 		pending.OriginTaskID != plan.OriginTaskID || pending.CapturedByUserID != plan.RequesterID {
 		return false
 	}
-	return true
+	return h.verifyAgentSourceContextFilePlanCommitted(ctx, plan.FilePlan, pending.Snapshot)
 }

@@ -22,18 +22,19 @@ import (
 )
 
 type rustAgentSourceRetryWrite struct {
-	SourceTaskID          string          `json:"source_task_id"`
-	NewTaskID             string          `json:"new_task_id"`
-	ActorUserID           string          `json:"actor_user_id"`
-	ExpectedContextID     string          `json:"expected_context_id"`
-	ExpectedSourceIssueID string          `json:"expected_source_issue_id"`
-	ExpectedAgentID       string          `json:"expected_agent_id"`
-	ExpectedRuntimeID     string          `json:"expected_runtime_id"`
-	ExpectedTaskContext   json.RawMessage `json:"expected_task_context"`
-	ExpectedCaptureDigest string          `json:"expected_capture_digest"`
-	RuntimeMcpOverlay     json.RawMessage `json:"runtime_mcp_overlay,omitempty"`
-	RuntimeConnectedApps  json.RawMessage `json:"runtime_connected_apps,omitempty"`
-	RuntimeCLIVersion     string          `json:"runtime_cli_version"`
+	SourceTaskID          string                        `json:"source_task_id"`
+	NewTaskID             string                        `json:"new_task_id"`
+	ActorUserID           string                        `json:"actor_user_id"`
+	ExpectedContextID     string                        `json:"expected_context_id"`
+	ExpectedSourceIssueID string                        `json:"expected_source_issue_id"`
+	ExpectedAgentID       string                        `json:"expected_agent_id"`
+	ExpectedRuntimeID     string                        `json:"expected_runtime_id"`
+	ExpectedTaskContext   json.RawMessage               `json:"expected_task_context"`
+	ExpectedCaptureDigest string                        `json:"expected_capture_digest"`
+	ExpectedClones        []rustSourceContextCloneTrust `json:"expected_clones,omitempty"`
+	RuntimeMcpOverlay     json.RawMessage               `json:"runtime_mcp_overlay,omitempty"`
+	RuntimeConnectedApps  json.RawMessage               `json:"runtime_connected_apps,omitempty"`
+	RuntimeCLIVersion     string                        `json:"runtime_cli_version"`
 }
 
 type rustAgentSourceRetryResult struct {
@@ -53,6 +54,7 @@ type preparedRustAgentSourceRetry struct {
 	RuntimeCLIVersion string
 	ParentContext     json.RawMessage
 	CaptureDigest     string
+	FilePlan          rustAgentSourceContextFilePlan
 	Agent             db.Agent
 }
 
@@ -113,8 +115,23 @@ func (h *Handler) prepareRustRetryAgentSourceQuickCreate(
 	clones, err := h.Queries.ListAttachmentsBySourceContext(ctx, db.ListAttachmentsBySourceContextParams{
 		WorkspaceID: wsUUID, SourceContextID: contextID,
 	})
-	if err != nil || len(clones) > 0 {
+	if err != nil {
 		return false, none, err
+	}
+	filePlan, planOK := h.buildAgentSourceContextFilePlan(wsUUID, contextID, userUUID, pending.Snapshot, clones)
+	if !planOK {
+		return false, none, nil
+	}
+	if filePlan.HasFiles {
+		if len(h.IssueReadBridge.AgentSourceFilesLifecyclePilotScopes) == 0 {
+			return false, none, nil
+		}
+		inLifecycle, lifeErr := matchesIssuePilot(
+			ctx, h.Queries, h.IssueReadBridge.AgentSourceFilesLifecyclePilotScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if lifeErr != nil || !inLifecycle {
+			return false, none, lifeErr
+		}
 	}
 	sourceIssue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: pending.SourceIssueID, WorkspaceID: wsUUID,
@@ -154,6 +171,7 @@ func (h *Handler) prepareRustRetryAgentSourceQuickCreate(
 		RuntimeCLIVersion: readRuntimeCLIVersion(rt.Metadata),
 		ParentContext:     parentContext,
 		CaptureDigest:     pending.CaptureDigest,
+		FilePlan:          filePlan,
 		Agent:             ag,
 	}, nil
 }
@@ -178,6 +196,9 @@ func (h *Handler) agentSourceRetryCommitted(ctx context.Context, plan preparedRu
 	})
 	if err != nil || pending.OriginTaskID != plan.NewTaskID || pending.CapturedByUserID != plan.RequesterID ||
 		pending.SourceIssueID != plan.SourceIssueID || pending.CaptureDigest != plan.CaptureDigest {
+		return none, false
+	}
+	if !h.verifyAgentSourceContextFilePlanCommitted(ctx, plan.FilePlan, pending.Snapshot) {
 		return none, false
 	}
 	switch pending.State {
@@ -210,6 +231,7 @@ func (h *Handler) retrySourceContextQuickCreateViaRust(
 		ExpectedRuntimeID:     uuidToString(plan.RuntimeID),
 		ExpectedTaskContext:   plan.ParentContext,
 		ExpectedCaptureDigest: plan.CaptureDigest,
+		ExpectedClones:        plan.FilePlan.Clones,
 		RuntimeMcpOverlay:     overlay.Overlay,
 		RuntimeConnectedApps:  overlay.ConnectedApps,
 		RuntimeCLIVersion:     plan.RuntimeCLIVersion,
