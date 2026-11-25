@@ -7,11 +7,52 @@ import { setActiveCell, setEditStatus } from "../third-party/actions";
 import { optionColor } from "../third-party/option-colors";
 import { getActiveCell, getEditingCell, getGridSnapshot } from "../third-party/selectors";
 import type { GridRootState } from "../third-party/state";
-import type { GridCellValue, GridCollaborator, GridFieldView, GridLabels } from "./types";
+import type { GridCellValue, GridCollaborator, GridFieldView, GridLabels, GridRecordOption } from "./types";
 
-function shown(value: string | number | boolean | null | undefined): string {
-  if (value == null || typeof value === "boolean") return "";
+function shown(value: GridCellValue | undefined): string {
+  if (value == null || typeof value === "boolean" || Array.isArray(value)) return "";
   return String(value);
+}
+
+function hashId(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function flattenValues(value: GridCellValue | undefined): Array<string | number | boolean | null> {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return [value];
+  const out: Array<string | number | boolean | null> = [];
+  for (const item of value) {
+    out.push(...flattenValues(item));
+  }
+  return out;
+}
+
+function formatLiteralScalar(
+  value: string | number | boolean | null,
+  labels: GridLabels,
+): string | null {
+  if (value === null) return null;
+  if (typeof value === "boolean") return value ? labels.checked : labels.unchecked;
+  return String(value);
+}
+
+function formatLookupScalar(
+  value: string | number | boolean | null,
+  labels: GridLabels,
+  selectOptions: ReadonlyMap<string, string> | null,
+  relationOptions: ReadonlyMap<string, string> | null,
+): string | null {
+  if (value === null) return null;
+  if (typeof value === "boolean") return value ? labels.checked : labels.unchecked;
+  if (typeof value === "number") return String(value);
+  if (selectOptions) return selectOptions.get(value) ?? value;
+  if (relationOptions) return relationOptions.get(value) ?? "...";
+  return value;
 }
 
 export function GridCell({
@@ -22,7 +63,9 @@ export function GridCell({
   recordIds,
   labels,
   collaborator,
+  recordOptions,
   onCommit,
+  onOpenRelationCell,
   onActive,
   onEditEnd,
 }: {
@@ -33,7 +76,14 @@ export function GridCell({
   recordIds: readonly string[];
   labels: GridLabels;
   collaborator?: GridCollaborator | null;
+  recordOptions?: readonly GridRecordOption[];
   onCommit: (value: GridCellValue, baseRevision: number) => void;
+  onOpenRelationCell?: (
+    recordId: string,
+    field: GridFieldView,
+    currentIds: readonly string[],
+    baseRevision: number,
+  ) => void;
   onActive?: (recordId: string, fieldId: string, revision: number) => void;
   onEditEnd?: () => void;
 }) {
@@ -41,6 +91,9 @@ export function GridCell({
   const value = useSelector((state: GridRootState) => {
     const stored = getGridSnapshot(state, datasheetId)?.records[recordId]?.values[field.id];
     return stored ?? null;
+  });
+  const cellError = useSelector((state: GridRootState) => {
+    return getGridSnapshot(state, datasheetId)?.records[recordId]?.errors?.[field.id] ?? null;
   });
   const conflict = useSelector((state: GridRootState) => {
     return getGridSnapshot(state, datasheetId)?.conflicts[`${recordId}:${field.id}`] ?? null;
@@ -119,11 +172,122 @@ export function GridCell({
     "aria-label": cellName,
     "data-active": active ? "true" : "false",
     "data-conflict": conflict ? "true" : undefined,
+    "data-error": cellError ? "true" : undefined,
     "data-collaborator": collaborator?.kind,
     "data-collaborator-name": collaborator?.label,
-    title: conflict ?? undefined,
+    title: conflict ?? cellError ?? undefined,
     style: collaborator ? { boxShadow: `inset 0 0 0 2px ${collaborator.color}` } : undefined,
   };
+
+  if (field.kind === "relation") {
+    const linkedIds = Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+    const optionMap = new Map((recordOptions ?? []).map((item) => [item.id, item.label]));
+    const chipLabels = linkedIds.map((id) => ({
+      id,
+      label: optionMap.get(id) ?? "...",
+    }));
+    const buttonLabel = chipLabels.length > 0
+      ? `${field.name}: ${chipLabels.map((item) => item.label).join(", ")}`
+      : `${field.name}: ${labels.addLink ?? labels.emptyValue}`;
+    return (
+      <td {...cellProps}>
+        {mark}
+        <button
+          type="button"
+          className="apitable-grid__relationCell"
+          data-cell={`${recordId}:${field.id}`}
+          aria-label={buttonLabel}
+          onFocus={() => {
+            dispatch(setActiveCell(datasheetId, { recordId, fieldId: field.id }));
+            onActive?.(recordId, field.id, revision);
+          }}
+          onBlur={blurCell}
+          onKeyDown={onKeyDown}
+          onClick={() => onOpenRelationCell?.(recordId, field, linkedIds, revision)}
+        >
+          {chipLabels.length > 0 ? chipLabels.map((item) => (
+            <span
+              key={item.id}
+              className="apitable-grid__relationChip"
+              style={{ background: optionColor(hashId(item.id)) }}
+              title={item.label}
+            >
+              {item.label}
+            </span>
+          )) : (
+            <span className="apitable-grid__relationPlaceholder">
+              {labels.addLink ?? "+"}
+            </span>
+          )}
+        </button>
+      </td>
+    );
+  }
+
+  if (field.kind === "lookup" || field.kind === "formula") {
+    const isNumber = field.kind === "formula" && typeof value === "number";
+    const selectOptions = field.kind === "lookup" && field.config?.target_options
+      ? new Map(field.config.target_options.map((option) => [option.id, option.label]))
+      : null;
+    const relationOptions = field.kind === "lookup" && field.config?.target_relation_table_id
+      ? new Map((recordOptions ?? []).map((option) => [option.id, option.label]))
+      : null;
+    const items = field.kind === "lookup"
+      ? flattenValues(value)
+          .map((item) => formatLookupScalar(item, labels, selectOptions, relationOptions))
+          .filter((item): item is string => item !== null && item !== "")
+      : [];
+    const formulaDisplay = field.kind === "formula"
+      ? (Array.isArray(value)
+          ? flattenValues(value)
+              .map((item) => formatLiteralScalar(item, labels))
+              .filter((item): item is string => item !== null && item !== "")
+              .join(", ")
+          : (formatLiteralScalar(value, labels) ?? ""))
+      : "";
+    return (
+      <td {...cellProps}>
+        {mark}
+        <div
+          tabIndex={0}
+          role="textbox"
+          aria-readonly="true"
+          aria-label={field.name}
+          data-cell={`${recordId}:${field.id}`}
+          data-readonly="true"
+          className={`apitable-grid__readonlyCell${isNumber ? " apitable-grid__readonlyCell--number" : ""}`}
+          onFocus={() => {
+            dispatch(setActiveCell(datasheetId, { recordId, fieldId: field.id }));
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Delete" || event.key === "Backspace") {
+              event.preventDefault();
+              return;
+            }
+            onKeyDown(event);
+          }}
+        >
+          {cellError ? (
+            <span className="apitable-grid__cellError" role="status" title={cellError}>
+              ! {cellError}
+            </span>
+          ) : field.kind === "lookup" ? (
+            items.map((item, idx) => (
+              <span key={`${idx}:${item}`} className="apitable-grid__lookupChip" title={item}>
+                {item}
+              </span>
+            ))
+          ) : (
+            <span className="apitable-grid__readonlyText" title={formulaDisplay || undefined}>
+              {formulaDisplay}
+            </span>
+          )}
+        </div>
+      </td>
+    );
+  }
 
   if (field.kind === "checkbox") {
     const checked = value === true;

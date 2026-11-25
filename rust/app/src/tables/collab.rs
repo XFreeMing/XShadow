@@ -4,9 +4,10 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+use super::relation;
 use super::store::{
     RecordDto, StoreError, begin, commit, failed, load_fields, load_record, lock_record,
-    lock_table, normalize_values, ts, write_cells,
+    normalize_values, ts, write_cells,
 };
 
 const CONFLICT: &str = "这条记录已在其他窗口更新，刚才的修改没有写入";
@@ -153,7 +154,8 @@ pub async fn update_record(
         return Err(StoreError::Invalid("没有要保存的字段"));
     }
     let mut tx = begin(pool).await?;
-    lock_table(&mut tx, workspace, table).await?;
+    let touched: Vec<String> = values.keys().cloned().collect();
+    let locked_tables = relation::prepare_table_locks(&mut tx, workspace, table, &touched).await?;
     let current = lock_record(&mut tx, workspace, table, record).await?;
     let fields = load_fields(&mut tx, workspace, table).await?;
     let normalized = normalize_values(&fields, values)?;
@@ -179,12 +181,21 @@ pub async fn update_record(
     let Decision::Apply { base } = decision else {
         return Err(StoreError::Conflict {
             message: CONFLICT,
-            record: fresh,
+            record: Box::new(fresh),
         });
     };
+    let reverse_plan = relation::validate_and_plan_reverse(
+        &mut tx,
+        workspace,
+        &fields,
+        Some(&fresh.values),
+        &normalized,
+        &locked_tables,
+    )
+    .await?;
     write_cells(&mut tx, workspace, record, &normalized).await?;
     bump_revision(&mut tx, workspace, table, record).await?;
-    let saved = load_record(&mut tx, workspace, &fields, record).await?;
+    let saved_revision = current.revision + 1;
     insert_change(
         &mut tx,
         &ChangeWrite {
@@ -193,13 +204,15 @@ pub async fn update_record(
             record,
             base,
             client_revision: expected_revision,
-            record_revision: saved.revision,
+            record_revision: saved_revision,
             values: &normalized,
             actor,
             digest: &digest,
         },
     )
     .await?;
+    relation::apply_reverse_plan(&mut tx, workspace, record, &reverse_plan, actor).await?;
+    let saved = load_record(&mut tx, workspace, &fields, record).await?;
     commit(tx).await?;
     Ok(saved)
 }
@@ -266,7 +279,7 @@ async fn load_steps(
     Ok(steps)
 }
 
-async fn bump_revision(
+pub(super) async fn bump_revision(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -306,19 +319,19 @@ async fn next_seq(
     Ok(row.get(0))
 }
 
-struct ChangeWrite<'a> {
-    workspace: &'a str,
-    table: &'a str,
-    record: &'a str,
-    base: i64,
-    client_revision: i64,
-    record_revision: i64,
-    values: &'a BTreeMap<String, Option<Value>>,
-    actor: &'a Actor,
-    digest: &'a str,
+pub(super) struct ChangeWrite<'a> {
+    pub workspace: &'a str,
+    pub table: &'a str,
+    pub record: &'a str,
+    pub base: i64,
+    pub client_revision: i64,
+    pub record_revision: i64,
+    pub values: &'a BTreeMap<String, Option<Value>>,
+    pub actor: &'a Actor,
+    pub digest: &'a str,
 }
 
-async fn insert_change(
+pub(super) async fn insert_change(
     tx: &mut Transaction<'_, Postgres>,
     write: &ChangeWrite<'_>,
 ) -> Result<(), StoreError> {

@@ -5,7 +5,7 @@ import { Provider, useDispatch } from "react-redux";
 import { GRID_STYLE_ID, gridCss } from "./grid-css";
 import { GridCell } from "./cell";
 import { createGridStore, hostSnapshot, setPageDatasheet } from "./store";
-import type { GridActor, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordView, GridRemotePatch } from "./types";
+import type { GridActor, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch } from "./types";
 import type { GridSnapshot } from "../third-party/state";
 
 const NO_CONFLICTS: readonly GridConflictMark[] = [];
@@ -17,7 +17,12 @@ function mirror(fields: readonly GridFieldView[], records: readonly GridRecordVi
     for (const [fieldId, value] of Object.entries(record.values)) {
       if (value !== undefined) values[fieldId] = value;
     }
-    recordMap[record.id] = { id: record.id, revision: record.revision, values };
+    recordMap[record.id] = {
+      id: record.id,
+      revision: record.revision,
+      values,
+      errors: record.errors,
+    };
   }
   const conflictMap: Record<string, string> = {};
   for (const conflict of conflicts) {
@@ -51,6 +56,9 @@ function typeMark(kind: string): string {
   if (kind === "date") return "D";
   if (kind === "single_select") return "S";
   if (kind === "checkbox") return "C";
+  if (kind === "relation") return "R";
+  if (kind === "lookup") return "L";
+  if (kind === "formula") return "fx";
   return "A";
 }
 
@@ -61,10 +69,13 @@ export function ApitableGrid({
   groups,
   actors,
   collaborators,
+  recordOptionsByTable,
   remote,
   labels,
   onCellCommit,
   onRenameField,
+  onEditField,
+  onOpenRelationCell,
   onActiveCell,
   onEditEnd,
   onToggleGroup,
@@ -75,10 +86,18 @@ export function ApitableGrid({
   groups?: readonly GridGroup[] | null;
   actors?: readonly GridActor[];
   collaborators?: readonly GridCollaborator[];
+  recordOptionsByTable?: Readonly<Record<string, readonly GridRecordOption[]>>;
   remote?: GridRemotePatch;
   labels: GridLabels;
   onCellCommit: (recordId: string, fieldId: string, value: GridCellValue, baseRevision: number) => void;
   onRenameField: (fieldId: string, name: string) => void;
+  onEditField?: (field: GridFieldView) => void;
+  onOpenRelationCell?: (
+    recordId: string,
+    field: GridFieldView,
+    currentIds: readonly string[],
+    baseRevision: number,
+  ) => void;
   onActiveCell?: (recordId: string, fieldId: string, revision: number) => void;
   onEditEnd?: () => void;
   onToggleGroup?: (key: string) => void;
@@ -102,21 +121,30 @@ export function ApitableGrid({
   const renderRecord = (record: GridRecordView, rowIndex: number) => (
     <tr className="apitable-grid__row" data-record-id={record.id} key={record.id}>
       <th className="apitable-grid__rowHead" scope="row">{rowIndex + 1}</th>
-      {fields.map((field) => (
-        <GridCell
-          key={field.id}
-          datasheetId={datasheetId}
-          field={field}
-          recordId={record.id}
-          rowIndex={rowIndex}
-          recordIds={recordIds}
-          labels={labels}
-          collaborator={collaboratorAt(record.id, field.id)}
-          onActive={onActiveCell}
-          onEditEnd={onEditEnd}
-          onCommit={(value, baseRevision) => onCellCommit(record.id, field.id, value, baseRevision)}
-        />
-      ))}
+      {fields.map((field) => {
+        const optionTableId = field.kind === "relation"
+          ? field.config?.target_table_id
+          : field.kind === "lookup"
+            ? field.config?.target_relation_table_id
+            : undefined;
+        return (
+          <GridCell
+            key={field.id}
+            datasheetId={datasheetId}
+            field={field}
+            recordId={record.id}
+            rowIndex={rowIndex}
+            recordIds={recordIds}
+            labels={labels}
+            collaborator={collaboratorAt(record.id, field.id)}
+            recordOptions={optionTableId ? recordOptionsByTable?.[optionTableId] : undefined}
+            onOpenRelationCell={onOpenRelationCell}
+            onActive={onActiveCell}
+            onEditEnd={onEditEnd}
+            onCommit={(value, baseRevision) => onCellCommit(record.id, field.id, value, baseRevision)}
+          />
+        );
+      })}
     </tr>
   );
 
@@ -162,6 +190,17 @@ export function ApitableGrid({
                   if (event.key === "Enter") event.currentTarget.blur();
                 }}
               />
+              {(field.kind === "lookup" || field.kind === "formula") && onEditField ? (
+                <button
+                  type="button"
+                  className="apitable-grid__fieldAction"
+                  aria-label={`${labels.configureField ?? "Configure"} ${field.name}`}
+                  title={labels.configureField ?? "Configure"}
+                  onClick={() => onEditField(field)}
+                >
+                  {labels.configureField ?? "Edit"}
+                </button>
+              ) : null}
             </th>
           ))}
         </tr>

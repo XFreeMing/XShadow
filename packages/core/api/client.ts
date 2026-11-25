@@ -306,9 +306,12 @@ import {
   genericRecordResponseSchema,
   genericSheetSchema,
   genericTableCreatedSchema,
+  EMPTY_GENERIC_RECORD_OPTIONS,
+  genericRecordOptionsSchema,
   genericTableListSchema,
   genericViewResponseSchema,
   type GenericCellValue,
+  type GenericFieldPatch,
   type GenericFieldWrite,
   type GenericViewWrite,
 } from "../tables/schema";
@@ -6322,16 +6325,27 @@ export class ApiClient {
     return parsed.field;
   }
 
-  async renameGenericField(tableId: string, fieldId: string, name: string) {
+  async listGenericRecordOptions(tableId: string) {
+    const raw = await this.fetch<unknown>(`/api/tables/${encodeURIComponent(tableId)}/record-options`);
+    return parseWithFallback(raw, genericRecordOptionsSchema, EMPTY_GENERIC_RECORD_OPTIONS, {
+      endpoint: "GET /api/tables/:id/record-options",
+    });
+  }
+
+  async updateGenericField(tableId: string, fieldId: string, body: GenericFieldPatch) {
     const raw = await this.fetch<unknown>(
       `/api/tables/${encodeURIComponent(tableId)}/fields/${encodeURIComponent(fieldId)}`,
-      { method: "PATCH", body: JSON.stringify({ name }) },
+      { method: "PATCH", body: JSON.stringify(body) },
     );
     const parsed = parseWithFallback(raw, genericFieldResponseSchema, { field: EMPTY_GENERIC_FIELD }, {
       endpoint: "PATCH /api/tables/:id/fields/:fieldId",
     });
     if (!parsed.field.id) throw new Error("字段响应无法读取");
     return parsed.field;
+  }
+
+  async renameGenericField(tableId: string, fieldId: string, name: string) {
+    return this.updateGenericField(tableId, fieldId, { name });
   }
 
   async createGenericRecord(tableId: string, values: Record<string, GenericCellValue> = {}) {

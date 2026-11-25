@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApitableGrid } from "@multica/apitable-grid";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApitableGrid, type GridRecordOption } from "@multica/apitable-grid";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@multica/ui/components/ui/popover";
@@ -10,13 +10,15 @@ import { ApiError, api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
+  genericRecordOptionsQuery,
   genericSheetOptions,
   genericTableKeys,
   revisionConflictSchema,
   type GenericActor,
   type GenericCellValue,
   type GenericField,
-  type GenericFieldKind,
+  type GenericFieldPatch,
+  type GenericFieldWrite,
   type GenericFilter,
   type GenericPresence,
   type GenericRecord,
@@ -25,9 +27,14 @@ import {
 } from "@multica/core/tables";
 import { useT } from "../../i18n";
 import { AppLink, useNavigation } from "../../navigation";
+import {
+  EditDerivedFieldDialog,
+  FieldCreateForm,
+  RelationChooserDialog,
+  type RelationChooserState,
+} from "./derived-field-dialogs";
 
 const EMPTY_FIELDS: GenericField[] = [];
-const KINDS: GenericFieldKind[] = ["text", "number", "date", "single_select", "checkbox"];
 const OPS = ["eq", "contains", "is_empty", "is_not_empty"] as const;
 
 interface ViewDraft {
@@ -45,12 +52,23 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   const { replace, searchParams } = useNavigation();
   const viewId = searchParams.get("view");
   const queryClient = useQueryClient();
-  const sheet = useQuery(genericSheetOptions(wsId, tableId, viewId));
+  const editingRef = useRef(false);
+  const holdSheet = useRef(false);
+  const viewSaves = useRef(0);
+  const sheet = useQuery({
+    ...genericSheetOptions(wsId, tableId, viewId),
+    refetchOnMount: "always",
+    refetchOnWindowFocus: () => !editingRef.current,
+  });
   const revisions = useRef(new Map<string, number>());
   const [draft, setDraft] = useState<ViewDraft | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showField, setShowField] = useState(false);
+  const [fieldFormError, setFieldFormError] = useState<string | null>(null);
+  const [editingField, setEditingField] = useState<GenericField | null>(null);
+  const [editFieldError, setEditFieldError] = useState<string | null>(null);
+  const [relationChooser, setRelationChooser] = useState<RelationChooserState | null>(null);
   const [viewName, setViewName] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [presence, setPresence] = useState<GenericPresence[]>([]);
@@ -58,9 +76,6 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   const cursor = useRef(0);
   const recent = useRef(new Map<string, GenericActor>());
   const positionRef = useRef<{ recordId: string; fieldId: string } | null>(null);
-  const editingRef = useRef(false);
-  const holdSheet = useRef(false);
-  const viewSaves = useRef(0);
 
   const active = sheet.data?.views.find((view) => view.id === sheet.data?.active_view_id) ?? sheet.data?.views[0];
   const viewStamp = active ? `${active.id}:${active.updated_at}` : "";
@@ -95,22 +110,33 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: genericTableKeys.sheetAll(wsId, tableId) });
 
   const addField = useMutation({
-    mutationFn: (body: { name: string; kind: GenericFieldKind; options: string }) => {
-      const config = body.kind === "single_select"
-        ? {
-            options: body.options.split("\n").map((line) => line.trim()).filter(Boolean).map((label, index) => ({
-              id: `opt${index + 1}`,
-              label,
-            })),
-          }
-        : undefined;
-      return api.createGenericField(tableId, { name: body.name, kind: body.kind, config });
-    },
-    onSuccess: async () => {
+    mutationFn: (body: GenericFieldWrite) => api.createGenericField(tableId, body),
+    onSuccess: async (created) => {
+      setFieldFormError(null);
       setShowField(false);
       await invalidate();
+      if (created.kind === "relation" && created.config.target_table_id) {
+        await queryClient.invalidateQueries({
+          queryKey: genericTableKeys.sheetAll(wsId, created.config.target_table_id),
+        });
+      }
     },
-    onError: report,
+    onError: (error) => {
+      setFieldFormError(error instanceof ApiError ? error.message : t(($) => $.sheet.save_failed));
+    },
+  });
+
+  const updateField = useMutation({
+    mutationFn: (body: { fieldId: string; patch: GenericFieldPatch }) =>
+      api.updateGenericField(tableId, body.fieldId, body.patch),
+    onSuccess: async () => {
+      setEditFieldError(null);
+      setEditingField(null);
+      await invalidate();
+    },
+    onError: (error) => {
+      setEditFieldError(error instanceof ApiError ? error.message : t(($) => $.sheet.save_failed));
+    },
   });
 
   const renameField = useMutation({
@@ -121,7 +147,10 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
 
   const addRecord = useMutation({
     mutationFn: () => api.createGenericRecord(tableId),
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      await invalidate();
+      await queryClient.invalidateQueries({ queryKey: genericTableKeys.recordOptions(wsId, tableId) });
+    },
     onError: report,
   });
 
@@ -135,9 +164,17 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
         : revisions.current.get(body.recordId) ?? 0;
       return api.updateGenericRecord(tableId, body.recordId, revision, { [body.fieldId]: body.value });
     },
-    onSuccess: async (record) => {
+    onSuccess: async (record, variables) => {
       revisions.current.set(record.id, record.revision);
       setConflict(null);
+      setNotice(null);
+      void queryClient.invalidateQueries({ queryKey: genericTableKeys.recordOptions(wsId, tableId) });
+      const field = sheet.data?.fields.find((item) => item.id === variables.fieldId);
+      if (field?.kind === "relation" && field.config.target_table_id) {
+        void queryClient.invalidateQueries({
+          queryKey: genericTableKeys.sheetAll(wsId, field.config.target_table_id),
+        });
+      }
       if (editingRef.current) holdSheet.current = true;
       else await invalidate();
     },
@@ -219,6 +256,31 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   }, [sheetReady, tableId]);
 
   const fields = sheet.data?.fields ?? EMPTY_FIELDS;
+  const relationTargetTableIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const field of fields) {
+      if (field.kind === "relation" && field.config.target_table_id) {
+        ids.add(field.config.target_table_id);
+      } else if (field.kind === "lookup" && field.config.target_relation_table_id) {
+        ids.add(field.config.target_relation_table_id);
+      }
+    }
+    return [...ids];
+  }, [fields]);
+  const optionQueries = useQueries({
+    queries: relationTargetTableIds.map((targetId) => ({
+      ...genericRecordOptionsQuery(wsId, targetId),
+      refetchOnMount: "always" as const,
+    })),
+  });
+  const recordOptionsByTable = useMemo(() => {
+    const map: Record<string, readonly GridRecordOption[]> = {};
+    relationTargetTableIds.forEach((targetId, index) => {
+      map[targetId] = optionQueries[index]?.data?.records ?? [];
+    });
+    return map;
+  }, [optionQueries, relationTargetTableIds]);
+
   const visible = useMemo(() => visibleFields(fields, draft?.columns ?? null), [fields, draft?.columns]);
   const hiddenCount = draft?.columns == null ? 0 : Math.max(0, fields.length - visible.length);
   const groups = useMemo(() => {
@@ -227,12 +289,27 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
     if (!field) return null;
     const order: string[] = [];
     const buckets = new Map<string, { label: string; records: GenericRecord[] }>();
+    const targetOptions = field.config.target_table_id
+      ? new Map((recordOptionsByTable[field.config.target_table_id] ?? []).map((item) => [item.id, item.label]))
+      : null;
     for (const record of sheet.data.records) {
       const raw = record.values[field.id];
-      const empty = raw == null || raw === "";
-      const key = empty ? "" : String(raw);
-      const option = field.config.options?.find((item) => item.id === raw);
-      const label = empty ? t(($) => $.sheet.empty_group) : option?.label ?? String(raw);
+      const empty = raw == null || raw === "" || (Array.isArray(raw) && raw.length === 0);
+      const key = empty ? "" : JSON.stringify(raw);
+      let label: string;
+      if (empty) {
+        label = t(($) => $.sheet.empty_group);
+      } else if (field.kind === "relation" && Array.isArray(raw)) {
+        label = raw
+          .filter((item): item is string => typeof item === "string")
+          .map((id) => targetOptions?.get(id) ?? "...")
+          .join(", ");
+      } else if (Array.isArray(raw)) {
+        label = flattenCell(raw).filter((item) => item != null).map(String).join(", ") || t(($) => $.sheet.empty_group);
+      } else {
+        const option = field.config.options?.find((item) => item.id === raw);
+        label = option?.label ?? String(raw);
+      }
       const bucket = buckets.get(key);
       if (bucket) bucket.records.push(record);
       else {
@@ -244,7 +321,7 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
       const bucket = buckets.get(key)!;
       return { key, label: bucket.label, count: bucket.records.length, collapsed: collapsed[key] === true, records: bucket.records };
     });
-  }, [collapsed, draft?.group, fields, sheet.data, t]);
+  }, [collapsed, draft?.group, fields, recordOptionsByTable, sheet.data, t]);
   const actors = presence.map((item) => ({
     id: item.actor.id,
     label: item.actor.label,
@@ -298,10 +375,26 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
           {t(($) => $.sheet.back)}
         </AppLink>
         <h1 className="min-w-0 flex-1 truncate text-title-sm font-semibold">{sheet.data?.table.name ?? t(($) => $.list.title)}</h1>
-        <Popover open={showField} onOpenChange={setShowField}>
+        <Popover
+          open={showField}
+          onOpenChange={(open) => {
+            setShowField(open);
+            if (!open) setFieldFormError(null);
+          }}
+        >
           <PopoverTrigger render={<Button type="button" variant="outline" size="sm">{t(($) => $.sheet.add_field)}</Button>} />
           <PopoverContent align="end" className="w-80 p-3">
-            <FieldForm pending={addField.isPending} onSubmit={(body) => addField.mutate(body)} />
+            <FieldCreateForm
+              wsId={wsId}
+              tableId={tableId}
+              fields={fields}
+              pending={addField.isPending}
+              error={fieldFormError}
+              onSubmit={(body) => {
+                setFieldFormError(null);
+                addField.mutate(body);
+              }}
+            />
           </PopoverContent>
         </Popover>
         <Button type="button" size="sm" onClick={() => addRecord.mutate()} disabled={addRecord.isPending || fields.length === 0}>
@@ -347,6 +440,7 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
             groups={groups}
             actors={actors}
             collaborators={collaborators}
+            recordOptionsByTable={recordOptionsByTable}
             labels={{
               rename: t(($) => $.sheet.rename),
               clear: t(($) => $.sheet.clear),
@@ -357,8 +451,27 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
               emptyGroup: t(($) => $.sheet.empty_group),
               online: t(($) => $.sheet.online),
               recent: t(($) => $.sheet.recent),
+              configureField: t(($) => $.sheet.configure_field),
+              addLink: t(($) => $.sheet.add_link),
             }}
             onRenameField={(fieldId, name) => renameField.mutate({ fieldId, name })}
+            onEditField={(gridField) => {
+              const full = fields.find((item) => item.id === gridField.id) ?? null;
+              setEditFieldError(null);
+              setEditingField(full);
+            }}
+            onOpenRelationCell={(recordId, gridField, currentIds, baseRevision) => {
+              if (!gridField.config?.target_table_id) return;
+              editingRef.current = true;
+              setRelationChooser({
+                recordId,
+                fieldId: gridField.id,
+                fieldName: gridField.name,
+                targetTableId: gridField.config.target_table_id,
+                currentIds,
+                baseRevision,
+              });
+            }}
             onActiveCell={(recordId, fieldId) => {
               positionRef.current = { recordId, fieldId };
               editingRef.current = true;
@@ -376,13 +489,61 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
             }}
             onToggleGroup={(key) => setCollapsed((current) => ({ ...current, [key]: !current[key] }))}
             onCellCommit={(recordId, fieldId, value, baseRevision) => {
+              const target = fields.find((item) => item.id === fieldId);
+              if (target?.kind === "lookup" || target?.kind === "formula") return;
               saveCell.mutate({ recordId, fieldId, value, baseRevision });
             }}
           />
         ) : null}
       </div>
+      <EditDerivedFieldDialog
+        wsId={wsId}
+        field={editingField}
+        fields={fields}
+        pending={updateField.isPending}
+        error={editFieldError}
+        onClose={() => {
+          setEditingField(null);
+          setEditFieldError(null);
+        }}
+        onSubmit={(fieldId, patch) => {
+          setEditFieldError(null);
+          updateField.mutate({ fieldId, patch });
+        }}
+      />
+      <RelationChooserDialog
+        wsId={wsId}
+        state={relationChooser}
+        pending={saveCell.isPending}
+        onClose={() => {
+          setRelationChooser(null);
+          editingRef.current = false;
+          releaseSheet();
+        }}
+        onSave={(nextIds) => {
+          if (!relationChooser) return;
+          const current = relationChooser;
+          setRelationChooser(null);
+          editingRef.current = false;
+          saveCell.mutate({
+            recordId: current.recordId,
+            fieldId: current.fieldId,
+            value: nextIds,
+            baseRevision: current.baseRevision,
+          });
+        }}
+      />
     </div>
   );
+}
+
+function flattenCell(value: GenericCellValue): Array<string | number | boolean | null> {
+  if (!Array.isArray(value)) return [value];
+  const out: Array<string | number | boolean | null> = [];
+  for (const item of value) {
+    out.push(...flattenCell(item));
+  }
+  return out;
 }
 
 function savedView(draft: ViewDraft): GenericViewWrite {
@@ -552,9 +713,12 @@ function FilterSort({
               value={draft.filter?.field_id ?? ""}
               onChange={(event) => {
                 const fieldId = event.target.value;
+                const picked = fields.find((item) => item.id === fieldId);
                 onDraft({
                   ...draft,
-                  filter: fieldId ? { field_id: fieldId, op: "eq" } : null,
+                  filter: fieldId
+                    ? { field_id: fieldId, op: picked?.kind === "lookup" ? "is_not_empty" : "eq" }
+                    : null,
                 });
               }}
               className="mt-1 block h-8 rounded-md border border-border bg-transparent px-2 text-body"
@@ -573,7 +737,15 @@ function FilterSort({
               })}
               className="h-8 rounded-md border border-border bg-transparent px-2 text-body"
             >
-              {OPS.filter((item) => item !== "contains" || filterField?.kind === "text").map((item) => (
+              {OPS.filter((item) => {
+                if (filterField?.kind === "lookup") {
+                  return item === "is_empty" || item === "is_not_empty";
+                }
+                if (item === "contains") {
+                  return filterField?.kind === "text" || filterField?.kind === "formula";
+                }
+                return true;
+              }).map((item) => (
                 <option key={item} value={item}>{t(($) => $.sheet.ops[item])}</option>
               ))}
             </select>
@@ -678,56 +850,15 @@ function FilterValue({
         else if (field?.kind === "number") {
           const parsed = Number(raw);
           if (Number.isFinite(parsed)) onChange(parsed);
+        } else if (field?.kind === "formula") {
+          if (raw === "true") onChange(true);
+          else if (raw === "false") onChange(false);
+          else if (raw.trim() !== "" && Number.isFinite(Number(raw))) onChange(Number(raw));
+          else onChange(raw);
         } else onChange(raw);
       }}
       className="max-w-48"
     />
-  );
-}
-
-function FieldForm({
-  pending,
-  onSubmit,
-}: {
-  pending: boolean;
-  onSubmit: (body: { name: string; kind: GenericFieldKind; options: string }) => void;
-}) {
-  const { t } = useT("tables");
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState<GenericFieldKind>("text");
-  const [options, setOptions] = useState("");
-  return (
-    <form
-      className="flex flex-col gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!name.trim()) return;
-        if (kind === "single_select" && options.trim() === "") return;
-        onSubmit({ name: name.trim(), kind, options });
-        setName("");
-        setOptions("");
-      }}
-    >
-      <Input aria-label={t(($) => $.sheet.field_name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={t(($) => $.sheet.field_name)} />
-      <select
-        aria-label={t(($) => $.sheet.kind)}
-        value={kind}
-        onChange={(event) => setKind(event.target.value as GenericFieldKind)}
-        className="h-8 rounded-md border border-border bg-transparent px-2 text-body"
-      >
-        {KINDS.map((item) => <option key={item} value={item}>{t(($) => $.sheet.kinds[item])}</option>)}
-      </select>
-      {kind === "single_select" ? (
-        <textarea
-          aria-label={t(($) => $.sheet.options)}
-          value={options}
-          onChange={(event) => setOptions(event.target.value)}
-          placeholder={t(($) => $.sheet.options_hint)}
-          className="min-h-20 rounded-md border border-border bg-transparent px-2 py-1 text-body"
-        />
-      ) : null}
-      <Button type="submit" size="sm" disabled={pending || name.trim() === ""}>{t(($) => $.sheet.add)}</Button>
-    </form>
   );
 }
 

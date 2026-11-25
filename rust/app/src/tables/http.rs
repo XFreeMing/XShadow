@@ -14,7 +14,7 @@ use sqlx::PgPool;
 
 use super::collab::{self, Actor};
 use super::store::{self, RecordDto, StoreError};
-use super::validate::{StoredFilter, StoredSort};
+use super::validate::{StoredFilter, StoredSort, is_uuid};
 
 struct Tables {
     pool: PgPool,
@@ -71,7 +71,11 @@ pub fn router(pool: PgPool, token: String) -> Router {
         .route("/internal/tables/{id}/fields", post(create_field))
         .route(
             "/internal/tables/{id}/fields/{field_id}",
-            patch(rename_field),
+            patch(update_field),
+        )
+        .route(
+            "/internal/tables/{id}/record-options",
+            get(list_record_options),
         )
         .route("/internal/tables/{id}/records", post(create_record))
         .route(
@@ -206,11 +210,19 @@ async fn create_field(
     }
 }
 
-async fn rename_field(
+#[derive(Deserialize)]
+struct FieldPatchBody {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    config: Option<Value>,
+}
+
+async fn update_field(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
     Path((id, field_id)): Path<(String, String)>,
-    body: Result<Json<NameBody>, axum::extract::rejection::JsonRejection>,
+    body: Result<Json<FieldPatchBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     if let Some(response) = bad_id(&id).or_else(|| bad_id(&field_id)) {
         return response;
@@ -218,7 +230,16 @@ async fn rename_field(
     let Ok(Json(body)) = body else {
         return invalid("请求格式不正确");
     };
-    match store::rename_field(&app.pool, &ws, &id, &field_id, &body.name).await {
+    match store::update_field(
+        &app.pool,
+        &ws,
+        &id,
+        &field_id,
+        body.name.as_deref(),
+        body.config.as_ref(),
+    )
+    .await
+    {
         Ok(field) => Json(json!({ "field": field })).into_response(),
         Err(err) => store_error(err),
     }
@@ -236,9 +257,24 @@ struct RecordPatch {
     values: BTreeMap<String, Value>,
 }
 
+async fn list_record_options(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    match store::list_record_options(&app.pool, &ws, &id).await {
+        Ok(records) => Json(json!({ "records": records })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
 async fn create_record(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     body: Result<Json<RecordBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -248,7 +284,15 @@ async fn create_record(
     let Ok(Json(body)) = body else {
         return invalid("请求格式不正确");
     };
-    match store::create_record(&app.pool, &ws, &id, &body.values).await {
+    for field_id in body.values.keys() {
+        if bad_id(field_id).is_some() {
+            return invalid("字段标识无效");
+        }
+    }
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::create_record(&app.pool, &ws, &id, &body.values, actor.as_ref()).await {
         Ok(record) => (StatusCode::CREATED, Json(json!({ "record": record }))).into_response(),
         Err(err) => store_error(err),
     }
@@ -364,6 +408,21 @@ fn optional_id(value: Option<String>) -> Result<Option<String>, ()> {
         Some(id) if is_uuid(&id) => Ok(Some(id)),
         Some(_) => Err(()),
     }
+}
+
+fn optional_actor(headers: &HeaderMap) -> Result<Option<Actor>, ()> {
+    let any_present = [
+        "x-xshadow-actor-source",
+        "x-xshadow-actor-id",
+        "x-xshadow-task-id",
+        "x-xshadow-actor-label",
+    ]
+    .iter()
+    .any(|name| !header_str(headers, name).is_empty() || !header_utf8(headers, name).is_empty());
+    if !any_present {
+        return Ok(None);
+    }
+    require_actor(headers).map(Some)
 }
 
 fn require_actor(headers: &HeaderMap) -> Result<Actor, ()> {
@@ -554,7 +613,7 @@ fn store_error(err: StoreError) -> Response {
             StatusCode::CONFLICT,
             "revision_conflict",
             message,
-            Some(record),
+            Some(*record),
         ),
         StoreError::Failed => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -608,35 +667,11 @@ fn tokens_match(expected: &str, got: &str) -> bool {
     diff == 0
 }
 
-fn is_uuid(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() != 36 {
-        return false;
-    }
-    let groups = [8usize, 4, 4, 4, 12];
-    let mut index = 0;
-    for (group, len) in groups.iter().enumerate() {
-        if group > 0 {
-            if bytes[index] != b'-' {
-                return false;
-            }
-            index += 1;
-        }
-        for _ in 0..*len {
-            if !bytes[index].is_ascii_hexdigit() {
-                return false;
-            }
-            index += 1;
-        }
-    }
-    index == bytes.len()
-}
-
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{decide_access, require_actor};
+    use super::{decide_access, optional_actor, require_actor};
 
     #[test]
     fn disabled_token_rejects_before_a_client_could_supply_a_workspace() {
@@ -678,6 +713,24 @@ mod tests {
         );
         let actor = require_actor(&headers).unwrap();
         assert_eq!(actor.label, "核对智能体");
+        assert_eq!(actor.id, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn optional_actor_preserves_callers_without_actor_headers() {
+        let empty = HeaderMap::new();
+        assert!(optional_actor(&empty).unwrap().is_none());
+
+        let mut partial = HeaderMap::new();
+        partial.insert("x-xshadow-actor-source", HeaderValue::from_static("member"));
+        assert!(optional_actor(&partial).is_err());
+
+        partial.insert(
+            "x-xshadow-actor-id",
+            HeaderValue::from_static("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        );
+        let actor = optional_actor(&partial).unwrap().unwrap();
+        assert_eq!(actor.source, "member");
         assert_eq!(actor.id, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     }
 }

@@ -22,10 +22,18 @@
 
 import type { ICell, ISelection } from "./types";
 
+export type GridMirrorCellValue =
+  | string
+  | number
+  | boolean
+  | null
+  | GridMirrorCellValue[];
+
 export interface GridRecordMirror {
   id: string;
   revision: number;
-  values: Record<string, string | number | boolean | null>;
+  values: Record<string, GridMirrorCellValue>;
+  errors?: Record<string, string>;
 }
 
 export interface GridSnapshot {

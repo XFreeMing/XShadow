@@ -105,4 +105,151 @@ describe("ApitableGrid", () => {
     await user.tab();
     expect(onCellCommit).toHaveBeenCalledWith("rec1", "name", "草稿", 2);
   });
+
+  it("renders relation chips, opens chooser, displays lookup/formula values & errors, and blocks readonly Delete", async () => {
+    const user = userEvent.setup();
+    const onCellCommit = vi.fn();
+    const onOpenRelationCell = vi.fn();
+    const onEditField = vi.fn();
+    const derivedFields: GridFieldView[] = [
+      { id: "rel", name: "关联项目", kind: "relation", config: { target_table_id: "tbl-b", bidirectional: true } },
+      { id: "lkp", name: "查找数量", kind: "lookup", config: { relation_field_id: "rel", target_field_id: "f-num" } },
+      { id: "frm", name: "合计", kind: "formula", config: { expression: "SUM({查找数量})" } },
+      { id: "bad", name: "异常", kind: "formula", config: { expression: "1 / 0" } },
+    ];
+    const derivedRecords: GridRecordView[] = [
+      {
+        id: "rec1",
+        revision: 2,
+        values: {
+          rel: ["r-b1"],
+          lkp: [0, false, null, 5],
+          frm: 5,
+          bad: null,
+        },
+        errors: {
+          bad: "公式不能除以零",
+        },
+      },
+    ];
+    render(
+      <ApitableGrid
+        datasheetId="dst"
+        fields={derivedFields}
+        records={derivedRecords}
+        recordOptionsByTable={{ "tbl-b": [{ id: "r-b1", label: "项目 Alpha" }] }}
+        labels={{ ...labels, configureField: "设置", addLink: "关联记录" }}
+        onCellCommit={onCellCommit}
+        onRenameField={vi.fn()}
+        onEditField={onEditField}
+        onOpenRelationCell={onOpenRelationCell}
+      />,
+    );
+
+    const relButton = screen.getByRole("button", { name: "关联项目: 项目 Alpha" });
+    expect(relButton).toHaveTextContent("项目 Alpha");
+    await user.click(relButton);
+    expect(onOpenRelationCell).toHaveBeenCalledWith("rec1", derivedFields[0], ["r-b1"], 2);
+
+    const lookupCell = screen.getByRole("textbox", { name: "查找数量" });
+    expect(lookupCell).toHaveAttribute("aria-readonly", "true");
+    expect(lookupCell).toHaveTextContent("0");
+    expect(lookupCell).toHaveTextContent("未勾选");
+    expect(lookupCell).toHaveTextContent("5");
+    await user.click(lookupCell);
+    await user.keyboard("{Delete}{Backspace}abc");
+    expect(onCellCommit).not.toHaveBeenCalled();
+
+    const formulaCell = screen.getByRole("textbox", { name: "合计" });
+    expect(formulaCell).toHaveTextContent("5");
+    await user.click(formulaCell);
+    await user.keyboard("{Delete}");
+    expect(onCellCommit).not.toHaveBeenCalled();
+
+    const errCell = screen.getByRole("textbox", { name: "异常" });
+    expect(errCell).toHaveTextContent("公式不能除以零");
+
+    await user.click(screen.getByRole("button", { name: "设置 合计" }));
+    expect(onEditField).toHaveBeenCalledWith(derivedFields[2]);
+  });
+
+  it("scopes lookup option and relation labels per field without rewriting literal formula or text strings", () => {
+    const scopedFields: GridFieldView[] = [
+      {
+        id: "lkp_a",
+        name: "表A状态",
+        kind: "lookup",
+        config: {
+          relation_field_id: "rel_a",
+          target_field_id: "status_a",
+          target_options: [{ id: "opt1", label: "进行中" }],
+        },
+      },
+      {
+        id: "lkp_b",
+        name: "表B等级",
+        kind: "lookup",
+        config: {
+          relation_field_id: "rel_b",
+          target_field_id: "level_b",
+          target_options: [{ id: "opt1", label: "高风险" }],
+        },
+      },
+      {
+        id: "lkp_text",
+        name: "原样文本",
+        kind: "lookup",
+        config: { relation_field_id: "rel_a", target_field_id: "note_a" },
+      },
+      {
+        id: "lkp_rel",
+        name: "关联负责人",
+        kind: "lookup",
+        config: {
+          relation_field_id: "rel_a",
+          target_field_id: "owner_rel",
+          target_relation_table_id: "tbl-owners",
+        },
+      },
+      {
+        id: "frm_lit",
+        name: "字面公式",
+        kind: "formula",
+        config: { expression: "'opt1'" },
+      },
+    ];
+    const scopedRecords: GridRecordView[] = [
+      {
+        id: "rec1",
+        revision: 1,
+        values: {
+          lkp_a: ["opt1"],
+          lkp_b: ["opt1"],
+          lkp_text: ["opt1"],
+          lkp_rel: [["owner-1"]],
+          frm_lit: "opt1",
+        },
+      },
+    ];
+    render(
+      <ApitableGrid
+        datasheetId="dst"
+        fields={scopedFields}
+        records={scopedRecords}
+        recordOptionsByTable={{
+          "tbl-owners": [{ id: "owner-1", label: "张三" }],
+          "tbl-other": [{ id: "opt1", label: "误替换" }],
+        }}
+        labels={labels}
+        onCellCommit={vi.fn()}
+        onRenameField={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "表A状态" })).toHaveTextContent("进行中");
+    expect(screen.getByRole("textbox", { name: "表B等级" })).toHaveTextContent("高风险");
+    expect(screen.getByRole("textbox", { name: "原样文本" })).toHaveTextContent("opt1");
+    expect(screen.getByRole("textbox", { name: "关联负责人" })).toHaveTextContent("张三");
+    expect(screen.getByRole("textbox", { name: "字面公式" })).toHaveTextContent("opt1");
+  });
 });

@@ -242,4 +242,103 @@ export const gridCss = `
   padding: 12px;
   color: var(--firstLevelText);
 }
+.apitable-grid__fieldAction {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border: 1px solid var(--shadowColor);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fc3, #8c8c8c);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.apitable-grid__fieldAction:hover {
+  color: var(--primaryColor);
+  border-color: var(--primaryColor);
+}
+.apitable-grid__relationCell {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  width: 100%;
+  min-height: 30px;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  outline: none;
+}
+.apitable-grid__relationChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 20px;
+  color: #262626;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+.apitable-grid__relationPlaceholder {
+  color: var(--fc3, #8c8c8c);
+  font-size: 12px;
+}
+.apitable-grid__readonlyCell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 30px;
+  padding: 3px 10px;
+  line-height: 24px;
+  overflow: hidden;
+  outline: none;
+  background: rgba(128, 128, 128, 0.04);
+}
+.apitable-grid__readonlyCell--number {
+  justify-content: flex-end;
+}
+.apitable-grid__readonlyText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apitable-grid__lookupChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 110px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(123, 103, 238, 0.12);
+  color: var(--firstLevelText);
+  font-size: 12px;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+.apitable-grid__cellError {
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dark .apitable-grid__cellError {
+  color: #f87171;
+}
 `;

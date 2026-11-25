@@ -2,7 +2,42 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Number, Value};
 
-pub const KINDS: &[&str] = &["text", "number", "date", "single_select", "checkbox"];
+use super::{projection, relation};
+
+pub const KINDS: &[&str] = &[
+    "text",
+    "number",
+    "date",
+    "single_select",
+    "checkbox",
+    "relation",
+    "lookup",
+    "formula",
+];
+
+pub fn is_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    let groups = [8usize, 4, 4, 4, 12];
+    let mut index = 0;
+    for (group, len) in groups.iter().enumerate() {
+        if group > 0 {
+            if bytes[index] != b'-' {
+                return false;
+            }
+            index += 1;
+        }
+        for _ in 0..*len {
+            if !bytes[index].is_ascii_hexdigit() {
+                return false;
+            }
+            index += 1;
+        }
+    }
+    index == bytes.len()
+}
 
 #[derive(Clone)]
 pub struct FieldDef {
@@ -46,6 +81,18 @@ pub fn clean_name(raw: &str) -> Result<String, &'static str> {
 pub fn normalize_config(kind: &str, config: &Value) -> Result<Value, &'static str> {
     if !KINDS.contains(&kind) {
         return Err("不支持的字段类型");
+    }
+    if kind == "relation" {
+        return relation::RelationConfig::parse_input(config).map(|cfg| cfg.to_json());
+    }
+    if kind == "lookup" {
+        return projection::LookupConfig::parse_input(config).map(|cfg| cfg.to_json());
+    }
+    if kind == "formula" {
+        let expression = projection::parse_formula_input(config)?;
+        let mut object = Map::new();
+        object.insert("expression".to_owned(), Value::String(expression));
+        return Ok(Value::Object(object));
     }
     if kind != "single_select" {
         if config.is_null() || config == &Value::Object(Map::new()) {
@@ -92,7 +139,11 @@ pub fn normalize_config(kind: &str, config: &Value) -> Result<Value, &'static st
 }
 
 /// `Ok(None)` clears the cell. Checkbox `false` stays `Some(false)`.
+/// `lookup` and `formula` fields are read-only for direct writes, including `null`.
 pub fn normalize_value(field: &FieldDef, value: &Value) -> Result<Option<Value>, &'static str> {
+    if field.kind == "lookup" || field.kind == "formula" {
+        return Err("计算字段和查找字段是只读的，不能直接写入");
+    }
     if value.is_null() {
         return Ok(None);
     }
@@ -134,6 +185,7 @@ pub fn normalize_value(field: &FieldDef, value: &Value) -> Result<Option<Value>,
             let checked = value.as_bool().ok_or("勾选字段只能是勾选、未勾选或清空")?;
             Ok(Some(Value::Bool(checked)))
         }
+        "relation" => relation::normalize_cell(value),
         _ => Err("不支持的字段类型"),
     }
 }
@@ -203,13 +255,21 @@ pub fn normalize_view(
 
 pub fn matches(field: &FieldDef, cell: Option<&Value>, filter: &StoredFilter) -> bool {
     match filter.op.as_str() {
-        "is_empty" => cell.is_none(),
-        "is_not_empty" => cell.is_some(),
+        "is_empty" => match (field.kind.as_str(), cell) {
+            (_, None) => true,
+            ("lookup", Some(Value::Array(items))) => items.is_empty(),
+            _ => false,
+        },
+        "is_not_empty" => match (field.kind.as_str(), cell) {
+            (_, None) => false,
+            ("lookup", Some(Value::Array(items))) => !items.is_empty(),
+            _ => true,
+        },
         "eq" => cell.is_some_and(|value| {
             values_equal(field, value, filter.value.as_ref().unwrap_or(&Value::Null))
         }),
         "contains" => match (field.kind.as_str(), cell, filter.value.as_ref()) {
-            ("text", Some(Value::String(text)), Some(Value::String(needle))) => {
+            ("text" | "formula", Some(Value::String(text)), Some(Value::String(needle))) => {
                 text.contains(needle)
             }
             _ => false,
@@ -233,11 +293,17 @@ pub fn sort_key(field: &FieldDef, cell: Option<&Value>) -> Option<SortKey> {
                 .position(|id| *id == picked)
                 .map(|index| SortKey::Number(index as f64))
         }),
+        "formula" => match value {
+            Value::Number(number) => number.as_f64().map(SortKey::Number),
+            Value::String(text) => Some(SortKey::Text(text.clone())),
+            Value::Bool(checked) => Some(SortKey::Number(if *checked { 1.0 } else { 0.0 })),
+            _ => None,
+        },
         _ => None,
     }
 }
 
-#[derive(Clone, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum SortKey {
     Number(f64),
     Text(String),
@@ -263,11 +329,17 @@ fn check_filter(
             })
         }
         "eq" | "contains" => {
-            if filter.op == "contains" && field.kind != "text" {
-                return Err("只有文本字段可以按包含筛选");
+            if filter.op == "contains" && field.kind != "text" && field.kind != "formula" {
+                return Err("只有文本或公式字段可以按包含筛选");
             }
             let value = filter.value.as_ref().ok_or("筛选需要一个比较值")?;
-            let stored = normalize_value(field, value)?.ok_or("筛选不能和空值比较，请改用为空")?;
+            let stored = if field.kind == "formula" {
+                normalize_formula_filter_value(&filter.op, value)?
+            } else if field.kind == "lookup" {
+                return Err("查找字段不支持按值筛选");
+            } else {
+                normalize_value(field, value)?.ok_or("筛选不能和空值比较，请改用为空")?
+            };
             Ok(StoredFilter {
                 field_id: field.id.clone(),
                 op: filter.op.clone(),
@@ -278,8 +350,38 @@ fn check_filter(
     }
 }
 
+fn normalize_formula_filter_value(op: &str, value: &Value) -> Result<Value, &'static str> {
+    if op == "contains" {
+        let text = value.as_str().ok_or("包含筛选需要文本")?;
+        if text.trim().is_empty() {
+            return Err("筛选不能和空值比较，请改用为空");
+        }
+        return Ok(Value::String(text.to_owned()));
+    }
+    match value {
+        Value::Null => Err("筛选不能和空值比较，请改用为空"),
+        Value::String(text) => {
+            if text.trim().is_empty() {
+                return Err("筛选不能和空值比较，请改用为空");
+            }
+            Ok(Value::String(text.clone()))
+        }
+        Value::Number(number) => {
+            let finite = number
+                .as_f64()
+                .filter(|item| item.is_finite())
+                .ok_or("数字超出可保存的范围")?;
+            let stored = Number::from_f64(finite).ok_or("数字超出可保存的范围")?;
+            Ok(Value::Number(stored))
+        }
+        Value::Bool(checked) => Ok(Value::Bool(*checked)),
+        _ => Err("公式筛选只支持文本、数字或布尔值"),
+    }
+}
+
 fn values_equal(field: &FieldDef, left: &Value, right: &Value) -> bool {
-    if field.kind == "number" {
+    if field.kind == "number" || (field.kind == "formula" && left.is_number() && right.is_number())
+    {
         return left.as_f64() == right.as_f64();
     }
     left == right
@@ -456,5 +558,39 @@ mod tests {
         };
         assert!(matches(&select_field(), Some(&json!("high")), &still));
         let _ = named;
+    }
+
+    #[test]
+    fn lookup_and_formula_are_read_only_even_for_null_and_support_grid_filters() {
+        let lookup = field("lookup", json!({}));
+        assert!(normalize_value(&lookup, &Value::Null).is_err());
+        assert!(normalize_value(&lookup, &json!([1])).is_err());
+
+        let formula = field("formula", json!({ "expression": "1 + 1" }));
+        assert!(normalize_value(&formula, &Value::Null).is_err());
+        assert!(normalize_value(&formula, &json!(2)).is_err());
+
+        let empty_lookup = StoredFilter {
+            field_id: lookup.id.clone(),
+            op: "is_empty".to_owned(),
+            value: None,
+        };
+        assert!(matches(&lookup, Some(&json!([])), &empty_lookup));
+        assert!(!matches(&lookup, Some(&json!([0])), &empty_lookup));
+
+        let formula_eq = StoredFilter {
+            field_id: formula.id.clone(),
+            op: "eq".to_owned(),
+            value: Some(json!(42)),
+        };
+        assert!(matches(&formula, Some(&json!(42.0)), &formula_eq));
+        assert_eq!(
+            sort_key(&formula, Some(&json!(42.0))),
+            Some(SortKey::Number(42.0))
+        );
+        assert_eq!(
+            sort_key(&formula, Some(&json!("abc"))),
+            Some(SortKey::Text("abc".to_owned()))
+        );
     }
 }

@@ -5,13 +5,14 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use super::validate::{self, FieldDef, StoredFilter, StoredSort, StoredView};
+use super::{projection, relation};
 
 #[derive(Debug)]
 pub enum StoreError {
     NotFound(&'static str),
     Conflict {
         message: &'static str,
-        record: RecordDto,
+        record: Box<RecordDto>,
     },
     Invalid(&'static str),
     NameTaken,
@@ -44,6 +45,8 @@ pub struct RecordDto {
     pub created_at: String,
     pub updated_at: String,
     pub values: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -66,6 +69,12 @@ pub struct SheetDto {
     pub views: Vec<ViewDto>,
     pub records: Vec<RecordDto>,
     pub active_view_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RecordOptionDto {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Serialize)]
@@ -155,9 +164,95 @@ pub async fn get_sheet(
     view: Option<&str>,
 ) -> Result<SheetDto, StoreError> {
     let mut tx = begin(pool).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
     let sheet = load_sheet(&mut tx, workspace, table, view).await?;
     commit(tx).await?;
     Ok(sheet)
+}
+
+pub async fn list_record_options(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+) -> Result<Vec<RecordOptionDto>, StoreError> {
+    let mut tx = begin(pool).await?;
+    let table = load_table(&mut tx, workspace, table).await?;
+    let fields = load_fields(&mut tx, workspace, &table.id).await?;
+    let records = load_records(&mut tx, workspace, &table.id, &fields).await?;
+    commit(tx).await?;
+    Ok(records
+        .iter()
+        .map(|record| RecordOptionDto {
+            id: record.id.clone(),
+            label: record_option_label(&fields, record),
+        })
+        .collect())
+}
+
+fn record_option_label(fields: &[FieldDto], record: &RecordDto) -> String {
+    if let Some(first) = fields.first()
+        && let Some(label) = format_option_value(first, record.values.get(&first.id))
+    {
+        return label;
+    }
+    for field in fields.iter().skip(1) {
+        if field.kind == "text"
+            && let Some(label) = format_option_value(field, record.values.get(&field.id))
+        {
+            return label;
+        }
+    }
+    let short: String = record
+        .id
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .take(8)
+        .collect();
+    format!("未命名记录 ({short})")
+}
+
+fn format_option_value(field: &FieldDto, value: Option<&Value>) -> Option<String> {
+    let value = value.filter(|item| !item.is_null())?;
+    let raw = match field.kind.as_str() {
+        "text" | "date" => value.as_str()?.trim().to_owned(),
+        "number" => value.as_number()?.to_string(),
+        "checkbox" => {
+            if value.as_bool()? {
+                "是".to_owned()
+            } else {
+                "否".to_owned()
+            }
+        }
+        "single_select" => {
+            let picked = value.as_str()?;
+            field
+                .config
+                .get("options")
+                .and_then(Value::as_array)
+                .and_then(|options| {
+                    options.iter().find_map(|option| {
+                        let id = option.get("id").and_then(Value::as_str)?;
+                        if id == picked {
+                            option.get("label").and_then(Value::as_str)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or(picked)
+                .trim()
+                .to_owned()
+        }
+        _ => return None,
+    };
+    let first_line = raw.lines().next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        return None;
+    }
+    Some(first_line.chars().take(80).collect())
 }
 
 pub async fn create_field(
@@ -171,6 +266,19 @@ pub async fn create_field(
     let name = validate::clean_name(name).map_err(StoreError::Invalid)?;
     let config = validate::normalize_config(kind, config).map_err(StoreError::Invalid)?;
     let mut tx = begin(pool).await?;
+    if kind == "relation" {
+        let field =
+            relation::create_relation_field(&mut tx, workspace, table, &name, &config).await?;
+        commit(tx).await?;
+        return Ok(field);
+    }
+    if kind == "lookup" || kind == "formula" {
+        let field =
+            projection::create_derived_field(&mut tx, workspace, table, &name, kind, &config)
+                .await?;
+        commit(tx).await?;
+        return Ok(field);
+    }
     lock_table(&mut tx, workspace, table).await?;
     let position = next_position(&mut tx, workspace, table).await?;
     let created = ts("created_at");
@@ -195,14 +303,36 @@ pub async fn create_field(
     Ok(field)
 }
 
-pub async fn rename_field(
+pub async fn update_field(
     pool: &PgPool,
     workspace: &str,
     table: &str,
     field: &str,
-    name: &str,
+    name: Option<&str>,
+    config: Option<&Value>,
 ) -> Result<FieldDto, StoreError> {
-    let name = validate::clean_name(name).map_err(StoreError::Invalid)?;
+    if name.is_none() && config.is_none() {
+        return Err(StoreError::Invalid("没有要保存的字段变更"));
+    }
+    let clean_name = match name {
+        Some(raw) => Some(validate::clean_name(raw).map_err(StoreError::Invalid)?),
+        None => None,
+    };
+    let mut tx = begin(pool).await?;
+    if let Some(raw_config) = config {
+        let updated = projection::update_field_config(
+            &mut tx,
+            workspace,
+            table,
+            field,
+            clean_name.as_deref(),
+            raw_config,
+        )
+        .await?;
+        commit(tx).await?;
+        return Ok(updated);
+    }
+    lock_table(&mut tx, workspace, table).await?;
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
@@ -215,12 +345,22 @@ pub async fn rename_field(
         .bind(field)
         .bind(table)
         .bind(workspace)
-        .bind(name)
-        .fetch_optional(pool)
+        .bind(clean_name.expect("checked above"))
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|err| map_write(err, "请重试重命名字段"))?
         .ok_or(StoreError::NotFound("找不到这个字段"))?;
-    field_from_row(&row)
+    let mut updated_field = field_from_row(&row)?;
+    if updated_field.kind == "formula" {
+        let fields = load_fields(&mut tx, workspace, table).await?;
+        let names: BTreeMap<String, String> = fields
+            .into_iter()
+            .map(|item| (item.id, item.name))
+            .collect();
+        projection::hydrate_single_formula(&mut updated_field, &names);
+    }
+    commit(tx).await?;
+    Ok(updated_field)
 }
 
 pub async fn create_record(
@@ -228,11 +368,25 @@ pub async fn create_record(
     workspace: &str,
     table: &str,
     values: &BTreeMap<String, Value>,
+    actor: Option<&super::collab::Actor>,
 ) -> Result<RecordDto, StoreError> {
     let mut tx = begin(pool).await?;
-    lock_table(&mut tx, workspace, table).await?;
+    let touched: Vec<String> = values.keys().cloned().collect();
+    let locked_tables = relation::prepare_table_locks(&mut tx, workspace, table, &touched).await?;
     let fields = load_fields(&mut tx, workspace, table).await?;
     let normalized = normalize_values(&fields, values)?;
+    let reverse_plan = relation::validate_and_plan_reverse(
+        &mut tx,
+        workspace,
+        &fields,
+        None,
+        &normalized,
+        &locked_tables,
+    )
+    .await?;
+    if reverse_plan.has_writes() && actor.is_none() {
+        return Err(StoreError::Invalid("创建包含双向关联的记录需要协作者身份"));
+    }
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
@@ -248,7 +402,12 @@ pub async fn create_record(
         .map_err(failed)?;
     let id: String = row.get(0);
     write_cells(&mut tx, workspace, &id, &normalized).await?;
-    let record = record_from_parts(&row, &fields, &normalized);
+    if let Some(actor) = actor
+        && reverse_plan.has_writes()
+    {
+        relation::apply_reverse_plan(&mut tx, workspace, &id, &reverse_plan, actor).await?;
+    }
+    let record = load_record(&mut tx, workspace, &fields, &id).await?;
     commit(tx).await?;
     Ok(record)
 }
@@ -369,7 +528,7 @@ async fn load_sheet(
     view_id: Option<&str>,
 ) -> Result<SheetDto, StoreError> {
     let table = load_table(tx, workspace, table).await?;
-    let fields = load_fields(tx, workspace, &table.id).await?;
+    let mut fields = load_fields(tx, workspace, &table.id).await?;
     let views = load_views(tx, workspace, &table.id).await?;
     let active = match view_id {
         None => views.first().map(|view| view.id.clone()),
@@ -384,6 +543,7 @@ async fn load_sheet(
         .as_ref()
         .and_then(|id| views.iter().find(|view| &view.id == id));
     let mut records = load_records(tx, workspace, &table.id, &fields).await?;
+    projection::project_sheet(tx, workspace, &table.id, &mut fields, &mut records).await?;
     if let Some(view) = active_view {
         if let Some(filter) = &view.filter {
             let field = fields.iter().find(|item| item.id == filter.field_id);
@@ -467,7 +627,7 @@ pub(super) async fn lock_table(
     Ok(())
 }
 
-async fn next_position(
+pub(super) async fn next_position(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -658,7 +818,7 @@ async fn load_views(
     rows.iter().map(view_from_row).collect()
 }
 
-async fn load_records(
+pub(super) async fn load_records(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -833,18 +993,6 @@ pub(super) fn normalize_values(
     Ok(normalized)
 }
 
-fn record_from_parts(
-    row: &sqlx::postgres::PgRow,
-    fields: &[FieldDto],
-    values: &BTreeMap<String, Option<Value>>,
-) -> RecordDto {
-    let mut map = HashMap::new();
-    for (id, value) in values {
-        map.insert(id.clone(), value.clone().unwrap_or(Value::Null));
-    }
-    record_from_maps(row, fields, &map)
-}
-
 fn record_from_maps(
     row: &sqlx::postgres::PgRow,
     fields: &[FieldDto],
@@ -863,6 +1011,7 @@ fn record_from_maps(
         created_at: row.get(2),
         updated_at: row.get(3),
         values: complete,
+        errors: BTreeMap::new(),
     }
 }
 
@@ -875,7 +1024,7 @@ fn table_from_row(row: &sqlx::postgres::PgRow) -> Result<TableDto, StoreError> {
     })
 }
 
-fn field_from_row(row: &sqlx::postgres::PgRow) -> Result<FieldDto, StoreError> {
+pub(super) fn field_from_row(row: &sqlx::postgres::PgRow) -> Result<FieldDto, StoreError> {
     let config_text: String = row.get(3);
     let config = serde_json::from_str(&config_text).map_err(|_| StoreError::Failed)?;
     Ok(FieldDto {
@@ -931,7 +1080,7 @@ pub(super) fn failed(err: sqlx::Error) -> StoreError {
     StoreError::Failed
 }
 
-fn map_write(err: sqlx::Error, retry: &'static str) -> StoreError {
+pub(super) fn map_write(err: sqlx::Error, retry: &'static str) -> StoreError {
     if let Some(db) = err.as_database_error()
         && db.code().as_deref() == Some("23505")
     {
@@ -942,4 +1091,60 @@ fn map_write(err: sqlx::Error, retry: &'static str) -> StoreError {
         return StoreError::Invalid(retry);
     }
     failed(err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn field(id: &str, kind: &str, config: Value) -> FieldDto {
+        FieldDto {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            kind: kind.to_owned(),
+            config,
+            position: 1,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn record(id: &str, values: BTreeMap<String, Value>) -> RecordDto {
+        RecordDto {
+            id: id.to_owned(),
+            revision: 1,
+            created_at: String::new(),
+            updated_at: String::new(),
+            values,
+            errors: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn record_option_label_uses_first_field_then_text_then_fallback() {
+        let f1 = field("f1", "text", json!({}));
+        let f2 = field("f2", "text", json!({}));
+        let rec_id = "12345678-1111-4111-8111-111111111111";
+
+        let mut values = BTreeMap::new();
+        values.insert("f1".to_owned(), json!("  主标题\n第二行 "));
+        assert_eq!(
+            record_option_label(&[f1.clone(), f2.clone()], &record(rec_id, values)),
+            "主标题"
+        );
+
+        let mut second = BTreeMap::new();
+        second.insert("f1".to_owned(), Value::Null);
+        second.insert("f2".to_owned(), json!("备用标题"));
+        assert_eq!(
+            record_option_label(&[f1.clone(), f2.clone()], &record(rec_id, second)),
+            "备用标题"
+        );
+
+        assert_eq!(
+            record_option_label(&[f1, f2], &record(rec_id, BTreeMap::new())),
+            "未命名记录 (12345678)"
+        );
+    }
 }

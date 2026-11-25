@@ -5,7 +5,10 @@
 //! these ids, but it does not add columns or tables here.
 
 mod collab;
+mod formula;
 mod http;
+mod projection;
+mod relation;
 mod store;
 mod validate;
 

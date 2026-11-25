@@ -1,11 +1,15 @@
 export {
   genericCellValueSchema,
+  genericFieldKinds,
   genericFieldSchema,
+  genericRecordOptionSchema,
+  genericRecordOptionsSchema,
   genericRecordSchema,
   genericSheetSchema,
   genericTableListSchema,
   revisionConflictSchema,
   EMPTY_GENERIC_CHANGES,
+  EMPTY_GENERIC_RECORD_OPTIONS,
   EMPTY_GENERIC_SHEET,
   EMPTY_GENERIC_TABLE_LIST,
 } from "./schema";
@@ -16,10 +20,14 @@ export type {
   GenericChanges,
   GenericPresence,
   GenericField,
+  GenericFieldConfigWrite,
   GenericFieldKind,
+  GenericFieldPatch,
   GenericFieldWrite,
   GenericFilter,
   GenericRecord,
+  GenericRecordOption,
+  GenericRecordOptions,
   GenericSheet,
   GenericSort,
   GenericTable,
@@ -27,4 +35,9 @@ export type {
   GenericView,
   GenericViewWrite,
 } from "./schema";
-export { genericTableKeys, genericTableListOptions, genericSheetOptions } from "./queries";
+export {
+  genericTableKeys,
+  genericTableListOptions,
+  genericSheetOptions,
+  genericRecordOptionsQuery,
+} from "./queries";

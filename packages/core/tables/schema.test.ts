@@ -45,4 +45,24 @@ describe("generic table values", () => {
       endpoint: "GET /api/tables/:id",
     })).toEqual(EMPTY_GENERIC_SHEET);
   });
+
+  it("parses relation arrays, nested lookup arrays, and per-cell formula errors", () => {
+    const record = genericRecordSchema.parse({
+      id: "rec-1",
+      revision: 3,
+      created_at: "2026-11-25T00:00:00Z",
+      updated_at: "2026-11-25T00:00:00Z",
+      values: {
+        rel: ["11111111-1111-4111-8111-111111111111"],
+        lkp: [0, false, null, ["nested"]],
+        frm: null,
+      },
+      errors: {
+        frm: "公式不能除以零",
+      },
+    });
+    expect(record.values.rel).toEqual(["11111111-1111-4111-8111-111111111111"]);
+    expect(record.values.lkp).toEqual([0, false, null, ["nested"]]);
+    expect(record.errors?.frm).toBe("公式不能除以零");
+  });
 });

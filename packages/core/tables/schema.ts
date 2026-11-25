@@ -1,9 +1,32 @@
 import { z } from "zod";
 
-export const genericCellValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
-export type GenericCellValue = z.infer<typeof genericCellValueSchema>;
+export type GenericCellValue =
+  | string
+  | number
+  | boolean
+  | null
+  | GenericCellValue[];
 
-export const genericFieldKinds = ["text", "number", "date", "single_select", "checkbox"] as const;
+export const genericCellValueSchema: z.ZodType<GenericCellValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(genericCellValueSchema),
+  ]),
+);
+
+export const genericFieldKinds = [
+  "text",
+  "number",
+  "date",
+  "single_select",
+  "checkbox",
+  "relation",
+  "lookup",
+  "formula",
+] as const;
 export type GenericFieldKind = (typeof genericFieldKinds)[number];
 
 export const genericOptionSchema = z.object({
@@ -17,6 +40,14 @@ export const genericFieldSchema = z.object({
   kind: z.string(),
   config: z.object({
     options: z.array(genericOptionSchema).optional(),
+    target_table_id: z.string().optional(),
+    bidirectional: z.boolean().optional(),
+    reverse_field_id: z.string().optional(),
+    relation_field_id: z.string().optional(),
+    target_field_id: z.string().optional(),
+    target_options: z.array(genericOptionSchema).optional(),
+    target_relation_table_id: z.string().optional(),
+    expression: z.string().optional(),
   }).loose().catch({}),
   position: z.number(),
   created_at: z.string(),
@@ -30,8 +61,20 @@ export const genericRecordSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   values: z.record(z.string(), genericCellValueSchema),
+  errors: z.record(z.string(), z.string()).optional(),
 }).loose();
 export type GenericRecord = z.infer<typeof genericRecordSchema>;
+
+export const genericRecordOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+}).loose();
+export type GenericRecordOption = z.infer<typeof genericRecordOptionSchema>;
+
+export const genericRecordOptionsSchema = z.object({
+  records: z.array(genericRecordOptionSchema),
+}).loose();
+export type GenericRecordOptions = z.infer<typeof genericRecordOptionsSchema>;
 
 export const genericFilterSchema = z.object({
   field_id: z.string(),
@@ -106,10 +149,24 @@ export const revisionConflictSchema = z.object({
   record: genericRecordSchema,
 }).loose();
 
+export interface GenericFieldConfigWrite {
+  options?: { id: string; label: string }[];
+  target_table_id?: string;
+  bidirectional?: boolean;
+  relation_field_id?: string;
+  target_field_id?: string;
+  expression?: string;
+}
+
 export interface GenericFieldWrite {
   name: string;
   kind: GenericFieldKind;
-  config?: { options?: { id: string; label: string }[] };
+  config?: GenericFieldConfigWrite;
+}
+
+export interface GenericFieldPatch {
+  name?: string;
+  config?: GenericFieldConfigWrite;
 }
 
 export interface GenericViewWrite {
@@ -167,6 +224,7 @@ const emptyView = {
 };
 
 export const EMPTY_GENERIC_TABLE_LIST: GenericTableList = { tables: [] };
+export const EMPTY_GENERIC_RECORD_OPTIONS: GenericRecordOptions = { records: [] };
 export const EMPTY_GENERIC_TABLE_CREATED: GenericTableCreated = { table: emptyTable, view: emptyView };
 export const EMPTY_GENERIC_FIELD: GenericField = {
   id: "",

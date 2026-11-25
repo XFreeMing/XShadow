@@ -2,19 +2,40 @@
 // `remote` is the insertion point for a later turn: pass received records
 // and conflict marks here. This package does not open a collaboration session.
 
+export type GridCellValue =
+  | string
+  | number
+  | boolean
+  | null
+  | GridCellValue[];
+
+export interface GridRecordOption {
+  id: string;
+  label: string;
+}
+
 export interface GridFieldView {
   id: string;
   name: string;
   kind: string;
   config?: {
     options?: { id: string; label: string }[];
+    target_table_id?: string;
+    bidirectional?: boolean;
+    reverse_field_id?: string;
+    relation_field_id?: string;
+    target_field_id?: string;
+    target_options?: { id: string; label: string }[];
+    target_relation_table_id?: string;
+    expression?: string;
   };
 }
 
 export interface GridRecordView {
   id: string;
   revision: number;
-  values: Record<string, string | number | boolean | null | undefined>;
+  values: Record<string, GridCellValue | undefined>;
+  errors?: Record<string, string>;
 }
 
 export interface GridConflictMark {
@@ -38,6 +59,9 @@ export interface GridLabels {
   emptyGroup?: string;
   online?: string;
   recent?: string;
+  configureField?: string;
+  addLink?: string;
+  readonly?: string;
 }
 
 export interface GridCollaborator {
@@ -62,5 +86,3 @@ export interface GridGroup {
   collapsed: boolean;
   records: readonly GridRecordView[];
 }
-
-export type GridCellValue = string | number | boolean | null;
