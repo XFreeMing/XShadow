@@ -228,7 +228,7 @@ func (h *Handler) decidePRAutoComplete(ctx context.Context, ws db.Workspace, iss
 			d.State = prAutoCompleteMethodReviewOpen
 			return d, nil
 		}
-		if errors.Is(err, errMethodMergePending) {
+		if errors.Is(err, errMethodMergePending) || errors.Is(err, errMethodReclaimPending) {
 			d.State, d.PRs = prAutoCompleteWaiting, prs
 			return d, nil
 		}

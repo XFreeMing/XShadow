@@ -1698,6 +1698,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/cancel-ack", h.AckTaskCancelled)
 
 		r.Post("/workspaces/{workspaceId}/issues/gc-check", h.BatchIssueGCCheck)
+		r.Get("/runtimes/{runtimeId}/project-deliveries", h.ListProjectDeliveryJobs)
+		r.Post("/runtimes/{runtimeId}/project-deliveries/{issueId}", h.ReportProjectDelivery)
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
 		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
 		r.Get("/autopilot-runs/{runId}/gc-check", h.GetAutopilotRunGCCheck)

@@ -81,6 +81,56 @@ function mount(patch: Partial<WorkMethodRun> = {}) {
   return change;
 }
 
+it("displays the GitHub pull request and keeps pending cleanup visible after approval", async () => {
+  const merge = "c".repeat(40);
+  mount({
+    method: {
+      ...method,
+      kind: "development",
+      github_delivery: { repository: "owner/project", base_ref: "dev" },
+    },
+    state: "closed",
+    can_act: false,
+    project_delivery: { resource_id: "local-resource" },
+    history: [{
+      action: "approve",
+      step: 1,
+      evidence: "Independent review passed",
+      actor: "member/Bella",
+      at: "2026-11-25T08:00:00Z",
+      delivery_receipt: { state: "cleanup_pending", pull_request: 9, merge },
+    }],
+  });
+  expect(await screen.findByText("Merged, awaiting cleanup")).toBeVisible();
+  expect(screen.getByRole("link", { name: "PR #9" })).toHaveAttribute("href", "https://github.com/owner/project/pull/9");
+});
+
+it("submits coverage preflight receipts along with the coverage handoff", async () => {
+  const change = mount({
+    state: "working",
+    method: {
+      ...method,
+      kind: "development",
+      steps: [{ ...method.steps[0], require_preflight: true, acceptance_gate: "coverage" }, method.steps[1]],
+    },
+  });
+  const input = await screen.findByRole("textbox", { name: "Coverage receipts (JSON)" });
+  const receipt = [{
+    criterion_id: "AC1",
+    criterion_version: 1,
+    case_id: "B01",
+    case_version: 1,
+    command: "./test B01",
+    baseline: { commit: "a".repeat(40), result: "pass", evidence: "Legacy behavior confirmed" },
+  }];
+  fireEvent.change(screen.getByRole("textbox", { name: "Step output and supporting evidence" }), { target: { value: "Evidence at test report" } });
+  fireEvent.change(input, { target: { value: JSON.stringify(receipt) } });
+  fireEvent.click(screen.getByRole("button", { name: "Submit for review" }));
+  await waitFor(() => expect(change).toHaveBeenCalledWith("issue", expect.objectContaining({
+    action: "advance", coverage_preflight: receipt,
+  })));
+});
+
 it("records checked items separately from an intermediate reviewer's evidence", async () => {
   const change = mount();
   const approval = await screen.findByRole("button", {

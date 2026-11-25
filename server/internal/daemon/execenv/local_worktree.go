@@ -1560,6 +1560,27 @@ func ConfirmDeliveredLocalBranch(directory, branch, sha, workspaceID, agentID, i
 	return err == nil, err
 }
 
+// ReclaimApprovedProjectBranch reads ownership from the branch record rather
+// than the last runtime run, which may have been performed by a reviewer.
+func ReclaimApprovedProjectBranch(directory, branch, sha, workspaceID, issueID string, logger *slog.Logger) (bool, error) {
+	if !strings.HasPrefix(branch, "agent/") {
+		return true, nil
+	}
+	root, err := resolveGitRoot(directory)
+	if err != nil {
+		return false, err
+	}
+	ref, err := readUserStateRef(root, branch)
+	if err != nil || ref == "" {
+		return false, err
+	}
+	record, err := readBranchRecord(root, ref)
+	if err != nil || record.owner.WorkspaceID != workspaceID || record.owner.ConversationID != issueID {
+		return false, err
+	}
+	return ConfirmDeliveredLocalBranch(root, branch, sha, workspaceID, record.owner.AgentID, issueID, logger)
+}
+
 func mergedLocalBranchRef(branch string) string {
 	return mergedLocalBranchRefPrefix + branch
 }

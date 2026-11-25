@@ -185,6 +185,7 @@ var errMethodStageMoved = errors.New("work method stage moved; end this run")
 
 var errMethodReviewOpen = errors.New("complete the work method review before marking the issue done")
 var errMethodMergePending = errors.New("等待已审核候选合入指定 GitHub 分支")
+var errMethodReclaimPending = errors.New("已合并，等待交付分支和工作空间回收")
 
 func (h *Handler) checkMethodCompletion(ctx context.Context, issue db.Issue, status string) error {
 	return h.checkMethodStatus(ctx, issue, status, false)
@@ -215,6 +216,23 @@ func (h *Handler) checkMethodStatus(ctx context.Context, issue db.Issue, status 
 	}
 	if run.State != "closed" {
 		return errMethodReviewOpen
+	}
+	if run.ProjectDelivery != nil {
+		if requestingMerge {
+			return errors.New("此项目由 GitHub Actions 自动合并已审核的交付")
+		}
+		approval := run.DeliveryApproval()
+		if approval == nil || approval.DeliveryReceipt == nil {
+			return errMethodMergePending
+		}
+		switch approval.DeliveryReceipt.State {
+		case workmethod.DeliveryDone:
+			return nil
+		case workmethod.DeliveryCleanup:
+			return errMethodReclaimPending
+		default:
+			return errMethodMergePending
+		}
 	}
 	if !requestingMerge && run.Method != nil && run.Method.GitHubDelivery != nil && h.verifyMethodGitHubDelivery(ctx, issue, run.Method.GitHubDelivery) != nil {
 		return errMethodMergePending
@@ -260,7 +278,7 @@ func writeIssueWorkflowError(w http.ResponseWriter, err error) bool {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "work_method_review_open"})
 		return true
 	}
-	if errors.Is(err, errMethodMergePending) {
+	if errors.Is(err, errMethodMergePending) || errors.Is(err, errMethodReclaimPending) {
 		writeErrorCode(w, http.StatusConflict, "github_delivery_pending", err.Error())
 		return true
 	}
@@ -689,8 +707,12 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 			b.WriteString("Use current criterion texts and their user-facing scope.")
 		case "coverage":
 			b.WriteString("Check current criteria and active cases against original samples. Before submitting cases, show which plausible wrong implementation each important case rejects. Where applicable, check object identity alongside status, legacy fields alongside current fields, and actual execution evidence for each request. Retrieve retired cases only for supersession checks.")
+			if run.RequiresCoveragePreflight() {
+				b.WriteString(" Submit coverage_preflight with the method advance. Each entry has criterion_id, criterion_version, case_id, case_version, command, baseline {commit, result, evidence}, and reference {commit, result, evidence} when comparing implementations. For new behavior, report the failing business assertion and the passing reference. For preserved behavior, report the passing legacy baseline. On rework, submit receipts only for new or affected case revisions. Review the changed receipts together and carry forward the applicable previous ones.")
+			}
 		case "candidate", "delivery":
 			b.WriteString("Use current criteria, active cases, candidate commit and matching run evidence. Verify the original entry points.")
+			b.WriteString(" The work-method history contains the submitted coverage_preflight receipts, including replay commands. Reuse receipts for unchanged cases.")
 		}
 		b.WriteString(" Record evidence with --change-file.\n")
 		if step.Gate == "candidate" {
@@ -725,6 +747,9 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 			fmt.Fprintf(&b, "Final review criteria: %s\n", run.Method.Review)
 		}
 		b.WriteString("Review the submitted work and each check against original evidence. Approve only after all checks pass. Otherwise record rework with the zero-based target_step. For each reproducible finding, submit findings with criterion_id and case_id when applicable, expected, actual, and evidence.\n")
+		if run.RequiresCoveragePreflight() {
+			b.WriteString("Group the blocking findings in one rework. On resubmission, review the changed cases, related assertions and open findings, with previous evidence for unchanged cases.\n")
+		}
 	}
 	payload := map[string]any{"base_revision": run.Revision, "action": action, "evidence": "<actual deliverable or review findings and source>"}
 	if action == "approve" && step.Reviewer != nil && len(step.Checks) > 0 {

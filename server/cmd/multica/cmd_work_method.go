@@ -43,6 +43,12 @@ or start a recommended method, coordinate its candidate step, submit a step's ou
 For an authorized squad candidate step with self_claim enabled, offer_candidate starts an assessment.
 The invited agent can submit claim_candidate itself when ready.
 
+On a coverage step with require_preflight, include coverage_preflight with advance.
+For each new or revised case, include criterion_id, criterion_version, case_id,
+case_version, command and baseline {commit, result, evidence}. A failing
+baseline requires a passing reference {commit, result, evidence}. Unchanged
+case revisions can reuse their earlier receipts.
+
 Examples of changes (base_revision must match the latest read):
   {"action":"start","base_revision":0}
   {"action":"select","base_revision":0,"method_id":"seven-step"}

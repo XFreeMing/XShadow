@@ -41,6 +41,14 @@
 
 平台改进的跨平台声明以实测为准。当前工作台使用 Bash 和 Make。Windows 工具链的文档入口是 WSL。
 
+### 敏捷研发交接和 GitHub 交付
+
+用例作者在覆盖阶段提交可复跑回执。每份回执绑定标准和用例修订，记录复跑命令、基线提交和实际结果。新增行为配通过的参照，保留行为记录旧版通过的结果。返审沿用未变更用例的回执。独立终验仍在同一候选提交上从实际入口复验。
+
+工作区管理员可在项目的本地目录资源上设置 `github_actions_delivery: {"repository":"owner/repo","base_ref":"dev"}`。执行电脑的 daemon 环境需设置 `MULTICA_GITHUB_ACTIONS_DELIVERY_REPOS`，填写逗号分隔的允许投递仓库。用仓库所有者身份登录 GitHub CLI，本机 Git 的 `origin` 需可推送到同一仓库。可通过 `MULTICA_GITHUB_ACTIONS_DELIVERY_GH` 指定 GitHub CLI 的路径。
+
+该模式使用目标分支上的 `.github/workflows/merge-to-dev.yml`。工作流接受 `codex/merge-requests/<PR>-<head SHA>-<dev SHA>` 请求分支，从其中读取 `.github/merge-to-dev.json`，复核同仓 PR、候选提交和目标提交后合并。平台在终验后创建 PR 并提交请求。事项页显示 PR、合并结果和回收状态。平台只回收对应交付的 Git 引用和运行时拥有的工作目录，变化过的分支或仍被占用的 worktree 保留在待回收状态。
+
 ## 后续功能优先级
 
 以下是依据个人多机使用方式确定的建设方向，不是已完成能力：

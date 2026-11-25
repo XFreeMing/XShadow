@@ -24,6 +24,15 @@
     "chat_draft": "Modifica el prototipo de {{issue}} ({{id}}).\n\n{{request}}\n\nImágenes originales en orden\n{{originals}}\n\nLee la tarea y las imágenes. Pregúntame si el alcance no está claro. Presenta las imágenes nuevas con `multica attachment upload`, guarda sus ID y espera mi aprobación explícita. Después lee la descripción y revisión actuales con `multica issue get`. Si cambiaron las referencias originales, indícamelo. Descarga las imágenes aprobadas y sustituye solo sus referencias por rutas locales relativas. Conserva el resto del texto y los adjuntos. Publica con {{command}}, repitiendo --attachment por imagen. Si hay conflicto, vuelve a leer e infórmame. Verifica las nuevas referencias."
   },
   "method": {
+    "coverage_receipt": "Comprobantes de cobertura (JSON)",
+    "coverage_invalid": "Introduce una lista válida de comprobantes de cobertura.",
+    "github_delivery": "Entrega en GitHub",
+    "waiting_delivery": "Esperando el inicio de la entrega",
+    "setup_required": "Configura la autenticación de GitHub o el directorio de trabajo",
+    "waiting_actions": "Esperando a GitHub Actions",
+    "merge_blocked": "Fusión bloqueada",
+    "cleanup_pending": "Fusionado, pendiente de limpieza",
+    "reclaimed": "Fusionado y limpiado",
     "closeout": "Resumen de cierre",
     "closeout_passed": "{{passed}}/{{total}} aprobados",
     "closeout_reconstructed": "Según registros históricos",

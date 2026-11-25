@@ -205,6 +205,7 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	id := dbfx.Issue(t, "实现敏捷交付闭环", testutil.Cols{"status": "todo", "work_method_run": raw})
 	path := "/api/issues/" + id
 	trace := acceptance.Trace{}
+	var preflight []workmethod.CoveragePreflight
 	accept := func(action string, fields map[string]any) {
 		t.Helper()
 		fields["action"], fields["criterion_id"], fields["base_revision"] = action, "AC1", trace.Revision
@@ -215,6 +216,9 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	move := func(action string, want int) {
 		t.Helper()
 		body := map[string]any{"action": action, "base_revision": run.Revision, "evidence": "核对原始证据"}
+		if action == "advance" && len(preflight) > 0 {
+			body["coverage_preflight"] = preflight
+		}
 		req := goalRequest("POST", path+"/work-method", testUserID, body, map[string]string{"id": id})
 		if action == "approve" {
 			checked := make([]int, len(run.Method.Steps[run.Step].Checks))
@@ -249,7 +253,19 @@ func TestAgileEvidenceEventsDriveBoardAndHandoff(t *testing.T) {
 	for _, key := range []string{"T1", "T2"} {
 		accept("case", map[string]any{"case_id": key, "text": "运行 " + key})
 	}
+	move("advance", 409)
+	for _, key := range []string{"T1", "T2"} {
+		preflight = append(preflight, workmethod.CoveragePreflight{
+			CriterionID: "AC1", CriterionVersion: 1, CaseID: key, CaseVersion: 1, Command: "./test " + key,
+			Baseline:  workmethod.CoverageRun{Commit: strings.Repeat("a", 40), Result: "fail", Evidence: "baseline failed at " + key},
+			Reference: &workmethod.CoverageRun{Commit: strings.Repeat("b", 40), Result: "pass", Evidence: "reference passed " + key},
+		})
+	}
 	move("advance", 200)
+	preflight = nil
+	if got := run.History[len(run.History)-1].CoveragePreflight; len(got) != 2 || got[1].CaseID != "T2" {
+		t.Fatalf("coverage reviewer did not receive both receipts: %+v", got)
+	}
 	move("approve", 200)
 	board("in_progress")
 	sha := strings.Repeat("b", 40)
