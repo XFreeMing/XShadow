@@ -128,6 +128,7 @@ type GoalPlanResponse struct {
 	Review             *GoalPlanReviewView       `json:"review,omitempty"`
 	ExecutionState     string                    `json:"execution_state,omitempty"`
 	ExecutionRevision  *int32                    `json:"execution_revision,omitempty"`
+	ExecutionStage     int                       `json:"execution_stage,omitempty"`
 	CanManageExecution bool                      `json:"can_manage_execution,omitempty"`
 	Progress           *service.GoalWorkProgress `json:"progress,omitempty"`
 	ID                 *string                   `json:"id"`
@@ -236,6 +237,7 @@ func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 
 	var executionState string
 	var executionRevision *int32
+	var executionStage int
 	if plan.ExecutionID.Valid {
 		executionState = "stale"
 		executionRevision = &plan.ExecutionRevision.Int32
@@ -245,6 +247,7 @@ func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 		}
 		if execution.ID.Valid {
 			executionState = "active"
+			executionStage = service.GoalExecutionStage(plan)
 		}
 	}
 	bindGoalPreparationIssues(content.Items, progress.PreparationBindings)
@@ -256,6 +259,7 @@ func goalPlanToResponse(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 		Review:            review,
 		ExecutionState:    executionState,
 		ExecutionRevision: executionRevision,
+		ExecutionStage:    executionStage,
 		ID:                &id,
 		GoalID:            uuidToString(goal.ID),
 		ProjectID:         uuidToPtr(goal.ProjectID),

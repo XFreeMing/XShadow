@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -31,7 +33,7 @@ func CanManageGoalExecution(member db.Member, goal db.Goal) bool {
 
 // GoalExecutionScope binds approval to the goal charter and the definitions of
 // the methods selected by this saved plan. The plan's revision binds its items.
-func GoalExecutionScope(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan) (string, error) {
+func GoalExecutionScope(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan, stage int) (string, error) {
 	var content struct {
 		Items []goalWorkItem `json:"items"`
 	}
@@ -56,7 +58,25 @@ func GoalExecutionScope(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
+	scope := fmt.Sprintf("%x", sha256.Sum256(raw))
+	if stage > 0 {
+		scope += "/stage/" + strconv.Itoa(stage)
+	}
+	return scope, nil
+}
+
+// GoalExecutionStage reports the stage saved with the grant. Zero retains the
+// whole-plan behavior of grants created without a stage.
+func GoalExecutionStage(plan db.GoalPlan) int {
+	if !plan.ExecutionID.Valid || !plan.ExecutionRevision.Valid || plan.ExecutionRevision.Int32 != plan.Revision {
+		return 0
+	}
+	_, value, found := strings.Cut(plan.ExecutionScope.String, "/stage/")
+	if !found {
+		return 0
+	}
+	stage, _ := strconv.Atoi(value)
+	return max(stage, 0)
 }
 
 func ReadGoalExecution(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan) (GoalExecution, error) {
@@ -83,7 +103,7 @@ func ReadGoalExecution(ctx context.Context, q *db.Queries, goal db.Goal, plan db
 	if !access.CanSeeProject(goal.ProjectID) {
 		return GoalExecution{}, nil
 	}
-	scope, err := GoalExecutionScope(ctx, q, goal, plan)
+	scope, err := GoalExecutionScope(ctx, q, goal, plan, GoalExecutionStage(plan))
 	if err != nil || scope != plan.ExecutionScope.String {
 		return GoalExecution{}, err
 	}
@@ -130,7 +150,7 @@ func goalExecutionForIssue(ctx context.Context, q *db.Queries, issue db.Issue, l
 	}
 	issueID := util.UUIDToString(issue.ID)
 	progress, err := readGoalWorkProgress(ctx, q, goal, plan, issueID)
-	if err != nil || progress.IssueID != issueID || progress.MethodID == "" ||
+	if err != nil || progress.OutsideExecutionStage || progress.IssueID != issueID || progress.MethodID == "" ||
 		(progress.Phase != "planning" && progress.Phase != "delivering") {
 		return GoalExecution{}, err
 	}
