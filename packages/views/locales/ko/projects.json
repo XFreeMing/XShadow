@@ -148,7 +148,7 @@
     "mode_worktree_title": "병렬 실행",
     "mode_worktree_description": "작업 사본을 건드리지 않고 동시에 실행합니다. 각 실행은 agent/… 브랜치를 돌려주며, 검토 후 병합하면 됩니다.",
     "mode_worktree_needs_git": "이 폴더는 git 저장소가 아니어서 병렬로 실행할 수 없습니다.",
-    "mode_worktree_needs_server_upgrade": "Multica 서버가 오래되어 병렬 실행이 이 폴더에서 직접 실행됩니다. 먼저 서버를 업데이트하세요.",
+    "mode_worktree_needs_server_upgrade": "BaiShadow 서버가 오래되어 병렬 실행이 이 폴더에서 직접 실행됩니다. 먼저 서버를 업데이트하세요.",
     "mode_cancel": "취소",
     "mode_add": "폴더 추가",
     "mode_edit_tooltip": "실행 모드 변경",

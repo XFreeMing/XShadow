@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import {
   useNavigationInputBindings,
   useTabHistory,
@@ -161,7 +161,7 @@ function MainCanvas({
           role="status"
         >
           <div className="flex flex-col items-center gap-4">
-            <MulticaIcon mode="think" size={40} />
+            <BaiShadowIcon mode="think" size={40} />
             <p className="text-body text-muted-foreground">{loadingLabel}</p>
           </div>
         </div>

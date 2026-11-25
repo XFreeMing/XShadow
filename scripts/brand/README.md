@@ -1,69 +1,73 @@
 # Brand assets
 
-Every logo file in the repo is generated from `packages/ui/lib/multica-brand.ts`.
-After editing that file, regenerate and commit what changed:
+`packages/ui/lib/baishadow-brand.ts` defines the 百影 / BaiShadow lockup, three
+blades rotated by 120 degrees with open channels between them, and the
+teal-to-indigo gradient for light and dark surfaces. The rendered production assets are previewed in
+`docs/assets/brand/preview.png`.
+
+After changing the geometry, regenerate the assets and review the preview:
 
 ```sh
 pnpm generate:brand
+node scripts/brand/sync.mjs --check
+node --test scripts/brand/sync.test.mjs
 ```
-
-On an unchanged `multica-brand.ts` the command normally leaves the working
-tree clean, byte for byte. GPU rasterisation occasionally moves a single pixel
-by one step in one channel. A bitmap showing up as modified when the geometry
-didn't change is that noise. Discard it with `git checkout -- <file>`.
 
 ## Prerequisites
 
-Run it on macOS. The committed bitmaps were rendered there. Other platforms
-are untested, and they skip `icon.icns` because `iconutil` is macOS-only.
+- Node 22.18 or later and `pnpm install`.
+- Playwright Chromium (`pnpm exec playwright install chromium`), or an installed
+  Chromium browser selected with `BRAND_CHROMIUM_EXECUTABLE`.
+- Python 3 with Pillow for ICO, ICNS and GIF packaging. ICNS generation works
+  on Linux and macOS; it does not require `iconutil`.
+- Optional `oxipng` for lossless PNG optimization. Its absence does not skip assets.
 
-- Node 22.18 or later, for `.ts` type stripping, with `pnpm install` done.
-- Playwright's Chromium: `pnpm exec playwright install chromium`. The script
-  uses the full Chrome for Testing build (`channel: "chromium"`), which
-  rasterises on the GPU. The default headless shell, or `--disable-gpu`,
-  rasterises in software and changes every bitmap.
-- Python 3 with Pillow (`pip install pillow`), for `icon.ico` and the GIFs.
-- `oxipng` (`brew install oxipng`).
-- `iconutil` for `icon.icns`, which ships with macOS.
+For example, on Linux with Google Chrome installed:
 
-## What it writes
+```sh
+BRAND_CHROMIUM_EXECUTABLE=/usr/bin/google-chrome pnpm generate:brand
+```
 
-`sync.mjs` writes the text copies. It needs no dependencies, so CI runs it
-with `--check` and fails when a copy drifts from `multica-brand.ts`.
+Raster antialiasing can differ across browser versions and operating systems.
+Use the same environment for byte comparisons. SVG synchronization is exact.
 
-- `apps/web/public/favicon.svg`, `apps/docs/app/icon.svg`: favicon, with a dark-mode variant
-- `apps/web/public/icons/icon.svg`: full-bleed source for the home-screen icons
-- `docs/assets/logo-{light,dark}.svg`: the README wordmark
-- `apps/mobile/components/brand/multica-logo.tsx`: the block between the `GENERATED` markers. Mobile does not depend on `@multica/ui`.
-- `server/cmd/multica/cmd_auth.go`: the `.brand` SVG on the `multica login` callback page
+## Outputs
 
-`generate.mjs` runs `sync.mjs`, then renders the bitmaps in Chromium:
+`sync.mjs` has no external dependencies and supports `--check` for CI. It writes:
 
-| File | Size | Shape |
-| --- | --- | --- |
-| `apps/desktop/build/icons/*.png`, `build/icon.png` | 16–1024 | tile with transparent margin |
-| `apps/desktop/build/icon.ico` | 16–256 | same tiles, packed by Pillow |
-| `apps/desktop/resources/icon.png`, `build/icon.icns` | 16–1024 | Apple's 1024 grid (body 100–924) with a soft shadow |
-| `apps/web/public/icons/icon-{192,512}.png` | 192, 512 | PWA tile with transparent margin |
-| `apps/web/public/icons/apple-touch-icon.png`, `icon-maskable-512.png` | 180, 512 | full-bleed, opaque |
-| `apps/mobile/assets/icon.png` | 1024 | full-bleed, opaque |
-| `apps/web/app/opengraph-image.png` | 1200×630 | OG card, Inter from `@fontsource-variable/inter` |
-| `docs/assets/logo-{light,dark}.gif` | 720×256 | README write-on, 30 fps, 64 colours |
+- `apps/web/public/favicon.svg` and `apps/docs/app/icon.svg`: the gradient tile at 16 px.
+- `apps/web/public/icons/icon.svg`: opaque full-bleed PWA source.
+- `docs/assets/logo-{light,dark}.svg`: the complete Chinese and English lockup.
+- `docs/assets/brand/mark.svg`: the standalone transparent mark.
+- The generated block in `apps/mobile/components/brand/baishadow-logo.tsx`.
+  Mobile keeps its own component and does not import `@baishadow/ui`.
 
-At 24px and below, the star grows and thickens (`iconStar`). The margins in
-`FLAT` follow the existing desktop sizes. Every PNG then goes through
-`oxipng -o max --strip safe`.
+The Go CLI login callback embeds the same wordmark in
+`server/cmd/multica/cmd_auth.go`.
 
-## Recording the GIF
+`generate.mjs` synchronizes those files, then renders:
 
-The write-on timings mirror `MulticaWordmark` (`multica-wordmark.tsx`) and its
-keyframes in `packages/ui/styles/base.css`. Change all three together.
+| Output | Dimensions / use |
+| --- | --- |
+| `apps/desktop/build/icons/*.png` | 16–512 px Linux/Windows icons |
+| `apps/desktop/build/icon.png` | 1024 px padded desktop tile |
+| `apps/desktop/build/icon.ico` | 16–256 px Windows icon bundle |
+| `apps/desktop/resources/icon.png`, `build/icon.icns` | macOS grid with soft shadow; Electron uses the PNG |
+| `apps/web/public/icons/icon-{192,512}.png` | PWA icons |
+| `apps/web/public/icons/apple-touch-icon.png`, `icon-maskable-512.png` | Opaque 180/512 px icons, masked by the OS |
+| `apps/mobile/assets/icon.png` | Opaque 1024 px Expo icon |
+| `apps/web/app/opengraph-image.png` | 1200×630 share card |
+| `docs/assets/logo-{light,dark}.gif` | 720×256 lockup reveal |
+| `docs/assets/brand/preview.png` | Production lockup, variants and small-size specimens |
 
-Frames are captured by pausing every animation and seeking it to each frame's
-time. Do not use CDP virtual time instead: transform animations, like the star
-spinning in, do not advance under it, so the star never appears.
+At 24 px and below the symbol grows for legibility. The default tile uses a
+midnight-blue gradient. The preview includes light, dark and monochrome specimens.
 
-After each seek, wait two animation frames before taking the screenshot. The
-star's transform reaches the compositor late. Captured sooner, a few frames of
-the spin keep pixels from the previous frame, and the GIF differs from run to
-run.
+Web/desktop components consume the same geometry directly. The wordmark reveals
+its symbol, Chinese name and English name in sequence; loading icons light up
+three shadows in turn. Brand motion respects `prefers-reduced-motion`.
+
+Existing screenshots in incident reports and product walkthroughs are historical
+content, not generated logo assets. Third-party provider logos are independent.
+Desktop bundles and installed applications need a rebuild/reinstall to pick up
+updated source assets; this command does not replace installed applications.

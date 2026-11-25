@@ -64,8 +64,8 @@ vi.mock("@multica/views/workspace/use-workspace-seen", () => ({
   useWorkspaceSeen: () => state.hasBeenSeen,
 }));
 
-vi.mock("@multica/ui/components/common/multica-icon", () => ({
-  MulticaIcon: () => <div data-testid="workspace-loading" />,
+vi.mock("@multica/ui/components/common/baishadow-icon", () => ({
+  BaiShadowIcon: () => <div data-testid="workspace-loading" />,
 }));
 
 import { setCurrentWorkspace } from "@multica/core/platform";

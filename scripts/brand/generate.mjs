@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Rebuilds every brand asset from packages/ui/lib/multica-brand.ts. Prerequisites
+// Rebuilds every brand asset from packages/ui/lib/baishadow-brand.ts. Prerequisites
 // and the list of outputs: scripts/brand/README.md.
 //
 //   node scripts/brand/generate.mjs
@@ -10,12 +10,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { INK, PAPER, loadBrand, svgs, sync } from "./sync.mjs";
+import { loadBrand, svgs, sync } from "./sync.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const brand = await loadBrand(root);
-const { WORDMARK, WORDMARK_STROKE, STAR_GRAPHIC_STROKE, starPath } = brand;
+const { MARK_PATH, BRAND_COLORS } = brand;
+const INK = BRAND_COLORS.navy, PAPER = BRAND_COLORS.white;
 const { tile, wordmark } = svgs(brand);
 
 function run(cmd, args) {
@@ -24,7 +25,7 @@ function run(cmd, args) {
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited ${r.status}`);
 }
 
-const out = mkdtempSync(join(tmpdir(), "multica-brand-"));
+const out = mkdtempSync(join(tmpdir(), "baishadow-brand-"));
 const repo = (rel) => join(root, rel);
 const pngs = [];
 
@@ -34,10 +35,10 @@ if (updated.length) console.log(`updated ${updated.join(", ")}`);
 const inter = createRequire(repo("apps/desktop/package.json")).resolve("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2");
 const fonts = `@font-face{font-family:"Inter";font-weight:100 900;src:url(data:font/woff2;base64,${readFileSync(inter).toString("base64")}) format("woff2")}`;
 
-// Full Chrome for Testing, which rasterises on the GPU like the committed bitmaps.
-// The default headless shell (and --disable-gpu) rasterises in software and
-// antialiases differently, so every bitmap would change.
-const browser = await chromium.launch({ channel: "chromium" });
+// Set BRAND_CHROMIUM_EXECUTABLE to use a locally installed Chromium browser.
+const browser = await chromium.launch(process.env.BRAND_CHROMIUM_EXECUTABLE
+  ? { executablePath: process.env.BRAND_CHROMIUM_EXECUTABLE }
+  : { channel: "chromium" });
 try {
   const page = await browser.newPage({ deviceScaleFactor: 1 });
   async function png(file, [w, h], body, { alpha = true } = {}) {
@@ -76,37 +77,42 @@ try {
     await png(join(iconset, `icon_${name}.png`), [S, S], macOS(S));
   }
 
-  // OG card: the wordmark and headline beside a team of thin stars, one per
-  // teammate. The lit one is the newest to join.
-  const TEAM = { cols: 3, rows: 4, size: 96, gap: 36, right: 76, lit: 7 };
-  const pitch = TEAM.size + TEAM.gap;
-  const teamLeft = 1200 - TEAM.right - (TEAM.cols * pitch - TEAM.gap);
-  const teamTop = (630 - (TEAM.rows * pitch - TEAM.gap)) / 2;
-  const thinStar = starPath(STAR_GRAPHIC_STROKE);
-  const team = Array.from({ length: TEAM.cols * TEAM.rows }, (_, i) =>
-    `<svg viewBox="0 0 100 100" style="position:absolute;width:${TEAM.size}px;height:${TEAM.size}px;left:${teamLeft + (i % TEAM.cols) * pitch}px;top:${teamTop + Math.floor(i / TEAM.cols) * pitch}px"><path fill="${i === TEAM.lit ? PAPER : "#2c2c30"}" d="${thinStar}"/></svg>`).join("");
   await png(repo("apps/web/app/opengraph-image.png"), [1200, 630], `<div style="position:relative;width:1200px;height:630px;background:${INK};overflow:hidden;font-family:Inter">
-  ${team}
-  <div style="position:absolute;left:64px;top:72px;height:52px">${wordmark(PAPER, ` height="52"`)}</div>
-  <div style="position:absolute;left:64px;bottom:70px;color:#fff;font:600 60px/1.12 Inter;letter-spacing:-.02em;white-space:nowrap">People and agents,<br>working as one team.</div></div>`, { alpha: false });
+  <svg viewBox="0 0 100 100" style="position:absolute;width:780px;height:780px;right:-250px;bottom:-90px"><path fill="#1d3856" d="${MARK_PATH}"/></svg>
+  <div style="position:absolute;left:64px;top:98px;height:116px">${wordmark({ dark: true, extra: ' height="116"' })}</div>
+  <div style="position:absolute;left:64px;bottom:76px;color:#fff;font:600 66px/1.12 Inter;letter-spacing:-.02em">People and agents,<br>working as one team.</div></div>`, { alpha: false });
+  await png(repo("docs/assets/brand/preview.png"), [1200, 760], `<main style="box-sizing:border-box;height:760px;background:#f0f3f7;padding:36px;display:grid;grid-template-rows:424px 244px;gap:20px;font-family:Inter;color:${INK}">
+    <div style="display:grid;place-items:center;background:white;border-radius:24px;border:1px solid #e2e8f2">
+      ${wordmark({ extra: ' width="785" height="298"' })}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px">
+      <section style="display:grid;place-content:center;justify-items:center;gap:18px;background:#101e36;border-radius:20px;color:white">
+        ${wordmark({ dark: true, id: "reverse-wordmark", extra: ' width="268" height="102"' })}
+        <span style="font-size:13px;font-weight:500">Dark background</span>
+      </section>
+      <section style="display:grid;place-content:center;justify-items:center;gap:14px;background:white;border:1px solid #e2e8f2;border-radius:20px">
+        ${tile(132, { id: "preview-icon" })}
+        <div style="display:flex;gap:12px;align-items:center">${[16,24,32].map(px => tile(px, { id: `preview-${px}` })).join("")}</div>
+      </section>
+      <section style="display:grid;place-content:center;justify-items:center;gap:18px;background:#dfe7ef;border-radius:20px">
+        <svg width="112" height="112" viewBox="0 0 100 100"><path fill="${INK}" d="${MARK_PATH}"/></svg>
+        <span style="font-size:13px;font-weight:500">Monochrome</span>
+      </section>
+    </div>
+  </main>`, { alpha: false });
   await page.close();
 
-  // README hero: the write-on from MulticaWordmark (timings in multica-wordmark.tsx,
-  // keyframes in packages/ui/styles/base.css). Transform animations do not advance
-  // under CDP virtual time, so every animation is paused and seeked per frame. The
-  // seeked transform reaches the compositor a frame or two later; capturing sooner
-  // leaves a few star pixels from the previous frame, differently on every run.
-  const W = 720, H = 256, FPS = 30, TOTAL_MS = 2500, START_MS = 100, LETTER_MS = 150, STAR_AFTER_MS = 6 * LETTER_MS + 420;
-  const css = `@keyframes write { from { stroke-dashoffset: 1; } }
-@keyframes star-in { from { transform: scale(0) rotate(-135deg); } }
-.wl { stroke-dasharray: 1 1; animation: write .5s cubic-bezier(.65,0,.35,1) both; }
-.ws { transform-box: fill-box; transform-origin: 50% 50%; animation: star-in .9s cubic-bezier(.34,1.56,.64,1) backwards; }`;
-  const writeOn = (c) => `<svg viewBox="${WORDMARK.viewBox}" width="643" style="display:block"><g fill="none" stroke="${c}" stroke-width="${WORDMARK_STROKE}">${WORDMARK.letters.map((l, i) => `<path class="wl" pathLength="1" style="animation-delay:${START_MS + i * LETTER_MS}ms" d="${l.d}"/>${l.star ? `<path class="ws" style="animation-delay:${START_MS + STAR_AFTER_MS}ms" fill="${c}" stroke="none" d="${l.star}"/>` : ""}`).join("")}</g></svg>`;
-  for (const [name, bg, fg] of [["light", PAPER, INK], ["dark", "#0d1117", PAPER]]) {
+  // The same three-part reveal used by BaiShadowWordmark.
+  const W = 720, H = 256, FPS = 30, TOTAL_MS = 1600;
+  const css = `@keyframes reveal { from { opacity:0; transform:translateY(5px); } }
+.reveal { animation:reveal .35s ease both; }`;
+  const writeOn = (dark) => wordmark({ dark, extra: ' width="600"' })
+    .replace(/<path /g, (() => { let i = 0; return () => `<path class="reveal" style="animation-delay:${100 + i++ * 150}ms" `; })());
+  for (const [name, bg, dark] of [["light", PAPER, false], ["dark", INK, true]]) {
     const dir = join(out, `gif-${name}`);
     mkdirSync(dir);
     const gif = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
-    await gif.setContent(`<html><head><style>*{margin:0}html,body{width:${W}px;height:${H}px;background:${bg};overflow:hidden}body{display:grid;place-items:center}${css}</style></head><body>${writeOn(fg)}</body></html>`);
+    await gif.setContent(`<html><head><style>*{margin:0}html,body{width:${W}px;height:${H}px;background:${bg};overflow:hidden}body{display:grid;place-items:center}${css}</style></head><body>${writeOn(dark)}</body></html>`);
     await gif.evaluate(() => document.getAnimations().forEach((a) => a.pause()));
     for (let k = 0; k < Math.round((TOTAL_MS / 1000) * FPS); k++) {
       await gif.evaluate(async (t) => {
@@ -122,8 +128,8 @@ try {
 }
 
 run("python3", [join(here, "pack.py"), out, root]);
-if (process.platform === "darwin") run("iconutil", ["-c", "icns", join(out, "icon.iconset"), "-o", repo("apps/desktop/build/icon.icns")]);
-else console.warn("iconutil is macOS-only: apps/desktop/build/icon.icns was not rebuilt");
-run("oxipng", ["-o", "max", "--strip", "safe", "-q", ...pngs]);
+const optimizer = spawnSync("oxipng", ["-o", "2", "--strip", "safe", "-q", ...pngs], { stdio: "inherit" });
+if (optimizer.error?.code === "ENOENT") console.log("oxipng unavailable; using Chromium PNG encoding");
+else if (optimizer.status !== 0) throw new Error("PNG optimization failed");
 rmSync(out, { recursive: true, force: true });
 console.log("done");

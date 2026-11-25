@@ -371,7 +371,7 @@ function loadRenderer(window: BrowserWindow): void {
 }
 
 function installLocaleRefresh(window: BrowserWindow): void {
-  // Electron has no dedicated OS-language event. Check whenever any Multica
+  // Electron has no dedicated OS-language event. Check whenever any BaiShadow
   // window regains focus, then broadcast so all open windows remain aligned.
   window.on("focus", () => {
     const current = getSystemLocale();
@@ -689,27 +689,13 @@ function createIssueWindow(context: IssueWindowContext): void {
 // is derived from the userData path. (Same approach VS Code uses for
 // Stable / Insiders coexistence.)
 
-// DESKTOP_APP_SUFFIX lets parallel worktrees run dev Electron side-by-side
-// without fighting for the shared single-instance lock. The suffix is
-// appended to the app name + userData path, so each worktree gets its own
-// lock file. Default (no env var) keeps behavior unchanged — the common
-// single-worktree case still lands at "Multica Canary".
-const DEV_APP_NAME = process.env.DESKTOP_APP_SUFFIX
-  ? `Multica Canary ${process.env.DESKTOP_APP_SUFFIX}`
-  : "Multica Canary";
-
-if (is.dev) {
-  app.setName(DEV_APP_NAME);
-  app.setPath("userData", join(app.getPath("appData"), DEV_APP_NAME));
-} else {
-  // Pin the production app name in code. Electron's Linux WM_CLASS is set
-  // from app.getName() when the first BrowserWindow is realized; the
-  // packaged ASAR's package.json `productName` already steers app.getName()
-  // to "Multica", but anchoring it here makes WM_CLASS ↔ StartupWMClass
-  // (declared in electron-builder.yml) survive a regression in
-  // productName / the build pipeline. Must run before requestSingleInstanceLock().
-  app.setName("Multica");
-}
+// Keep profile directories stable so existing sessions, settings and instance locks survive
+// renaming the packaged app and the per-worktree development windows.
+const appSuffix = process.env.DESKTOP_APP_SUFFIX ? ` ${process.env.DESKTOP_APP_SUFFIX}` : "";
+const appName = is.dev ? `BaiShadow Canary${appSuffix}` : "BaiShadow";
+const profileDirectory = is.dev ? `Multica Canary${appSuffix}` : "Multica";
+app.setName(appName);
+app.setPath("userData", join(app.getPath("appData"), profileDirectory));
 
 // --- Protocol registration -----------------------------------------------
 

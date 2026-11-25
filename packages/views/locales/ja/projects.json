@@ -148,7 +148,7 @@
     "mode_worktree_title": "並行実行",
     "mode_worktree_description": "作業コピーに触れずに並行して実行します。それぞれが agent/… ブランチを返すので、レビューしてマージします。",
     "mode_worktree_needs_git": "このフォルダは git リポジトリではないため、並行実行できません。",
-    "mode_worktree_needs_server_upgrade": "Multica サーバーが古いため、並行実行はこのフォルダでの直接実行になってしまいます。先にサーバーを更新してください。",
+    "mode_worktree_needs_server_upgrade": "BaiShadow サーバーが古いため、並行実行はこのフォルダでの直接実行になってしまいます。先にサーバーを更新してください。",
     "mode_cancel": "キャンセル",
     "mode_add": "フォルダを追加",
     "mode_edit_tooltip": "実行モードを変更",

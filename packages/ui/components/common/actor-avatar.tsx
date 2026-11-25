@@ -9,7 +9,7 @@ import {
   type AvatarSize,
 } from "@multica/ui/lib/avatar-size";
 import { parseAvatarEmoji } from "@multica/ui/lib/avatar-emoji";
-import { MulticaIcon } from "./multica-icon";
+import { BaiShadowIcon } from "./baishadow-icon";
 
 interface ActorAvatarProps {
   name: string;
@@ -79,7 +79,7 @@ function ActorAvatar({
         />
       ) : isSystem ? (
         // `size` only picks the optical size; the slot decides the rendered size.
-        <MulticaIcon shape="circle" size={AVATAR_SIZE_PX[size]} style={{ width: "100%", height: "100%" }} />
+        <BaiShadowIcon shape="circle" size={AVATAR_SIZE_PX[size]} style={{ width: "100%", height: "100%" }} />
       ) : isAgent ? (
         <Bot style={{ width: scaled(0.55), height: scaled(0.55) }} />
       ) : isSquad ? (

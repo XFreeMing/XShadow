@@ -148,7 +148,7 @@
     "mode_worktree_title": "並行執行",
     "mode_worktree_description": "多個執行同時進行，不改動你的工作區。每次執行交回一個 agent/… 分支，由你審查後合併。",
     "mode_worktree_needs_git": "這個資料夾不是 git 倉庫，無法並行執行。",
-    "mode_worktree_needs_server_upgrade": "Multica 服務端版本過舊，並行執行會退回到直接修改這個資料夾。請先升級服務端。",
+    "mode_worktree_needs_server_upgrade": "百影 服務端版本過舊，並行執行會退回到直接修改這個資料夾。請先升級服務端。",
     "mode_cancel": "取消",
     "mode_add": "新增資料夾",
     "mode_edit_tooltip": "修改執行方式",

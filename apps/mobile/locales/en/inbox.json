@@ -41,7 +41,7 @@
     "billing_disabled": "Billing changes are unavailable for this workspace. Contact your workspace administrator for help.",
     "contact_admin": "Ask a workspace owner or admin to review the billing options.",
     "review_billing": "Review billing options",
-    "review_billing_web": "Open Multica on the web to review billing options."
+    "review_billing_web": "Open BaiShadow on the web to review billing options."
   },
   "type": {
     "assigned": "Assigned",

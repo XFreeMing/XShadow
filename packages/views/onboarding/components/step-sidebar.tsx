@@ -8,7 +8,7 @@ import {
 } from "@multica/core/onboarding";
 import { cn } from "@multica/ui/lib/utils";
 import { IconButton } from "@multica/ui/components/common/icon-button";
-import { MulticaWordmark } from "@multica/ui/components/common/multica-wordmark";
+import { BaiShadowWordmark } from "@multica/ui/components/common/baishadow-wordmark";
 import { DotSphere } from "@multica/ui/components/ui/dot-sphere";
 import {
   Stepper,
@@ -164,7 +164,7 @@ export function StepSidebar({
 
         <div className="relative flex min-h-0 flex-1 flex-col pt-5">
           <header className="flex min-h-9 shrink-0 items-center justify-between gap-3">
-            <MulticaWordmark
+            <BaiShadowWordmark
               title={t(($) => $.step_nav.wordmark)}
               className="h-[17px] text-foreground"
             />

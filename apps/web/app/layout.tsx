@@ -98,13 +98,13 @@ export const metadata: Metadata = {
     apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180" }],
   },
   // Home-screen behaviour: launch without browser chrome, and label the icon
-  // "Multica" rather than the long SEO <title>. `capable` renders the
+  // "BaiShadow" rather than the long SEO <title>. `capable` renders the
   // standardised `mobile-web-app-capable` tag — Next 16 no longer emits the
   // deprecated apple-prefixed spelling, so iOS standalone rides on the
   // manifest's `display` instead (honoured since iOS 16.4).
   appleWebApp: {
     capable: true,
-    title: "Multica",
+    title: "BaiShadow",
     // `default` keeps the web view below the status bar. Going edge-to-edge
     // (`black-translucent` + viewport-fit=cover) needs env(safe-area-inset-*)
     // padding, which no surface in the app has yet.
@@ -112,7 +112,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Multica",
+    siteName: "BaiShadow",
     locale: "en_US",
   },
   twitter: {

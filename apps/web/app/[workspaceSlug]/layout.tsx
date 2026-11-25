@@ -8,7 +8,7 @@ import { workspaceBySlugOptions } from "@multica/core/workspace";
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
 import { NoAccessPage } from "@multica/views/workspace/no-access-page";
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
 import { workspaceSlugFromPathname } from "@/lib/workspace-slug-from-pathname";
 
@@ -78,7 +78,7 @@ export default function WorkspaceLayout({
 
   const loadingIndicator = (
     <div className="flex h-svh items-center justify-center">
-      <MulticaIcon mode="think" size={40} />
+      <BaiShadowIcon mode="think" size={40} />
     </div>
   );
 

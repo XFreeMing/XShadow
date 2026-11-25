@@ -41,7 +41,7 @@
     "billing_disabled": "该工作区无法修改账单设置。请联系工作区管理员。",
     "contact_admin": "请让工作区所有者或管理员查看账单选项。",
     "review_billing": "查看账单选项",
-    "review_billing_web": "在网页端打开 Multica 查看账单选项。"
+    "review_billing_web": "在网页端打开 百影 查看账单选项。"
   },
   "type": {
     "assigned": "已分配",

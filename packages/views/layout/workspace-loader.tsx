@@ -1,6 +1,6 @@
 "use client";
 
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import { useT } from "../i18n";
 
 /**
@@ -22,7 +22,7 @@ export function WorkspaceLoader({ name }: { name?: string | null }) {
       role="status"
     >
       <div className="flex flex-col items-center gap-4">
-        <MulticaIcon mode="think" size={40} />
+        <BaiShadowIcon mode="think" size={40} />
         {name ? (
           <p className="text-body text-muted-foreground">
             {t(($) => $.workspace_loader.loading_named_prefix)}{" "}

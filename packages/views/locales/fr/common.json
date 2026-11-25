@@ -52,7 +52,7 @@
   "lark_bind": {
     "page_title": "Associer votre compte Lark",
     "redeeming": "Validation du jeton d'association…",
-    "needs_auth_description": "Connectez-vous à Multica pour terminer l'association. Le jeton contenu dans le lien associe votre compte Lark à cet utilisateur Multica : vous devez donc être connecté au préalable.",
+    "needs_auth_description": "Connectez-vous à BaiShadow pour terminer l'association. Le jeton contenu dans le lien associe votre compte Lark à cet utilisateur BaiShadow : vous devez donc être connecté au préalable.",
     "sign_in": "Se connecter",
     "done_title": "Association effectuée.",
     "done_description": "Votre prochain message au bot dans Lark ira directement à l'agent. Vous pouvez fermer cet onglet.",
@@ -60,14 +60,14 @@
     "error_admin_hint": "Si le problème persiste, demandez à l'administrateur de l'espace de travail de renvoyer le lien d'association depuis Lark.",
     "error_missing_token": "Le lien ne contient pas de jeton d'association. Demandez au bot d'en envoyer un nouveau dans Lark.",
     "error_expired": "Ce lien d'association est invalide ou expiré (les liens sont valables 15 minutes). Demandez au bot d'en envoyer un nouveau.",
-    "error_already_bound": "Ce compte Lark est déjà associé à un autre utilisateur Multica. Tout transfert de compte exige une dissociation explicite au préalable.",
-    "error_not_member": "Vous êtes connecté avec un compte Multica qui n'est pas membre de cet espace de travail.",
+    "error_already_bound": "Ce compte Lark est déjà associé à un autre utilisateur BaiShadow. Tout transfert de compte exige une dissociation explicite au préalable.",
+    "error_not_member": "Vous êtes connecté avec un compte BaiShadow qui n'est pas membre de cet espace de travail.",
     "error_unknown": "Une erreur est survenue. Réessayez et, si le problème persiste, contactez l'administrateur de l'espace de travail."
   },
   "slack_bind": {
     "page_title": "Associer votre compte Slack",
     "redeeming": "Association de votre compte…",
-    "needs_auth_description": "Connectez-vous à Multica pour terminer l'association. Le jeton contenu dans le lien associe votre compte Slack à cet utilisateur Multica : vous devez donc être connecté au préalable.",
+    "needs_auth_description": "Connectez-vous à BaiShadow pour terminer l'association. Le jeton contenu dans le lien associe votre compte Slack à cet utilisateur BaiShadow : vous devez donc être connecté au préalable.",
     "sign_in": "Se connecter",
     "done_title": "Association effectuée.",
     "done_description": "Votre prochain message au bot dans Slack ira directement à l'agent. Vous pouvez fermer cet onglet.",
@@ -75,14 +75,14 @@
     "error_admin_hint": "Si le problème persiste, écrivez de nouveau au bot dans Slack pour obtenir un lien récent.",
     "error_missing_token": "Le lien ne contient pas de jeton. Écrivez de nouveau au bot dans Slack pour en obtenir un nouveau.",
     "error_expired": "Ce lien est invalide ou expiré (les liens sont valables 15 minutes). Écrivez de nouveau au bot pour en obtenir un nouveau.",
-    "error_already_bound": "Ce compte Slack est déjà associé à un autre utilisateur Multica. Tout transfert de compte exige une dissociation explicite au préalable.",
-    "error_not_member": "Vous êtes connecté avec un compte Multica qui n'est pas membre de cet espace de travail.",
+    "error_already_bound": "Ce compte Slack est déjà associé à un autre utilisateur BaiShadow. Tout transfert de compte exige une dissociation explicite au préalable.",
+    "error_not_member": "Vous êtes connecté avec un compte BaiShadow qui n'est pas membre de cet espace de travail.",
     "error_unknown": "Une erreur est survenue. Réessayez et, si le problème persiste, contactez l'administrateur de l'espace de travail."
   },
   "dingtalk_bind": {
     "page_title": "Associer votre compte DingTalk",
     "redeeming": "Association de votre compte…",
-    "needs_auth_description": "Connectez-vous à Multica pour terminer l'association. Le jeton contenu dans le lien associe votre compte DingTalk à cet utilisateur Multica : vous devez donc être connecté au préalable.",
+    "needs_auth_description": "Connectez-vous à BaiShadow pour terminer l'association. Le jeton contenu dans le lien associe votre compte DingTalk à cet utilisateur BaiShadow : vous devez donc être connecté au préalable.",
     "sign_in": "Se connecter",
     "done_title": "Association effectuée.",
     "done_description": "Votre prochain message au bot dans DingTalk ira directement à l'agent. Vous pouvez fermer cet onglet.",
@@ -90,14 +90,14 @@
     "error_admin_hint": "Si le problème persiste, écrivez de nouveau au bot dans DingTalk pour obtenir un lien récent.",
     "error_missing_token": "Le lien ne contient pas de jeton. Écrivez de nouveau au bot dans DingTalk pour en obtenir un nouveau.",
     "error_expired": "Ce lien est invalide ou expiré (les liens sont valables 15 minutes). Écrivez de nouveau au bot pour en obtenir un nouveau.",
-    "error_already_bound": "Ce compte DingTalk est déjà associé à un autre utilisateur Multica. Tout transfert de compte exige une dissociation explicite au préalable.",
-    "error_not_member": "Vous êtes connecté avec un compte Multica qui n'est pas membre de cet espace de travail.",
+    "error_already_bound": "Ce compte DingTalk est déjà associé à un autre utilisateur BaiShadow. Tout transfert de compte exige une dissociation explicite au préalable.",
+    "error_not_member": "Vous êtes connecté avec un compte BaiShadow qui n'est pas membre de cet espace de travail.",
     "error_unknown": "Une erreur est survenue. Réessayez et, si le problème persiste, contactez l'administrateur de l'espace de travail."
   },
   "telegram_bind": {
     "page_title": "Associer votre compte Telegram",
     "redeeming": "Association de votre compte…",
-    "needs_auth_description": "Connectez-vous à Multica pour terminer l'association. Le jeton contenu dans le lien associe votre compte Telegram à cet utilisateur Multica : vous devez donc être connecté au préalable.",
+    "needs_auth_description": "Connectez-vous à BaiShadow pour terminer l'association. Le jeton contenu dans le lien associe votre compte Telegram à cet utilisateur BaiShadow : vous devez donc être connecté au préalable.",
     "sign_in": "Se connecter",
     "done_title": "Association effectuée.",
     "done_description": "Votre prochain message au bot dans Telegram ira directement à l'agent. Vous pouvez fermer cet onglet.",
@@ -105,8 +105,8 @@
     "error_admin_hint": "Si le problème persiste, écrivez de nouveau au bot dans Telegram pour obtenir un lien récent.",
     "error_missing_token": "Le lien ne contient pas de jeton. Écrivez de nouveau au bot dans Telegram pour en obtenir un nouveau.",
     "error_expired": "Ce lien est invalide ou expiré (les liens sont valables 15 minutes). Écrivez de nouveau au bot pour en obtenir un nouveau.",
-    "error_already_bound": "Ce compte Telegram est déjà associé à un autre utilisateur Multica. Tout transfert de compte exige une dissociation explicite au préalable.",
-    "error_not_member": "Vous êtes connecté avec un compte Multica qui n'est pas membre de cet espace de travail.",
+    "error_already_bound": "Ce compte Telegram est déjà associé à un autre utilisateur BaiShadow. Tout transfert de compte exige une dissociation explicite au préalable.",
+    "error_not_member": "Vous êtes connecté avec un compte BaiShadow qui n'est pas membre de cet espace de travail.",
     "error_unknown": "Une erreur est survenue. Réessayez et, si le problème persiste, contactez l'administrateur de l'espace de travail."
   },
   "expandable_description": {
@@ -114,9 +114,9 @@
     "collapse": "Afficher moins"
   },
   "wecom_bind": {
-    "page_title": "Associer votre compte Multica",
+    "page_title": "Associer votre compte BaiShadow",
     "redeeming": "Association de votre compte…",
-    "needs_auth_description": "Connectez-vous à Multica pour terminer l'association. Le jeton contenu dans le lien associe votre identité WeCom à cet utilisateur Multica : vous devez donc être connecté au préalable.",
+    "needs_auth_description": "Connectez-vous à BaiShadow pour terminer l'association. Le jeton contenu dans le lien associe votre identité WeCom à cet utilisateur BaiShadow : vous devez donc être connecté au préalable.",
     "sign_in": "Se connecter",
     "done_title": "Association effectuée.",
     "done_description": "Votre prochain message au bot intelligent dans WeCom ira directement à l'agent. Vous pouvez fermer cet onglet.",
@@ -124,14 +124,14 @@
     "error_admin_hint": "Si le problème persiste, écrivez de nouveau au bot dans WeCom pour obtenir un lien récent.",
     "error_missing_token": "Le lien ne contient pas de jeton. Écrivez de nouveau au bot dans WeCom pour en obtenir un nouveau.",
     "error_expired": "Ce lien est invalide ou expiré (les liens sont valables 15 minutes). Écrivez de nouveau au bot pour en obtenir un nouveau.",
-    "error_already_bound": "Cette identité WeCom est déjà associée à un autre utilisateur Multica. Tout transfert de compte exige une dissociation explicite au préalable.",
-    "error_not_member": "Vous êtes connecté avec un compte Multica qui n'est pas membre de cet espace de travail.",
+    "error_already_bound": "Cette identité WeCom est déjà associée à un autre utilisateur BaiShadow. Tout transfert de compte exige une dissociation explicite au préalable.",
+    "error_not_member": "Vous êtes connecté avec un compte BaiShadow qui n'est pas membre de cet espace de travail.",
     "error_unknown": "Une erreur est survenue. Réessayez et, si le problème persiste, contactez l'administrateur de l'espace de travail."
   },
   "not_found": {
     "title": "Page introuvable",
     "description": "La page recherchée n'existe pas ou a été déplacée.",
-    "back_to_multica": "Retour à Multica"
+    "back_to_multica": "Retour à BaiShadow"
   },
   "navigation": {
     "open_in_new_tab": "Ouvrir dans un nouvel onglet"

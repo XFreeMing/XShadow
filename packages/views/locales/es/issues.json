@@ -125,7 +125,7 @@
     "open_in_desktop": "Abrir en la aplicación de escritorio"
   },
   "desktop": {
-    "link_other_instance": "La aplicación de escritorio está conectada a otra instancia de Multica.",
+    "link_other_instance": "La aplicación de escritorio está conectada a otra instancia de BaiShadow.",
     "link_workspace_unavailable": "Este espacio de trabajo no está disponible en la aplicación de escritorio."
   },
   "inline_run": {
@@ -1115,7 +1115,7 @@
       "open_link": "Abrir enlace",
       "archived_hint": "Propiedad archivada; el valor es de solo lectura",
       "unknown_value": "No disponible",
-      "unknown_value_hint": "Este valor lo estableció una versión más reciente de Multica y no se puede editar aquí; actualiza la app o bórralo",
+      "unknown_value_hint": "Este valor lo estableció una versión más reciente de BaiShadow y no se puede editar aquí; actualiza la app o bórralo",
       "url_scheme_required": "La URL debe empezar por http:// o https://.",
       "remove_item": "Quitar {{value}}"
     },
@@ -1566,7 +1566,7 @@
     "link_placeholder": "Pega la URL de un pull request",
     "link_hint": "Los PR con {{identifier}} en el título o el nombre de la rama se enlazan automáticamente.",
     "link_submit": "Enlazar",
-    "link_not_found": "Multica aún no ha recibido este PR. Comprueba que su repositorio esté conectado.",
+    "link_not_found": "BaiShadow aún no ha recibido este PR. Comprueba que su repositorio esté conectado.",
     "link_failed": "No se ha podido enlazar el pull request.",
     "row_menu": "Acciones del pull request",
     "section_menu": "Automatización de pull request",
@@ -2123,7 +2123,7 @@
     "detected_label": "Servicio detectado · {{name}}",
     "detected_no_logs": "Este servicio no se inició desde la configuración de entornos, así que no tiene registros ni se puede reiniciar.",
     "offline_hint": "Disponible cuando este equipo vuelva a estar en línea.",
-    "outdated_hint": "Actualiza Multica en este equipo para gestionarlo desde aquí.",
+    "outdated_hint": "Actualiza BaiShadow en este equipo para gestionarlo desde aquí.",
     "no_permission_hint": "Solo los miembros que pueden usar este equipo pueden detenerlo o reiniciarlo.",
     "waiting_machine": "Esperando al equipo",
     "waiting_ready": "Esperando a que esté listo",
@@ -2174,11 +2174,11 @@
       "exit_divider_code": "Terminó a las {{time}} · código de salida {{code}}",
       "stopped_divider": "Detenido a las {{time}}"
     },
-    "app_desktop_hint": "Una app de escritorio. Cambia a su ventana desde Multica Desktop en la máquina que la ejecuta.",
-    "app_remote_hint": "Se ejecuta en {{machine}}. Cambia a su ventana desde Multica Desktop en esa máquina.",
+    "app_desktop_hint": "Una app de escritorio. Cambia a su ventana desde BaiShadow Desktop en la máquina que la ejecuta.",
+    "app_remote_hint": "Se ejecuta en {{machine}}. Cambia a su ventana desde BaiShadow Desktop en esa máquina.",
     "focus": "Ir a la ventana",
     "focus_gone": "{{name}} ya no se está ejecutando",
-    "focus_unsupported": "El daemon de esta máquina aún no puede cambiar a ventanas de apps. Actualiza Multica e inténtalo de nuevo.",
+    "focus_unsupported": "El daemon de esta máquina aún no puede cambiar a ventanas de apps. Actualiza BaiShadow e inténtalo de nuevo.",
     "focus_unavailable": "El daemon local no se está ejecutando",
     "focus_failed": "No se pudo cambiar a {{name}}",
     "retry": "Reintentar",

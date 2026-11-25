@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { MulticaBleedMark } from "@multica/ui/components/common/multica-graphics";
+import { BaiShadowBleedMark } from "@multica/ui/components/common/baishadow-graphics";
 import { ApiError, errorCode } from "@multica/core/api";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
@@ -1131,7 +1131,7 @@ export function InboxPage() {
           )}
           <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden text-muted-foreground">
             {inboxZeroCount === 0 ? (
-              <MulticaBleedMark
+              <BaiShadowBleedMark
                 key={inboxZeroRises ? "rise" : "rest"}
                 enterDelay={inboxZeroRises ? 0.2 : undefined}
                 className="pointer-events-none absolute -right-[14%] -bottom-[26%] w-[min(560px,58%)] text-muted"

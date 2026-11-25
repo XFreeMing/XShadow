@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { WORDMARK, WORDMARK_STAR, WORDMARK_STROKE } from "@multica/ui/lib/multica-brand";
+import { WORDMARK } from "@multica/ui/lib/baishadow-brand";
 import { cn } from "@multica/ui/lib/utils";
 import { Container } from "./primitives";
 
@@ -16,10 +16,10 @@ import { Container } from "./primitives";
  *
  * The canvas spans the whole width of the page and the host's top padding, so
  * anywhere around the wordmark the pointer becomes a bulb blower aimed at the
- * star on the i. Each click squeezes the bulb and sends a puff of air, drawn
+ * three-blade mark. Each click squeezes the bulb and sends a puff of air, drawn
  * in the same cells, towards the star; every bit of air that reaches it pushes
  * it round like a pinwheel, so closer and faster clicking spins it harder. It
- * slows under friction and settles back upright on one of its eight arms. Air
+ * slows under friction and settles back upright on one of its three blades. Air
  * that crosses the letters knocks their cells loose; they drift, then are
  * drawn back home. The spinning star powers the wordmark like a dynamo: the
  * faster it turns the more the dither fills in and darkens towards the ink,
@@ -35,12 +35,8 @@ import { Container } from "./primitives";
  */
 
 const [VIEW_X, VIEW_Y, VIEW_W, VIEW_H] = WORDMARK.viewBox.split(" ").map(Number) as [number, number, number, number];
-const LETTER_PATHS = WORDMARK.letters.map((letter) => letter.d);
-const STAR = (() => {
-  const i = WORDMARK.letters.find((letter) => letter.star)!;
-  // The star is centred on the i's stem, the first move of its path.
-  return { d: i.star!, cx: Number(/^M([-\d.]+)/.exec(i.d)![1]), cy: WORDMARK_STAR.cy, r: WORDMARK_STAR.r };
-})();
+const LETTER_PATHS = [WORDMARK.name, WORDMARK.english];
+const STAR = { d: WORDMARK.symbol, cx: 50, cy: 55, r: 48 };
 
 /** Cell edge in CSS pixels. */
 const CELL = 3;
@@ -70,7 +66,7 @@ const FRICTION = 1;
 /** Below this speed (rad/s) the star stops coasting and springs to the nearest arm. */
 const SETTLE_SPEED = 2.4;
 const SETTLE_STIFFNESS = 90;
-const ARM_STEP = Math.PI / 4;
+const ARM_STEP = (2 * Math.PI) / 3;
 
 /** The spin (rad/s) at which the wordmark is fully powered, how quickly power follows the spin, and what full power adds. */
 const FULL_POWER_SPIN = 24;
@@ -420,8 +416,7 @@ export function FooterWordmark({ className, label, locale }: { className?: strin
         width && height
           ? sampleCells(width, fullHeight, cols, rows, (scratch) => {
               scratch.setTransform(scale, 0, 0, scale, ox - VIEW_X * scale, oy - VIEW_Y * scale);
-              scratch.lineWidth = WORDMARK_STROKE;
-              for (const d of LETTER_PATHS) scratch.stroke(new Path2D(d));
+              for (const d of LETTER_PATHS) scratch.fill(new Path2D(d), "evenodd");
             })
           : new Uint8Array();
       inside = letters.slice();

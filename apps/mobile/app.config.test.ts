@@ -27,10 +27,10 @@ describe("iOS scene lifecycle configuration", () => {
   });
 
   it.each([
-    [undefined, "Multica (Dev)", "ai.multica.mobile.dev"],
-    ["development", "Multica (Dev)", "ai.multica.mobile.dev"],
-    ["staging", "Multica (Staging)", "ai.multica.mobile.staging"],
-    ["production", "Multica", "ai.multica.mobile"],
+    [undefined, "百影 (Dev)", "ai.multica.mobile.dev"],
+    ["development", "百影 (Dev)", "ai.multica.mobile.dev"],
+    ["staging", "百影 (Staging)", "ai.multica.mobile.staging"],
+    ["production", "百影", "ai.multica.mobile"],
   ])("enables scene support for %s without changing app identity", (env, name, bundleIdentifier) => {
     vi.stubEnv("APP_ENV", env);
     vi.stubEnv("EXPO_BUNDLE_IDENTIFIER_DEV", undefined);
