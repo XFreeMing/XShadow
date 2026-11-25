@@ -34,17 +34,18 @@ func assignEditSourceAllowed(prev db.Issue) bool {
 		return true
 	}
 	switch prev.AssigneeType.String {
-	case "member", "agent":
+	case "member", "agent", "squad":
 		return true
 	default:
 		return false
 	}
 }
 
-// assignIssueEditUsesRust selects grid-style direct-agent assignments the native
-// writer can own: expected_revision present, target is agent, source is
-// unassigned/member/agent, built-in status, no workflow handoff, and no fields
-// outside the assign payload. Squad targets and mixed mutations stay on Go.
+// assignIssueEditUsesRust selects grid-style direct-agent or ordinary squad
+// assignments the native writer can own: expected_revision present, target is
+// agent or squad, source is unassigned/member/agent/squad, built-in status, no
+// workflow handoff, and no fields outside the assign payload. Mixed mutations
+// stay on Go.
 func (h *Handler) assignIssueEditUsesRust(
 	r *http.Request,
 	workspaceID pgtype.UUID,
@@ -65,7 +66,12 @@ func (h *Handler) assignIssueEditUsesRust(
 	if !touchedType || !touchedID {
 		return false, nil
 	}
-	if !params.AssigneeType.Valid || params.AssigneeType.String != "agent" || !params.AssigneeID.Valid {
+	if !params.AssigneeType.Valid || !params.AssigneeID.Valid {
+		return false, nil
+	}
+	switch params.AssigneeType.String {
+	case "agent", "squad":
+	default:
 		return false, nil
 	}
 	if !assignEditSourceAllowed(prev) {

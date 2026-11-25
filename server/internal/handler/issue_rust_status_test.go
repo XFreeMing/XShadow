@@ -140,8 +140,8 @@ func TestStatusIssueEditUsesRustRejectsDispatchSensitivePromotion(t *testing.T) 
 		issuestatus.Todo,
 		nil,
 	)
-	if err != nil || ok {
-		t.Fatalf("backlog promotion with squad uses rust = %v err=%v, want false", ok, err)
+	if err != nil || !ok {
+		t.Fatalf("backlog promotion with squad uses rust = %v err=%v, want true", ok, err)
 	}
 
 	run := &db.AgentTaskQueue{WorkflowStep: pgtype.Text{String: "todo", Valid: true}}

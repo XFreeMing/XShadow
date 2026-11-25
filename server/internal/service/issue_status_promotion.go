@@ -7,12 +7,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var errIssueNotDirectAgent = fmt.Errorf("issue is not assigned to a direct agent")
+
+var errIssueNotSquadAssignee = fmt.Errorf("issue is not assigned to a squad")
 
 // IssuePreparedAgentEnqueue is the trusted queue insert Go prepares for a
 // direct-agent write the Rust pilot commits atomically with the issue row.
@@ -42,6 +45,36 @@ func (s *TaskService) PrepareIssueAgentEnqueue(
 	}
 	params.WorkflowStep = pgtype.Text{String: issue.Status, Valid: true}
 	return IssuePreparedAgentEnqueue{Task: params, QueueKeyHeadSha: headSha}, nil
+}
+
+// PrepareIssueSquadLeaderEnqueue mirrors the ordinary squad assign/promote
+// leader enqueue plan without writing the queue row. The prepared task targets
+// the squad's leader with is_leader_task and squad_id stamped like
+// EnqueueTaskForSquadLeaderWithHandoff.
+func (s *TaskService) PrepareIssueSquadLeaderEnqueue(
+	ctx context.Context,
+	issue db.Issue,
+	squad db.Squad,
+	handoffNote string,
+	actorUserID pgtype.UUID,
+) (IssuePreparedAgentEnqueue, error) {
+	if !issue.AssigneeID.Valid || issue.AssigneeType.String != "squad" ||
+		squad.ID != issue.AssigneeID || squad.WorkspaceID != issue.WorkspaceID {
+		return IssuePreparedAgentEnqueue{}, errIssueNotSquadAssignee
+	}
+	if squad.ArchivedAt.Valid {
+		return IssuePreparedAgentEnqueue{}, fmt.Errorf("squad is archived")
+	}
+	attr := s.attributionForIssueTask(ctx, issue, pgtype.UUID{}, attribution.SourceDelegation, actorUserID)
+	params, err := s.prepareMentionTask(
+		ctx, issue, squad.LeaderID, pgtype.UUID{}, nil, true, issue.AssigneeID,
+		false, handoffNote, attr, pgtype.UUID{}, OriginDerived, false,
+	)
+	if err != nil {
+		return IssuePreparedAgentEnqueue{}, err
+	}
+	params.WorkflowStep = pgtype.Text{String: issue.Status, Valid: true}
+	return IssuePreparedAgentEnqueue{Task: params, QueueKeyHeadSha: params.HeadSha.String}, nil
 }
 
 // CompleteIssueStatusPromotionAfterNativeWrite performs post-commit wakeups only

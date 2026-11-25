@@ -4418,8 +4418,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var statusPromotionPrepared *service.IssuePreparedAgentEnqueue
-	dispatchSensitiveAgent := rustStatus && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) && prevIssue.AssigneeType.String == "agent"
-	if dispatchSensitiveAgent && !req.SuppressRun {
+	dispatchSensitivePromotion := rustStatus && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) &&
+		(prevIssue.AssigneeType.String == "agent" || prevIssue.AssigneeType.String == "squad")
+	if dispatchSensitivePromotion && !req.SuppressRun {
 		projected := prevIssue
 		projected.Status = statusKeyForGuard
 		_, promotionWillRun := h.IssueService.WillEnqueueRun(r.Context(),
@@ -4433,13 +4434,16 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		if !promotionWillRun {
 			rustStatus = false
 		} else {
-			prep, prepErr := h.TaskService.PrepareIssueAgentEnqueue(
-				r.Context(), projected, req.HandoffNote, memberActorUserID(actorType, actorID),
+			prep, prepErr := h.prepareNativeIssueEnqueue(
+				r.Context(), projected, req.HandoffNote, actorType, actorID,
 			)
-			if prepErr != nil {
+			switch {
+			case errors.Is(prepErr, errNativeSquadLeaderGate):
 				rustStatus = false
-			} else {
-				statusPromotionPrepared = &prep
+			case prepErr != nil:
+				rustStatus = false
+			default:
+				statusPromotionPrepared = prep
 			}
 		}
 	}
@@ -4457,13 +4461,16 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
 		)
 		if assignWillRun {
-			prep, prepErr := h.TaskService.PrepareIssueAgentEnqueue(
-				r.Context(), projected, req.HandoffNote, memberActorUserID(actorType, actorID),
+			prep, prepErr := h.prepareNativeIssueEnqueue(
+				r.Context(), projected, req.HandoffNote, actorType, actorID,
 			)
-			if prepErr != nil {
+			switch {
+			case errors.Is(prepErr, errNativeSquadLeaderGate):
 				rustAssign = false
-			} else {
-				assignPrepared = &prep
+			case prepErr != nil:
+				rustAssign = false
+			default:
+				assignPrepared = prep
 			}
 		} else {
 			rustAssign = false

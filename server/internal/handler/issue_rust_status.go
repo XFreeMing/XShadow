@@ -68,8 +68,8 @@ func statusEditNeedsGoRunAdvance(callerRun *db.AgentTaskQueue, prev db.Issue, ta
 
 // statusIssueEditUsesRust selects grid-style status moves the native writer can
 // own: built-in active targets only, expected_revision present, no workflow
-// handoff, and no fields outside the grid payload. Direct-agent backlog
-// promotions are native; squad promotions and workflow advancement stay on Go.
+// handoff, and no fields outside the grid payload. Direct-agent and ordinary
+// squad backlog promotions are native; workflow advancement stays on Go.
 func (h *Handler) statusIssueEditUsesRust(
 	r *http.Request,
 	workspaceID pgtype.UUID,
@@ -92,8 +92,12 @@ func (h *Handler) statusIssueEditUsesRust(
 	if !isActiveBuiltInIssueStatus(statusKeyForGuard) || !issuestatus.IsBuiltIn(prev.Status) {
 		return false, nil
 	}
-	if statusEditDispatchSensitive(prev, statusKeyForGuard, req) && prev.AssigneeType.String != "agent" {
-		return false, nil
+	if statusEditDispatchSensitive(prev, statusKeyForGuard, req) {
+		switch prev.AssigneeType.String {
+		case "agent", "squad":
+		default:
+			return false, nil
+		}
 	}
 	if statusEditNeedsGoRunAdvance(callerRun, prev, statusKeyForGuard) {
 		return false, nil

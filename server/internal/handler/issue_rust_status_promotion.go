@@ -32,6 +32,8 @@ type issueStatusPreparedEnqueue struct {
 	RuntimeMcpOverlay    json.RawMessage `json:"runtime_mcp_overlay,omitempty"`
 	RuntimeConnectedApps json.RawMessage `json:"runtime_connected_apps,omitempty"`
 	QueueKeyHeadSha      string          `json:"queue_key_head_sha"`
+	IsLeaderTask         bool            `json:"is_leader_task,omitempty"`
+	SquadID              string          `json:"squad_id,omitempty"`
 }
 
 func marshalIssueStatusPreparedEnqueue(prep service.IssuePreparedAgentEnqueue) ([]byte, error) {
@@ -74,6 +76,12 @@ func marshalIssueStatusPreparedEnqueue(prep service.IssuePreparedAgentEnqueue) (
 	if len(task.RuntimeConnectedApps) > 0 {
 		wire.RuntimeConnectedApps = json.RawMessage(task.RuntimeConnectedApps)
 	}
+	if task.IsLeaderTask.Valid && task.IsLeaderTask.Bool {
+		wire.IsLeaderTask = true
+	}
+	if task.SquadID.Valid {
+		wire.SquadID = uuidToString(task.SquadID)
+	}
 	return json.Marshal(wire)
 }
 
@@ -112,6 +120,12 @@ func rustStatusQueuedTaskValid(
 		return false
 	}
 	if want.OriginatorSource.Valid && row.OriginatorSource.String != want.OriginatorSource.String {
+		return false
+	}
+	if row.IsLeaderTask != (want.IsLeaderTask.Valid && want.IsLeaderTask.Bool) {
+		return false
+	}
+	if row.SquadID != want.SquadID {
 		return false
 	}
 	return true

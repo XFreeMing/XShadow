@@ -59,7 +59,7 @@ func TestAssignIssueEditUsesRustRejectsMixedPayloads(t *testing.T) {
 	}
 }
 
-func TestAssignIssueEditUsesRustRejectsSquadSourcesAndTargets(t *testing.T) {
+func TestAssignIssueEditUsesRustAcceptsOrdinarySquadTargets(t *testing.T) {
 	t.Parallel()
 	h := &Handler{IssueReadBridge: &IssueReadBridge{AssignPilotScopes: []string{"*"}}}
 	rev := int64(1)
@@ -96,14 +96,26 @@ func TestAssignIssueEditUsesRustRejectsSquadSourcesAndTargets(t *testing.T) {
 		UpdateIssueRequest{ExpectedRevision: &rev, AssigneeType: strPtr("agent"), AssigneeID: strPtr(agent.String())},
 		nil, agentParams)
 	if err != nil || ok {
-		t.Fatalf("squad source uses rust = %v err=%v, want false", ok, err)
+		t.Fatalf("squad source reassign to agent uses rust = %v err=%v, want false", ok, err)
 	}
 
-	ok, err = h.assignIssueEditUsesRust(req, pgtype.UUID{}, db.Issue{Status: issuestatus.Todo}, raw,
+	squadRaw := assignPilotRaw(t, map[string]any{
+		"assignee_type":     "squad",
+		"assignee_id":       squad.String(),
+		"expected_revision": rev,
+	})
+	ok, err = h.assignIssueEditUsesRust(req, pgtype.UUID{}, db.Issue{Status: issuestatus.Todo}, squadRaw,
 		UpdateIssueRequest{ExpectedRevision: &rev, AssigneeType: strPtr("squad"), AssigneeID: strPtr(squad.String())},
 		nil, squadParams)
-	if err != nil || ok {
-		t.Fatalf("squad target uses rust = %v err=%v, want false", ok, err)
+	if err != nil || !ok {
+		t.Fatalf("squad target uses rust = %v err=%v, want true", ok, err)
+	}
+
+	ok, err = h.assignIssueEditUsesRust(req, squadPrev.WorkspaceID, squadPrev, squadRaw,
+		UpdateIssueRequest{ExpectedRevision: &rev, AssigneeType: strPtr("squad"), AssigneeID: strPtr(squad.String())},
+		nil, squadParams)
+	if err != nil || !ok {
+		t.Fatalf("squad-to-squad uses rust = %v err=%v, want true", ok, err)
 	}
 }
 

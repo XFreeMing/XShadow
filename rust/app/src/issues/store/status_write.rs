@@ -122,6 +122,16 @@ pub async fn update_issue_status(
         .await?;
     let prepared = edit.prepared_enqueue.as_ref();
     let agent_owner = match prepared {
+        Some(plan) if plan.is_leader_task => {
+            status_dispatch::lock_active_squad_leader(
+                &mut tx,
+                workspace_id,
+                &plan.squad_id,
+                Some(plan),
+            )
+            .await?
+            .owner_id
+        }
         Some(plan) => status_dispatch::lock_prepared_agent(&mut tx, workspace_id, plan).await?,
         None => None,
     };
@@ -173,8 +183,16 @@ pub async fn update_issue_status(
         return Err(IssueStatusEditError::DispatchSensitive);
     }
     if let Some(plan) = prepared {
-        if assignee_type.as_deref() != Some("agent")
-            || assignee_id.as_deref() != Some(plan.agent_id.as_str())
+        let assignee_matches = match assignee_type.as_deref() {
+            Some("agent") if !plan.is_leader_task => {
+                assignee_id.as_deref() == Some(plan.agent_id.as_str())
+            }
+            Some("squad") if plan.is_leader_task && is_uuid(&plan.squad_id) => {
+                assignee_id.as_deref() == Some(plan.squad_id.as_str())
+            }
+            _ => false,
+        };
+        if !assignee_matches
             || triage_state_present
             || issue_id != plan.issue_id
             || edit.status != plan.workflow_step
@@ -398,6 +416,13 @@ mod tests {
             Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             "todo",
             true,
+        ));
+        assert!(dispatch_sensitive_locked(
+            "backlog",
+            Some("squad"),
+            Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+            "todo",
+            false,
         ));
     }
 

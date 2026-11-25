@@ -32,9 +32,9 @@ INSERT INTO agent_task_queue (
 )
 SELECT
     $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5,
-    NULL::uuid, '{}'::uuid[], NULL::text, FALSE, FALSE,
+    NULL::uuid, '{}'::uuid[], NULL::text, FALSE, $19::boolean,
     NULLIF($6::text, ''),
-    NULL::uuid,
+    NULLIF($20::uuid, '00000000-0000-0000-0000-000000000000'::uuid),
     NULLIF(CASE
         WHEN COALESCE($7::text, '') <> '' THEN jsonb_build_object('head_sha', $7::text)
         ELSE '{}'::jsonb
@@ -125,6 +125,10 @@ pub struct PreparedStatusEnqueue {
     pub runtime_connected_apps: Option<Value>,
     #[serde(default)]
     pub queue_key_head_sha: String,
+    #[serde(default)]
+    pub is_leader_task: bool,
+    #[serde(default)]
+    pub squad_id: String,
 }
 
 #[derive(Debug)]
@@ -159,6 +163,56 @@ async fn issue_review_head_sha(
             .flatten()
             .unwrap_or_default(),
     )
+}
+
+#[derive(Debug, Clone)]
+pub struct LockedSquadLeader {
+    pub leader_id: String,
+    pub owner_id: Option<String>,
+}
+
+/// Locks the squad before its current leader, matching both native writers.
+pub async fn lock_active_squad_leader(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    squad_id: &str,
+    prepared: Option<&PreparedStatusEnqueue>,
+) -> Result<LockedSquadLeader, StatusPromotionError> {
+    if !is_uuid(squad_id) {
+        return Err(StatusPromotionError::RouteChanged);
+    }
+    let (leader_id, owner_id, runtime_id, runtime_in_workspace) =
+        sqlx::query_as::<_, (String, Option<String>, Option<String>, bool)>(
+            "WITH locked_squad AS MATERIALIZED (
+                SELECT leader_id FROM squad
+                WHERE id = $1::uuid AND workspace_id = $2::uuid AND archived_at IS NULL
+                FOR SHARE
+            )
+            SELECT a.id::text, a.owner_id::text, a.runtime_id::text,
+                EXISTS (SELECT 1 FROM agent_runtime r
+                        WHERE r.id = a.runtime_id AND r.workspace_id = a.workspace_id)
+            FROM locked_squad s
+            JOIN agent a ON a.id = s.leader_id AND a.workspace_id = $2::uuid
+            WHERE a.archived_at IS NULL
+            FOR SHARE OF a",
+        )
+        .bind(squad_id)
+        .bind(workspace_id)
+        .fetch_optional(conn)
+        .await
+        .map_err(StatusPromotionError::Database)?
+        .ok_or(StatusPromotionError::RouteChanged)?;
+    if prepared.is_some_and(|plan| {
+        plan.agent_id != leader_id
+            || runtime_id.as_deref() != Some(plan.runtime_id.as_str())
+            || !runtime_in_workspace
+    }) {
+        return Err(StatusPromotionError::RouteChanged);
+    }
+    Ok(LockedSquadLeader {
+        leader_id,
+        owner_id,
+    })
 }
 
 pub async fn lock_target_agent_for_assignment(
@@ -245,6 +299,9 @@ pub async fn validate_prepared_status_enqueue(
     if head_sha != prepared.queue_key_head_sha || head_sha != prepared.head_sha {
         return Err(StatusPromotionError::RouteChanged);
     }
+    if prepared.is_leader_task && !is_uuid(&prepared.squad_id) {
+        return Err(StatusPromotionError::RouteChanged);
+    }
     let human = if is_uuid(&prepared.originator_user_id) {
         &prepared.originator_user_id
     } else {
@@ -302,6 +359,8 @@ pub async fn apply_prepared_status_enqueue(
         .bind(prepared.trigger_evidence_kind.as_deref().unwrap_or(""))
         .bind(opt_uuid(prepared.trigger_evidence_ref_id.as_deref()))
         .bind(&prepared.workflow_step)
+        .bind(prepared.is_leader_task)
+        .bind(opt_uuid(Some(&prepared.squad_id)))
         .fetch_optional(&mut *conn)
         .await
         .map_err(StatusPromotionError::Database)?;
@@ -327,4 +386,53 @@ pub async fn apply_prepared_status_enqueue(
         return Ok(PromotionEnqueueOutcome::Coalesced(id));
     }
     Err(StatusPromotionError::RouteChanged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepared_enqueue_defaults_direct_agent_shape() {
+        let plan: PreparedStatusEnqueue = serde_json::from_str(
+            r#"{
+                "task_id": "11111111-1111-4111-8111-111111111111",
+                "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "runtime_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "issue_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "priority": 0,
+                "workflow_step": "todo",
+                "originator_user_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "accountable_user_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "originator_source": "derived",
+                "queue_key_head_sha": ""
+            }"#,
+        )
+        .unwrap();
+        assert!(!plan.is_leader_task);
+        assert!(plan.squad_id.is_empty());
+    }
+
+    #[test]
+    fn prepared_enqueue_accepts_squad_leader_fields() {
+        let plan: PreparedStatusEnqueue = serde_json::from_str(
+            r#"{
+                "task_id": "11111111-1111-4111-8111-111111111111",
+                "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "runtime_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "issue_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "priority": 0,
+                "workflow_step": "todo",
+                "originator_user_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "accountable_user_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "originator_source": "derived",
+                "queue_key_head_sha": "",
+                "is_leader_task": true,
+                "squad_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+            }"#,
+        )
+        .unwrap();
+        assert!(plan.is_leader_task);
+        assert_eq!(plan.squad_id, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+    }
 }

@@ -1226,6 +1226,13 @@ func commentMentionsAnyone(content string) bool {
 // enqueueSquadLeaderTask below, which keeps the leader access gate and pending
 // dedup in one place.
 
+func (h *Handler) squadLeaderIssueOriginator(ctx context.Context, actorType, actorID string, issue db.Issue) string {
+	if actorType == "member" {
+		return actorID
+	}
+	return uuidToString(h.TaskService.OriginatorForIssueTask(ctx, issue, pgtype.UUID{}))
+}
+
 // enqueueSquadLeaderTask triggers the squad leader agent for an issue assigned
 // to a squad. Assign and backlog-promotion paths use this directly; comment
 // paths go through computeCommentAgentTriggers so preview and create share the
@@ -1250,12 +1257,7 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, au
 	// pass an invalid UUID to match. A still-unresolved originator leaves
 	// leaderOriginator empty, which correctly fails closed for member/team
 	// targets while a workspace target still admits the agent principal.
-	leaderOriginator := ""
-	if authorType == "member" {
-		leaderOriginator = authorID
-	} else {
-		leaderOriginator = uuidToString(h.TaskService.OriginatorForIssueTask(ctx, issue, pgtype.UUID{}))
-	}
+	leaderOriginator := h.squadLeaderIssueOriginator(ctx, authorType, authorID, issue)
 	if !h.canEnqueueSquadLeader(ctx, squad.LeaderID, authorType, authorID, leaderOriginator, uuidToString(issue.WorkspaceID)) {
 		return false
 	}
