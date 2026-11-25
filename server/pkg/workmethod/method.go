@@ -60,17 +60,18 @@ type Run struct {
 }
 
 type Event struct {
-	Closeout       *acceptance.Closeout `json:"closeout,omitempty"`
-	PreviousMethod *Template            `json:"previous_method,omitempty"`
-	MethodRevision int                  `json:"method_revision,omitempty"`
-	CheckedItems   []int                `json:"checked_items,omitempty"`
-	FromStep       *int                 `json:"from_step,omitempty"`
-	Action         string               `json:"action"`
-	Step           int                  `json:"step"`
-	Evidence       string               `json:"evidence"`
-	Findings       []ReviewFinding      `json:"findings,omitempty"`
-	Actor          string               `json:"actor"`
-	At             string               `json:"at"`
+	CandidateFailure *CandidateFailure    `json:"candidate_failure,omitempty"`
+	Closeout         *acceptance.Closeout `json:"closeout,omitempty"`
+	PreviousMethod   *Template            `json:"previous_method,omitempty"`
+	MethodRevision   int                  `json:"method_revision,omitempty"`
+	CheckedItems     []int                `json:"checked_items,omitempty"`
+	FromStep         *int                 `json:"from_step,omitempty"`
+	Action           string               `json:"action"`
+	Step             int                  `json:"step"`
+	Evidence         string               `json:"evidence"`
+	Findings         []ReviewFinding      `json:"findings,omitempty"`
+	Actor            string               `json:"actor"`
+	At               string               `json:"at"`
 }
 
 type ReviewFinding struct {
@@ -255,6 +256,9 @@ func (r *Run) Apply(c Change, methods []Template, actor, at string) error {
 	if c.Action == "approve" || c.Action == "rework" {
 		if r.State != "review" || r.Method == nil || r.Step < 0 || r.Step >= len(r.Method.Steps) {
 			return errors.New("当前步骤尚未提交评审")
+		}
+		if c.Action == "approve" && r.CandidateFailureReview() != nil {
+			return ErrCandidateFailureApproval
 		}
 		step := r.Method.Steps[r.Step]
 		passed := make([]bool, len(step.Checks))

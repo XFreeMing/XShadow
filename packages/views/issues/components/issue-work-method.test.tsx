@@ -136,6 +136,23 @@ it("shows pending review evidence without another reviewer's actions", async () 
   ).toBeNull();
 });
 
+it("offers rework as the decision for an independently reviewed candidate failure", async () => {
+  const change = mount({
+    history: [{
+      action: "advance", step: 0, actor: "agent/Alice", at: "2026-11-19T08:00:00Z",
+      evidence: "The candidate failed T1",
+      candidate_failure: { commit: "a".repeat(40), cases: ["T1"], worker_task_id: "worker-1", trace_revision: 2 },
+    }],
+  });
+  const rework = await screen.findByRole("button", { name: "Return for rework" });
+  expect(screen.queryByRole("button", { name: "Approve and continue" })).toBeNull();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Fix the failing implementation" } });
+  fireEvent.click(rework);
+  await waitFor(() => expect(change).toHaveBeenCalledWith("issue", {
+    action: "rework", base_revision: 3, target_step: 0, checked_items: [], evidence: "Fix the failing implementation",
+  }));
+});
+
 it("displays approvals against the checklist the reviewer signed", async () => {
   const old = structuredClone(method);
   old.revision = 1;

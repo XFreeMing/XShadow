@@ -23,11 +23,15 @@ import (
 )
 
 func TestGoalCandidateDelegationKeepsPrivateAuthorityWithinTheStep(t *testing.T) {
-	testGoalCandidateHandoff(t, false)
+	testGoalCandidateHandoff(t, false, false)
 }
 
 func TestGoalCandidateSelfClaimRequiresTheCandidatesOwnDecision(t *testing.T) {
-	testGoalCandidateHandoff(t, true)
+	testGoalCandidateHandoff(t, true, false)
+}
+
+func TestGoalCandidateFailureReachesIndependentReviewerAfterResumption(t *testing.T) {
+	testGoalCandidateHandoff(t, true, true)
 }
 
 func TestReworkUsesCurrentImplementerAfterSquadRetirement(t *testing.T) {
@@ -64,7 +68,7 @@ func TestReworkUsesCurrentImplementerAfterSquadRetirement(t *testing.T) {
 	}
 }
 
-func testGoalCandidateHandoff(t *testing.T, selfClaim bool) {
+func testGoalCandidateHandoff(t *testing.T, selfClaim, candidateFails bool) {
 	t.Helper()
 	ctx := context.Background()
 	seedTestCatalog(t)
@@ -304,22 +308,62 @@ func testGoalCandidateHandoff(t *testing.T, selfClaim bool) {
 	sha := strings.Repeat("a", 40)
 	record(map[string]any{"action": "case", "case_id": "T1", "text": "Open the report"})
 	record(map[string]any{"action": "implementation", "repository": "org/reports", "branch": "dev", "commit": sha})
-	record(map[string]any{"action": "run", "case_id": "T1", "result": "pass", "candidate": sha, "evidence": "Report opened on the candidate"})
+	result := "pass"
+	if candidateFails {
+		result = "fail"
+	}
+	record(map[string]any{"action": "run", "case_id": "T1", "result": result, "candidate": sha, "evidence": "Recorded the report behavior on the candidate"})
 	advance := map[string]any{"action": "advance", "base_revision": 1, "evidence": "Verified the same candidate"}
 	post(issue, "work-method", workerToken, advance, http.StatusForbidden, nil)
 	finish(implementer)
+	if candidateFails {
+		authorize(false)
+		tick()
+		if taskCountFor(t, issue, lead) != 1 {
+			t.Fatal("a revoked goal must leave the failed candidate paused")
+		}
+		authorize(true)
+	}
 	tick()
 	resumed := start(latest(lead))
-	if resumed.ID == leader.ID || !strings.Contains(resumed.HandoffNote.String, uuidToString(implementer.ID)) {
+	if resumed.ID == leader.ID || (!candidateFails && !strings.Contains(resumed.HandoffNote.String, uuidToString(implementer.ID))) {
 		t.Fatalf("resume should cite the finished worker: %q", resumed.HandoffNote.String)
 	}
-	post(issue, "work-method", tokenFor(resumed), advance, http.StatusOK, nil)
+	var opened workmethod.Run
+	post(issue, "work-method", tokenFor(resumed), advance, http.StatusOK, &opened)
+	if candidateFails {
+		if !strings.Contains(resumed.HandoffNote.String, sha) || !strings.Contains(resumed.HandoffNote.String, "action=advance") {
+			t.Fatalf("resumption must point to the fixed failed candidate: %q", resumed.HandoffNote.String)
+		}
+		if opened.State != "review" || opened.Revision != 2 || taskCountFor(t, issue, reviewer) != 1 {
+			t.Fatalf("a reported failure must dispatch exactly one review: %+v", opened)
+		}
+		post(issue, "work-method", tokenFor(resumed), advance, http.StatusConflict, nil)
+	}
 	finish(resumed)
 	independent := start(latest(reviewer))
+	if candidateFails {
+		if !strings.Contains(independent.HandoffNote.String, sha) || !strings.Contains(independent.HandoffNote.String, "T1") {
+			t.Fatalf("the reviewer needs the failed SHA and case: %q", independent.HandoffNote.String)
+		}
+		post(issue, "work-method", tokenFor(independent), map[string]any{
+			"action": "approve", "base_revision": 2, "evidence": "Try to accept the failed candidate",
+		}, http.StatusConflict, nil)
+	}
 	post(issue, "work-method", tokenFor(independent), map[string]any{
 		"action": "rework", "base_revision": 2, "evidence": "Recheck the candidate report",
 	}, http.StatusOK, nil)
 	finish(independent)
+	if candidateFails {
+		rework := start(latest(lead))
+		post(issue, "work-method", tokenFor(rework), map[string]any{
+			"action": "advance", "base_revision": 3, "evidence": "Try to resubmit the previous slot's failed candidate",
+		}, http.StatusConflict, nil)
+		if service.ReadGoalExecutionTask(rework).Revision != 3 || taskCountFor(t, issue, reviewer) != 1 {
+			t.Fatal("the independent decision must reassign the working step without repeating failed review")
+		}
+		return
+	}
 	rework := start(latest(lead))
 	firstReworkID := delegate(issue, tokenFor(rework), worker, 3, http.StatusOK)
 	if selfClaim {

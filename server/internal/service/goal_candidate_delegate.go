@@ -24,6 +24,29 @@ func GoalCandidateWorker(ctx context.Context, q *db.Queries, issue db.Issue, run
 	})
 }
 
+func GoalCandidateFailureWorker(ctx context.Context, q *db.Queries, issue db.Issue, run workmethod.Run, executionID pgtype.UUID, failure workmethod.CandidateFailure) (db.AgentTaskQueue, error) {
+	worker, err := GoalCandidateWorker(ctx, q, issue, run, executionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A renewed grant may route evidence from the same slot for rework.
+		// The old run has no authority under the renewed grant.
+		id, parseErr := util.ParseUUID(failure.WorkerTaskID)
+		if parseErr != nil {
+			return db.AgentTaskQueue{}, ErrGoalCandidateConflict
+		}
+		worker, err = q.GetAgentTask(ctx, id)
+	}
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	binding := ReadGoalExecutionTask(worker)
+	if util.UUIDToString(worker.ID) != failure.WorkerTaskID || worker.IssueID != issue.ID ||
+		worker.SquadID != parseGoalCandidateSquad(run) || worker.IsLeaderTask || !worker.DelegatedFromTaskID.Valid ||
+		binding.CandidateOffer || !binding.ID.Valid || binding.Revision != run.SlotRevision() || worker.Status != "completed" {
+		return db.AgentTaskQueue{}, ErrGoalCandidateConflict
+	}
+	return worker, nil
+}
+
 func parseGoalCandidateSquad(run workmethod.Run) pgtype.UUID {
 	if !run.CanDelegateCandidate() {
 		return pgtype.UUID{}

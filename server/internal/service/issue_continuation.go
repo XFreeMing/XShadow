@@ -14,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
@@ -274,12 +275,24 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 	}
 	if method.GoalExecution {
 		note = "在已授权的原事项接续当前步骤。先读当前方法、当前候选和最新交接。沿用已裁定的标准、用例和回执，只补新证据、差异及待决定事项。仅在这些入口不足时回查相关历史。平台按正式方法派送下一位。"
+		if failure := method.CandidateFailureReview(); failure != nil {
+			note += "\n" + failure.ReviewBrief()
+		}
 		if method.CanDelegateCandidate() {
 			worker, err := GoalCandidateWorker(ctx, q, issue, method, execution.ID)
 			if err == nil {
 				note = fmt.Sprintf("本步骤的实现运行 %s 已结束，状态为 %s。先读取该运行交付回执和验收台账的当前候选，核对 SHA、已运行用例与待审核差异。引用已有证据后送独立评审；把复跑和新反例留给独立评审者。", util.UUIDToString(worker.ID), worker.Status)
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return err
+			}
+			trace, _ := acceptance.Decode(issue.AcceptanceCriteria)
+			if failure := workmethod.FailedCandidate(trace); failure != nil {
+				_, err := GoalCandidateFailureWorker(ctx, q, issue, method, execution.ID, *failure)
+				if err == nil {
+					note = failure.Summary() + " 用 issue method 的 action=advance 和当前 base_revision 提交这份固定失败回执。平台会正式派送独立裁定；本运行无需复跑或发起新的实现。"
+				} else if !errors.Is(err, ErrGoalCandidateConflict) && !errors.Is(err, pgx.ErrNoRows) {
+					return err
+				}
 			}
 		}
 	}
