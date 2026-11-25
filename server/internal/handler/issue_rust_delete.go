@@ -22,6 +22,7 @@ type rustIssueDeleteWrite struct {
 	AttachmentCleanup         []rustIssueDeleteAttachmentPlanItem `json:"attachment_cleanup,omitempty"`
 	SourceContextID           *string                             `json:"source_context_id,omitempty"`
 	SourceContextCloneCleanup []rustIssueDeleteAttachmentPlanItem `json:"source_context_clone_cleanup,omitempty"`
+	ExpectedProjectID         *string                             `json:"expected_project_id,omitempty"`
 }
 
 type rustIssueDeleteClearedDuplicate struct {
@@ -108,6 +109,7 @@ type rustIssueDeleteSelection struct {
 	AttachmentPlan         []rustIssueDeleteAttachmentPlanItem
 	SourceContextID        pgtype.UUID
 	SourceContextClonePlan []rustIssueDeleteAttachmentPlanItem
+	ExpectedProjectID      pgtype.UUID
 }
 
 // selectRustIssueDelete selects member-authenticated deletes of member-created
@@ -137,39 +139,9 @@ func (h *Handler) selectRustIssueDelete(r *http.Request, issue db.Issue) (rustIs
 		if !source.ID.Valid {
 			return rustIssueDeleteSelection{UseRust: true}, nil
 		}
-		if issue.ProjectID.Valid || source.OriginTaskID.Valid ||
-			len(h.IssueReadBridge.DeleteSourceContextPilotScopes) == 0 {
-			return none, nil
-		}
-		inSourcePilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeleteSourceContextPilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
-		if err != nil || !inSourcePilot {
-			return none, err
-		}
-		contextFiles, noPendingCleanup, err := h.sourceContextFilesForDelete(ctx, source)
-		if err != nil || !noPendingCleanup {
-			return none, err
-		}
-		if len(contextFiles) == 0 {
-			return rustIssueDeleteSelection{UseRust: true, SourceContextID: source.ID}, nil
-		}
-		if len(h.IssueReadBridge.DeleteSourceContextFilesPilotScopes) == 0 {
-			return none, nil
-		}
-		inFilesPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeleteSourceContextFilesPilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
-		if err != nil || !inFilesPilot {
-			return none, err
-		}
-		clonePlan := h.buildRustIssueDeleteSourceContextClonePlan(source, contextFiles)
-		if len(clonePlan) == 0 {
-			return none, nil
-		}
-		return rustIssueDeleteSelection{
-			UseRust:                true,
-			SourceContextID:        source.ID,
-			SourceContextClonePlan: clonePlan,
-		}, nil
+		return h.selectRustManualSourceContextDelete(r, issue, source)
 	}
-	if h.IssueReadBridge == nil || len(h.IssueReadBridge.DeleteAttachPilotScopes) == 0 {
+	if len(h.IssueReadBridge.DeleteAttachPilotScopes) == 0 {
 		return none, nil
 	}
 	inAttachPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeleteAttachPilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
@@ -188,8 +160,9 @@ func (h *Handler) selectRustIssueDelete(r *http.Request, issue db.Issue) (rustIs
 
 func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, issue db.Issue, userID string, selection rustIssueDeleteSelection) {
 	request := rustIssueDeleteWrite{
-		SourceTaskID:    uuidToPtr(h.wakeupSourceTaskID(r)),
-		SourceContextID: uuidToPtr(selection.SourceContextID),
+		SourceTaskID:      uuidToPtr(h.wakeupSourceTaskID(r)),
+		SourceContextID:   uuidToPtr(selection.SourceContextID),
+		ExpectedProjectID: uuidToPtr(selection.ExpectedProjectID),
 	}
 	withAttachments := len(selection.AttachmentPlan) > 0
 	withSourceClones := len(selection.SourceContextClonePlan) > 0
