@@ -85,6 +85,7 @@
     "@dnd-kit/sortable": "catalog:",
     "@dnd-kit/utilities": "catalog:",
     "@floating-ui/dom": "^1.7.6",
+    "@multica/apitable-grid": "workspace:*",
     "@multica/core": "workspace:*",
     "@multica/ui": "workspace:*",
     "@tanstack/react-virtual": "catalog:",

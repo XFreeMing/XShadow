@@ -2,16 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApitableGrid } from "@multica/apitable-grid";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@multica/ui/components/ui/table";
 import { ApiError, api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -218,54 +211,27 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
           <p className="text-body text-muted-foreground">{t(($) => $.sheet.empty_fields)}</p>
         ) : null}
         {sheet.data && fields.length > 0 ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {visible.map((field) => (
-                  <TableHead key={field.id}>
-                    <input
-                      aria-label={t(($) => $.sheet.rename)}
-                      defaultValue={field.name}
-                      key={field.name}
-                      onBlur={(event) => {
-                        const name = event.target.value.trim();
-                        if (name && name !== field.name) renameField.mutate({ fieldId: field.id, name });
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") event.currentTarget.blur();
-                      }}
-                      className="w-full min-w-28 bg-transparent font-medium outline-none"
-                    />
-                  </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sheet.data.records.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={Math.max(visible.length, 1)} className="text-muted-foreground">
-                    {t(($) => $.sheet.empty_records)}
-                  </TableCell>
-                </TableRow>
-              ) : sheet.data.records.map((record) => (
-                <TableRow key={record.id} data-record-id={record.id}>
-                  {visible.map((field) => (
-                    <TableCell key={field.id}>
-                      <CellEditor
-                        field={field}
-                        value={record.values[field.id] ?? null}
-                        onCommit={(value) => {
-                          const current = record.values[field.id] ?? null;
-                          if (value === current) return;
-                          saveCell.mutate({ record, fieldId: field.id, value });
-                        }}
-                      />
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <ApitableGrid
+            datasheetId={tableId}
+            fields={visible}
+            records={sheet.data.records}
+            labels={{
+              rename: t(($) => $.sheet.rename),
+              clear: t(($) => $.sheet.clear),
+              emptyRecords: t(($) => $.sheet.empty_records),
+              emptyValue: t(($) => $.sheet.empty_value),
+              checked: t(($) => $.sheet.checked),
+              unchecked: t(($) => $.sheet.unchecked),
+            }}
+            onRenameField={(fieldId, name) => renameField.mutate({ fieldId, name })}
+            onCellCommit={(recordId, fieldId, value) => {
+              const record = sheet.data?.records.find((item) => item.id === recordId);
+              if (!record) return;
+              const current = record.values[fieldId] ?? null;
+              if (value === current) return;
+              saveCell.mutate({ record, fieldId, value });
+            }}
+          />
         ) : null}
       </div>
     </div>
@@ -593,74 +559,3 @@ function FieldForm({
   );
 }
 
-function CellEditor({
-  field,
-  value,
-  onCommit,
-}: {
-  field: GenericField;
-  value: GenericCellValue;
-  onCommit: (value: GenericCellValue) => void;
-}) {
-  const { t } = useT("tables");
-  const [text, setText] = useState(value == null ? "" : String(value));
-  useEffect(() => {
-    setText(value == null ? "" : String(value));
-  }, [value]);
-  if (field.kind === "checkbox") {
-    const checked = value === true;
-    return (
-      <span className="flex items-center gap-2">
-        <input
-          type="checkbox"
-          checked={checked}
-          ref={(node) => {
-            if (node) node.indeterminate = value == null;
-          }}
-          aria-label={value == null ? t(($) => $.sheet.empty_value) : checked ? t(($) => $.sheet.checked) : t(($) => $.sheet.unchecked)}
-          onChange={(event) => onCommit(event.target.checked)}
-        />
-        <Button type="button" variant="ghost" size="xs" disabled={value == null} onClick={() => onCommit(null)}>
-          {t(($) => $.sheet.clear)}
-        </Button>
-      </span>
-    );
-  }
-  if (field.kind === "single_select") {
-    return (
-      <select
-        aria-label={field.name}
-        value={typeof value === "string" ? value : ""}
-        onChange={(event) => onCommit(event.target.value || null)}
-        className="h-8 w-full min-w-28 rounded-md border border-border bg-transparent px-2 text-body"
-      >
-        <option value="">{t(($) => $.sheet.empty_value)}</option>
-        {field.config.options?.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-      </select>
-    );
-  }
-  return (
-    <input
-      aria-label={field.name}
-      type={field.kind === "date" ? "date" : "text"}
-      value={field.kind === "date" && typeof value === "string" ? value : text}
-      onChange={(event) => {
-        setText(event.target.value);
-        if (field.kind === "date") onCommit(event.target.value || null);
-      }}
-      onBlur={() => {
-        if (field.kind === "date") return;
-        if (field.kind === "number") {
-          if (text.trim() === "") onCommit(null);
-          else {
-            const parsed = Number(text);
-            if (Number.isFinite(parsed)) onCommit(parsed);
-          }
-          return;
-        }
-        onCommit(text.trim() === "" ? null : text);
-      }}
-      className="h-8 w-full min-w-28 rounded-md border border-border bg-transparent px-2 text-body outline-none"
-    />
-  );
-}
