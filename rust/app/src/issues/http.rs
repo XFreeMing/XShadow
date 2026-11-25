@@ -445,6 +445,18 @@ async fn create_issue(
             })),
         )
             .into_response(),
+        Err(IssueCreateError::DispatchSensitive) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "issue_create_configuration_changed",
+                "error": "task assignment requirements changed; reload and create again",
+            })),
+        )
+            .into_response(),
+        Err(IssueCreateError::AgentInvokeForbidden) => error_response(
+            StatusCode::FORBIDDEN,
+            "you do not have permission to assign work to this agent",
+        ),
         Err(IssueCreateError::ParentNotFound) => {
             error_response(StatusCode::BAD_REQUEST, "parent issue not found in this workspace")
         }

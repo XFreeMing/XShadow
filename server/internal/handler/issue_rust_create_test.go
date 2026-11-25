@@ -16,45 +16,68 @@ func TestCreateIssueUsesRustRejectsOutOfScopeShapes(t *testing.T) {
 	t.Parallel()
 	h := &Handler{IssueReadBridge: &IssueReadBridge{CreatePilotScopes: []string{"*"}}}
 	req := httptest.NewRequest(http.MethodPost, "/api/issues", nil)
+	planUsesRust := func(handler *Handler, issue CreateIssueRequest, creatorType string,
+		assigneeType pgtype.Text, assigneeID pgtype.UUID, status string, originType pgtype.Text,
+		attachmentIDs []pgtype.UUID, workflowNeedsGo bool,
+	) (bool, error) {
+		plan, err := handler.planIssueCreateRust(
+			req, pgtype.UUID{}, issue, creatorType, "", "", assigneeType, assigneeID, status,
+			originType, attachmentIDs, workflowNeedsGo, pgtype.UUID{},
+		)
+		return plan.useRust, err
+	}
 
-	ok, err := h.createIssueUsesRust(req, pgtype.UUID{}, CreateIssueRequest{
+	ok, err := planUsesRust(h, CreateIssueRequest{
 		Title:  "plain",
 		Status: issuestatus.Todo,
-	}, "member", pgtype.Text{}, issuestatus.Todo, pgtype.Text{}, nil, false)
+	}, "member", pgtype.Text{}, pgtype.UUID{}, issuestatus.Todo, pgtype.Text{}, nil, false)
 	if err != nil || !ok {
 		t.Fatalf("plain member todo uses rust = %v err=%v, want true", ok, err)
 	}
 
-	ok, err = h.createIssueUsesRust(req, pgtype.UUID{}, CreateIssueRequest{
+	ok, err = planUsesRust(h, CreateIssueRequest{
 		Title:  "agent",
 		Status: issuestatus.Todo,
-	}, "agent", pgtype.Text{}, issuestatus.Todo, pgtype.Text{}, nil, false)
+	}, "agent", pgtype.Text{}, pgtype.UUID{}, issuestatus.Todo, pgtype.Text{}, nil, false)
 	if err != nil || ok {
 		t.Fatalf("agent author uses rust = %v err=%v, want false", ok, err)
 	}
 
 	origin := "quick_create"
-	ok, err = h.createIssueUsesRust(req, pgtype.UUID{}, CreateIssueRequest{
+	ok, err = planUsesRust(h, CreateIssueRequest{
 		Title:      "origin",
 		Status:     issuestatus.Todo,
 		OriginType: &origin,
-	}, "member", pgtype.Text{}, issuestatus.Todo, pgtype.Text{String: "quick_create", Valid: true}, nil, false)
+	}, "member", pgtype.Text{}, pgtype.UUID{}, issuestatus.Todo, pgtype.Text{String: "quick_create", Valid: true}, nil, false)
 	if err != nil || ok {
 		t.Fatalf("explicit origin uses rust = %v err=%v, want false", ok, err)
 	}
 
-	ok, err = h.createIssueUsesRust(req, pgtype.UUID{}, CreateIssueRequest{
-		Title:  "assigned agent",
-		Status: issuestatus.Todo,
-	}, "member", pgtype.Text{String: "agent", Valid: true}, issuestatus.Todo, pgtype.Text{}, nil, false)
+	agentID := util.MustParseUUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+	ok, err = planUsesRust(h, CreateIssueRequest{
+		Title:  "assigned agent backlog",
+		Status: issuestatus.Backlog,
+	}, "member", pgtype.Text{String: "agent", Valid: true}, agentID, issuestatus.Backlog, pgtype.Text{}, nil, false)
 	if err != nil || ok {
-		t.Fatalf("agent assignee uses rust = %v err=%v, want false", ok, err)
+		t.Fatalf("agent assignee without dispatch pilot uses rust = %v err=%v, want false", ok, err)
 	}
 
-	ok, err = h.createIssueUsesRust(req, pgtype.UUID{}, CreateIssueRequest{
+	hBoth := &Handler{IssueReadBridge: &IssueReadBridge{
+		CreatePilotScopes:         []string{"*"},
+		CreateDispatchPilotScopes: []string{"*"},
+	}}
+	ok, err = planUsesRust(hBoth, CreateIssueRequest{
+		Title:  "assigned agent backlog",
+		Status: issuestatus.Backlog,
+	}, "member", pgtype.Text{String: "agent", Valid: true}, agentID, issuestatus.Backlog, pgtype.Text{}, nil, false)
+	if err != nil || ok {
+		t.Fatalf("agent assignee without workspace DB uses rust = %v err=%v, want false", ok, err)
+	}
+
+	ok, err = planUsesRust(hBoth, CreateIssueRequest{
 		Title:  "workflow handoff",
 		Status: issuestatus.Todo,
-	}, "member", pgtype.Text{String: "agent", Valid: true}, issuestatus.Todo, pgtype.Text{}, nil, true)
+	}, "member", pgtype.Text{String: "agent", Valid: true}, agentID, issuestatus.Todo, pgtype.Text{}, nil, true)
 	if err != nil || ok {
 		t.Fatalf("workflow handoff uses rust = %v err=%v, want false", ok, err)
 	}
@@ -62,11 +85,15 @@ func TestCreateIssueUsesRustRejectsOutOfScopeShapes(t *testing.T) {
 
 func TestIssueReadBridgeCreatePilotEnv(t *testing.T) {
 	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_PILOT", "create-pilot")
+	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_DISPATCH_PILOT", "create-dispatch")
 	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
 	t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
 	bridge := NewIssueReadBridgeFromEnv(nil)
 	if !reflect.DeepEqual(bridge.CreatePilotScopes, []string{"create-pilot"}) {
 		t.Fatalf("CreatePilotScopes = %v, want [create-pilot]", bridge.CreatePilotScopes)
+	}
+	if !reflect.DeepEqual(bridge.CreateDispatchPilotScopes, []string{"create-dispatch"}) {
+		t.Fatalf("CreateDispatchPilotScopes = %v, want [create-dispatch]", bridge.CreateDispatchPilotScopes)
 	}
 }
 

@@ -1022,7 +1022,11 @@ func (s *IssueService) publishIssueAttachmentsChanged(issue db.Issue, actorID pg
 
 // CapturePlainCreateAnalytics records a member create handled outside IssueService.Create.
 func (s *IssueService) CapturePlainCreateAnalytics(issue db.Issue, creatorType, actorID, platform string) {
-	s.captureCreatedAnalytics(issue, creatorType, actorID, IssueCreateOpts{Platform: platform})
+	opts := IssueCreateOpts{Platform: platform}
+	if issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" {
+		opts.AnalyticsAgentID = util.UUIDToString(issue.AssigneeID)
+	}
+	s.captureCreatedAnalytics(issue, creatorType, actorID, opts)
 }
 
 func (s *IssueService) captureCreatedAnalytics(issue db.Issue, creatorType, actorID string, opts IssueCreateOpts) {
@@ -1105,7 +1109,7 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 	if issue.TriageState.Valid || issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return pgtype.UUID{}
 	}
-	verdict, admitted := agentAssigneeVerdict(ctx, s.runtimeLookup(s.Queries), issue)
+	verdict, admitted := AgentAssigneeVerdict(ctx, s.runtimeLookup(s.Queries), issue)
 	if !admitted && RuntimeBlockedNeedsNotice(verdict.Reason) {
 		// Assignment has no response the assigner reads for this outcome, so the
 		// refusal explains itself on the issue instead of vanishing (MUL-6164).
@@ -1157,17 +1161,14 @@ func (s *IssueService) shouldEnqueueAgentTaskWithQueries(ctx context.Context, q 
 }
 
 func isAgentAssigneeReadyWithQueries(ctx context.Context, lookup RuntimeLookup, issue db.Issue) bool {
-	_, ok := agentAssigneeVerdict(ctx, lookup, issue)
+	_, ok := AgentAssigneeVerdict(ctx, lookup, issue)
 	return ok
 }
 
-// agentAssigneeVerdict resolves the issue's agent assignee through the shared
-// readiness check and reports whether work may be enqueued for it, plus the
-// verdict when it may not.
-//
-// Only a BLOCKED verdict stops the enqueue. A merely offline machine still
-// queues: that work runs when the laptop comes back, and people rely on it.
-func agentAssigneeVerdict(ctx context.Context, lookup RuntimeLookup, issue db.Issue) (AgentVerdict, bool) {
+// AgentAssigneeVerdict resolves the issue's direct agent assignee through the
+// shared readiness check. Only a blocked verdict suppresses enqueue; offline
+// machines still admit work.
+func AgentAssigneeVerdict(ctx context.Context, lookup RuntimeLookup, issue db.Issue) (AgentVerdict, bool) {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 		return AgentVerdict{}, false
 	}

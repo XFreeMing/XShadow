@@ -169,10 +169,20 @@ pub(super) async fn guard_parent_projects_and_assignee(
     {
         return Err(IssueCreateError::ConfigurationChanged);
     }
-    if let Some(assignee) = request.assignee_id.as_deref()
-        && !lock_member(conn, workspace_id, assignee).await?
-    {
-        return Err(IssueCreateError::InvalidAssignee);
+    if let (Some(assignee_type), Some(assignee)) = (
+        request.assignee_type.as_deref(),
+        request.assignee_id.as_deref(),
+    ) {
+        match assignee_type {
+            "member" => {
+                if !lock_member(conn, workspace_id, assignee).await? {
+                    return Err(IssueCreateError::InvalidAssignee);
+                }
+            }
+            // Direct dispatch validates its target and binding together in the writer.
+            "agent" => {}
+            _ => return Err(IssueCreateError::InvalidAssignee),
+        }
     }
     Ok(effective.map(str::to_owned))
 }

@@ -13,6 +13,9 @@ use super::create_validate::{
     validate_labels_before_number,
 };
 use super::ordinary::set_write_actor;
+use super::status_dispatch::{
+    self, PreparedStatusEnqueue, PromotionEnqueueOutcome, StatusPromotionError,
+};
 
 use super::{
     CallerActor, IssueReadError, IssueResponse, LabelResponse, format_issue_timestamp, is_uuid,
@@ -56,12 +59,17 @@ pub struct IssueCreateRequest {
     pub issue_limit: IssueCreateLimit,
     #[serde(default)]
     pub pr_auto_complete_disabled: bool,
+    pub prepared_enqueue: Option<PreparedStatusEnqueue>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct IssueCreatePayload {
     pub issue: IssueResponse,
     pub labels: Vec<LabelResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coalesced_queued_task_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +102,8 @@ pub enum IssueCreateError {
     NumberCollision {
         allocated: i32,
     },
+    DispatchSensitive,
+    AgentInvokeForbidden,
     Database(sqlx::Error),
 }
 
@@ -323,6 +333,27 @@ async fn attach_labels(
     Ok(())
 }
 
+fn create_requires_enqueue(status: &str, assignee_type: Option<&str>) -> bool {
+    assignee_type == Some("agent") && status != "backlog"
+}
+
+fn map_dispatch_error(error: StatusPromotionError) -> IssueCreateError {
+    match error {
+        StatusPromotionError::RouteChanged => IssueCreateError::DispatchSensitive,
+        StatusPromotionError::Database(error) => IssueCreateError::Database(error),
+    }
+}
+
+fn require_direct_agent_creator_owner(
+    creator_id: &str,
+    owner: &Option<String>,
+) -> Result<(), IssueCreateError> {
+    match owner.as_deref() {
+        Some(o) if o == creator_id => Ok(()),
+        _ => Err(IssueCreateError::AgentInvokeForbidden),
+    }
+}
+
 async fn create_issue_attempt(
     pool: &PgPool,
     workspace_id: &str,
@@ -346,7 +377,7 @@ async fn create_issue_attempt(
         return Err(IssueCreateError::InvalidInput);
     }
     if let Some(assignee_type) = request.assignee_type.as_deref() {
-        if assignee_type != "member" {
+        if assignee_type != "member" && assignee_type != "agent" {
             return Err(IssueCreateError::InvalidInput);
         }
         let Some(assignee_id) = request.assignee_id.as_deref() else {
@@ -355,6 +386,12 @@ async fn create_issue_attempt(
         if !is_uuid(assignee_id) {
             return Err(IssueCreateError::InvalidInput);
         }
+    }
+    let prepared = request.prepared_enqueue.as_ref();
+    if create_requires_enqueue(&request.status, request.assignee_type.as_deref())
+        != prepared.is_some()
+    {
+        return Err(IssueCreateError::DispatchSensitive);
     }
 
     let mut tx = pool.begin().await?;
@@ -373,6 +410,55 @@ async fn create_issue_attempt(
     let effective_project =
         guard_parent_projects_and_assignee(&mut tx, workspace_id, user_id, request).await?;
     set_write_actor(&mut tx, actor, None).await?;
+
+    if request.assignee_type.as_deref() == Some("agent") {
+        let Some(assignee_id) = request.assignee_id.as_deref() else {
+            return Err(IssueCreateError::InvalidAssignee);
+        };
+        let agent_owner = match prepared {
+            Some(plan)
+                if !plan.is_leader_task
+                    && plan.squad_id.is_empty()
+                    && plan.agent_id == assignee_id
+                    && plan.issue_id == request.id
+                    && plan.workflow_step == request.status =>
+            {
+                status_dispatch::lock_prepared_agent(&mut tx, workspace_id, plan)
+                    .await
+                    .map_err(map_dispatch_error)?
+            }
+            Some(_) => return Err(IssueCreateError::DispatchSensitive),
+            None => status_dispatch::lock_target_agent_for_assignment(
+                &mut tx,
+                workspace_id,
+                assignee_id,
+            )
+            .await
+            .map_err(map_dispatch_error)?,
+        };
+        require_direct_agent_creator_owner(user_id, &agent_owner)?;
+        if let Some(plan) = prepared {
+            status_dispatch::validate_prepared_status_enqueue(
+                &mut tx,
+                workspace_id,
+                &request.id,
+                effective_project.as_deref(),
+                Some(user_id.to_string()),
+                plan,
+            )
+            .await
+            .map_err(map_dispatch_error)?;
+        } else {
+            status_dispatch::validate_agent_issue_project_access(
+                &mut tx,
+                workspace_id,
+                effective_project.as_deref(),
+                vec![user_id.to_string()],
+            )
+            .await
+            .map_err(map_dispatch_error)?;
+        }
+    }
 
     let receipt_labels =
         validate_labels_before_number(&mut tx, workspace_id, &request.label_ids).await?;
@@ -520,6 +606,22 @@ async fn create_issue_attempt(
 
     attach_labels(&mut tx, workspace_id, &request.id, &receipt_labels).await?;
 
+    let (queued_task_id, coalesced_queued_task_id) = match prepared {
+        Some(plan) => match status_dispatch::apply_prepared_status_enqueue(
+            &mut tx,
+            &request.id,
+            &plan.head_sha,
+            plan,
+        )
+        .await
+        .map_err(map_dispatch_error)?
+        {
+            PromotionEnqueueOutcome::Inserted(id) => (Some(id), None),
+            PromotionEnqueueOutcome::Coalesced(id) => (None, Some(id)),
+        },
+        None => (None, None),
+    };
+
     let prefix = workspace_prefix(&mut tx, workspace_id).await?;
     let issue = map_create_row_to_response(&inserted, &prefix)?;
 
@@ -528,6 +630,8 @@ async fn create_issue_attempt(
     Ok(IssueCreatePayload {
         issue,
         labels: receipt_labels,
+        queued_task_id,
+        coalesced_queued_task_id,
     })
 }
 

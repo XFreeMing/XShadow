@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,9 +13,11 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/issueguard"
+	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -50,19 +53,23 @@ type rustIssueCreate struct {
 	WorkMethodRun          json.RawMessage      `json:"work_method_run,omitempty"`
 	IssueLimit             rustIssueCreateLimit `json:"issue_limit"`
 	PRAutoCompleteDisabled bool                 `json:"pr_auto_complete_disabled,omitempty"`
+	PreparedEnqueue        *json.RawMessage     `json:"prepared_enqueue,omitempty"`
 }
 
 type rustIssueCreatePayload struct {
-	Issue  IssueResponse   `json:"issue"`
-	Labels []LabelResponse `json:"labels"`
+	Issue                 IssueResponse   `json:"issue"`
+	Labels                []LabelResponse `json:"labels"`
+	QueuedTaskID          *string         `json:"queued_task_id,omitempty"`
+	CoalescedQueuedTaskID *string         `json:"coalesced_queued_task_id,omitempty"`
 }
 
-// createIssueUsesRust selects plain member-authored creates on built-in active
-// statuses without attachments, origin stamping, workflow handoffs, or runtime
-// assignees.
-func (h *Handler) createIssueUsesRust(
-	r *http.Request,
-	workspaceID pgtype.UUID,
+type issueCreateRustPlan struct {
+	useRust      bool
+	issueID      pgtype.UUID
+	dispatchPrep *service.IssuePreparedAgentEnqueue
+}
+
+func (h *Handler) plainIssueCreateRustEligible(
 	req CreateIssueRequest,
 	creatorType string,
 	assigneeType pgtype.Text,
@@ -70,32 +77,125 @@ func (h *Handler) createIssueUsesRust(
 	originType pgtype.Text,
 	attachmentIDs []pgtype.UUID,
 	workflowNeedsGo bool,
-) (bool, error) {
-	if h.IssueReadBridge == nil || len(h.IssueReadBridge.CreatePilotScopes) == 0 {
-		return false, nil
-	}
+) bool {
 	if creatorType != "member" {
-		return false, nil
+		return false
 	}
 	if originType.Valid || req.OriginType != nil || req.OriginID != nil {
-		return false, nil
+		return false
 	}
 	if len(attachmentIDs) > 0 {
-		return false, nil
+		return false
 	}
 	if req.Stage != nil {
-		return false, nil
+		return false
 	}
 	if workflowNeedsGo {
-		return false, nil
+		return false
 	}
 	if !isActiveBuiltInIssueStatus(status) {
-		return false, nil
+		return false
 	}
 	if assigneeType.Valid && assigneeType.String != "member" {
-		return false, nil
+		return false
 	}
-	return matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.CreatePilotScopes, uuidToString(workspaceID), workspaceID)
+	return true
+}
+
+// nativeCreateDirectAgentOwnerOnly reports whether the acting member is the
+// agent's owner — the only direct-agent shape the native create pilot writes.
+func (h *Handler) nativeCreateDirectAgentOwnerOnly(
+	ctx context.Context,
+	wsUUID, assigneeID pgtype.UUID,
+	memberUserID string,
+) bool {
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID: assigneeID, WorkspaceID: wsUUID,
+	})
+	if err != nil || !agent.OwnerID.Valid {
+		return false
+	}
+	return uuidToString(agent.OwnerID) == memberUserID
+}
+
+// planIssueCreateRust chooses at most one native create plan per request. Any
+// direct-agent shape needs both CREATE and CREATE_DISPATCH pilots plus an
+// owner-only assignee the member still owns at selection time.
+func (h *Handler) planIssueCreateRust(
+	r *http.Request,
+	wsUUID pgtype.UUID,
+	req CreateIssueRequest,
+	creatorType, actualCreatorID, priority string,
+	assigneeType pgtype.Text,
+	assigneeID pgtype.UUID,
+	status string,
+	originType pgtype.Text,
+	attachmentIDs []pgtype.UUID,
+	workflowNeedsGo bool,
+	projectID pgtype.UUID,
+) (issueCreateRustPlan, error) {
+	plan := issueCreateRustPlan{}
+	if h.IssueReadBridge == nil || len(h.IssueReadBridge.CreatePilotScopes) == 0 {
+		return plan, nil
+	}
+	inCreatePilot, err := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.CreatePilotScopes, uuidToString(wsUUID), wsUUID)
+	if err != nil || !inCreatePilot {
+		return plan, err
+	}
+
+	if assigneeType.Valid && assigneeType.String == "agent" {
+		if len(h.IssueReadBridge.CreateDispatchPilotScopes) == 0 {
+			return plan, nil
+		}
+		inDispatchPilot, err := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.CreateDispatchPilotScopes, uuidToString(wsUUID), wsUUID)
+		if err != nil || !inDispatchPilot {
+			return plan, err
+		}
+		if !h.plainIssueCreateRustEligible(req, creatorType, pgtype.Text{}, status, originType, attachmentIDs, workflowNeedsGo) {
+			return plan, nil
+		}
+		if !wsUUID.Valid || actualCreatorID == "" || !assigneeID.Valid || !h.nativeCreateDirectAgentOwnerOnly(r.Context(), wsUUID, assigneeID, actualCreatorID) {
+			return plan, nil
+		}
+		plan.issueID = dbid.NewV7()
+		plan.useRust = true
+		active := status != issuestatus.Backlog &&
+			issuestatus.Effective(r.Context(), h.Queries, wsUUID, status) != issuestatus.Backlog
+		if !active {
+			return plan, nil
+		}
+		projected := db.Issue{
+			ID:           plan.issueID,
+			WorkspaceID:  wsUUID,
+			Title:        req.Title,
+			Status:       status,
+			Priority:     priority,
+			AssigneeType: assigneeType,
+			AssigneeID:   assigneeID,
+			ProjectID:    projectID,
+		}
+		_, admitted := service.AgentAssigneeVerdict(r.Context(), h.runtimeLookup(uuidToString(wsUUID)), projected)
+		if !admitted {
+			plan.useRust = false
+			return plan, nil
+		}
+		prep, err := h.TaskService.PrepareIssueAgentEnqueue(
+			r.Context(), projected, "", memberActorUserID(creatorType, actualCreatorID),
+		)
+		if err != nil {
+			plan.useRust = false
+			return plan, nil
+		}
+		plan.dispatchPrep = &prep
+		return plan, nil
+	}
+
+	if !h.plainIssueCreateRustEligible(req, creatorType, assigneeType, status, originType, attachmentIDs, workflowNeedsGo) {
+		return plan, nil
+	}
+	plan.useRust = true
+	plan.issueID = dbid.NewV7()
+	return plan, nil
 }
 
 func (h *Handler) createIssueViaRust(
@@ -114,7 +214,15 @@ func (h *Handler) createIssueViaRust(
 	properties map[pgtype.UUID]json.RawMessage,
 	labelIDs []pgtype.UUID,
 	fillCreated func(*IssueResponse),
+	plan issueCreateRustPlan,
 ) {
+	if !plan.useRust {
+		writeError(w, http.StatusInternalServerError, "failed to create issue")
+		return
+	}
+	issueID := plan.issueID
+	dispatchPrepared := plan.dispatchPrep
+
 	prepared, err := h.IssueService.PrepareCreateProperties(r.Context(), wsUUID, issueTypeID, properties)
 	if err != nil {
 		if writeIssueCreatePropertyError(w, err) {
@@ -139,7 +247,6 @@ func (h *Handler) createIssueViaRust(
 	}
 	policy := service.ResolveIssueCountPolicy(r.Context(), h.Entitlements, wsUUID)
 
-	issueID := dbid.NewV7()
 	payload := rustIssueCreate{
 		ID:                     uuidToString(issueID),
 		Title:                  req.Title,
@@ -185,6 +292,15 @@ func (h *Handler) createIssueViaRust(
 	if len(workMethod) > 0 {
 		payload.WorkMethodRun = workMethod
 	}
+	if dispatchPrepared != nil {
+		raw, err := marshalIssueStatusPreparedEnqueue(*dispatchPrepared)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encode issue create enqueue")
+			return
+		}
+		rawMsg := json.RawMessage(raw)
+		payload.PreparedEnqueue = &rawMsg
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -204,6 +320,13 @@ func (h *Handler) createIssueViaRust(
 		return
 	}
 	if resp.StatusCode == http.StatusConflict {
+		var changed struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(bodyBytes, &changed) == nil && changed.Code == "issue_create_configuration_changed" {
+			writeJSON(w, http.StatusConflict, changed)
+			return
+		}
 		var conflict struct {
 			Code  string        `json:"code"`
 			Error string        `json:"error"`
@@ -227,6 +350,31 @@ func (h *Handler) createIssueViaRust(
 		writeError(w, http.StatusBadGateway, "invalid rust issue create response")
 		return
 	}
+	taskReceipt := derefString(receipt.QueuedTaskID)
+	coalescedReceipt := derefString(receipt.CoalescedQueuedTaskID)
+	if dispatchPrepared != nil {
+		switch {
+		case taskReceipt != "" && coalescedReceipt != "":
+			writeError(w, http.StatusBadGateway, "invalid rust issue create queue receipt")
+			return
+		case taskReceipt != "":
+			if !rustStatusQueuedTaskValid(r.Context(), h.Queries, taskReceipt, *dispatchPrepared) {
+				writeError(w, http.StatusBadGateway, "invalid rust issue create queue receipt")
+				return
+			}
+		case coalescedReceipt != "":
+			if !rustStatusCoalescedTaskValid(r.Context(), h.Queries, coalescedReceipt, *dispatchPrepared) {
+				writeError(w, http.StatusBadGateway, "invalid rust issue create queue receipt")
+				return
+			}
+		default:
+			writeError(w, http.StatusBadGateway, "invalid rust issue create queue receipt")
+			return
+		}
+	} else if taskReceipt != "" || coalescedReceipt != "" {
+		writeError(w, http.StatusBadGateway, "unexpected rust issue create queue receipt")
+		return
+	}
 
 	issue := receipt.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", issue.ID, "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
@@ -247,10 +395,16 @@ func (h *Handler) createIssueViaRust(
 	platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
 	h.IssueService.CapturePlainCreateAnalytics(db.Issue{
 		ID: issueID, WorkspaceID: wsUUID, Title: issue.Title, Status: issue.Status, Number: issue.Number,
+		AssigneeType: assigneeType, AssigneeID: assigneeID,
 	}, creatorType, actualCreatorID, platform)
 	h.publish(protocol.EventIssueCreated, workspaceID, creatorType, actualCreatorID, map[string]any{
 		"issue": respIssue,
 	})
+	if taskReceipt != "" {
+		if taskID, err := util.ParseUUID(taskReceipt); err == nil {
+			h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
+		}
+	}
 	writeJSON(w, http.StatusCreated, CreateIssueResponse{IssueResponse: respIssue, PRAutoCompleteDisabled: req.PRAutoCompleteDisabled})
 }
 

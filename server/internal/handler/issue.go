@@ -3724,15 +3724,20 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// request rather than once per payload. (MUL-6243)
 	fillCreated := h.newStatusCategoryFiller(r.Context(), wsUUID, projectaccess.Hidden{})
 
-	if usesRust, err := h.createIssueUsesRust(r, wsUUID, req, creatorType, assigneeType, status, originType, attachmentIDs, workflowNeedsGo); err != nil {
+	rustPlan, err := h.planIssueCreateRust(
+		r, wsUUID, req, creatorType, actualCreatorID, priority,
+		assigneeType, assigneeID, status, originType, attachmentIDs, workflowNeedsGo, workflowProjectID,
+	)
+	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
 			slog.Warn("resolve rust issue create route failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to resolve issue create route")
 		}
 		return
-	} else if usesRust {
+	}
+	if rustPlan.useRust {
 		h.createIssueViaRust(w, r, workspaceID, wsUUID, creatorID, creatorType, actualCreatorID, req, status, priority,
-			assigneeType, assigneeID, parentIssueID, projectID, startDate, dueDate, issueTypeID, properties, labelIDs, fillCreated)
+			assigneeType, assigneeID, parentIssueID, projectID, startDate, dueDate, issueTypeID, properties, labelIDs, fillCreated, rustPlan)
 		return
 	}
 
