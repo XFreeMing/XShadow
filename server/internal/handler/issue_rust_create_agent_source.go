@@ -19,6 +19,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+type agentSourceRustSelection struct {
+	useRust                 bool
+	expectedSourceProjectID pgtype.UUID
+}
+
 type rustAgentSourceQuickCreateWrite struct {
 	TaskID               string                       `json:"task_id"`
 	AgentID              string                       `json:"agent_id"`
@@ -37,8 +42,20 @@ type rustAgentSourceQuickCreateWrite struct {
 }
 
 type rustAgentSourceQuickCreateResult struct {
-	TaskID          string `json:"task_id"`
-	SourceContextID string `json:"source_context_id"`
+	TaskID          string  `json:"task_id"`
+	SourceContextID string  `json:"source_context_id"`
+	SourceProjectID *string `json:"source_project_id,omitempty"`
+}
+
+func agentSourceQuickCreateReceiptProjectOK(
+	selection agentSourceRustSelection,
+	reply rustAgentSourceQuickCreateResult,
+) bool {
+	if selection.expectedSourceProjectID.Valid {
+		return reply.SourceProjectID != nil &&
+			*reply.SourceProjectID == uuidToString(selection.expectedSourceProjectID)
+	}
+	return reply.SourceProjectID == nil
 }
 
 func agentSourceQuickCreateLocalRuntimeOwned(userID pgtype.UUID, rt db.AgentRuntime) bool {
@@ -55,70 +72,91 @@ func (h *Handler) selectRustAgentSourceCommentSubIssue(
 	build service.SourceContextBuild,
 	capture service.SourceContextCapture,
 	prepared preparedAgentCommentSubIssue,
-) (bool, error) {
+) (agentSourceRustSelection, error) {
+	var out agentSourceRustSelection
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.CreateAgentSourcePilotScopes) == 0 {
-		return false, nil
+		return out, nil
 	}
 	if len(prepared.attachmentIDs) > 0 || prepared.squadID.Valid || prepared.projectID.Valid {
-		return false, nil
+		return out, nil
 	}
 	hasSourceFiles := len(build.Rows) != 0 || len(capture.Clones) != 0
 	if hasSourceFiles && (len(h.IssueReadBridge.CreateAgentSourceFilesPilotScopes) == 0 ||
 		!rustSourceContextClonePlanMatchesCapture(build, capture)) {
-		return false, nil
+		return out, nil
 	}
 	ctx := r.Context()
 	inPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.CreateAgentSourcePilotScopes, uuidToString(wsUUID), wsUUID)
 	if err != nil || !inPilot {
-		return false, err
+		return out, err
 	}
 	if hasSourceFiles {
 		inFilesPilot, filesErr := matchesIssuePilot(
 			ctx, h.Queries, h.IssueReadBridge.CreateAgentSourceFilesPilotScopes, uuidToString(wsUUID), wsUUID,
 		)
 		if filesErr != nil || !inFilesPilot {
-			return false, filesErr
+			return out, filesErr
 		}
 	}
 	sourceIssueID, err := util.ParseUUID(build.Snapshot.SourceIssue.ID)
 	if err != nil {
-		return false, nil
+		return out, nil
 	}
 	sourceIssue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: sourceIssueID, WorkspaceID: wsUUID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return out, nil
 		}
-		return false, err
+		return out, err
 	}
 	if sourceIssue.ProjectID.Valid {
-		return false, nil
+		if hasSourceFiles {
+			return out, nil
+		}
+		if len(h.IssueReadBridge.CreateAgentSourceProjectPilotScopes) == 0 {
+			return out, nil
+		}
+		inProjectPilot, pilotErr := matchesIssuePilot(
+			ctx, h.Queries, h.IssueReadBridge.CreateAgentSourceProjectPilotScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if pilotErr != nil || !inProjectPilot {
+			return out, pilotErr
+		}
+		hidden, hiddenErr := h.hiddenProjects(r, uuidToString(wsUUID))
+		if hiddenErr != nil {
+			return out, hiddenErr
+		}
+		if !hidden.CanSeeProject(sourceIssue.ProjectID) {
+			return out, nil
+		}
+		out.expectedSourceProjectID = sourceIssue.ProjectID
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID: prepared.agentID, WorkspaceID: wsUUID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return out, nil
 		}
-		return false, err
+		return out, err
 	}
 	if agent.OwnerID != userUUID || agent.RuntimeMode != "local" {
-		return false, nil
+		return out, nil
 	}
 	rt, err := h.getAgentRuntime(ctx, obsmetrics.RuntimeLookupSourceSourceContext, prepared.runtimeID)
 	if err != nil {
-		return false, nil
+		return out, nil
 	}
 	if !agentSourceQuickCreateLocalRuntimeOwned(userUUID, rt) {
-		return false, nil
+		return out, nil
 	}
 	if !runtimeHasCapability(rt.Metadata, protocol.DaemonCapabilitySourceContextQuickCreateV1) {
-		return false, nil
+		return out, nil
 	}
-	return true, nil
+	out.useRust = true
+	return out, nil
 }
 
 func agentSourceQuickCreateClonesCommitted(
@@ -194,6 +232,7 @@ func (h *Handler) createAgentCommentSubIssueViaRust(
 	capture service.SourceContextCapture,
 	build service.SourceContextBuild,
 	limits service.SourceContextLimitUsage,
+	selection agentSourceRustSelection,
 ) error {
 	ctx := r.Context()
 	if err := service.CheckIssueCreateCapacity(ctx, h.Queries, h.Entitlements, workspaceID); err != nil {
@@ -223,6 +262,10 @@ func (h *Handler) createAgentCommentSubIssueViaRust(
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "invalid source context clone plan")
 		return errSourceContextResponseWritten
+	}
+	if selection.expectedSourceProjectID.Valid {
+		projectID := uuidToString(selection.expectedSourceProjectID)
+		contextTrust.ExpectedSourceProjectID = &projectID
 	}
 	payload := rustAgentSourceQuickCreateWrite{
 		TaskID:               uuidToString(createParams.ID),
@@ -270,7 +313,8 @@ func (h *Handler) createAgentCommentSubIssueViaRust(
 	var reply rustAgentSourceQuickCreateResult
 	if json.Unmarshal(raw, &reply) != nil ||
 		reply.TaskID != uuidToString(createParams.ID) ||
-		reply.SourceContextID != uuidToString(capture.ID) {
+		reply.SourceContextID != uuidToString(capture.ID) ||
+		!agentSourceQuickCreateReceiptProjectOK(selection, reply) {
 		writeError(w, http.StatusBadGateway, "invalid agent source quick-create response")
 		return errSourceContextResponseWritten
 	}

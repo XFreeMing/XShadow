@@ -742,10 +742,19 @@ pub async fn validate_agent_pending_source(
     workspace_id: &str,
     user_id: &str,
     trust: &SourceContextCreateTrust,
-) -> Result<String, IssueCreateError> {
+) -> Result<(String, Option<String>), IssueCreateError> {
+    use super::create_validate::lock_source_inherited_project;
+
     validate_capture_ids(user_id, trust)?;
+    if trust.expected_source_project_id.is_some() && !trust.clones.is_empty() {
+        return Err(IssueCreateError::InvalidInput);
+    }
     let parsed = parse_trust_inputs(trust)?;
     validate_frozen_shape(workspace_id, trust, &parsed)?;
+    let effective_project = trust.expected_source_project_id.as_deref();
+    if let Some(project_id) = effective_project {
+        lock_source_inherited_project(tx, workspace_id, user_id, project_id).await?;
+    }
     let source = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM issue WHERE workspace_id = $1::uuid AND id = $2::uuid FOR UPDATE",
     )
@@ -754,7 +763,10 @@ pub async fn validate_agent_pending_source(
     .fetch_optional(&mut **tx)
     .await?;
     source.ok_or(IssueCreateError::SourceIssueDeleted)?;
-    validate_source_context_create_trust(tx, workspace_id, trust, &parsed, None).await
+    let prefix =
+        validate_source_context_create_trust(tx, workspace_id, trust, &parsed, effective_project)
+            .await?;
+    Ok((prefix, effective_project.map(str::to_owned)))
 }
 
 pub async fn validate_source_context_create_trust(

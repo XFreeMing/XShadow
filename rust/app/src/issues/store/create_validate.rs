@@ -59,6 +59,72 @@ enum ParentIssueLock {
     Update,
 }
 
+async fn lock_project_row_member_grant(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    member_id: &str,
+    privileged: bool,
+    project_id: &str,
+    missing: IssueCreateError,
+) -> Result<(String, bool), IssueCreateError> {
+    let Some((visibility, has_workflow)) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT visibility, workflow_id IS NOT NULL
+         FROM project WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+    )
+    .bind(project_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    else {
+        return Err(missing);
+    };
+    if visibility == "private" && !privileged {
+        let access = sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM project_member WHERE project_id = $1::uuid AND user_id = $2::uuid FOR SHARE",
+        )
+        .bind(project_id)
+        .bind(member_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+        if access.is_none() {
+            return Err(missing);
+        }
+    }
+    Ok((visibility, has_workflow))
+}
+
+pub(super) async fn lock_source_inherited_project(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    member_id: &str,
+    project_id: &str,
+) -> Result<(), IssueCreateError> {
+    if !is_uuid(project_id) {
+        return Err(IssueCreateError::AnchorCommentDeleted);
+    }
+    let role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM member WHERE user_id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+    )
+    .bind(member_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(role) = role else {
+        return Err(IssueCreateError::AnchorCommentDeleted);
+    };
+    let privileged = matches!(role.as_str(), "owner" | "admin");
+    lock_project_row_member_grant(
+        conn,
+        workspace_id,
+        member_id,
+        privileged,
+        project_id,
+        IssueCreateError::AnchorCommentDeleted,
+    )
+    .await?;
+    Ok(())
+}
+
 async fn read_parent_project(
     conn: &mut PgConnection,
     workspace_id: &str,
@@ -141,38 +207,19 @@ pub(super) async fn guard_parent_projects_and_assignee(
         }
         previous = Some(project);
         let is_parent = parent_project.as_deref() == Some(project);
-        let missing = if is_parent {
-            IssueCreateError::ParentNotFound
-        } else {
-            IssueCreateError::ProjectNotFound
-        };
-        let (visibility, has_workflow) = sqlx::query_as::<_, (String, bool)>(
-            "SELECT visibility, workflow_id IS NOT NULL
-             FROM project WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
-        )
-        .bind(project)
-        .bind(workspace_id)
-        .fetch_optional(&mut *conn)
-        .await?
-        .ok_or_else(|| {
+        let (_, has_workflow) = lock_project_row_member_grant(
+            conn,
+            workspace_id,
+            member_id,
+            privileged,
+            project,
             if is_parent {
                 IssueCreateError::ParentNotFound
             } else {
                 IssueCreateError::ProjectNotFound
-            }
-        })?;
-        if visibility == "private" && !privileged {
-            let access = sqlx::query_scalar::<_, i32>(
-                "SELECT 1 FROM project_member WHERE project_id = $1::uuid AND user_id = $2::uuid FOR SHARE",
-            )
-            .bind(project)
-            .bind(member_id)
-            .fetch_optional(&mut *conn)
-            .await?;
-            if access.is_none() {
-                return Err(missing);
-            }
-        }
+            },
+        )
+        .await?;
         if has_workflow && effective == Some(project) {
             return Err(IssueCreateError::ConfigurationChanged);
         }

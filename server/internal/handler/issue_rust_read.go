@@ -55,6 +55,7 @@ type IssueReadBridge struct {
 	CreateSourceProjectPilotScopes       []string
 	CreateSourceFilesPilotScopes         []string
 	CreateAgentSourcePilotScopes         []string
+	CreateAgentSourceProjectPilotScopes  []string
 	CreateAgentSourceFilesPilotScopes    []string
 	RetryAgentSourcePilotScopes          []string
 	AttachAgentSourcePilotScopes         []string
@@ -125,11 +126,18 @@ type IssueReadBridge struct {
 //     is online and advertises source-context quick-create support. Disabled
 //     by default; explicit/inherited project, squad, file, and non-local shapes
 //     continue on Go.
+//   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PROJECT_PILOT: comma-separated
+//     workspace slugs or UUIDs for native agent-mode source-context enqueue that
+//     inherit the source issue's ordinary project with no extra uploads
+//     (requires CREATE_AGENT_SOURCE on the same workspace). Source issues with
+//     frozen attachments also require CREATE_AGENT_SOURCE_FILES on the same
+//     workspace. Explicit destination projects, squads, and other shapes stay on
+//     Go.
 //   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT: comma-separated
 //     workspace slugs or UUIDs for native agent-mode source-context enqueue with
 //     frozen ordinary source attachments on projectless sources. Requires
 //     CREATE_AGENT_SOURCE on the same workspace. Extra quick-create uploads,
-//     projects, and squads stay on Go.
+//     explicit destination projects, and squads stay on Go.
 //   - XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT: comma-separated workspace
 //     slugs or UUIDs for native manual POST /api/tasks/{taskId}/retry-source-context
 //     on failed projectless source-context quick-creates with no clone uploads,
@@ -204,6 +212,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	createSourceProjectScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_PROJECT_PILOT"))
 	createSourceFilesScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT"))
 	createAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT"))
+	createAgentSourceProjectScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PROJECT_PILOT"))
 	createAgentSourceFilesScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT"))
 	retryAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT"))
 	attachAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT"))
@@ -249,6 +258,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		CreateSourceProjectPilotScopes:       createSourceProjectScopes,
 		CreateSourceFilesPilotScopes:         createSourceFilesScopes,
 		CreateAgentSourcePilotScopes:         createAgentSourceScopes,
+		CreateAgentSourceProjectPilotScopes:  createAgentSourceProjectScopes,
 		CreateAgentSourceFilesPilotScopes:    createAgentSourceFilesScopes,
 		RetryAgentSourcePilotScopes:          retryAgentSourceScopes,
 		AttachAgentSourcePilotScopes:         attachAgentSourceScopes,

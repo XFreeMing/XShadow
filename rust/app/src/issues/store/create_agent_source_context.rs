@@ -10,7 +10,7 @@ use super::agent_source_queue_lock::{
 };
 use super::create_source_context::{
     SOURCE_CONTEXT_VERSION, SourceContextCreateTrust, persist_source_context_clones,
-    reconcile_source_context_project, validate_agent_pending_source,
+    validate_agent_pending_source,
 };
 use super::create_write::IssueCreateError;
 use super::is_uuid;
@@ -44,6 +44,8 @@ pub struct AgentSourceQuickCreateWrite {
 pub struct AgentSourceQuickCreateResult {
     pub task_id: String,
     pub source_context_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_project_id: Option<String>,
 }
 
 const CREATE_QUICK_CREATE_TASK: &str = r#"
@@ -222,11 +224,9 @@ pub async fn create_agent_source_quick_create(
         &request.context,
         request.priority,
     )?;
-    reconcile_source_context_project(&request.source_context, None)?;
-
     let mut tx = pool.begin().await.map_err(IssueCreateError::Database)?;
     lock_agent_runtime_member(&mut tx, workspace_id, member_id, &request).await?;
-    let issue_prefix =
+    let (issue_prefix, locked_source_project) =
         validate_agent_pending_source(&mut tx, workspace_id, member_id, &request.source_context)
             .await?;
 
@@ -252,5 +252,6 @@ pub async fn create_agent_source_quick_create(
     Ok(AgentSourceQuickCreateResult {
         task_id,
         source_context_id: context_id,
+        source_project_id: locked_source_project,
     })
 }
