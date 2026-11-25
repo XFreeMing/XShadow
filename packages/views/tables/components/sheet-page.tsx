@@ -256,6 +256,23 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   }, [sheetReady, tableId]);
 
   const fields = sheet.data?.fields ?? EMPTY_FIELDS;
+  const hasLookup = fields.some((field) => field.kind === "lookup");
+  useEffect(() => {
+    if (!sheetReady || !hasLookup) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      if (editingRef.current) {
+        holdSheet.current = true;
+        return;
+      }
+      void queryClient.invalidateQueries(
+        { queryKey: genericTableKeys.sheetAll(wsId, tableId) },
+        { cancelRefetch: false },
+      );
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [hasLookup, queryClient, sheetReady, tableId, wsId]);
+
   const relationTargetTableIds = useMemo(() => {
     const ids = new Set<string>();
     for (const field of fields) {
@@ -271,6 +288,7 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
     queries: relationTargetTableIds.map((targetId) => ({
       ...genericRecordOptionsQuery(wsId, targetId),
       refetchOnMount: "always" as const,
+      refetchInterval: 4000,
     })),
   });
   const recordOptionsByTable = useMemo(() => {
