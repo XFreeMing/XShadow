@@ -228,6 +228,10 @@ func (h *Handler) decidePRAutoComplete(ctx context.Context, ws db.Workspace, iss
 			d.State = prAutoCompleteMethodReviewOpen
 			return d, nil
 		}
+		if errors.Is(err, errMethodMergePending) {
+			d.State, d.PRs = prAutoCompleteWaiting, prs
+			return d, nil
+		}
 		return prAutoCompleteDecision{}, err
 	}
 	var open, closed []db.ListIssueLinkedPullRequestStatesRow

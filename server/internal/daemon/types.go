@@ -312,12 +312,13 @@ type SkillFileRefData struct {
 
 // TaskUsageEntry represents token usage for a single model during a task execution.
 type TaskUsageEntry struct {
-	Provider         string `json:"provider"`
-	Model            string `json:"model"`
-	InputTokens      int64  `json:"input_tokens"`
-	OutputTokens     int64  `json:"output_tokens"`
-	CacheReadTokens  int64  `json:"cache_read_tokens"`
-	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	Provider              string `json:"provider"`
+	Model                 string `json:"model"`
+	InputTokens           int64  `json:"input_tokens"`
+	OutputTokens          int64  `json:"output_tokens"`
+	CacheReadTokens       int64  `json:"cache_read_tokens"`
+	CacheWriteTokens      int64  `json:"cache_write_tokens"`
+	ReportedModelRequests int64  `json:"reported_model_requests,omitempty"`
 	// CostUSDTicks is the provider's own price for this usage, in 1e-10 USD.
 	// Omitted when the agent reports no cost, which is the common case — the
 	// server then leaves the column NULL and the client estimates from the

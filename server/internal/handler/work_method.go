@@ -272,6 +272,19 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			}
 			if closing {
 				snapshot := acceptanceTrace.Closeout(nil)
+				if run.Method.GitHubDelivery != nil {
+					if len(snapshot.Criteria) == 0 || !gitHubCommitSHA.MatchString(snapshot.Criteria[0].Candidate) {
+						writeError(w, http.StatusConflict, "须提供已复验的完整 GitHub 候选提交")
+						return
+					}
+					head := snapshot.Criteria[0].Candidate
+					for _, criterion := range snapshot.Criteria {
+						if criterion.Candidate != head {
+							writeError(w, http.StatusConflict, "所有交付验收标准须关联同一个完整 GitHub 候选提交")
+							return
+						}
+					}
+				}
 				closeout = &snapshot
 			}
 		}
@@ -312,6 +325,9 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		"status_changed": issue.Status != updated.Status, "prev_status": issue.Status,
 		"assignee_changed":   issue.AssigneeType != updated.AssigneeType || issue.AssigneeID != updated.AssigneeID,
 		"prev_assignee_type": textToPtr(issue.AssigneeType), "prev_assignee_id": uuidToPtr(issue.AssigneeID)})
+	if run.State == "closed" && run.Method != nil && run.Method.GitHubDelivery != nil {
+		h.maybeAutoCompleteIssue(r.Context(), updated.WorkspaceID, updated.ID, nil)
+	}
 	h.writeIssueMethodView(w, r, updated, run, delivery)
 }
 

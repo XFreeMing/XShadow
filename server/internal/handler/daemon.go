@@ -5559,12 +5559,13 @@ func formatLegacyCommentEntry(comment CoalescedCommentData) string {
 // ReportTaskUsage stores per-task token usage. Called independently of
 // complete/fail so usage is captured even when tasks fail or are blocked.
 type TaskUsagePayload struct {
-	Provider         string `json:"provider"`
-	Model            string `json:"model"`
-	InputTokens      int64  `json:"input_tokens"`
-	OutputTokens     int64  `json:"output_tokens"`
-	CacheReadTokens  int64  `json:"cache_read_tokens"`
-	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	Provider              string `json:"provider"`
+	Model                 string `json:"model"`
+	InputTokens           int64  `json:"input_tokens"`
+	OutputTokens          int64  `json:"output_tokens"`
+	CacheReadTokens       int64  `json:"cache_read_tokens"`
+	CacheWriteTokens      int64  `json:"cache_write_tokens"`
+	ReportedModelRequests int64  `json:"reported_model_requests,omitempty"`
 	// CostUSDTicks is the provider's own price for this usage in 1e-10 USD.
 	// Absent or 0 from every daemon that doesn't have one (older builds, and
 	// every provider except Grok today) — stored as NULL so the reader knows
@@ -5644,15 +5645,16 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 			provider = runtimeProvider
 		}
 		if err := h.Queries.UpsertTaskUsage(r.Context(), db.UpsertTaskUsageParams{
-			TaskID:           task.ID,
-			Provider:         provider,
-			Model:            u.Model,
-			InputTokens:      u.InputTokens,
-			OutputTokens:     u.OutputTokens,
-			CacheReadTokens:  u.CacheReadTokens,
-			CacheWriteTokens: u.CacheWriteTokens,
-			CostUsdTicks:     authoritativeCostTicks(u.CostUSDTicks),
-			CreditsMicros:    reportedCredits(u.CreditsMicros),
+			TaskID:                task.ID,
+			Provider:              provider,
+			Model:                 u.Model,
+			InputTokens:           u.InputTokens,
+			OutputTokens:          u.OutputTokens,
+			CacheReadTokens:       u.CacheReadTokens,
+			CacheWriteTokens:      u.CacheWriteTokens,
+			ReportedModelRequests: max(0, u.ReportedModelRequests),
+			CostUsdTicks:          authoritativeCostTicks(u.CostUSDTicks),
+			CreditsMicros:         reportedCredits(u.CreditsMicros),
 		}); err != nil {
 			slog.Warn("upsert task usage failed", "task_id", taskID, "model", u.Model, "error", err)
 			continue
@@ -6797,10 +6799,12 @@ func (h *Handler) GetIssueUsage(w http.ResponseWriter, r *http.Request) {
 		// task_count is the legacy count of tasks with usage. Keep it stable for
 		// installed clients while the explicit coverage fields distinguish runs
 		// from metered runs.
-		"task_count":            row.TaskCount,
-		"terminal_task_count":   row.TerminalTaskCount,
-		"metered_task_count":    row.MeteredTaskCount,
-		"unreported_task_count": row.UnreportedTaskCount,
+		"task_count":                        row.TaskCount,
+		"terminal_task_count":               row.TerminalTaskCount,
+		"metered_task_count":                row.MeteredTaskCount,
+		"unreported_task_count":             row.UnreportedTaskCount,
+		"reported_model_requests":           row.ReportedModelRequests,
+		"model_request_reported_task_count": row.ModelRequestReportedTaskCount,
 	})
 }
 

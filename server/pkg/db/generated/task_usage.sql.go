@@ -23,7 +23,9 @@ WITH usage AS (
         COALESCE(SUM(tu.output_tokens)      FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_output_tokens,
         COALESCE(SUM(tu.cache_read_tokens)  FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_cache_read_tokens,
         COALESCE(SUM(tu.cache_write_tokens) FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_cache_write_tokens,
-        COUNT(DISTINCT tu.task_id)::int AS task_count
+        COUNT(DISTINCT tu.task_id)::int AS task_count,
+        COALESCE(SUM(tu.reported_model_requests), 0)::bigint AS reported_model_requests,
+        COUNT(DISTINCT tu.task_id) FILTER (WHERE tu.reported_model_requests > 0)::int AS model_request_reported_task_count
     FROM task_usage tu
     JOIN agent_task_queue atq ON atq.id = tu.task_id
     WHERE (atq.issue_id = $1::uuid OR (atq.chat_session_id IS NOT NULL AND atq.context->>'evidence_issue_id' = ($1::uuid)::text))
@@ -40,7 +42,7 @@ WITH usage AS (
       AND atq.completed_at IS NOT NULL
 )
 SELECT
-    usage.total_input_tokens, usage.total_output_tokens, usage.total_cache_read_tokens, usage.total_cache_write_tokens, usage.total_cost_usd_ticks, usage.uncosted_input_tokens, usage.uncosted_output_tokens, usage.uncosted_cache_read_tokens, usage.uncosted_cache_write_tokens, usage.task_count,
+    usage.total_input_tokens, usage.total_output_tokens, usage.total_cache_read_tokens, usage.total_cache_write_tokens, usage.total_cost_usd_ticks, usage.uncosted_input_tokens, usage.uncosted_output_tokens, usage.uncosted_cache_read_tokens, usage.uncosted_cache_write_tokens, usage.task_count, usage.reported_model_requests, usage.model_request_reported_task_count,
     terminal_runs.terminal_task_count,
     terminal_runs.metered_task_count,
     (terminal_runs.terminal_task_count - terminal_runs.metered_task_count)::int AS unreported_task_count
@@ -49,19 +51,21 @@ CROSS JOIN terminal_runs
 `
 
 type GetIssueUsageSummaryRow struct {
-	TotalInputTokens         int64 `json:"total_input_tokens"`
-	TotalOutputTokens        int64 `json:"total_output_tokens"`
-	TotalCacheReadTokens     int64 `json:"total_cache_read_tokens"`
-	TotalCacheWriteTokens    int64 `json:"total_cache_write_tokens"`
-	TotalCostUsdTicks        int64 `json:"total_cost_usd_ticks"`
-	UncostedInputTokens      int64 `json:"uncosted_input_tokens"`
-	UncostedOutputTokens     int64 `json:"uncosted_output_tokens"`
-	UncostedCacheReadTokens  int64 `json:"uncosted_cache_read_tokens"`
-	UncostedCacheWriteTokens int64 `json:"uncosted_cache_write_tokens"`
-	TaskCount                int32 `json:"task_count"`
-	TerminalTaskCount        int32 `json:"terminal_task_count"`
-	MeteredTaskCount         int32 `json:"metered_task_count"`
-	UnreportedTaskCount      int32 `json:"unreported_task_count"`
+	TotalInputTokens              int64 `json:"total_input_tokens"`
+	TotalOutputTokens             int64 `json:"total_output_tokens"`
+	TotalCacheReadTokens          int64 `json:"total_cache_read_tokens"`
+	TotalCacheWriteTokens         int64 `json:"total_cache_write_tokens"`
+	TotalCostUsdTicks             int64 `json:"total_cost_usd_ticks"`
+	UncostedInputTokens           int64 `json:"uncosted_input_tokens"`
+	UncostedOutputTokens          int64 `json:"uncosted_output_tokens"`
+	UncostedCacheReadTokens       int64 `json:"uncosted_cache_read_tokens"`
+	UncostedCacheWriteTokens      int64 `json:"uncosted_cache_write_tokens"`
+	TaskCount                     int32 `json:"task_count"`
+	ReportedModelRequests         int64 `json:"reported_model_requests"`
+	ModelRequestReportedTaskCount int32 `json:"model_request_reported_task_count"`
+	TerminalTaskCount             int32 `json:"terminal_task_count"`
+	MeteredTaskCount              int32 `json:"metered_task_count"`
+	UnreportedTaskCount           int32 `json:"unreported_task_count"`
 }
 
 // Keep the legacy usage aggregates intact, then report coverage over finite
@@ -82,6 +86,8 @@ func (q *Queries) GetIssueUsageSummary(ctx context.Context, issueID pgtype.UUID)
 		&i.UncostedCacheReadTokens,
 		&i.UncostedCacheWriteTokens,
 		&i.TaskCount,
+		&i.ReportedModelRequests,
+		&i.ModelRequestReportedTaskCount,
 		&i.TerminalTaskCount,
 		&i.MeteredTaskCount,
 		&i.UnreportedTaskCount,
@@ -90,7 +96,7 @@ func (q *Queries) GetIssueUsageSummary(ctx context.Context, issueID pgtype.UUID)
 }
 
 const getTaskUsage = `-- name: GetTaskUsage :many
-SELECT id, task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, updated_at, cost_usd_ticks, credits_micros FROM task_usage
+SELECT id, task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, updated_at, cost_usd_ticks, credits_micros, reported_model_requests FROM task_usage
 WHERE task_id = $1
 ORDER BY model
 `
@@ -117,6 +123,7 @@ func (q *Queries) GetTaskUsage(ctx context.Context, taskID pgtype.UUID) ([]TaskU
 			&i.UpdatedAt,
 			&i.CostUsdTicks,
 			&i.CreditsMicros,
+			&i.ReportedModelRequests,
 		); err != nil {
 			return nil, err
 		}
@@ -828,8 +835,8 @@ func (q *Queries) ListTaskUsageByIDs(ctx context.Context, taskIds []pgtype.UUID)
 }
 
 const upsertTaskUsage = `-- name: UpsertTaskUsage :exec
-INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_ticks, credits_micros, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_ticks, credits_micros, reported_model_requests, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 ON CONFLICT (task_id, provider, model)
 DO UPDATE SET
     input_tokens = EXCLUDED.input_tokens,
@@ -838,19 +845,21 @@ DO UPDATE SET
     cache_write_tokens = EXCLUDED.cache_write_tokens,
     cost_usd_ticks = EXCLUDED.cost_usd_ticks,
     credits_micros = EXCLUDED.credits_micros,
+    reported_model_requests = GREATEST(task_usage.reported_model_requests, EXCLUDED.reported_model_requests),
     updated_at = now()
 `
 
 type UpsertTaskUsageParams struct {
-	TaskID           pgtype.UUID `json:"task_id"`
-	Provider         string      `json:"provider"`
-	Model            string      `json:"model"`
-	InputTokens      int64       `json:"input_tokens"`
-	OutputTokens     int64       `json:"output_tokens"`
-	CacheReadTokens  int64       `json:"cache_read_tokens"`
-	CacheWriteTokens int64       `json:"cache_write_tokens"`
-	CostUsdTicks     pgtype.Int8 `json:"cost_usd_ticks"`
-	CreditsMicros    pgtype.Int8 `json:"credits_micros"`
+	TaskID                pgtype.UUID `json:"task_id"`
+	Provider              string      `json:"provider"`
+	Model                 string      `json:"model"`
+	InputTokens           int64       `json:"input_tokens"`
+	OutputTokens          int64       `json:"output_tokens"`
+	CacheReadTokens       int64       `json:"cache_read_tokens"`
+	CacheWriteTokens      int64       `json:"cache_write_tokens"`
+	CostUsdTicks          pgtype.Int8 `json:"cost_usd_ticks"`
+	CreditsMicros         pgtype.Int8 `json:"credits_micros"`
+	ReportedModelRequests int64       `json:"reported_model_requests"`
 }
 
 // Bumps `updated_at` on INSERT and on conflict so the hourly-rollup worker
@@ -872,6 +881,7 @@ func (q *Queries) UpsertTaskUsage(ctx context.Context, arg UpsertTaskUsageParams
 		arg.CacheWriteTokens,
 		arg.CostUsdTicks,
 		arg.CreditsMicros,
+		arg.ReportedModelRequests,
 	)
 	return err
 }

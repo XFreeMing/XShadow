@@ -14,14 +14,20 @@ import (
 )
 
 type Template struct {
-	ID         string   `json:"id"`
-	Revision   int      `json:"revision"`
-	Name       string   `json:"name"`
-	Kind       string   `json:"kind"`
-	Keywords   []string `json:"keywords"`
-	Steps      []Step   `json:"steps"`
-	Review     string   `json:"review"`
-	ReworkStep int      `json:"rework_step"`
+	ID             string          `json:"id"`
+	Revision       int             `json:"revision"`
+	Name           string          `json:"name"`
+	Kind           string          `json:"kind"`
+	Keywords       []string        `json:"keywords"`
+	Steps          []Step          `json:"steps"`
+	Review         string          `json:"review"`
+	ReworkStep     int             `json:"rework_step"`
+	GitHubDelivery *GitHubDelivery `json:"github_delivery,omitempty"`
+}
+
+type GitHubDelivery struct {
+	Repository string `json:"repository"`
+	BaseRef    string `json:"base_ref"`
 }
 
 type Actor struct {
@@ -89,8 +95,10 @@ type Change struct {
 }
 
 var (
-	ErrConflict = errors.New("工作方法记录已更新，请重新读取")
-	methodID    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$`)
+	ErrConflict      = errors.New("工作方法记录已更新，请重新读取")
+	methodID         = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$`)
+	githubRepository = regexp.MustCompile(`^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$`)
+	githubBranch     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,249}$`)
 )
 
 func validText(s string, limit int) bool {
@@ -119,6 +127,10 @@ func Validate(m Template) error {
 	case "development", "research", "outcome":
 	default:
 		return errors.New("未知任务类型")
+	}
+	if target := m.GitHubDelivery; target != nil && (m.Kind != "development" || !githubRepository.MatchString(target.Repository) ||
+		!githubBranch.MatchString(target.BaseRef) || strings.Contains(target.BaseRef, "..")) {
+		return errors.New("GitHub 交付须配置研发仓库和目标分支")
 	}
 	if len(m.Keywords) > 60 {
 		return errors.New("匹配词最多 60 个")
@@ -173,6 +185,10 @@ func Validate(m Template) error {
 }
 
 func snapshot(m Template) *Template {
+	if m.GitHubDelivery != nil {
+		target := *m.GitHubDelivery
+		m.GitHubDelivery = &target
+	}
 	m.Steps = slices.Clone(m.Steps)
 	for i := range m.Steps {
 		step := &m.Steps[i]

@@ -166,6 +166,9 @@ func (s *IssueContinuation) recoverIssue(ctx context.Context, manager db.Agent, 
 		if err = json.Unmarshal(issue.WorkMethodRun, &method); err != nil {
 			return err
 		}
+		if method.State == "closed" && method.Method != nil && method.Method.GitHubDelivery != nil {
+			return nil
+		}
 		if goalGate.planning && method.GoalExecution {
 			return nil
 		}
@@ -270,11 +273,11 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 		note = goalGate.note + "\n" + note
 	}
 	if method.GoalExecution {
-		note = "在已授权的原事项接续当前工作方法步骤。先读取本步骤的产物、标准和已有证据。仅提交本步骤的结果或独立评审，平台按正式工作方法派送下一位。"
+		note = "在已授权的原事项接续当前步骤。先读当前方法、当前候选和最新交接。沿用已裁定的标准、用例和回执，只补新证据、差异及待决定事项。仅在这些入口不足时回查相关历史。平台按正式方法派送下一位。"
 		if method.CanDelegateCandidate() {
 			worker, err := GoalCandidateWorker(ctx, q, issue, method, execution.ID)
 			if err == nil {
-				note = fmt.Sprintf("本步骤的实现运行 %s 已结束，状态为 %s。核对同一候选及实测回执，再按正式方法送独立评审。", util.UUIDToString(worker.ID), worker.Status)
+				note = fmt.Sprintf("本步骤的实现运行 %s 已结束，状态为 %s。先读取该运行交付回执和验收台账的当前候选，核对 SHA、已运行用例与待审核差异。引用已有证据后送独立评审；把复跑和新反例留给独立评审者。", util.UUIDToString(worker.ID), worker.Status)
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}

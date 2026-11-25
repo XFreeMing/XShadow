@@ -72,8 +72,23 @@ func TestLocalDirectoryAutoIsolatesOnlyOverlappingIssueRun(t *testing.T) {
 	if hold, abort := d.acquireLocalDirectoryLockIfNeeded(t.Context(), &followup, slog.Default()); abort || hold != nil || !followup.localDirectoryConcurrent {
 		t.Fatal("an overlapping delivery lost its branch when the other writer finished")
 	}
+	checkedOut := filepath.Join(t.TempDir(), "owner-checkout")
+	git(repo, "worktree", "add", checkedOut, worktree.Branch)
+	if confirmed, err := execenv.ConfirmDeliveredLocalBranch(repo, worktree.Branch, sha, "workspace", "coder", "DEV-2", slog.Default()); err != nil || confirmed {
+		t.Fatalf("reclaiming the owner's checkout must wait: %v %v", confirmed, err)
+	}
+	git(repo, "worktree", "remove", checkedOut)
 	if confirmed, err := execenv.ConfirmDeliveredLocalBranch(repo, worktree.Branch, sha, "workspace", "coder", "DEV-2", slog.Default()); err != nil || !confirmed {
 		t.Fatalf("confirm merged branch: %v %v", confirmed, err)
+	}
+	if _, err := runGitGCCommandContext(t.Context(), repo, "show-ref", "--verify", "refs/heads/"+worktree.Branch); err == nil {
+		t.Fatal("the merged branch is still listed")
+	}
+	if got := git(repo, "rev-parse", "refs/multica/merged-deliveries/"+sha); got != sha {
+		t.Fatalf("the original commit must remain recoverable: %s", got)
+	}
+	if confirmed, err := execenv.ConfirmDeliveredLocalBranch(repo, worktree.Branch, sha, "workspace", "coder", "DEV-2", slog.Default()); err != nil || !confirmed {
+		t.Fatalf("reconcile an already reclaimed branch: %v %v", confirmed, err)
 	}
 	next := task("next", "DEV-2")
 	hold, abort := d.acquireLocalDirectoryLockIfNeeded(t.Context(), &next, slog.Default())
