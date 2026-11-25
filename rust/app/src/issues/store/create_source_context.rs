@@ -679,6 +679,13 @@ fn validate_capture_ids(
     if trust.captured_by_user_id != user_id {
         return Err(IssueCreateError::InvalidInput);
     }
+    if trust
+        .clones
+        .iter()
+        .any(|clone| !is_uuid(&clone.clone_id) || !is_uuid(&clone.source_attachment_id))
+    {
+        return Err(IssueCreateError::InvalidInput);
+    }
     Ok(())
 }
 
@@ -703,15 +710,6 @@ fn validate_trust_ids(
         || request.prepared_enqueue.is_some()
         || request.squad_create_trust.is_some()
     {
-        return Err(IssueCreateError::InvalidInput);
-    }
-    if !trust.clones.is_empty() {
-        for clone in &trust.clones {
-            if !is_uuid(&clone.clone_id) || !is_uuid(&clone.source_attachment_id) {
-                return Err(IssueCreateError::InvalidInput);
-            }
-        }
-    } else if trust.source_compare_snapshot.is_some() {
         return Err(IssueCreateError::InvalidInput);
     }
     Ok(())
@@ -746,9 +744,6 @@ pub async fn validate_agent_pending_source(
     trust: &SourceContextCreateTrust,
 ) -> Result<String, IssueCreateError> {
     validate_capture_ids(user_id, trust)?;
-    if !trust.clones.is_empty() || trust.source_compare_snapshot.is_some() {
-        return Err(IssueCreateError::InvalidInput);
-    }
     let parsed = parse_trust_inputs(trust)?;
     validate_frozen_shape(workspace_id, trust, &parsed)?;
     let source = sqlx::query_scalar::<_, i32>(
@@ -965,6 +960,17 @@ pub async fn insert_attached_source_context(
         return Err(IssueCreateError::SourceContextChanged);
     }
 
+    persist_source_context_clones(tx, workspace_id, trust).await
+}
+
+pub async fn persist_source_context_clones(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace_id: &str,
+    trust: &SourceContextCreateTrust,
+) -> Result<(), IssueCreateError> {
+    if trust.clones.is_empty() {
+        return Ok(());
+    }
     insert_source_context_clones(
         tx,
         workspace_id,
@@ -973,8 +979,7 @@ pub async fn insert_attached_source_context(
         &trust.clones,
     )
     .await?;
-    consume_source_context_intents(tx, workspace_id, &trust.context_id, &trust.clones).await?;
-    Ok(())
+    consume_source_context_intents(tx, workspace_id, &trust.context_id, &trust.clones).await
 }
 
 #[cfg(test)]

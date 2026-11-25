@@ -611,7 +611,7 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	case "agent":
-		useRust, err := h.selectRustAgentSourceCommentSubIssue(r, wsUUID, userUUID, build, *preparedAgent)
+		useRust, err := h.selectRustAgentSourceCommentSubIssue(r, wsUUID, userUUID, build, capture, *preparedAgent)
 		if err != nil {
 			cleanupIfUnpersisted()
 			if !writeQueryCancellation(w, r, err) {
@@ -621,7 +621,7 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 			break
 		}
 		if useRust {
-			if err := h.createAgentCommentSubIssueViaRust(w, r, wsUUID, userUUID, *preparedAgent, capture, build.Limits); err != nil {
+			if err := h.createAgentCommentSubIssueViaRust(w, r, wsUUID, userUUID, *preparedAgent, capture, build, build.Limits); err != nil {
 				cleanupIfUnpersisted()
 				slog.Warn("source context capture failed", append(sourceContextAuditAttrs(r, capture.ID, capture.Snapshot.SourceIssue.ID, capture.Snapshot.AnchorCommentID, userUUID, req.Mode, build.Limits, "failed"), "error", err)...)
 				if !errors.Is(err, errSourceContextResponseWritten) {

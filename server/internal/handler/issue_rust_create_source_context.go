@@ -56,6 +56,60 @@ type manualSourceContextCreateRustPlan struct {
 	expectedSourceProjectID pgtype.UUID
 }
 
+func rustSourceContextCreateTrustFromCapture(
+	wsUUID pgtype.UUID,
+	capture service.SourceContextCapture,
+	build service.SourceContextBuild,
+) (rustSourceContextCreateTrust, error) {
+	snapshotJSON, err := json.Marshal(capture.Snapshot)
+	if err != nil {
+		return rustSourceContextCreateTrust{}, err
+	}
+	trust := rustSourceContextCreateTrust{
+		ContextID:        util.UUIDToString(capture.ID),
+		SourceIssueID:    util.UUIDToString(capture.SourceIssueID),
+		AnchorCommentID:  util.UUIDToString(capture.AnchorCommentID),
+		CaptureDigest:    capture.Digest,
+		CapturedByUserID: util.UUIDToString(capture.CapturedByUserID),
+		CapturedAt:       capture.CapturedAt.UTC().Format(time.RFC3339Nano),
+		Snapshot:         snapshotJSON,
+	}
+	if len(capture.Clones) == 0 {
+		return trust, nil
+	}
+	compareSnapshotJSON, err := json.Marshal(build.Snapshot)
+	if err != nil {
+		return rustSourceContextCreateTrust{}, err
+	}
+	if !rustSourceContextClonePlanMatchesCapture(build, capture) {
+		return rustSourceContextCreateTrust{}, fmt.Errorf("source context clone plan mismatch")
+	}
+	trust.SourceCompareSnapshot = compareSnapshotJSON
+	workspaceKey := util.UUIDToString(wsUUID)
+	trust.Clones = make([]rustSourceContextCloneTrust, len(capture.Clones))
+	for i, clone := range capture.Clones {
+		row := build.Rows[i]
+		sourceID := util.UUIDToString(row.ID)
+		if sourceID == "" {
+			return rustSourceContextCreateTrust{}, fmt.Errorf("invalid source context clone plan")
+		}
+		cloneID := util.UUIDToString(clone.ID)
+		trust.Clones[i] = rustSourceContextCloneTrust{
+			CloneID:            cloneID,
+			SourceAttachmentID: sourceID,
+			Filename:           clone.Filename,
+			URL:                clone.URL,
+			ContentType:        clone.ContentType,
+			SizeBytes:          clone.SizeBytes,
+			StorageKey: fmt.Sprintf(
+				"workspaces/%s/source-context/%s%s",
+				workspaceKey, cloneID, path.Ext(clone.Filename),
+			),
+		}
+	}
+	return trust, nil
+}
+
 func rustSourceContextClonePlanMatchesCapture(build service.SourceContextBuild, capture service.SourceContextCapture) bool {
 	if len(build.Rows) != len(capture.Clones) || len(build.Rows) == 0 {
 		return false
@@ -267,42 +321,10 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		return errSourceContextResponseWritten
 	}
 	policy := service.ResolveIssueCountPolicy(r.Context(), h.Entitlements, wsUUID)
-	snapshotJSON, err := json.Marshal(capture.Snapshot)
+	contextTrust, err := rustSourceContextCreateTrustFromCapture(wsUUID, capture, build)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encode source context snapshot")
+		writeError(w, http.StatusBadGateway, "invalid source context clone plan")
 		return errSourceContextResponseWritten
-	}
-	var compareSnapshotJSON json.RawMessage
-	var cloneTrust []rustSourceContextCloneTrust
-	if len(capture.Clones) > 0 {
-		compareSnapshotJSON, err = json.Marshal(build.Snapshot)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to encode source context compare snapshot")
-			return errSourceContextResponseWritten
-		}
-		cloneTrust = make([]rustSourceContextCloneTrust, len(capture.Clones))
-		workspaceKey := util.UUIDToString(wsUUID)
-		for i, clone := range capture.Clones {
-			row := build.Rows[i]
-			sourceID := util.UUIDToString(row.ID)
-			if sourceID == "" {
-				writeError(w, http.StatusBadGateway, "invalid source context clone plan")
-				return errSourceContextResponseWritten
-			}
-			cloneID := util.UUIDToString(clone.ID)
-			cloneTrust[i] = rustSourceContextCloneTrust{
-				CloneID:            cloneID,
-				SourceAttachmentID: sourceID,
-				Filename:           clone.Filename,
-				URL:                clone.URL,
-				ContentType:        clone.ContentType,
-				SizeBytes:          clone.SizeBytes,
-				StorageKey: fmt.Sprintf(
-					"workspaces/%s/source-context/%s%s",
-					workspaceKey, cloneID, path.Ext(clone.Filename),
-				),
-			}
-		}
 	}
 
 	payload := assembleRustIssueCreate(
@@ -316,22 +338,11 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 			PolicyRevision: policy.PolicyRevision,
 		},
 	)
-	contextTrust := &rustSourceContextCreateTrust{
-		ContextID:             util.UUIDToString(capture.ID),
-		SourceIssueID:         util.UUIDToString(capture.SourceIssueID),
-		AnchorCommentID:       util.UUIDToString(capture.AnchorCommentID),
-		CaptureDigest:         capture.Digest,
-		CapturedByUserID:      memberID,
-		CapturedAt:            capture.CapturedAt.UTC().Format(time.RFC3339Nano),
-		Snapshot:              snapshotJSON,
-		SourceCompareSnapshot: compareSnapshotJSON,
-		Clones:                cloneTrust,
-	}
 	if plan.expectedSourceProjectID.Valid {
 		projectID := uuidToString(plan.expectedSourceProjectID)
 		contextTrust.ExpectedSourceProjectID = &projectID
 	}
-	payload.SourceContextCreateTrust = contextTrust
+	payload.SourceContextCreateTrust = &contextTrust
 
 	body, err := json.Marshal(payload)
 	if err != nil {

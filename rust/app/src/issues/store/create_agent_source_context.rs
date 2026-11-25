@@ -9,8 +9,8 @@ use super::agent_source_queue_lock::{
     lock_workspace_member_agent_runtime_share,
 };
 use super::create_source_context::{
-    SOURCE_CONTEXT_VERSION, SourceContextCreateTrust, reconcile_source_context_project,
-    validate_agent_pending_source,
+    SOURCE_CONTEXT_VERSION, SourceContextCreateTrust, persist_source_context_clones,
+    reconcile_source_context_project, validate_agent_pending_source,
 };
 use super::create_write::IssueCreateError;
 use super::is_uuid;
@@ -245,6 +245,7 @@ pub async fn create_agent_source_quick_create(
     if context_id != request.source_context.context_id {
         return Err(IssueCreateError::InvalidInput);
     }
+    persist_source_context_clones(&mut tx, workspace_id, &request.source_context).await?;
     insert_queue_notify_outbox(&mut tx, &task_id).await?;
 
     tx.commit().await.map_err(IssueCreateError::Database)?;

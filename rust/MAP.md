@@ -52,9 +52,11 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 及 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 同时启用。Go 流式复制文件并登记持久清理意图。Rust 核对原附件、写入克隆行并验证实际消费的意图集合。
 
-`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 为 `POST /api/comments/{commentId}/sub-issues` 中 `mode=agent` 指定试点工作区（默认关闭）。首批覆盖来源与目标均无项目、无来源附件或额外上传、请求者拥有的本地直连智能体及已上线并声明来源快速创建能力的本机运行时。Go 校验预览令牌和容量，准备队列归因及上下文，并返回 202。Rust 锁定工作区、成员、智能体、运行时和来源，复核运行时版本及冻结内容，在同一事务写入队列任务、待附着快照和持久唤醒记录。Go 核验回执和持久状态后投递唤醒。丢回执由同一持久队列恢复。旧 daemon 继续领取、创建并附着快照。带项目、带文件、军团、非本地或离线运行时和非本人智能体继续由 Go 处理。
+`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 为 `POST /api/comments/{commentId}/sub-issues` 中 `mode=agent` 指定试点工作区（默认关闭）。首批覆盖来源与目标均无项目、无额外 quick-create 上传、请求者拥有的本地直连智能体及已上线并声明来源快速创建能力的本机运行时。Go 校验预览令牌和容量，流式复制并登记对象意图，准备队列归因及上下文，并返回 202。Rust 锁定工作区、成员、智能体、运行时和来源，复核运行时版本及冻结内容，在同一事务写入队列任务、待附着快照、克隆附件行（有文件时消费意图集合）和持久唤醒记录。Go 核验回执和持久状态后投递唤醒。丢回执由同一持久队列恢复。旧 daemon 继续领取、创建并附着快照。带项目、额外上传、军团、非本地或离线运行时和非本人智能体继续由 Go 处理。
 
-`XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT` 为 `POST /api/tasks/{taskId}/retry-source-context` 指定试点工作区（默认关闭）。 首批覆盖失败且无事项/聊天/自动驾驶绑定、仍由同一请求者持有的待附着来源快照、无目标项目或上传、来源事项无项目、无克隆附件、智能体/运行时仍为本人本地在线且具备来源快速创建能力的形状。Go 保留调用权和容量检查、运行时 MCP 叠加层、公开 202 契约、事件及分析。Rust 先锁定工作区和运行时归属，再锁定原失败任务、来源任务与待附着快照，复核计划中的原任务上下文和快照摘要，在同一事务写入手动后继、转移原快照及记录持久唤醒。项目内来源、克隆附件、军团、非本地/离线或非原请求者继续由 Go 处理并保持既有拒绝语义。
+`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 同时启用，默认关闭。直接智能体入队与手动创建共享来源文件克隆及清理意图契约。Rust 在同一事务写入队列、待附着快照、克隆元数据和持久唤醒。无文件入队使用基本试点。带文件的重试和附着继续使用原 Go 路径。
+
+`XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT` 为 `POST /api/tasks/{taskId}/retry-source-context` 指定试点工作区（默认关闭）。首批覆盖失败且无事项/聊天/自动驾驶绑定、仍由同一请求者持有的待附着来源快照、无目标项目或上传、来源事项无项目、无克隆附件、智能体/运行时仍为本人本地在线且具备来源快速创建能力的形状。Go 保留调用权和容量检查、运行时 MCP 叠加层、公开 202 契约、事件及分析。Rust 先锁定工作区和运行时归属，再锁定原失败任务、来源任务与待附着快照，复核计划中的原任务上下文和快照摘要，在同一事务写入手动后继、转移原快照及记录持久唤醒。项目内来源、克隆附件、军团、非本地/离线或非原请求者继续由 Go 处理并保持既有拒绝语义。
 
 `XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 同时启用，默认关闭。由已启动的快速创建任务凭证调用原 `POST /api/issues`。首批覆盖无项目、无附件、本人本地直连智能体的标准待办任务，支持普通优先级和日期。Rust 在原创建事务校验任务、运行时、来源与已冻结快照，在编号和容量检查后锁定并附着快照。Go 核验创建结果和原凭证归因后发布事件，旧 daemon 完成入口继续关联任务。并发提交维持原查重及单次附着行为。
 

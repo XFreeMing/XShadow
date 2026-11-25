@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -54,18 +53,32 @@ func (h *Handler) selectRustAgentSourceCommentSubIssue(
 	wsUUID pgtype.UUID,
 	userUUID pgtype.UUID,
 	build service.SourceContextBuild,
+	capture service.SourceContextCapture,
 	prepared preparedAgentCommentSubIssue,
 ) (bool, error) {
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.CreateAgentSourcePilotScopes) == 0 {
 		return false, nil
 	}
-	if len(build.Rows) > 0 || len(prepared.attachmentIDs) > 0 || prepared.squadID.Valid || prepared.projectID.Valid {
+	if len(prepared.attachmentIDs) > 0 || prepared.squadID.Valid || prepared.projectID.Valid {
+		return false, nil
+	}
+	hasSourceFiles := len(build.Rows) != 0 || len(capture.Clones) != 0
+	if hasSourceFiles && (len(h.IssueReadBridge.CreateAgentSourceFilesPilotScopes) == 0 ||
+		!rustSourceContextClonePlanMatchesCapture(build, capture)) {
 		return false, nil
 	}
 	ctx := r.Context()
 	inPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.CreateAgentSourcePilotScopes, uuidToString(wsUUID), wsUUID)
 	if err != nil || !inPilot {
 		return false, err
+	}
+	if hasSourceFiles {
+		inFilesPilot, filesErr := matchesIssuePilot(
+			ctx, h.Queries, h.IssueReadBridge.CreateAgentSourceFilesPilotScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if filesErr != nil || !inFilesPilot {
+			return false, filesErr
+		}
 	}
 	sourceIssueID, err := util.ParseUUID(build.Snapshot.SourceIssue.ID)
 	if err != nil {
@@ -108,6 +121,33 @@ func (h *Handler) selectRustAgentSourceCommentSubIssue(
 	return true, nil
 }
 
+func agentSourceQuickCreateClonesCommitted(
+	rows []db.Attachment,
+	capture service.SourceContextCapture,
+) bool {
+	if len(capture.Clones) == 0 {
+		return len(rows) == 0
+	}
+	if len(rows) != len(capture.Clones) {
+		return false
+	}
+	byID := make(map[pgtype.UUID]db.Attachment, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	for _, clone := range capture.Clones {
+		row, ok := byID[clone.ID]
+		if !ok || row.WorkspaceID != capture.WorkspaceID || row.SourceContextID != capture.ID ||
+			row.IssueID.Valid || row.CommentID.Valid || row.UploaderType != "member" ||
+			row.UploaderID != capture.CapturedByUserID ||
+			row.Filename != clone.Filename || row.ContentType != clone.ContentType ||
+			row.SizeBytes != clone.SizeBytes || row.Url != clone.URL {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *Handler) agentSourceQuickCreateCommitted(
 	ctx context.Context,
 	workspaceID pgtype.UUID,
@@ -130,6 +170,12 @@ func (h *Handler) agentSourceQuickCreateCommitted(
 		source.CaptureDigest != capture.Digest {
 		return none, false
 	}
+	clones, err := h.Queries.ListAttachmentsBySourceContext(ctx, db.ListAttachmentsBySourceContextParams{
+		WorkspaceID: workspaceID, SourceContextID: capture.ID,
+	})
+	if err != nil || !agentSourceQuickCreateClonesCommitted(clones, capture) {
+		return none, false
+	}
 	switch source.State {
 	case "pending":
 		return row, !source.IssueID.Valid && !row.IssueID.Valid
@@ -146,6 +192,7 @@ func (h *Handler) createAgentCommentSubIssueViaRust(
 	workspaceID, userID pgtype.UUID,
 	prepared preparedAgentCommentSubIssue,
 	capture service.SourceContextCapture,
+	build service.SourceContextBuild,
 	limits service.SourceContextLimitUsage,
 ) error {
 	ctx := r.Context()
@@ -172,9 +219,9 @@ func (h *Handler) createAgentCommentSubIssueViaRust(
 	if err != nil {
 		return err
 	}
-	snapshotJSON, err := json.Marshal(capture.Snapshot)
+	contextTrust, err := rustSourceContextCreateTrustFromCapture(workspaceID, capture, build)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encode source context snapshot")
+		writeError(w, http.StatusBadGateway, "invalid source context clone plan")
 		return errSourceContextResponseWritten
 	}
 	payload := rustAgentSourceQuickCreateWrite{
@@ -188,15 +235,7 @@ func (h *Handler) createAgentCommentSubIssueViaRust(
 		AccountableUserID:    uuidToString(createParams.AccountableUserID),
 		RuntimeMcpOverlay:    createParams.RuntimeMcpOverlay,
 		RuntimeConnectedApps: createParams.RuntimeConnectedApps,
-		SourceContext: rustSourceContextCreateTrust{
-			ContextID:        uuidToString(capture.ID),
-			SourceIssueID:    uuidToString(capture.SourceIssueID),
-			AnchorCommentID:  uuidToString(capture.AnchorCommentID),
-			CaptureDigest:    capture.Digest,
-			CapturedByUserID: uuidToString(capture.CapturedByUserID),
-			CapturedAt:       capture.CapturedAt.UTC().Format(time.RFC3339Nano),
-			Snapshot:         snapshotJSON,
-		},
+		SourceContext:        contextTrust,
 	}
 	if createParams.OriginatorSource.Valid {
 		payload.OriginatorSource = &createParams.OriginatorSource.String

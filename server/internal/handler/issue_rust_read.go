@@ -55,6 +55,7 @@ type IssueReadBridge struct {
 	CreateSourceProjectPilotScopes      []string
 	CreateSourceFilesPilotScopes        []string
 	CreateAgentSourcePilotScopes        []string
+	CreateAgentSourceFilesPilotScopes   []string
 	RetryAgentSourcePilotScopes         []string
 	AttachAgentSourcePilotScopes        []string
 	DeletePilotScopes                   []string
@@ -118,11 +119,16 @@ type IssueReadBridge struct {
 //     inherit a project also require CREATE_SOURCE_PROJECT on the same workspace.
 //   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT: comma-separated workspace
 //     slugs or UUIDs for native agent-mode comment sub-issue quick-creates on
-//     projectless sources and destinations, no source attachments or extra
-//     uploads, and a requester-owned local direct agent whose machine runtime
+//     projectless sources and destinations, no extra quick-create uploads, and a
+//     requester-owned local direct agent whose machine runtime
 //     is online and advertises source-context quick-create support. Disabled
 //     by default; explicit/inherited project, squad, file, and non-local shapes
 //     continue on Go.
+//   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT: comma-separated
+//     workspace slugs or UUIDs for native agent-mode source-context enqueue with
+//     frozen ordinary source attachments on projectless sources. Requires
+//     CREATE_AGENT_SOURCE on the same workspace. Extra quick-create uploads,
+//     projects, and squads stay on Go.
 //   - XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT: comma-separated workspace
 //     slugs or UUIDs for native manual POST /api/tasks/{taskId}/retry-source-context
 //     on failed projectless source-context quick-creates with no clone uploads,
@@ -192,6 +198,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	createSourceProjectScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_PROJECT_PILOT"))
 	createSourceFilesScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT"))
 	createAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT"))
+	createAgentSourceFilesScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT"))
 	retryAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT"))
 	attachAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT"))
 	deleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_PILOT"))
@@ -235,6 +242,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		CreateSourceProjectPilotScopes:      createSourceProjectScopes,
 		CreateSourceFilesPilotScopes:        createSourceFilesScopes,
 		CreateAgentSourcePilotScopes:        createAgentSourceScopes,
+		CreateAgentSourceFilesPilotScopes:   createAgentSourceFilesScopes,
 		RetryAgentSourcePilotScopes:         retryAgentSourceScopes,
 		AttachAgentSourcePilotScopes:        attachAgentSourceScopes,
 		DeletePilotScopes:                   deleteScopes,
@@ -250,7 +258,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		BatchWorkflowPilotScopes:            batchWorkflowScopes,
 		MethodAdoptPilotScopes:              methodAdoptScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(createSourceProjectScopes)+len(createSourceFilesScopes)+len(createAgentSourceScopes)+len(retryAgentSourceScopes)+len(attachAgentSourceScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(deleteSourceContextScopes)+len(deleteSourceContextFilesScopes)+len(deleteSourceProjectScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(createSourceProjectScopes)+len(createSourceFilesScopes)+len(createAgentSourceScopes)+len(createAgentSourceFilesScopes)+len(retryAgentSourceScopes)+len(attachAgentSourceScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(deleteSourceContextScopes)+len(deleteSourceContextFilesScopes)+len(deleteSourceProjectScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}
