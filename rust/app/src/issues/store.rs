@@ -30,6 +30,7 @@ mod create_write;
 mod delete_write;
 mod status_dispatch;
 mod status_write;
+mod terminal_wakeup;
 mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
 pub use batch_delete_write::{IssueBatchDeleteWrite, batch_delete_issues};

@@ -11,10 +11,11 @@ use super::{
     ordinary::{self, ISSUE_ROW_SNAPSHOT},
     resolve_caller_access_on,
     status_dispatch::{self, PreparedStatusEnqueue, PromotionEnqueueOutcome, StatusPromotionError},
+    terminal_wakeup::{self, CancelledTaskReceipt},
 };
 
 const ACTIVE_BUILTINS: &[&str] = &["backlog", "todo", "in_progress", "in_review", "blocked"];
-
+const TERMINAL_BUILTINS: &[&str] = &["done", "cancelled"];
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IssueStatusEdit {
@@ -26,6 +27,14 @@ pub struct IssueStatusEdit {
     pub suppress_run: bool,
     pub activity_id: String,
     pub prepared_enqueue: Option<PreparedStatusEnqueue>,
+    pub terminal_scope: Option<TerminalScope>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalScope {
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -38,6 +47,8 @@ pub struct IssueStatusWrite {
     pub queued_task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coalesced_queued_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancelled_tasks: Option<Vec<CancelledTaskReceipt>>,
 }
 
 #[derive(Debug)]
@@ -75,6 +86,14 @@ pub fn is_active_builtin_status(status: &str) -> bool {
     ACTIVE_BUILTINS.contains(&status)
 }
 
+pub fn is_terminal_builtin_status(status: &str) -> bool {
+    TERMINAL_BUILTINS.contains(&status)
+}
+
+fn is_grid_builtin_status(status: &str) -> bool {
+    is_active_builtin_status(status) || is_terminal_builtin_status(status)
+}
+
 fn dispatch_sensitive_locked(
     prev_status: &str,
     assignee_type: Option<&str>,
@@ -108,8 +127,18 @@ pub async fn update_issue_status(
     issue_id: &str,
     edit: IssueStatusEdit,
 ) -> Result<IssueStatusWrite, IssueStatusEditError> {
-    if !is_active_builtin_status(&edit.status) || !is_uuid(&edit.activity_id) {
+    let terminal = is_terminal_builtin_status(&edit.status);
+    let terminal_scope = edit.terminal_scope.as_ref();
+    let prepared = edit.prepared_enqueue.as_ref();
+    if !is_grid_builtin_status(&edit.status)
+        || !is_uuid(&edit.activity_id)
+        || terminal != terminal_scope.is_some()
+        || (terminal && !matches!(actor, CallerActor::Member { .. }))
+    {
         return Err(IssueStatusEditError::InvalidStatus);
+    }
+    if terminal && prepared.is_some() {
+        return Err(IssueStatusEditError::DispatchSensitive);
     }
     let (actor_type, actor_id) = actor_refs(actor);
     if !is_uuid(actor_id) {
@@ -120,7 +149,22 @@ pub async fn update_issue_status(
         .bind(workspace_id)
         .execute(&mut *tx)
         .await?;
-    let prepared = edit.prepared_enqueue.as_ref();
+    if let Some(project) = terminal_scope.and_then(|scope| scope.project_id.as_deref()) {
+        if !is_uuid(project) {
+            return Err(IssueStatusEditError::InvalidStatus);
+        }
+        let default_project = sqlx::query_scalar::<_, bool>(
+            "SELECT workflow_id IS NULL
+             FROM project WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+        )
+        .bind(project)
+        .bind(workspace_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if default_project != Some(true) {
+            return Err(IssueStatusEditError::DispatchSensitive);
+        }
+    }
     let agent_owner = match prepared {
         Some(plan) if plan.is_leader_task => {
             status_dispatch::lock_active_squad_leader(
@@ -139,6 +183,7 @@ pub async fn update_issue_status(
         "SELECT i.project_id::text, i.revision, i.status, i.assignee_type, i.assignee_id::text,
                 i.triage_state IS NOT NULL AS triage_state_present,
                 i.duplicate_of_issue_id IS NOT NULL AS has_duplicate,
+                i.work_method_run IS NOT NULL AS has_work_method,
                 {ISSUE_ROW_SNAPSHOT} AS snapshot
          FROM issue i WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid FOR UPDATE"
     ))
@@ -167,6 +212,19 @@ pub async fn update_issue_status(
     let assignee_id: Option<String> = locked.try_get("assignee_id")?;
     let triage_state_present: bool = locked.try_get("triage_state_present")?;
     let has_duplicate: bool = locked.try_get("has_duplicate")?;
+    if !is_grid_builtin_status(prev_status) || (prev_status == "cancelled" && has_duplicate) {
+        return Err(IssueStatusEditError::DispatchSensitive);
+    }
+    if let Some(scope) = terminal_scope {
+        let has_work_method: bool = locked.try_get("has_work_method")?;
+        if triage_state_present
+            || has_work_method
+            || has_duplicate
+            || scope.project_id.as_deref() != project_id.as_deref()
+        {
+            return Err(IssueStatusEditError::DispatchSensitive);
+        }
+    }
     let promotion_sensitive = dispatch_sensitive_locked(
         prev_status,
         assignee_type.as_deref(),
@@ -174,11 +232,6 @@ pub async fn update_issue_status(
         &edit.status,
         edit.suppress_run,
     );
-    if (!is_active_builtin_status(prev_status) && !matches!(prev_status, "done" | "cancelled"))
-        || (prev_status == "cancelled" && has_duplicate)
-    {
-        return Err(IssueStatusEditError::DispatchSensitive);
-    }
     if promotion_sensitive != prepared.is_some() {
         return Err(IssueStatusEditError::DispatchSensitive);
     }
@@ -261,12 +314,18 @@ pub async fn update_issue_status(
         },
         None => (None, None),
     };
+    let cancelled_tasks = if terminal {
+        Some(terminal_wakeup::stop_closed_issue_wakeups(&mut tx, issue_id).await?)
+    } else {
+        None
+    };
     let write = IssueStatusWrite {
         before: serde_json::from_str(locked.try_get("snapshot")?)?,
         after: serde_json::from_str(&after_text)?,
         status_activity_id,
         queued_task_id,
         coalesced_queued_task_id,
+        cancelled_tasks,
     };
     tx.commit().await?;
     Ok(write)
@@ -424,6 +483,20 @@ mod tests {
             "todo",
             false,
         ));
+    }
+
+    #[test]
+    fn terminal_and_active_builtin_statuses_are_disjoint() {
+        for key in ACTIVE_BUILTINS.iter().chain(TERMINAL_BUILTINS) {
+            let active = is_active_builtin_status(key);
+            let terminal = is_terminal_builtin_status(key);
+            assert_ne!(
+                active, terminal,
+                "{key}: cannot be both active and terminal"
+            );
+        }
+        assert!(is_terminal_builtin_status("done"));
+        assert!(is_terminal_builtin_status("cancelled"));
     }
 
     #[test]

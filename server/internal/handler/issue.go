@@ -4408,17 +4408,31 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	var assignActivityReceipt string
 	var queuedTaskReceipt string
 	attachmentsChanged := false
-	rustStatus, err := h.statusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust issue status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
+	rustTerminal := false
+	if req.Status != nil && (statusKeyForGuard == issuestatus.Done || statusKeyForGuard == issuestatus.Cancelled) {
+		rustTerminal, err = h.terminalStatusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				slog.Warn("resolve rust issue terminal status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
+			}
+			return
 		}
-		return
+	}
+	rustStatus := false
+	if !rustTerminal {
+		rustStatus, err = h.statusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				slog.Warn("resolve rust issue status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
+			}
+			return
+		}
 	}
 	var assignPrepared *service.IssuePreparedAgentEnqueue
 	rustAssign := false
-	if !rustStatus {
+	if !rustStatus && !rustTerminal {
 		rustAssign, err = h.assignIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, params)
 		if err != nil {
 			if !writeQueryCancellation(w, r, err) {
@@ -4537,12 +4551,16 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-	} else if rustStatus {
-		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, ok = h.updateIssueStatusViaRust(
-			w, r, userID, prevIssue, params, req, statusPromotionPrepared,
+	} else if rustTerminal || rustStatus {
+		var cancelledWakeups []db.AgentTaskQueue
+		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, cancelledWakeups, ok = h.updateIssueStatusViaRust(
+			w, r, userID, prevIssue, params, req, statusPromotionPrepared, rustTerminal,
 		)
 		if !ok {
 			return
+		}
+		if len(cancelledWakeups) > 0 {
+			h.broadcastCancelledWakeups(r.Context(), prevIssue.WorkspaceID, cancelledWakeups)
 		}
 	} else if rustAssign {
 		issue, prevIssue, assignActivityReceipt, queuedTaskReceipt, ok = h.updateIssueAssignViaRust(

@@ -84,6 +84,18 @@ func TestIssueReadBridgeFromEnvAndPilotMatching(t *testing.T) {
 		}
 	})
 
+	t.Run("terminal status pilot scopes are independent", func(t *testing.T) {
+		t.Setenv("XSHADOW_ISSUES_RUST_STATUS_PILOT", "status-pilot")
+		t.Setenv("XSHADOW_ISSUES_RUST_TERMINAL_STATUS_PILOT", "terminal-pilot")
+		t.Setenv("XSHADOW_TABLES_UPSTREAM", "http://127.0.0.1:18080")
+		t.Setenv("XSHADOW_TABLES_INTERNAL_TOKEN", "shared-secret")
+
+		bridge := NewIssueReadBridgeFromEnv(nil)
+		if !reflect.DeepEqual(bridge.TerminalStatusPilotScopes, []string{"terminal-pilot"}) {
+			t.Fatalf("TerminalStatusPilotScopes = %v, want [terminal-pilot]", bridge.TerminalStatusPilotScopes)
+		}
+	})
+
 	t.Run("status pilot scopes are independent of other pilots", func(t *testing.T) {
 		t.Setenv("XSHADOW_ISSUES_RUST_STATUS_PILOT", "status-pilot")
 		t.Setenv("XSHADOW_ISSUES_RUST_WRITE_PILOT", "")
