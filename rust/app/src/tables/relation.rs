@@ -138,12 +138,13 @@ pub(super) fn extract_ids(value: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn validate_cross_table(
+pub(super) fn validate_target_table(
     source_table: &str,
     target_table: &str,
+    bidirectional: bool,
 ) -> Result<(), StoreError> {
-    if source_table.eq_ignore_ascii_case(target_table) {
-        return Err(StoreError::Invalid("关联字段不能指向当前表"));
+    if bidirectional && source_table.eq_ignore_ascii_case(target_table) {
+        return Err(StoreError::Invalid("双向关联字段不能指向当前表"));
     }
     Ok(())
 }
@@ -230,7 +231,7 @@ pub(super) async fn create_relation_field(
     config: &Value,
 ) -> Result<FieldDto, StoreError> {
     let rel = RelationConfig::from_stored(config)?;
-    validate_cross_table(table, &rel.target_table_id)?;
+    validate_target_table(table, &rel.target_table_id, rel.bidirectional)?;
     lock_tables_sorted(tx, workspace, table, &[rel.target_table_id.as_str()]).await?;
 
     let created = ts("created_at");
@@ -731,15 +732,18 @@ mod tests {
     }
 
     #[test]
-    fn cross_table_validation_rejects_same_table_relation() {
+    fn target_table_validation_allows_same_table_one_way_and_rejects_bidirectional() {
+        assert!(validate_target_table(T1, T1, false).is_ok());
+        assert!(validate_target_table(T1, &T1.to_ascii_uppercase(), false).is_ok());
         assert!(matches!(
-            validate_cross_table(T1, T1),
+            validate_target_table(T1, T1, true),
             Err(StoreError::Invalid(_))
         ));
         assert!(matches!(
-            validate_cross_table(T1, &T1.to_ascii_uppercase()),
+            validate_target_table(T1, &T1.to_ascii_uppercase(), true),
             Err(StoreError::Invalid(_))
         ));
-        assert!(validate_cross_table(T1, T2).is_ok());
+        assert!(validate_target_table(T1, T2, false).is_ok());
+        assert!(validate_target_table(T1, T2, true).is_ok());
     }
 }

@@ -5,6 +5,7 @@
 //! these ids, but it does not add columns or tables here.
 
 mod collab;
+mod comments;
 mod formula;
 mod http;
 mod projection;

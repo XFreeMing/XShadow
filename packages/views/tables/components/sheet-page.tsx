@@ -13,6 +13,7 @@ import {
   genericRecordOptionsQuery,
   genericSheetOptions,
   genericTableKeys,
+  genericViewKinds,
   revisionConflictSchema,
   type GenericActor,
   type GenericCellValue,
@@ -22,7 +23,11 @@ import {
   type GenericFilter,
   type GenericPresence,
   type GenericRecord,
+  type GenericSheet,
   type GenericSort,
+  type GenericView,
+  type GenericViewConfig,
+  type GenericViewKind,
   type GenericViewWrite,
 } from "@multica/core/tables";
 import { useT } from "../../i18n";
@@ -33,12 +38,29 @@ import {
   RelationChooserDialog,
   type RelationChooserState,
 } from "./derived-field-dialogs";
+import { FormView } from "./form-view";
+import { RecordDetailDialog } from "./record-detail-dialog";
+import { TableChatLauncher } from "./table-chat-launcher";
+import {
+  isEditableField,
+  isSameTableOneWayRelation,
+  resolveEffectiveViewConfig,
+} from "./view-helpers";
+import {
+  CalendarView,
+  GalleryView,
+  GanttView,
+  KanbanView,
+  OrgChartView,
+} from "./visual-views";
 
 const EMPTY_FIELDS: GenericField[] = [];
 const OPS = ["eq", "contains", "is_empty", "is_not_empty"] as const;
 
 interface ViewDraft {
   name: string;
+  kind: GenericViewKind;
+  config: GenericViewConfig;
   columns: string[] | null;
   filter: GenericFilter | null;
   sort: GenericSort | null;
@@ -54,14 +76,14 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   const queryClient = useQueryClient();
   const editingRef = useRef(false);
   const holdSheet = useRef(false);
-  const viewSaves = useRef(0);
+  const pendingViewSaves = useRef(new Map<string, number>());
   const sheet = useQuery({
     ...genericSheetOptions(wsId, tableId, viewId),
     refetchOnMount: "always",
     refetchOnWindowFocus: () => !editingRef.current,
   });
   const revisions = useRef(new Map<string, number>());
-  const [draft, setDraft] = useState<ViewDraft | null>(null);
+  const [draftsByView, setDraftsByView] = useState<Record<string, ViewDraft>>({});
   const [conflict, setConflict] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showField, setShowField] = useState(false);
@@ -69,7 +91,10 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   const [editingField, setEditingField] = useState<GenericField | null>(null);
   const [editFieldError, setEditFieldError] = useState<string | null>(null);
   const [relationChooser, setRelationChooser] = useState<RelationChooserState | null>(null);
+  const [openRecordId, setOpenRecordId] = useState<string | null>(null);
+  const [showNewView, setShowNewView] = useState(false);
   const [viewName, setViewName] = useState("");
+  const [viewKind, setViewKind] = useState<GenericViewKind>("grid");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [presence, setPresence] = useState<GenericPresence[]>([]);
   const [recentTick, setRecentTick] = useState(0);
@@ -78,19 +103,14 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   const positionRef = useRef<{ recordId: string; fieldId: string } | null>(null);
 
   const active = sheet.data?.views.find((view) => view.id === sheet.data?.active_view_id) ?? sheet.data?.views[0];
-  const viewStamp = active ? `${active.id}:${active.updated_at}` : "";
-  useEffect(() => {
-    if (!active || viewSaves.current > 0) return;
-    setDraft({
-      name: active.name,
-      columns: active.columns,
-      filter: active.filter,
-      sort: active.sort,
-      group: active.group ?? null,
-    });
-    // Local view edits stay put until this saved view changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewStamp]);
+  const draft: ViewDraft | null = useMemo(() => {
+    if (!active) return null;
+    const local = draftsByView[active.id];
+    if (local) {
+      return { ...local, kind: active.kind ?? "grid" };
+    }
+    return viewToDraft(active);
+  }, [active, draftsByView]);
 
   const refresh = async () => {
     revisions.current.clear();
@@ -183,14 +203,40 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
 
   const saveView = useMutation({
     scope: { id: `generic-view:${wsId}:${tableId}` },
-    mutationFn: (body: GenericViewWrite & { viewId: string }) =>
-      api.saveGenericView(tableId, body.viewId, body),
+    mutationFn: (body: GenericViewWrite & { viewId: string }) => {
+      const { viewId: targetViewId, ...payload } = body;
+      return api.saveGenericView(tableId, targetViewId, payload);
+    },
+    onSuccess: (saved, variables) => {
+      setNotice(null);
+      queryClient.setQueriesData<GenericSheet>(
+        { queryKey: genericTableKeys.sheetAll(wsId, tableId) },
+        (current) => patchCachedSheetView(current, variables.viewId, saved),
+      );
+    },
     onError: report,
+    onSettled: (_data, _error, variables) => {
+      const remaining = (pendingViewSaves.current.get(variables.viewId) ?? 1) - 1;
+      if (remaining > 0) {
+        pendingViewSaves.current.set(variables.viewId, remaining);
+        return;
+      }
+      pendingViewSaves.current.delete(variables.viewId);
+      setDraftsByView((prev) => {
+        if (!(variables.viewId in prev)) return prev;
+        const next = { ...prev };
+        delete next[variables.viewId];
+        return next;
+      });
+      void invalidate();
+    },
   });
 
   const createView = useMutation({
-    mutationFn: (name: string) => api.createGenericView(tableId, {
-      name,
+    mutationFn: (body: { name: string; kind: GenericViewKind }) => api.createGenericView(tableId, {
+      name: body.name,
+      kind: body.kind,
+      config: {},
       columns: null,
       filter: null,
       sort: null,
@@ -198,6 +244,8 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
     }),
     onSuccess: async (view) => {
       setViewName("");
+      setViewKind("grid");
+      setShowNewView(false);
       await invalidate();
       replace(paths.table(tableId, view.id));
     },
@@ -213,6 +261,8 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   useEffect(() => {
     cursor.current = 0;
     recent.current.clear();
+    pendingViewSaves.current.clear();
+    setDraftsByView({});
     setPresence([]);
   }, [tableId]);
   const releaseSheet = () => {
@@ -371,19 +421,25 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
   ];
   void recentTick;
   const persistDraft = (next: ViewDraft) => {
-    setDraft(next);
     if (!active) return;
-    viewSaves.current += 1;
-    saveView.mutate({ ...savedView(next), viewId: active.id }, {
-      onSettled: () => {
-        viewSaves.current -= 1;
-        if (viewSaves.current === 0) {
-          setNotice(null);
-          void invalidate();
-        }
-      },
-    });
+    const targetViewId = active.id;
+    const scoped: ViewDraft = { ...next, kind: active.kind ?? "grid" };
+    setDraftsByView((prev) => ({ ...prev, [targetViewId]: scoped }));
+    pendingViewSaves.current.set(
+      targetViewId,
+      (pendingViewSaves.current.get(targetViewId) ?? 0) + 1,
+    );
+    saveView.mutate({ ...savedView(scoped), viewId: targetViewId });
   };
+  const activeKind: GenericViewKind = active?.kind ?? "grid";
+  const effectiveConfig = useMemo(
+    () => resolveEffectiveViewConfig(activeKind, draft?.config ?? {}, fields, tableId),
+    [activeKind, draft?.config, fields, tableId],
+  );
+  const openRecord = useMemo(
+    () => (openRecordId ? sheet.data?.records.find((item) => item.id === openRecordId) ?? null : null),
+    [openRecordId, sheet.data?.records],
+  );
   const message = sheet.error instanceof ApiError ? sheet.error.message : notice;
 
   return (
@@ -393,6 +449,20 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
           {t(($) => $.sheet.back)}
         </AppLink>
         <h1 className="min-w-0 flex-1 truncate text-title-sm font-semibold">{sheet.data?.table.name ?? t(($) => $.list.title)}</h1>
+        {sheet.data ? (
+          <TableChatLauncher
+            mode="table"
+            context={{
+              table: sheet.data.table,
+              view: active ? { id: active.id, name: draft?.name ?? active.name, kind: activeKind } : null,
+              fields,
+              visibleFields: visible,
+              records: sheet.data.records,
+              titleFieldId: effectiveConfig.titleFieldId,
+              recordOptionsByTable,
+            }}
+          />
+        ) : null}
         <Popover
           open={showField}
           onOpenChange={(open) => {
@@ -415,24 +485,31 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
             />
           </PopoverContent>
         </Popover>
-        <Button type="button" size="sm" onClick={() => addRecord.mutate()} disabled={addRecord.isPending || fields.length === 0}>
-          {t(($) => $.sheet.add_record)}
-        </Button>
+        {activeKind !== "form" ? (
+          <Button type="button" size="sm" onClick={() => addRecord.mutate()} disabled={addRecord.isPending || fields.length === 0}>
+            {t(($) => $.sheet.add_record)}
+          </Button>
+        ) : null}
       </div>
       {sheet.data && draft && active ? (
         <ViewBar
+          tableId={tableId}
           fields={fields}
           views={sheet.data.views}
           activeId={active.id}
           draft={draft}
           hiddenCount={hiddenCount}
+          showNewView={showNewView}
+          onShowNewView={setShowNewView}
           viewName={viewName}
+          viewKind={viewKind}
           onViewName={setViewName}
+          onViewKind={setViewKind}
           onDraft={persistDraft}
           onSelectView={(id) => replace(paths.table(tableId, id))}
           onCreateView={() => {
             const name = viewName.trim();
-            if (name) createView.mutate(name);
+            if (name) createView.mutate({ name, kind: viewKind });
           }}
         />
       ) : null}
@@ -450,7 +527,7 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
         {sheet.data && fields.length === 0 ? (
           <p className="px-3 text-body text-muted-foreground">{t(($) => $.sheet.empty_fields)}</p>
         ) : null}
-        {sheet.data && fields.length > 0 ? (
+        {sheet.data && fields.length > 0 && activeKind === "grid" ? (
           <ApitableGrid
             datasheetId={tableId}
             fields={visible}
@@ -471,6 +548,7 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
               recent: t(($) => $.sheet.recent),
               configureField: t(($) => $.sheet.configure_field),
               addLink: t(($) => $.sheet.add_link),
+              openRecord: t(($) => $.sheet.open_record),
             }}
             onRenameField={(fieldId, name) => renameField.mutate({ fieldId, name })}
             onEditField={(gridField) => {
@@ -478,6 +556,7 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
               setEditFieldError(null);
               setEditingField(full);
             }}
+            onOpenRecord={setOpenRecordId}
             onOpenRelationCell={(recordId, gridField, currentIds, baseRevision) => {
               if (!gridField.config?.target_table_id) return;
               editingRef.current = true;
@@ -513,7 +592,90 @@ export function TableSheetPage({ tableId }: { tableId: string }) {
             }}
           />
         ) : null}
+        {sheet.data && fields.length > 0 && activeKind === "kanban" ? (
+          <KanbanView
+            fields={fields}
+            visibleFields={visible}
+            records={sheet.data.records}
+            recordOptionsByTable={recordOptionsByTable}
+            titleFieldId={effectiveConfig.titleFieldId}
+            groupFieldId={effectiveConfig.groupFieldId}
+            onOpenRecord={setOpenRecordId}
+            onMoveRecord={(recordId, fieldId, value, baseRevision) => {
+              saveCell.mutate({ recordId, fieldId, value, baseRevision });
+            }}
+          />
+        ) : null}
+        {sheet.data && fields.length > 0 && activeKind === "gallery" ? (
+          <GalleryView
+            fields={fields}
+            visibleFields={visible}
+            records={sheet.data.records}
+            recordOptionsByTable={recordOptionsByTable}
+            titleFieldId={effectiveConfig.titleFieldId}
+            onOpenRecord={setOpenRecordId}
+          />
+        ) : null}
+        {sheet.data && fields.length > 0 && activeKind === "calendar" ? (
+          <CalendarView
+            fields={fields}
+            visibleFields={visible}
+            records={sheet.data.records}
+            recordOptionsByTable={recordOptionsByTable}
+            titleFieldId={effectiveConfig.titleFieldId}
+            dateFieldId={effectiveConfig.dateFieldId}
+            onOpenRecord={setOpenRecordId}
+          />
+        ) : null}
+        {sheet.data && fields.length > 0 && activeKind === "gantt" ? (
+          <GanttView
+            fields={fields}
+            visibleFields={visible}
+            records={sheet.data.records}
+            recordOptionsByTable={recordOptionsByTable}
+            titleFieldId={effectiveConfig.titleFieldId}
+            dateFieldId={effectiveConfig.dateFieldId}
+            endDateFieldId={effectiveConfig.endDateFieldId}
+            onOpenRecord={setOpenRecordId}
+          />
+        ) : null}
+        {sheet.data && fields.length > 0 && activeKind === "org_chart" ? (
+          <OrgChartView
+            fields={fields}
+            visibleFields={visible}
+            records={sheet.data.records}
+            recordOptionsByTable={recordOptionsByTable}
+            titleFieldId={effectiveConfig.titleFieldId}
+            parentFieldId={effectiveConfig.parentFieldId}
+            onOpenRecord={setOpenRecordId}
+          />
+        ) : null}
+        {sheet.data && fields.length > 0 && active && activeKind === "form" ? (
+          <FormView
+            tableId={tableId}
+            viewId={active.id}
+            viewName={draft?.name ?? active.name}
+            visibleFields={visible}
+            requiredFieldIds={effectiveConfig.requiredFieldIds}
+            recordOptionsByTable={recordOptionsByTable}
+            onSubmitted={async () => {
+              await invalidate();
+              await queryClient.invalidateQueries({ queryKey: genericTableKeys.recordOptions(wsId, tableId) });
+            }}
+          />
+        ) : null}
       </div>
+      <RecordDetailDialog
+        table={sheet.data?.table ?? null}
+        activeView={active ? { id: active.id, name: draft?.name ?? active.name, kind: activeKind } : null}
+        record={openRecord}
+        fields={fields}
+        visibleFields={visible}
+        records={sheet.data?.records}
+        titleFieldId={effectiveConfig.titleFieldId}
+        recordOptionsByTable={recordOptionsByTable}
+        onClose={() => setOpenRecordId(null)}
+      />
       <EditDerivedFieldDialog
         wsId={wsId}
         field={editingField}
@@ -564,11 +726,45 @@ function flattenCell(value: GenericCellValue): Array<string | number | boolean |
   return out;
 }
 
+function viewToDraft(view: GenericView): ViewDraft {
+  return {
+    name: view.name,
+    kind: view.kind ?? "grid",
+    config: view.config ?? {},
+    columns: view.columns,
+    filter: view.filter,
+    sort: view.sort,
+    group: view.group ?? null,
+  };
+}
+
+export function patchCachedSheetView(
+  sheet: GenericSheet | undefined,
+  viewId: string,
+  saved: GenericView,
+): GenericSheet | undefined {
+  if (!sheet) return sheet;
+  let changed = false;
+  const views = sheet.views.map((view) => {
+    if (view.id !== viewId) return view;
+    changed = true;
+    return saved;
+  });
+  return changed ? { ...sheet, views } : sheet;
+}
+
 function savedView(draft: ViewDraft): GenericViewWrite {
   const filter = draft.filter && (draft.filter.op === "is_empty" || draft.filter.op === "is_not_empty")
     ? { field_id: draft.filter.field_id, op: draft.filter.op }
     : draft.filter;
-  return { name: draft.name.trim(), columns: draft.columns, filter, sort: draft.sort, group: draft.group };
+  return {
+    name: draft.name.trim(),
+    config: draft.config,
+    columns: draft.columns,
+    filter,
+    sort: draft.sort,
+    group: draft.group,
+  };
 }
 
 function visibleFields(fields: GenericField[], columns: string[] | null): GenericField[] {
@@ -581,24 +777,34 @@ function visibleFields(fields: GenericField[], columns: string[] | null): Generi
 }
 
 function ViewBar({
+  tableId,
   fields,
   views,
   activeId,
   draft,
   hiddenCount,
+  showNewView,
+  onShowNewView,
   viewName,
+  viewKind,
   onViewName,
+  onViewKind,
   onDraft,
   onSelectView,
   onCreateView,
 }: {
+  tableId: string;
   fields: GenericField[];
-  views: { id: string; name: string }[];
+  views: { id: string; name: string; kind: GenericViewKind }[];
   activeId: string;
   draft: ViewDraft;
   hiddenCount: number;
+  showNewView: boolean;
+  onShowNewView: (open: boolean) => void;
   viewName: string;
+  viewKind: GenericViewKind;
   onViewName: (value: string) => void;
+  onViewKind: (value: GenericViewKind) => void;
   onDraft: (draft: ViewDraft) => void;
   onSelectView: (id: string) => void;
   onCreateView: () => void;
@@ -608,7 +814,33 @@ function ViewBar({
   const hidden = fields.filter((field) => !visible.includes(field.id));
   const ordered = [...visibleFields(fields, draft.columns), ...hidden];
 
-  const setVisible = (ids: string[]) => onDraft({ ...draft, columns: ids });
+  const setVisible = (ids: string[]) => {
+    if (draft.kind === "form" && draft.config.required_field_ids?.length) {
+      const shownSet = new Set(ids);
+      const nextRequired = draft.config.required_field_ids.filter((id) => shownSet.has(id));
+      const nextConfig: GenericViewConfig = { ...draft.config };
+      if (nextRequired.length > 0) nextConfig.required_field_ids = nextRequired;
+      else delete nextConfig.required_field_ids;
+      onDraft({ ...draft, columns: ids, config: nextConfig });
+      return;
+    }
+    onDraft({ ...draft, columns: ids });
+  };
+
+  const updateConfig = (patch: Partial<GenericViewConfig>) => {
+    const nextConfig: GenericViewConfig = { ...draft.config, ...patch };
+    for (const [key, value] of Object.entries(nextConfig)) {
+      if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
+        delete (nextConfig as Record<string, unknown>)[key];
+      }
+    }
+    onDraft({ ...draft, config: nextConfig });
+  };
+
+  const singleSelectFields = fields.filter((field) => field.kind === "single_select");
+  const dateFields = fields.filter((field) => field.kind === "date");
+  const selfRelationFields = fields.filter((field) => isSameTableOneWayRelation(field, tableId));
+  const visibleEditableFields = visibleFields(fields, draft.columns).filter(isEditableField);
 
   return (
     <div className="border-b border-border">
@@ -618,22 +850,41 @@ function ViewBar({
             key={view.id}
             type="button"
             role="tab"
+            data-view-id={view.id}
+            data-view-kind={view.kind}
             aria-selected={view.id === activeId}
             className={view.id === activeId ? "h-7 shrink-0 rounded-sm bg-accent px-2 text-body" : "h-7 shrink-0 rounded-sm px-2 text-body text-muted-foreground"}
             onClick={() => onSelectView(view.id)}
           >
             {view.name}
+            {view.kind !== "grid" ? (
+              <span className="ml-1 text-caption text-muted-foreground">
+                · {t(($) => $.sheet.view_kinds[view.kind])}
+              </span>
+            ) : null}
           </button>
         ))}
-        <Popover>
+        <Popover open={showNewView} onOpenChange={onShowNewView}>
           <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.new_view)}</Button>} />
-          <PopoverContent align="start" className="flex w-64 items-center gap-2 p-2">
+          <PopoverContent align="start" className="flex w-72 flex-col gap-2 p-2.5">
             <Input
               aria-label={t(($) => $.sheet.view_name)}
               value={viewName}
               onChange={(event) => onViewName(event.target.value)}
               placeholder={t(($) => $.sheet.view_name)}
             />
+            <select
+              aria-label={t(($) => $.sheet.view_type)}
+              value={viewKind}
+              onChange={(event) => onViewKind(event.target.value as GenericViewKind)}
+              className="h-8 rounded-md border border-border bg-transparent px-2 text-body"
+            >
+              {genericViewKinds.map((kind) => (
+                <option key={kind} value={kind}>
+                  {t(($) => $.sheet.view_kinds[kind])}
+                </option>
+              ))}
+            </select>
             <Button type="button" size="sm" onClick={onCreateView} disabled={viewName.trim() === ""}>
               {t(($) => $.sheet.add)}
             </Button>
@@ -675,32 +926,161 @@ function ViewBar({
             </ul>
           </PopoverContent>
         </Popover>
-        <Popover>
-          <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.filter)}{draft.filter ? " 1" : ""}</Button>} />
-          <PopoverContent align="start" className="w-80 p-2">
-            <FilterSort fields={fields} draft={draft} onDraft={onDraft} part="filter" />
-          </PopoverContent>
-        </Popover>
-        <Popover>
-          <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.sort)}{draft.sort ? " 1" : ""}</Button>} />
-          <PopoverContent align="start" className="w-72 p-2">
-            <FilterSort fields={fields} draft={draft} onDraft={onDraft} part="sort" />
-          </PopoverContent>
-        </Popover>
-        <Popover>
-          <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.group)}{draft.group ? " 1" : ""}</Button>} />
-          <PopoverContent align="start" className="w-64 p-2">
-            <select
-              aria-label={t(($) => $.sheet.group)}
-              value={draft.group ?? ""}
-              onChange={(event) => onDraft({ ...draft, group: event.target.value || null })}
-              className="h-8 w-full rounded-md border border-border bg-transparent px-2 text-body"
-            >
-              <option value="">{t(($) => $.sheet.none)}</option>
-              {fields.map((field) => <option key={field.id} value={field.id}>{field.name}</option>)}
-            </select>
-          </PopoverContent>
-        </Popover>
+        {draft.kind !== "form" ? (
+          <>
+            <Popover>
+              <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.filter)}{draft.filter ? " 1" : ""}</Button>} />
+              <PopoverContent align="start" className="w-80 p-2">
+                <FilterSort fields={fields} draft={draft} onDraft={onDraft} part="filter" />
+              </PopoverContent>
+            </Popover>
+            <Popover>
+              <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.sort)}{draft.sort ? " 1" : ""}</Button>} />
+              <PopoverContent align="start" className="w-72 p-2">
+                <FilterSort fields={fields} draft={draft} onDraft={onDraft} part="sort" />
+              </PopoverContent>
+            </Popover>
+          </>
+        ) : null}
+        {draft.kind === "grid" ? (
+          <Popover>
+            <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.group)}{draft.group ? " 1" : ""}</Button>} />
+            <PopoverContent align="start" className="w-64 p-2">
+              <select
+                aria-label={t(($) => $.sheet.group)}
+                value={draft.group ?? ""}
+                onChange={(event) => onDraft({ ...draft, group: event.target.value || null })}
+                className="h-8 w-full rounded-md border border-border bg-transparent px-2 text-body"
+              >
+                <option value="">{t(($) => $.sheet.none)}</option>
+                {fields.map((field) => <option key={field.id} value={field.id}>{field.name}</option>)}
+              </select>
+            </PopoverContent>
+          </Popover>
+        ) : (
+          <Popover>
+            <PopoverTrigger render={<Button type="button" variant="ghost" size="sm">{t(($) => $.sheet.view_settings)}</Button>} />
+            <PopoverContent align="start" className="flex w-72 flex-col gap-2.5 p-3">
+              {draft.kind === "kanban" ? (
+                <label className="flex flex-col gap-1 text-caption text-muted-foreground">
+                  {t(($) => $.sheet.group_field)}
+                  <select
+                    aria-label={t(($) => $.sheet.group_field)}
+                    value={draft.config.group_field_id ?? ""}
+                    onChange={(event) => updateConfig({ group_field_id: event.target.value || undefined })}
+                    className="h-8 rounded-md border border-border bg-transparent px-2 text-body text-foreground"
+                  >
+                    <option value="">{t(($) => $.sheet.auto_field)}</option>
+                    {singleSelectFields.map((field) => (
+                      <option key={field.id} value={field.id}>{field.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {draft.kind === "calendar" || draft.kind === "gantt" ? (
+                <label className="flex flex-col gap-1 text-caption text-muted-foreground">
+                  {t(($) => $.sheet.date_field)}
+                  <select
+                    aria-label={t(($) => $.sheet.date_field)}
+                    value={draft.config.date_field_id ?? ""}
+                    onChange={(event) => updateConfig({ date_field_id: event.target.value || undefined })}
+                    className="h-8 rounded-md border border-border bg-transparent px-2 text-body text-foreground"
+                  >
+                    <option value="">{t(($) => $.sheet.auto_field)}</option>
+                    {dateFields.map((field) => (
+                      <option key={field.id} value={field.id}>{field.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {draft.kind === "gantt" ? (
+                <label className="flex flex-col gap-1 text-caption text-muted-foreground">
+                  {t(($) => $.sheet.end_date_field)}
+                  <select
+                    aria-label={t(($) => $.sheet.end_date_field)}
+                    value={draft.config.end_date_field_id ?? ""}
+                    onChange={(event) => updateConfig({ end_date_field_id: event.target.value || undefined })}
+                    className="h-8 rounded-md border border-border bg-transparent px-2 text-body text-foreground"
+                  >
+                    <option value="">{t(($) => $.sheet.auto_field)}</option>
+                    {dateFields.map((field) => (
+                      <option key={field.id} value={field.id}>{field.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {draft.kind === "org_chart" ? (
+                <label className="flex flex-col gap-1 text-caption text-muted-foreground">
+                  {t(($) => $.sheet.parent_field)}
+                  <select
+                    aria-label={t(($) => $.sheet.parent_field)}
+                    value={draft.config.parent_field_id ?? ""}
+                    onChange={(event) => updateConfig({ parent_field_id: event.target.value || undefined })}
+                    className="h-8 rounded-md border border-border bg-transparent px-2 text-body text-foreground"
+                  >
+                    <option value="">{t(($) => $.sheet.auto_field)}</option>
+                    {selfRelationFields.map((field) => (
+                      <option key={field.id} value={field.id}>{field.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {draft.kind !== "form" ? (
+                <label className="flex flex-col gap-1 text-caption text-muted-foreground">
+                  {t(($) => $.sheet.title_field)}
+                  <select
+                    aria-label={t(($) => $.sheet.title_field)}
+                    value={draft.config.title_field_id ?? ""}
+                    onChange={(event) => updateConfig({ title_field_id: event.target.value || undefined })}
+                    className="h-8 rounded-md border border-border bg-transparent px-2 text-body text-foreground"
+                  >
+                    <option value="">{t(($) => $.sheet.auto_field)}</option>
+                    {fields.map((field) => (
+                      <option key={field.id} value={field.id}>{field.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-caption font-medium text-muted-foreground">
+                    {t(($) => $.sheet.required_fields)}
+                  </span>
+                  {visibleEditableFields.length === 0 ? (
+                    <p className="text-caption text-muted-foreground">{t(($) => $.sheet.empty_form_fields)}</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {visibleEditableFields.map((field) => {
+                        const checked = draft.config.required_field_ids?.includes(field.id) ?? false;
+                        return (
+                          <li key={field.id}>
+                            <label className="flex cursor-pointer items-center gap-2 text-body">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  const current = draft.config.required_field_ids ?? [];
+                                  const next = checked
+                                    ? current.filter((id) => id !== field.id)
+                                    : [...current, field.id];
+                                  updateConfig({ required_field_ids: next });
+                                }}
+                              />
+                              <span className="truncate">{field.name}</span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        )}
       </div>
     </div>
   );

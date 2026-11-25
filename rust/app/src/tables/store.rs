@@ -53,6 +53,8 @@ pub struct RecordDto {
 pub struct ViewDto {
     pub id: String,
     pub name: String,
+    pub kind: String,
+    pub config: Value,
     pub columns: Option<Vec<String>>,
     pub filter: Option<StoredFilter>,
     pub sort: Option<StoredSort>,
@@ -120,6 +122,8 @@ pub async fn create_table(
         &table.id,
         &StoredView {
             name: "全部".to_owned(),
+            kind: "grid".to_owned(),
+            config: Value::Object(serde_json::Map::new()),
             columns: None,
             filter: None,
             sort: None,
@@ -375,15 +379,68 @@ pub async fn create_record(
     let locked_tables = relation::prepare_table_locks(&mut tx, workspace, table, &touched).await?;
     let fields = load_fields(&mut tx, workspace, table).await?;
     let normalized = normalize_values(&fields, values)?;
-    let reverse_plan = relation::validate_and_plan_reverse(
+    let record = create_record_in_tx(
         &mut tx,
         workspace,
+        table,
         &fields,
-        None,
         &normalized,
         &locked_tables,
+        actor,
     )
     .await?;
+    commit(tx).await?;
+    Ok(record)
+}
+
+pub async fn submit_form(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    view: &str,
+    values: &BTreeMap<String, Value>,
+    actor: Option<&super::collab::Actor>,
+) -> Result<RecordDto, StoreError> {
+    let mut tx = begin(pool).await?;
+    let touched: Vec<String> = values.keys().cloned().collect();
+    let locked_tables = relation::prepare_table_locks(&mut tx, workspace, table, &touched).await?;
+    let view_dto = load_view(&mut tx, workspace, table, view).await?;
+    let fields = load_fields(&mut tx, workspace, table).await?;
+    let defs: Vec<FieldDef> = fields.iter().map(def_of).collect();
+    let normalized = validate::validate_form_submission(
+        &view_dto.kind,
+        view_dto.columns.as_deref(),
+        &view_dto.config,
+        &defs,
+        values,
+    )
+    .map_err(StoreError::Invalid)?;
+    let record = create_record_in_tx(
+        &mut tx,
+        workspace,
+        table,
+        &fields,
+        &normalized,
+        &locked_tables,
+        actor,
+    )
+    .await?;
+    commit(tx).await?;
+    Ok(record)
+}
+
+async fn create_record_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    fields: &[FieldDto],
+    normalized: &BTreeMap<String, Option<Value>>,
+    locked_tables: &[String],
+    actor: Option<&super::collab::Actor>,
+) -> Result<RecordDto, StoreError> {
+    let reverse_plan =
+        relation::validate_and_plan_reverse(tx, workspace, fields, None, normalized, locked_tables)
+            .await?;
     if reverse_plan.has_writes() && actor.is_none() {
         return Err(StoreError::Invalid("创建包含双向关联的记录需要协作者身份"));
     }
@@ -397,19 +454,17 @@ pub async fn create_record(
     let row = sqlx::query(&sql)
         .bind(workspace)
         .bind(table)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(failed)?;
     let id: String = row.get(0);
-    write_cells(&mut tx, workspace, &id, &normalized).await?;
+    write_cells(tx, workspace, &id, normalized).await?;
     if let Some(actor) = actor
         && reverse_plan.has_writes()
     {
-        relation::apply_reverse_plan(&mut tx, workspace, &id, &reverse_plan, actor).await?;
+        relation::apply_reverse_plan(tx, workspace, &id, &reverse_plan, actor).await?;
     }
-    let record = load_record(&mut tx, workspace, &fields, &id).await?;
-    commit(tx).await?;
-    Ok(record)
+    load_record(tx, workspace, fields, &id).await
 }
 
 pub async fn update_record(
@@ -438,8 +493,15 @@ pub enum GroupUpdate<'a> {
     Set(Option<&'a str>),
 }
 
+pub enum ConfigUpdate<'a> {
+    Keep,
+    Set(&'a Value),
+}
+
 pub struct ViewWrite<'a> {
     pub name: &'a str,
+    pub kind: Option<&'a str>,
+    pub config: ConfigUpdate<'a>,
     pub columns: Option<&'a [String]>,
     pub filter: Option<&'a StoredFilter>,
     pub sort: Option<&'a StoredSort>,
@@ -455,11 +517,17 @@ pub async fn create_view(
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
     let fields = load_field_defs(&mut tx, workspace, table).await?;
+    let kind = write.kind.unwrap_or("grid");
+    let empty = Value::Object(serde_json::Map::new());
+    let config = match write.config {
+        ConfigUpdate::Set(value) => value,
+        ConfigUpdate::Keep => &empty,
+    };
     let group = match write.group {
         GroupUpdate::Set(value) => value,
         GroupUpdate::Keep => None,
     };
-    let view = normalize_write(write, group, &fields)?;
+    let view = normalize_write(table, write, kind, config, group, &fields)?;
     let saved = insert_view(&mut tx, workspace, table, &view).await?;
     commit(tx).await?;
     Ok(saved)
@@ -474,25 +542,50 @@ pub async fn save_view(
 ) -> Result<ViewDto, StoreError> {
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
-    ensure_view(&mut tx, workspace, table, view).await?;
+    let existing = load_view_for_update(&mut tx, workspace, table, view).await?;
+    if let Some(requested_kind) = write.kind {
+        if !validate::VIEW_KINDS.contains(&requested_kind) {
+            return Err(StoreError::Invalid("不支持的视图类型"));
+        }
+        if requested_kind != existing.kind {
+            return Err(StoreError::Invalid("视图类型创建后不能修改"));
+        }
+    }
     let fields = load_field_defs(&mut tx, workspace, table).await?;
     let group = match write.group {
         GroupUpdate::Set(value) => value.map(str::to_owned),
-        GroupUpdate::Keep => load_group(&mut tx, workspace, table, view).await?,
+        GroupUpdate::Keep => existing.group,
     };
-    let spec = normalize_write(write, group.as_deref(), &fields)?;
+    let config = match write.config {
+        ConfigUpdate::Set(value) => value,
+        ConfigUpdate::Keep => &existing.config,
+    };
+    let spec = normalize_write(
+        table,
+        write,
+        &existing.kind,
+        config,
+        group.as_deref(),
+        &fields,
+    )?;
     let saved = update_view(&mut tx, workspace, table, view, &spec).await?;
     commit(tx).await?;
     Ok(saved)
 }
 
 fn normalize_write(
+    table: &str,
     write: &ViewWrite<'_>,
+    kind: &str,
+    config: &Value,
     group: Option<&str>,
     fields: &[FieldDef],
 ) -> Result<validate::StoredView, StoreError> {
     validate::normalize_view(
+        table,
         write.name,
+        kind,
+        config,
         write.columns,
         write.filter,
         write.sort,
@@ -502,14 +595,23 @@ fn normalize_write(
     .map_err(StoreError::Invalid)
 }
 
-async fn load_group(
+struct ExistingViewMeta {
+    kind: String,
+    config: Value,
+    group: Option<String>,
+}
+
+async fn load_view_for_update(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
     view: &str,
-) -> Result<Option<String>, StoreError> {
+) -> Result<ExistingViewMeta, StoreError> {
     let row = sqlx::query(
-        "SELECT group_field FROM generic_view WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid",
+        "SELECT kind, config::text, group_field
+         FROM generic_view
+         WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid
+         FOR UPDATE",
     )
     .bind(view)
     .bind(table)
@@ -518,7 +620,37 @@ async fn load_group(
     .await
     .map_err(failed)?
     .ok_or(StoreError::NotFound("找不到这个视图"))?;
-    Ok(row.get(0))
+    let config_raw: String = row.get(1);
+    let config = serde_json::from_str(&config_raw).map_err(|_| StoreError::Failed)?;
+    Ok(ExistingViewMeta {
+        kind: row.get(0),
+        config,
+        group: row.get(2),
+    })
+}
+
+async fn load_view(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    view: &str,
+) -> Result<ViewDto, StoreError> {
+    let created = ts("created_at");
+    let updated = ts("updated_at");
+    let sql = format!(
+        "SELECT id::text, name, kind, config::text, columns::text, filter::text, sort::text, group_field, {created}, {updated}
+         FROM generic_view
+         WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid"
+    );
+    let row = sqlx::query(&sql)
+        .bind(view)
+        .bind(table)
+        .bind(workspace)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(failed)?
+        .ok_or(StoreError::NotFound("找不到这个视图"))?;
+    view_from_row(&row)
 }
 
 async fn load_sheet(
@@ -674,14 +806,16 @@ async fn insert_view(
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
-        "INSERT INTO generic_view (workspace_id, table_id, name, columns, filter, sort, group_field)
-         VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
-         RETURNING id::text, name, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
+        "INSERT INTO generic_view (workspace_id, table_id, name, kind, config, columns, filter, sort, group_field)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9)
+         RETURNING id::text, name, kind, config::text, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
     );
     let row = sqlx::query(&sql)
         .bind(workspace)
         .bind(table)
         .bind(&view.name)
+        .bind(&view.kind)
+        .bind(view.config.to_string())
         .bind(json_option(&view.columns)?)
         .bind(json_option(&view.filter)?)
         .bind(json_option(&view.sort)?)
@@ -703,15 +837,16 @@ async fn update_view(
     let updated = ts("updated_at");
     let sql = format!(
         "UPDATE generic_view
-         SET name = $4, columns = $5::jsonb, filter = $6::jsonb, sort = $7::jsonb, group_field = $8, updated_at = now()
+         SET name = $4, config = $5::jsonb, columns = $6::jsonb, filter = $7::jsonb, sort = $8::jsonb, group_field = $9, updated_at = now()
          WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid
-         RETURNING id::text, name, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
+         RETURNING id::text, name, kind, config::text, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
     );
     let row = sqlx::query(&sql)
         .bind(view)
         .bind(table)
         .bind(workspace)
         .bind(&spec.name)
+        .bind(spec.config.to_string())
         .bind(json_option(&spec.columns)?)
         .bind(json_option(&spec.filter)?)
         .bind(json_option(&spec.sort)?)
@@ -720,27 +855,6 @@ async fn update_view(
         .await
         .map_err(failed)?;
     view_from_row(&row)
-}
-
-async fn ensure_view(
-    tx: &mut Transaction<'_, Postgres>,
-    workspace: &str,
-    table: &str,
-    view: &str,
-) -> Result<(), StoreError> {
-    let found = sqlx::query(
-        "SELECT id::text FROM generic_view WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid FOR UPDATE",
-    )
-    .bind(view)
-    .bind(table)
-    .bind(workspace)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(failed)?;
-    if found.is_none() {
-        return Err(StoreError::NotFound("找不到这个视图"));
-    }
-    Ok(())
 }
 
 async fn load_table(
@@ -804,7 +918,7 @@ async fn load_views(
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
-        "SELECT id::text, name, columns::text, filter::text, sort::text, group_field, {created}, {updated}
+        "SELECT id::text, name, kind, config::text, columns::text, filter::text, sort::text, group_field, {created}, {updated}
          FROM generic_view
          WHERE table_id = $1::uuid AND workspace_id = $2::uuid
          ORDER BY created_at, id"
@@ -1039,18 +1153,22 @@ pub(super) fn field_from_row(row: &sqlx::postgres::PgRow) -> Result<FieldDto, St
 }
 
 fn view_from_row(row: &sqlx::postgres::PgRow) -> Result<ViewDto, StoreError> {
-    let columns: Option<String> = row.get(2);
-    let filter: Option<String> = row.get(3);
-    let sort: Option<String> = row.get(4);
+    let config_raw: String = row.get(3);
+    let config = serde_json::from_str(&config_raw).map_err(|_| StoreError::Failed)?;
+    let columns: Option<String> = row.get(4);
+    let filter: Option<String> = row.get(5);
+    let sort: Option<String> = row.get(6);
     Ok(ViewDto {
         id: row.get(0),
         name: row.get(1),
+        kind: row.get(2),
+        config,
         columns: parse_json(columns)?,
         filter: parse_json(filter)?,
         sort: parse_json(sort)?,
-        group: row.get(5),
-        created_at: row.get(6),
-        updated_at: row.get(7),
+        group: row.get(7),
+        created_at: row.get(8),
+        updated_at: row.get(9),
     })
 }
 

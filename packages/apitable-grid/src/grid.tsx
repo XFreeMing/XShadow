@@ -76,6 +76,7 @@ export function ApitableGrid({
   onRenameField,
   onEditField,
   onOpenRelationCell,
+  onOpenRecord,
   onActiveCell,
   onEditEnd,
   onToggleGroup,
@@ -98,6 +99,7 @@ export function ApitableGrid({
     currentIds: readonly string[],
     baseRevision: number,
   ) => void;
+  onOpenRecord?: (recordId: string) => void;
   onActiveCell?: (recordId: string, fieldId: string, revision: number) => void;
   onEditEnd?: () => void;
   onToggleGroup?: (key: string) => void;
@@ -120,7 +122,19 @@ export function ApitableGrid({
   };
   const renderRecord = (record: GridRecordView, rowIndex: number) => (
     <tr className="apitable-grid__row" data-record-id={record.id} key={record.id}>
-      <th className="apitable-grid__rowHead" scope="row">{rowIndex + 1}</th>
+      <th className="apitable-grid__rowHead" scope="row">
+        {onOpenRecord ? (
+          <button
+            type="button"
+            className="apitable-grid__rowOpen"
+            aria-label={`${labels.openRecord ?? "Open record"} ${rowIndex + 1}`}
+            title={labels.openRecord ?? "Open record"}
+            onClick={() => onOpenRecord(record.id)}
+          >
+            {rowIndex + 1}
+          </button>
+        ) : rowIndex + 1}
+      </th>
       {fields.map((field) => {
         const optionTableId = field.kind === "relation"
           ? field.config?.target_table_id

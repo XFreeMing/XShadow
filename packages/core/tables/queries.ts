@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
 export const genericTableKeys = {
@@ -10,6 +10,8 @@ export const genericTableKeys = {
     [...genericTableKeys.sheetAll(wsId, tableId), viewId] as const,
   recordOptions: (wsId: string, tableId: string) =>
     [...genericTableKeys.all(wsId), "record-options", tableId] as const,
+  recordComments: (wsId: string, tableId: string, recordId: string) =>
+    [...genericTableKeys.all(wsId), "record-comments", tableId, recordId] as const,
 };
 
 export function genericTableListOptions(wsId: string) {
@@ -33,5 +35,35 @@ export function genericRecordOptionsQuery(wsId: string, tableId: string) {
     queryKey: genericTableKeys.recordOptions(wsId, tableId),
     queryFn: () => api.listGenericRecordOptions(tableId),
     enabled: !!wsId && !!tableId,
+  });
+}
+
+export function genericRecordCommentsOptions(
+  wsId: string,
+  tableId: string,
+  recordId: string,
+  limit = 50,
+) {
+  return queryOptions({
+    queryKey: genericTableKeys.recordComments(wsId, tableId, recordId),
+    queryFn: () => api.listGenericRecordComments(tableId, recordId, { after: 0, limit }),
+    enabled: !!wsId && !!tableId && !!recordId,
+  });
+}
+
+export function genericRecordCommentsInfiniteOptions(
+  wsId: string,
+  tableId: string,
+  recordId: string,
+  limit = 50,
+) {
+  return infiniteQueryOptions({
+    queryKey: genericTableKeys.recordComments(wsId, tableId, recordId),
+    queryFn: ({ pageParam }) =>
+      api.listGenericRecordComments(tableId, recordId, { after: pageParam, limit }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more && lastPage.next_cursor != null ? lastPage.next_cursor : undefined,
+    enabled: !!wsId && !!tableId && !!recordId,
   });
 }

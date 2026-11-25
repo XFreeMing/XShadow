@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use super::collab::{self, Actor};
+use super::comments;
 use super::store::{self, RecordDto, StoreError};
 use super::validate::{StoredFilter, StoredSort, is_uuid};
 
@@ -82,10 +83,18 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/tables/{id}/records/{record_id}",
             patch(update_record),
         )
+        .route(
+            "/internal/tables/{id}/records/{record_id}/comments",
+            get(list_record_comments).post(create_record_comment),
+        )
         .route("/internal/tables/{id}/changes", get(list_changes))
         .route("/internal/tables/{id}/presence", post(touch_presence))
         .route("/internal/tables/{id}/views", post(create_view))
         .route("/internal/tables/{id}/views/{view_id}", patch(save_view))
+        .route(
+            "/internal/tables/{id}/views/{view_id}/submit",
+            post(submit_form),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
 }
@@ -499,13 +508,90 @@ fn clean_label(raw: &str, source: &str, id: &str) -> String {
 }
 
 #[derive(Deserialize)]
+struct CommentsQuery {
+    #[serde(default)]
+    after: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct CommentBody {
+    body: String,
+    #[serde(default)]
+    parent_id: Option<String>,
+}
+
+async fn list_record_comments(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path((id, record_id)): Path<(String, String)>,
+    Query(query): Query<CommentsQuery>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&record_id)) {
+        return response;
+    }
+    match comments::list_comments(&app.pool, &ws, &id, &record_id, query.after, query.limit).await {
+        Ok(list) => Json(list).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn create_record_comment(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path((id, record_id)): Path<(String, String)>,
+    body: Result<Json<CommentBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&record_id)) {
+        return response;
+    }
+    let Ok(Json(body)) = body else {
+        return invalid("请求格式不正确");
+    };
+    let Ok(actor) = require_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    let Ok(parent_id) = optional_id(body.parent_id) else {
+        return invalid("父评论标识无效");
+    };
+    match comments::create_comment(
+        &app.pool,
+        &ws,
+        &id,
+        &record_id,
+        &actor,
+        &body.body,
+        parent_id.as_deref(),
+    )
+    .await
+    {
+        Ok(comment) => (StatusCode::CREATED, Json(json!({ "comment": comment }))).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+#[derive(Deserialize)]
 struct ViewBody {
     name: String,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "config_field")]
+    config: Option<Value>,
     columns: Option<Vec<String>>,
     filter: Option<StoredFilter>,
     sort: Option<StoredSort>,
     #[serde(default, deserialize_with = "group_field")]
     group: Option<Option<String>>,
+}
+
+fn config_field<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(Some(value))
 }
 
 fn group_field<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
@@ -519,6 +605,11 @@ where
 fn view_write(body: &ViewBody) -> store::ViewWrite<'_> {
     store::ViewWrite {
         name: &body.name,
+        kind: body.kind.as_deref(),
+        config: match &body.config {
+            None => store::ConfigUpdate::Keep,
+            Some(value) => store::ConfigUpdate::Set(value),
+        },
         columns: body.columns.as_deref(),
         filter: body.filter.as_ref(),
         sort: body.sort.as_ref(),
@@ -526,6 +617,33 @@ fn view_write(body: &ViewBody) -> store::ViewWrite<'_> {
             None => store::GroupUpdate::Keep,
             Some(value) => store::GroupUpdate::Set(value.as_deref()),
         },
+    }
+}
+
+async fn submit_form(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path((id, view_id)): Path<(String, String)>,
+    body: Result<Json<RecordBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&view_id)) {
+        return response;
+    }
+    let Ok(Json(body)) = body else {
+        return invalid("请求格式不正确");
+    };
+    for field_id in body.values.keys() {
+        if bad_id(field_id).is_some() {
+            return invalid("字段标识无效");
+        }
+    }
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::submit_form(&app.pool, &ws, &id, &view_id, &body.values, actor.as_ref()).await {
+        Ok(record) => (StatusCode::CREATED, Json(json!({ "record": record }))).into_response(),
+        Err(err) => store_error(err),
     }
 }
 
@@ -671,7 +789,8 @@ fn tokens_match(expected: &str, got: &str) -> bool {
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{decide_access, optional_actor, require_actor};
+    use super::{ViewBody, decide_access, optional_actor, require_actor, view_write};
+    use crate::tables::store::ConfigUpdate;
 
     #[test]
     fn disabled_token_rejects_before_a_client_could_supply_a_workspace() {
@@ -732,5 +851,19 @@ mod tests {
         let actor = optional_actor(&partial).unwrap().unwrap();
         assert_eq!(actor.source, "member");
         assert_eq!(actor.id, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn view_body_omitting_kind_and_config_keeps_existing_values() {
+        let legacy: ViewBody = serde_json::from_str(r#"{"name":"旧视图"}"#).unwrap();
+        let write = view_write(&legacy);
+        assert_eq!(write.kind, None);
+        assert!(matches!(write.config, ConfigUpdate::Keep));
+
+        let explicit: ViewBody =
+            serde_json::from_str(r#"{"name":"看板","kind":"kanban","config":{}}"#).unwrap();
+        let write = view_write(&explicit);
+        assert_eq!(write.kind, Some("kanban"));
+        assert!(matches!(write.config, ConfigUpdate::Set(_)));
     }
 }

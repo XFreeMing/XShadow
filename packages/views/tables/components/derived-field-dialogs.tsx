@@ -52,10 +52,11 @@ export function FieldCreateForm({
     ...genericTableListOptions(wsId),
     enabled: Boolean(wsId && kind === "relation"),
   });
-  const otherTables = useMemo(
-    () => (tablesQuery.data?.tables ?? []).filter((item) => item.id !== tableId),
-    [tablesQuery.data?.tables, tableId],
+  const availableTables = useMemo(
+    () => tablesQuery.data?.tables ?? [],
+    [tablesQuery.data?.tables],
   );
+  const isSelfRelation = kind === "relation" && targetTableId === tableId;
 
   const relationFields = useMemo(
     () => fields.filter((field) => field.kind === "relation"),
@@ -95,7 +96,7 @@ export function FieldCreateForm({
               .map((label, index) => ({ id: `opt${index + 1}`, label })),
           };
         } else if (kind === "relation") {
-          config = { target_table_id: targetTableId, bidirectional };
+          config = { target_table_id: targetTableId, bidirectional: isSelfRelation ? false : bidirectional };
         } else if (kind === "lookup") {
           config = { relation_field_id: relationFieldId, target_field_id: targetFieldId };
         } else if (kind === "formula") {
@@ -141,26 +142,30 @@ export function FieldCreateForm({
           <select
             aria-label={t(($) => $.sheet.target_table)}
             value={targetTableId}
-            onChange={(event) => setTargetTableId(event.target.value)}
+            onChange={(event) => {
+              const nextTarget = event.target.value;
+              setTargetTableId(nextTarget);
+              if (nextTarget === tableId) setBidirectional(false);
+            }}
             className="h-8 rounded-md border border-border bg-transparent px-2 text-body"
           >
             <option value="">{t(($) => $.sheet.select_target_table)}</option>
-            {otherTables.map((table) => (
+            {availableTables.map((table) => (
               <option key={table.id} value={table.id}>
-                {table.name}
+                {table.id === tableId ? `${table.name} (${t(($) => $.sheet.current_table)})` : table.name}
               </option>
             ))}
           </select>
-          {otherTables.length === 0 && !tablesQuery.isLoading ? (
-            <p className="text-caption text-muted-foreground">{t(($) => $.sheet.no_other_tables)}</p>
-          ) : null}
           <label className="flex items-center gap-2 text-body">
             <input
               type="checkbox"
-              checked={bidirectional}
+              checked={isSelfRelation ? false : bidirectional}
+              disabled={isSelfRelation}
               onChange={(event) => setBidirectional(event.target.checked)}
             />
-            <span>{t(($) => $.sheet.bidirectional)}</span>
+            <span className={isSelfRelation ? "text-muted-foreground" : undefined}>
+              {isSelfRelation ? t(($) => $.sheet.self_relation_one_way) : t(($) => $.sheet.bidirectional)}
+            </span>
           </label>
         </div>
       ) : null}

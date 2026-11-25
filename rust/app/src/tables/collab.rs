@@ -131,7 +131,7 @@ pub fn actor_color(id: &str) -> String {
     COLORS[(hash as usize) % COLORS.len()].to_owned()
 }
 
-fn actor_dto(source: &str, id: &str, task_id: Option<String>, label: &str) -> ActorDto {
+pub(super) fn actor_dto(source: &str, id: &str, task_id: Option<String>, label: &str) -> ActorDto {
     ActorDto {
         source: source.to_owned(),
         id: id.to_owned(),

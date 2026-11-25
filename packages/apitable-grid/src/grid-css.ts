@@ -58,6 +58,21 @@ export const gridCss = `
   justify-content: center;
   font-size: 13px;
 }
+.apitable-grid__rowOpen {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.apitable-grid__rowOpen:hover,
+.apitable-grid__rowOpen:focus-visible {
+  color: var(--primaryColor);
+  text-decoration: underline;
+  outline: none;
+}
 .apitable-grid__fieldHeader {
   display: flex;
   align-items: center;

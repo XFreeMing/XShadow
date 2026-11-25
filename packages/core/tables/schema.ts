@@ -89,9 +89,32 @@ export const genericSortSchema = z.object({
 }).loose();
 export type GenericSort = z.infer<typeof genericSortSchema>;
 
+export const genericViewKinds = [
+  "grid",
+  "kanban",
+  "gallery",
+  "calendar",
+  "gantt",
+  "org_chart",
+  "form",
+] as const;
+export type GenericViewKind = (typeof genericViewKinds)[number];
+
+export const genericViewConfigSchema = z.object({
+  group_field_id: z.string().optional(),
+  title_field_id: z.string().optional(),
+  date_field_id: z.string().optional(),
+  end_date_field_id: z.string().optional(),
+  parent_field_id: z.string().optional(),
+  required_field_ids: z.array(z.string()).optional(),
+}).loose().catch({});
+export type GenericViewConfig = z.infer<typeof genericViewConfigSchema>;
+
 export const genericViewSchema = z.object({
   id: z.string(),
   name: z.string(),
+  kind: z.enum(genericViewKinds).catch("grid"),
+  config: genericViewConfigSchema.default({}),
   columns: z.array(z.string()).nullable(),
   filter: genericFilterSchema.nullable(),
   sort: genericSortSchema.nullable(),
@@ -171,6 +194,8 @@ export interface GenericFieldPatch {
 
 export interface GenericViewWrite {
   name: string;
+  kind?: GenericViewKind;
+  config?: GenericViewConfig;
   columns: string[] | null;
   filter: GenericFilter | null;
   sort: GenericSort | null;
@@ -211,10 +236,40 @@ export const genericChangesSchema = z.object({
 }).loose();
 export type GenericChanges = z.infer<typeof genericChangesSchema>;
 
+export const genericRecordCommentSchema = z.object({
+  id: z.string(),
+  record_id: z.string(),
+  parent_id: z.string().nullable().default(null),
+  seq: z.number(),
+  body: z.string(),
+  actor: genericActorSchema,
+  created_at: z.string(),
+}).loose();
+export type GenericRecordComment = z.infer<typeof genericRecordCommentSchema>;
+
+export const genericRecordCommentsSchema = z.object({
+  comments: z.array(genericRecordCommentSchema).default([]),
+  has_more: z.boolean().default(false),
+  next_cursor: z.number().nullable().default(null),
+}).loose();
+export type GenericRecordComments = z.infer<typeof genericRecordCommentsSchema>;
+
+export const genericRecordCommentResponseSchema = z.object({
+  comment: genericRecordCommentSchema,
+}).loose();
+export type GenericRecordCommentResponse = z.infer<typeof genericRecordCommentResponseSchema>;
+
+export interface GenericRecordCommentWrite {
+  body: string;
+  parent_id?: string | null;
+}
+
 const emptyTable = { id: "", name: "", created_at: "", updated_at: "" };
-const emptyView = {
+const emptyView: GenericView = {
   id: "",
   name: "",
+  kind: "grid",
+  config: {},
   columns: null,
   filter: null,
   sort: null,
@@ -248,6 +303,20 @@ export const EMPTY_GENERIC_CHANGES: GenericChanges = {
   next_since: 0,
   changes: [],
   presence: [],
+};
+export const EMPTY_GENERIC_RECORD_COMMENT: GenericRecordComment = {
+  id: "",
+  record_id: "",
+  parent_id: null,
+  seq: 0,
+  body: "",
+  actor: { source: "member", id: "", label: "", color: "#7B67EE" },
+  created_at: "",
+};
+export const EMPTY_GENERIC_RECORD_COMMENTS: GenericRecordComments = {
+  comments: [],
+  has_more: false,
+  next_cursor: null,
 };
 export const EMPTY_GENERIC_SHEET: GenericSheet = {
   table: emptyTable,

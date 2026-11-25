@@ -15,6 +15,20 @@ pub const KINDS: &[&str] = &[
     "formula",
 ];
 
+pub const VIEW_KINDS: &[&str] = &[
+    "grid",
+    "kanban",
+    "gallery",
+    "calendar",
+    "gantt",
+    "org_chart",
+    "form",
+];
+
+pub fn is_editable_kind(kind: &str) -> bool {
+    kind != "lookup" && kind != "formula"
+}
+
 pub fn is_uuid(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 36 {
@@ -63,6 +77,8 @@ pub struct StoredSort {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct StoredView {
     pub name: String,
+    pub kind: String,
+    pub config: Value,
     pub columns: Option<Vec<String>>,
     pub filter: Option<StoredFilter>,
     pub sort: Option<StoredSort>,
@@ -190,14 +206,21 @@ pub fn normalize_value(field: &FieldDef, value: &Value) -> Result<Option<Value>,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn normalize_view(
+    table_id: &str,
     name: &str,
+    kind: &str,
+    config: &Value,
     columns: Option<&[String]>,
     filter: Option<&StoredFilter>,
     sort: Option<&StoredSort>,
     group: Option<&str>,
     fields: &[FieldDef],
 ) -> Result<StoredView, &'static str> {
+    if !VIEW_KINDS.contains(&kind) {
+        return Err("不支持的视图类型");
+    }
     let by_id: BTreeMap<&str, &FieldDef> = fields
         .iter()
         .map(|field| (field.id.as_str(), field))
@@ -244,13 +267,224 @@ pub fn normalize_view(
             Some(id.to_owned())
         }
     };
+    let config = normalize_view_config(table_id, kind, config, columns.as_deref(), &by_id)?;
     Ok(StoredView {
         name: clean_name(name)?,
+        kind: kind.to_owned(),
+        config,
         columns,
         filter,
         sort,
         group,
     })
+}
+
+fn normalize_view_config(
+    table_id: &str,
+    kind: &str,
+    raw: &Value,
+    columns: Option<&[String]>,
+    by_id: &BTreeMap<&str, &FieldDef>,
+) -> Result<Value, &'static str> {
+    if raw.is_null() {
+        return Ok(Value::Object(Map::new()));
+    }
+    let Some(object) = raw.as_object() else {
+        return Err("视图配置必须是对象");
+    };
+    let allowed: &[&str] = match kind {
+        "grid" => &[],
+        "kanban" => &["group_field_id", "title_field_id"],
+        "gallery" => &["title_field_id"],
+        "calendar" => &["date_field_id", "title_field_id"],
+        "gantt" => &["date_field_id", "end_date_field_id", "title_field_id"],
+        "org_chart" => &["parent_field_id", "title_field_id"],
+        "form" => &["required_field_ids"],
+        _ => return Err("不支持的视图类型"),
+    };
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err("视图配置包含不支持的参数");
+        }
+    }
+    let mut normalized = Map::new();
+    if let Some(id) = optional_config_field_id(object, "title_field_id")? {
+        if !by_id.contains_key(id.as_str()) {
+            return Err("标题字段不属于这张表");
+        }
+        normalized.insert("title_field_id".to_owned(), Value::String(id));
+    }
+    if let Some(id) = optional_config_field_id(object, "group_field_id")? {
+        let field = by_id
+            .get(id.as_str())
+            .copied()
+            .ok_or("看板分组字段不属于这张表")?;
+        if field.kind != "single_select" {
+            return Err("看板分组字段必须是单选字段");
+        }
+        normalized.insert("group_field_id".to_owned(), Value::String(id));
+    }
+    if let Some(id) = optional_config_field_id(object, "date_field_id")? {
+        let field = by_id
+            .get(id.as_str())
+            .copied()
+            .ok_or("日期字段不属于这张表")?;
+        if field.kind != "date" {
+            return Err("视图日期字段必须是日期类型");
+        }
+        normalized.insert("date_field_id".to_owned(), Value::String(id));
+    }
+    if let Some(id) = optional_config_field_id(object, "end_date_field_id")? {
+        let field = by_id
+            .get(id.as_str())
+            .copied()
+            .ok_or("结束日期字段不属于这张表")?;
+        if field.kind != "date" {
+            return Err("结束日期字段必须是日期类型");
+        }
+        normalized.insert("end_date_field_id".to_owned(), Value::String(id));
+    }
+    if let Some(id) = optional_config_field_id(object, "parent_field_id")? {
+        let field = by_id
+            .get(id.as_str())
+            .copied()
+            .ok_or("上级关联字段不属于这张表")?;
+        if field.kind != "relation" {
+            return Err("组织架构上级字段必须是单向本表关联字段");
+        }
+        let rel = relation::RelationConfig::from_stored(&field.config)
+            .map_err(|_| "组织架构上级字段关联配置无效")?;
+        if rel.bidirectional || !rel.target_table_id.eq_ignore_ascii_case(table_id) {
+            return Err("组织架构上级字段必须是单向本表关联字段");
+        }
+        normalized.insert("parent_field_id".to_owned(), Value::String(id));
+    }
+    if let Some(raw_required) = object.get("required_field_ids")
+        && !raw_required.is_null()
+    {
+        let Some(items) = raw_required.as_array() else {
+            return Err("必填字段列表格式不正确");
+        };
+        let shown: Option<BTreeSet<&str>> =
+            columns.map(|cols| cols.iter().map(String::as_str).collect());
+        let mut seen = BTreeSet::new();
+        let mut required = Vec::with_capacity(items.len());
+        for item in items {
+            let id = item
+                .as_str()
+                .map(str::trim)
+                .filter(|id| is_uuid(id))
+                .ok_or("必填字段标识无效")?
+                .to_ascii_lowercase();
+            let field = by_id
+                .get(id.as_str())
+                .copied()
+                .ok_or("必填字段不属于这张表")?;
+            if !is_editable_kind(&field.kind) {
+                return Err("只读计算字段不能设为表单必填");
+            }
+            if let Some(visible) = &shown
+                && !visible.contains(id.as_str())
+            {
+                return Err("表单必填字段必须在可见列中显示");
+            }
+            if !seen.insert(id.clone()) {
+                return Err("必填字段不能重复");
+            }
+            required.push(Value::String(id));
+        }
+        if !required.is_empty() {
+            normalized.insert("required_field_ids".to_owned(), Value::Array(required));
+        }
+    }
+    Ok(Value::Object(normalized))
+}
+
+fn optional_config_field_id(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, &'static str> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let id = value
+                .as_str()
+                .map(str::trim)
+                .filter(|id| is_uuid(id))
+                .ok_or("视图配置中的字段标识无效")?
+                .to_ascii_lowercase();
+            Ok(Some(id))
+        }
+    }
+}
+
+pub fn effective_form_field_ids(
+    fields: &[FieldDef],
+    columns: Option<&[String]>,
+) -> BTreeSet<String> {
+    let editable: BTreeSet<&str> = fields
+        .iter()
+        .filter(|field| is_editable_kind(&field.kind))
+        .map(|field| field.id.as_str())
+        .collect();
+    match columns {
+        Some(cols) => cols
+            .iter()
+            .filter(|id| editable.contains(id.as_str()))
+            .cloned()
+            .collect(),
+        None => editable.into_iter().map(str::to_owned).collect(),
+    }
+}
+
+pub fn validate_form_submission(
+    view_kind: &str,
+    view_columns: Option<&[String]>,
+    view_config: &Value,
+    fields: &[FieldDef],
+    values: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Option<Value>>, &'static str> {
+    if view_kind != "form" {
+        return Err("只有表单视图支持提交记录");
+    }
+    let by_id: BTreeMap<&str, &FieldDef> = fields
+        .iter()
+        .map(|field| (field.id.as_str(), field))
+        .collect();
+    let enabled = effective_form_field_ids(fields, view_columns);
+    let mut normalized = BTreeMap::new();
+    for (field_id, raw_value) in values {
+        let field = by_id
+            .get(field_id.as_str())
+            .copied()
+            .ok_or("有字段不属于这张表")?;
+        if !is_editable_kind(&field.kind) {
+            return Err("计算字段和查找字段是只读的，不能通过表单提交");
+        }
+        if !enabled.contains(field_id) {
+            return Err("提交了表单未启用的字段");
+        }
+        let stored = normalize_value(field, raw_value)?;
+        normalized.insert(field_id.clone(), stored);
+    }
+    if let Some(required) = view_config
+        .get("required_field_ids")
+        .and_then(Value::as_array)
+    {
+        for item in required {
+            let Some(req_id) = item.as_str() else {
+                continue;
+            };
+            let present = normalized
+                .get(req_id)
+                .and_then(|value| value.as_ref())
+                .is_some();
+            if !present {
+                return Err("表单必填字段不能为空");
+            }
+        }
+    }
+    Ok(normalized)
 }
 
 pub fn matches(field: &FieldDef, cell: Option<&Value>, filter: &StoredFilter) -> bool {
@@ -591,6 +825,399 @@ mod tests {
         assert_eq!(
             sort_key(&formula, Some(&json!("abc"))),
             Some(SortKey::Text("abc".to_owned()))
+        );
+    }
+
+    const TABLE_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const OTHER_TABLE_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const F_TEXT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+    const F_NUM: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+    const F_CHECK: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3";
+    const F_SELECT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4";
+    const F_DATE1: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5";
+    const F_DATE2: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6";
+    const F_SELF_REL: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7";
+    const F_CROSS_REL: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8";
+    const F_BIDIR_REL: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9";
+    const F_FORMULA: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10";
+    const F_LOOKUP: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11";
+    const F_FOREIGN: &str = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
+    fn sample_fields() -> Vec<FieldDef> {
+        vec![
+            FieldDef {
+                id: F_TEXT.to_owned(),
+                kind: "text".to_owned(),
+                config: json!({}),
+            },
+            FieldDef {
+                id: F_NUM.to_owned(),
+                kind: "number".to_owned(),
+                config: json!({}),
+            },
+            FieldDef {
+                id: F_CHECK.to_owned(),
+                kind: "checkbox".to_owned(),
+                config: json!({}),
+            },
+            FieldDef {
+                id: F_SELECT.to_owned(),
+                kind: "single_select".to_owned(),
+                config: json!({"options": [{"id": "todo", "label": "待办"}]}),
+            },
+            FieldDef {
+                id: F_DATE1.to_owned(),
+                kind: "date".to_owned(),
+                config: json!({}),
+            },
+            FieldDef {
+                id: F_DATE2.to_owned(),
+                kind: "date".to_owned(),
+                config: json!({}),
+            },
+            FieldDef {
+                id: F_SELF_REL.to_owned(),
+                kind: "relation".to_owned(),
+                config: json!({"target_table_id": TABLE_ID, "bidirectional": false}),
+            },
+            FieldDef {
+                id: F_CROSS_REL.to_owned(),
+                kind: "relation".to_owned(),
+                config: json!({"target_table_id": OTHER_TABLE_ID, "bidirectional": false}),
+            },
+            FieldDef {
+                id: F_BIDIR_REL.to_owned(),
+                kind: "relation".to_owned(),
+                config: json!({"target_table_id": TABLE_ID, "bidirectional": true}),
+            },
+            FieldDef {
+                id: F_FORMULA.to_owned(),
+                kind: "formula".to_owned(),
+                config: json!({"expression": "1 + 1"}),
+            },
+            FieldDef {
+                id: F_LOOKUP.to_owned(),
+                kind: "lookup".to_owned(),
+                config: json!({"relation_field_id": F_CROSS_REL, "target_field_id": F_FOREIGN}),
+            },
+        ]
+    }
+
+    #[test]
+    fn typed_views_allow_sparse_empty_config_and_reject_invalid_kinds_and_keys() {
+        let fields = sample_fields();
+        for kind in VIEW_KINDS {
+            let saved = normalize_view(
+                TABLE_ID,
+                "测试视图",
+                kind,
+                &json!({}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .unwrap();
+            assert_eq!(saved.kind, *kind);
+            assert_eq!(saved.config, json!({}));
+        }
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "坏类型",
+                "pivot",
+                &json!({}),
+                None,
+                None,
+                None,
+                None,
+                &fields
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "表格不接受额外参数",
+                "grid",
+                &json!({"title_field_id": F_TEXT}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "非对象配置",
+                "kanban",
+                &json!(["bad"]),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn typed_view_config_validates_field_kinds_and_same_table_scope() {
+        let fields = sample_fields();
+
+        // Kanban requires single_select for group_field_id
+        let kanban = normalize_view(
+            TABLE_ID,
+            "看板",
+            "kanban",
+            &json!({"group_field_id": F_SELECT, "title_field_id": F_TEXT}),
+            None,
+            None,
+            None,
+            None,
+            &fields,
+        )
+        .unwrap();
+        assert_eq!(
+            kanban.config,
+            json!({"group_field_id": F_SELECT, "title_field_id": F_TEXT})
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "看板错字段",
+                "kanban",
+                &json!({"group_field_id": F_TEXT}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "跨表字段",
+                "gallery",
+                &json!({"title_field_id": F_FOREIGN}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+
+        // Calendar & Gantt require date fields
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "日历",
+                "calendar",
+                &json!({"date_field_id": F_DATE1, "title_field_id": F_TEXT}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_ok()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "甘特",
+                "gantt",
+                &json!({"date_field_id": F_DATE1, "end_date_field_id": F_DATE2}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_ok()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "甘特错结束日期",
+                "gantt",
+                &json!({"end_date_field_id": F_TEXT}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+
+        // Org chart requires same-table one-way relation
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "组织架构",
+                "org_chart",
+                &json!({"parent_field_id": F_SELF_REL, "title_field_id": F_TEXT}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_ok()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "跨表关联不能当上级",
+                "org_chart",
+                &json!({"parent_field_id": F_CROSS_REL}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "双向关联不能当上级",
+                "org_chart",
+                &json!({"parent_field_id": F_BIDIR_REL}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn form_view_required_fields_and_submission_rules() {
+        let fields = sample_fields();
+        let cols = vec![F_TEXT.to_owned(), F_NUM.to_owned(), F_CHECK.to_owned()];
+
+        // Required field must be editable and shown
+        let form = normalize_view(
+            TABLE_ID,
+            "收集表",
+            "form",
+            &json!({"required_field_ids": [F_TEXT, F_NUM, F_CHECK]}),
+            Some(&cols),
+            None,
+            None,
+            None,
+            &fields,
+        )
+        .unwrap();
+        assert_eq!(
+            form.config,
+            json!({"required_field_ids": [F_TEXT, F_NUM, F_CHECK]})
+        );
+
+        // Hidden field cannot be required
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "隐藏必填",
+                "form",
+                &json!({"required_field_ids": [F_SELECT]}),
+                Some(&cols),
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+        // Computed field cannot be required
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "计算字段必填",
+                "form",
+                &json!({"required_field_ids": [F_FORMULA]}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_view(
+                TABLE_ID,
+                "查找字段必填",
+                "form",
+                &json!({"required_field_ids": [F_LOOKUP]}),
+                None,
+                None,
+                None,
+                None,
+                &fields,
+            )
+            .is_err()
+        );
+
+        // Form submission: 0 and false satisfy required; blank/missing/disabled/computed rejected
+        let mut ok_values = BTreeMap::new();
+        ok_values.insert(F_TEXT.to_owned(), json!("提交项"));
+        ok_values.insert(F_NUM.to_owned(), json!(0));
+        ok_values.insert(F_CHECK.to_owned(), json!(false));
+        let normalized =
+            validate_form_submission("form", Some(&cols), &form.config, &fields, &ok_values)
+                .unwrap();
+        assert_eq!(normalized.get(F_NUM), Some(&Some(json!(0.0))));
+        assert_eq!(normalized.get(F_CHECK), Some(&Some(json!(false))));
+
+        // Non-form view rejected
+        assert!(
+            validate_form_submission("grid", Some(&cols), &json!({}), &fields, &ok_values).is_err()
+        );
+
+        // Blank text fails required
+        let mut blank_text = ok_values.clone();
+        blank_text.insert(F_TEXT.to_owned(), json!("   "));
+        assert!(
+            validate_form_submission("form", Some(&cols), &form.config, &fields, &blank_text)
+                .is_err()
+        );
+
+        // Missing required field fails
+        let mut missing_check = ok_values.clone();
+        missing_check.remove(F_CHECK);
+        assert!(
+            validate_form_submission("form", Some(&cols), &form.config, &fields, &missing_check)
+                .is_err()
+        );
+
+        // Disabled field (not in columns) rejected instead of silently dropped
+        let mut disabled_field = ok_values.clone();
+        disabled_field.insert(F_SELECT.to_owned(), json!("todo"));
+        assert!(
+            validate_form_submission("form", Some(&cols), &form.config, &fields, &disabled_field)
+                .is_err()
+        );
+
+        // Read-only computed field rejected even when columns is None
+        let mut computed_field = BTreeMap::new();
+        computed_field.insert(F_FORMULA.to_owned(), json!(2));
+        assert!(
+            validate_form_submission("form", None, &json!({}), &fields, &computed_field).is_err()
         );
     }
 }

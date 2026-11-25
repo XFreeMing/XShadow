@@ -62,6 +62,7 @@ export interface GridLabels {
   configureField?: string;
   addLink?: string;
   readonly?: string;
+  openRecord?: string;
 }
 
 export interface GridCollaborator {

@@ -297,19 +297,24 @@ import {
   EMPTY_GENERIC_CHANGES,
   EMPTY_GENERIC_FIELD,
   EMPTY_GENERIC_RECORD,
+  EMPTY_GENERIC_RECORD_COMMENT,
+  EMPTY_GENERIC_RECORD_COMMENTS,
+  EMPTY_GENERIC_RECORD_OPTIONS,
   EMPTY_GENERIC_SHEET,
   EMPTY_GENERIC_TABLE_CREATED,
   EMPTY_GENERIC_TABLE_LIST,
   EMPTY_GENERIC_VIEW,
   genericChangesSchema,
   genericFieldResponseSchema,
+  genericRecordCommentResponseSchema,
+  genericRecordCommentsSchema,
+  genericRecordOptionsSchema,
   genericRecordResponseSchema,
   genericSheetSchema,
   genericTableCreatedSchema,
-  EMPTY_GENERIC_RECORD_OPTIONS,
-  genericRecordOptionsSchema,
   genericTableListSchema,
   genericViewResponseSchema,
+  type GenericRecordCommentWrite,
   type GenericCellValue,
   type GenericFieldPatch,
   type GenericFieldWrite,
@@ -6404,6 +6409,22 @@ export class ApiClient {
     return parsed.view;
   }
 
+  async submitGenericForm(
+    tableId: string,
+    viewId: string,
+    values: Record<string, GenericCellValue>,
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/views/${encodeURIComponent(viewId)}/submit`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    );
+    const parsed = parseWithFallback(raw, genericRecordResponseSchema, { record: EMPTY_GENERIC_RECORD }, {
+      endpoint: "POST /api/tables/:id/views/:viewId/submit",
+    });
+    if (!parsed.record.id) throw new Error("记录响应无法读取");
+    return parsed.record;
+  }
+
   async listGenericChanges(tableId: string, since: number) {
     const raw = await this.fetch<unknown>(
       `/api/tables/${encodeURIComponent(tableId)}/changes?since=${encodeURIComponent(String(since))}`,
@@ -6421,5 +6442,44 @@ export class ApiClient {
     return parseWithFallback(raw, genericChangesSchema, EMPTY_GENERIC_CHANGES, {
       endpoint: "POST /api/tables/:id/presence",
     });
+  }
+
+  async listGenericRecordComments(
+    tableId: string,
+    recordId: string,
+    params?: { after?: number; limit?: number },
+  ) {
+    const search = new URLSearchParams();
+    if (params?.after !== undefined) search.set("after", String(params.after));
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    const query = search.toString();
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}/comments${query ? `?${query}` : ""}`,
+    );
+    return parseWithFallback(raw, genericRecordCommentsSchema, EMPTY_GENERIC_RECORD_COMMENTS, {
+      endpoint: "GET /api/tables/:id/records/:recordId/comments",
+    });
+  }
+
+  async createGenericRecordComment(
+    tableId: string,
+    recordId: string,
+    body: GenericRecordCommentWrite,
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}/comments`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+    const parsed = parseWithFallback(
+      raw,
+      genericRecordCommentResponseSchema,
+      { comment: EMPTY_GENERIC_RECORD_COMMENT },
+      { endpoint: "POST /api/tables/:id/records/:recordId/comments" },
+    );
+    if (!parsed.comment.id) throw new Error("评论响应无法读取");
+    return parsed.comment;
   }
 }
