@@ -662,9 +662,8 @@ async fn lock_and_load_thread(
     Ok(out)
 }
 
-fn validate_trust_ids(
+fn validate_capture_ids(
     user_id: &str,
-    request: &IssueCreateRequest,
     trust: &SourceContextCreateTrust,
 ) -> Result<(), IssueCreateError> {
     for id in [
@@ -677,10 +676,19 @@ fn validate_trust_ids(
             return Err(IssueCreateError::InvalidInput);
         }
     }
-    if request.creator_type != "member" || request.creator_id != user_id {
+    if trust.captured_by_user_id != user_id {
         return Err(IssueCreateError::InvalidInput);
     }
-    if trust.captured_by_user_id != user_id {
+    Ok(())
+}
+
+fn validate_trust_ids(
+    user_id: &str,
+    request: &IssueCreateRequest,
+    trust: &SourceContextCreateTrust,
+) -> Result<(), IssueCreateError> {
+    validate_capture_ids(user_id, trust)?;
+    if request.creator_type != "member" || request.creator_id != user_id {
         return Err(IssueCreateError::InvalidInput);
     }
     if request.parent_issue_id.as_deref() != Some(trust.source_issue_id.as_str()) {
@@ -729,6 +737,29 @@ pub fn reconcile_source_context_project(
         return Err(IssueCreateError::SourceContextChanged);
     }
     Ok(())
+}
+
+pub async fn validate_agent_pending_source(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace_id: &str,
+    user_id: &str,
+    trust: &SourceContextCreateTrust,
+) -> Result<String, IssueCreateError> {
+    validate_capture_ids(user_id, trust)?;
+    if !trust.clones.is_empty() || trust.source_compare_snapshot.is_some() {
+        return Err(IssueCreateError::InvalidInput);
+    }
+    let parsed = parse_trust_inputs(trust)?;
+    validate_frozen_shape(workspace_id, trust, &parsed)?;
+    let source = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM issue WHERE workspace_id = $1::uuid AND id = $2::uuid FOR UPDATE",
+    )
+    .bind(workspace_id)
+    .bind(&trust.source_issue_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    source.ok_or(IssueCreateError::SourceIssueDeleted)?;
+    validate_source_context_create_trust(tx, workspace_id, trust, &parsed, None).await
 }
 
 pub async fn validate_source_context_create_trust(

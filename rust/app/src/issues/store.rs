@@ -29,6 +29,7 @@ pub use method_adopt_write::{
 mod assign_write;
 mod batch_delete_write;
 mod comment_write;
+mod create_agent_source_context;
 mod create_source_context;
 mod create_validate;
 mod create_write;
@@ -40,6 +41,9 @@ mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
 pub use batch_delete_write::{IssueBatchDeleteWrite, batch_delete_issues};
 pub use comment_write::{IssueCommentCreate, IssueCommentCreateError, create_issue_comment};
+pub use create_agent_source_context::{
+    AgentSourceQuickCreateWrite, create_agent_source_quick_create,
+};
 pub use create_write::{IssueCreateError, IssueCreateRequest, create_issue};
 pub use delete_write::{IssueDeleteWrite, IssueDeleteWriteError, delete_issue};
 pub use status_write::{IssueStatusEdit, IssueStatusEditError, update_issue_status};

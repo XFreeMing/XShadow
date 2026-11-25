@@ -16,14 +16,14 @@ use super::store::{
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
 use super::store::{
+    AgentSourceQuickCreateWrite, IssueBatchDeleteWrite, IssueDeleteWrite, IssueDeleteWriteError,
+    IssuePropertyWrite, IssuePropertyWriteError,
+};
+use super::store::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit, IssueAssignEditError,
     IssueCommentCreate, IssueCommentCreateError, IssueCreateError, IssueCreateRequest,
     IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueStatusEdit, IssueStatusEditError,
     IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
-};
-use super::store::{
-    IssueBatchDeleteWrite, IssueDeleteWrite, IssueDeleteWriteError, IssuePropertyWrite,
-    IssuePropertyWriteError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -144,6 +144,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
         .route(
             "/internal/issues/create",
             post(create_issue).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/internal/issues/agent-source-quick-create",
+            post(create_agent_source_quick_create_handler).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/internal/issues/batch-delete",
@@ -607,10 +611,96 @@ async fn create_issue(
             })),
         )
             .into_response(),
+        Err(error @ (IssueCreateError::SourceContextQuickCreateUnsupported
+            | IssueCreateError::SourceContextQuickCreateUnavailable)) => map_agent_source_quick_create_error(error),
         Err(IssueCreateError::Database(error)) => {
             eprintln!("rust issue create failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to create issue")
         }
+    }
+}
+
+async fn create_agent_source_quick_create_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(request): Json<AgentSourceQuickCreateWrite>,
+) -> Response {
+    let CallerActor::Member { user_id } = ctx.actor else {
+        return error_response(StatusCode::FORBIDDEN, "user not authenticated");
+    };
+    match store::create_agent_source_quick_create(&app.pool, &ctx.workspace_id, &user_id, request)
+        .await
+    {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(error) => map_agent_source_quick_create_error(error),
+    }
+}
+
+fn map_agent_source_quick_create_error(error: IssueCreateError) -> Response {
+    match error {
+        IssueCreateError::InvalidInput => error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid agent source quick-create request",
+        ),
+        IssueCreateError::SourceContextChanged => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_context_changed",
+                "error": "source context changed",
+            })),
+        )
+            .into_response(),
+        IssueCreateError::AnchorCommentDeleted => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "anchor_comment_deleted",
+                "error": "anchor comment deleted",
+            })),
+        )
+            .into_response(),
+        IssueCreateError::SourceIssueDeleted => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_issue_deleted",
+                "error": "source issue deleted",
+            })),
+        )
+            .into_response(),
+        IssueCreateError::SourceContextInvalidPath => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "code": "source_context_invalid_path",
+                "error": "source context invalid comment thread",
+            })),
+        )
+            .into_response(),
+        IssueCreateError::SourceContextQuickCreateUnsupported => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "code": "source_context_quick_create_unsupported",
+                "error": "selected agent runtime must be updated before using captured context",
+            })),
+        )
+            .into_response(),
+        IssueCreateError::SourceContextQuickCreateUnavailable => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "code": "agent_unavailable",
+                "reason": "the selected agent or runtime changed before the task was queued",
+            })),
+        )
+            .into_response(),
+        IssueCreateError::Database(error) => {
+            eprintln!("rust agent source quick-create failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to enqueue agent source quick-create",
+            )
+        }
+        _ => error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid agent source quick-create request",
+        ),
     }
 }
 

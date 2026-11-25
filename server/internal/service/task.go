@@ -1638,82 +1638,9 @@ func (s *TaskService) enqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
 	}
-	if agent.ArchivedAt.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
-	}
-	if !agent.RuntimeID.Valid {
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
-	}
-
-	payload := QuickCreateContext{
-		Type:        QuickCreateContextType,
-		Prompt:      prompt,
-		RequesterID: util.UUIDToString(requesterID),
-		WorkspaceID: util.UUIDToString(workspaceID),
-		Priority:    priority,
-		DueDate:     dueDate,
-	}
-	if projectID.Valid {
-		payload.ProjectID = util.UUIDToString(projectID)
-	}
-	if squadID.Valid {
-		payload.SquadID = util.UUIDToString(squadID)
-	}
-	if parentIssueID.Valid {
-		payload.ParentIssueID = util.UUIDToString(parentIssueID)
-	}
-	if capture != nil {
-		payload.SourceContextID = util.UUIDToString(capture.ID)
-	}
-	if len(attachmentIDs) > 0 {
-		payload.AttachmentIDs = make([]string, 0, len(attachmentIDs))
-		for _, id := range attachmentIDs {
-			if id.Valid {
-				payload.AttachmentIDs = append(payload.AttachmentIDs, util.UUIDToString(id))
-			}
-		}
-	}
-	contextJSON, err := json.Marshal(payload)
-	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("marshal quick-create context: %w", err)
-	}
-
-	// The requester who submitted the quick-create modal is the direct_human
-	// originator and accountable. Quick-create is the ONE enqueue path with no
-	// antecedent row to point the uniform evidence pair at: the run's whole job is
-	// to CREATE the issue, so at enqueue time there is no comment / issue / session
-	// / run to reference (the issue is linked back later via LinkTaskToIssue).
-	// Evidence is therefore intentionally NULL; the accountable human is captured on
-	// originator/accountable_user_id, so this is not a NULL-source bypass — source
-	// is still stamped direct_human (MUL-4302 §2).
-	attr := attribution.DirectHumanRun(requesterID, "", pgtype.UUID{})
-	// An unresolved requester degrades to owner_fallback (accountable = agent
-	// owner), or is refused if the workspace is fail-closed (MUL-4302 §3.5).
-	attr, err = s.applyAttributionFallback(ctx, attr, agent)
+	createParams, err := s.PrepareQuickCreateTaskWrite(ctx, workspaceID, requesterID, agent, squadID, prompt, priority, dueDate, projectID, parentIssueID, attachmentIDs, capture)
 	if err != nil {
 		return db.AgentTaskQueue{}, err
-	}
-	// The claim hands this run the project's description and resources (and
-	// the parent issue for a sub-issue), so it is gated like an issue run.
-	if err := s.guardQuickCreateProjectAccess(ctx, workspaceID, agent, requesterID, attr.AccountableUserID, projectID, parentIssueID); err != nil {
-		return db.AgentTaskQueue{}, err
-	}
-	attrSource, _, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
-	runtimeMCPOverlay := s.buildRuntimeMCPOverlay(ctx, requesterID, agent)
-	taskID := dbid.NewV7()
-	createParams := db.CreateQuickCreateTaskParams{
-		ID:                   taskID,
-		AgentID:              agentID,
-		RuntimeID:            agent.RuntimeID,
-		Priority:             priorityToInt("high"),
-		Context:              contextJSON,
-		OriginatorUserID:     requesterID,
-		AccountableUserID:    attr.AccountableUserID,
-		RuntimeMcpOverlay:    runtimeMCPOverlay.Overlay,
-		RuntimeConnectedApps: runtimeMCPOverlay.ConnectedApps,
-		OriginatorSource:     attrSource,
-		TriggerEvidenceKind:  attrEvidenceKind,
-		TriggerEvidenceRefID: attrEvidenceRef,
 	}
 	var task db.AgentTaskQueue
 	if capture == nil {
@@ -1763,11 +1690,11 @@ func (s *TaskService) enqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	slog.Info("quick-create task enqueued",
 		"task_id", util.UUIDToString(task.ID),
 		"agent_id", util.UUIDToString(agentID),
-		"squad_id", payload.SquadID,
+		"squad_id", util.UUIDToString(squadID),
 		"requester_id", util.UUIDToString(requesterID),
 		"workspace_id", util.UUIDToString(workspaceID),
-		"project_id", payload.ProjectID,
-		"parent_issue_id", payload.ParentIssueID,
+		"project_id", util.UUIDToString(projectID),
+		"parent_issue_id", util.UUIDToString(parentIssueID),
 	)
 	// Match every other Enqueue* path: kick the daemon WS so the task
 	// gets claimed promptly instead of waiting for the next 30 s poll

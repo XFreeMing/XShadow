@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,15 @@ type QueueNotificationSweepResult struct {
 	Delivered int
 	Settled   int
 	Retried   int
+}
+
+// CompleteQuickCreateAfterNativeWrite records the accepted enqueue and uses the
+// same outbox delivery as recovery to invalidate the daemon's empty-claim cache.
+func (s *TaskService) CompleteQuickCreateAfterNativeWrite(ctx context.Context, task db.AgentTaskQueue) {
+	s.captureTaskQueued(ctx, task)
+	if _, err := s.deliverNativeQueueNotification(ctx, task.ID); err != nil {
+		slog.Warn("native quick-create notification delivery failed", "task_id", util.UUIDToString(task.ID), "error", err)
+	}
 }
 
 // RecoverPendingQueueNotifications replays undelivered native enqueue wakeups.

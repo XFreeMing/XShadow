@@ -52,6 +52,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 及 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 同时启用。Go 流式复制文件并登记持久清理意图。Rust 核对原附件、写入克隆行并验证实际消费的意图集合。
 
+`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 为 `POST /api/comments/{commentId}/sub-issues` 中 `mode=agent` 指定试点工作区（默认关闭）。首批覆盖来源与目标均无项目、无来源附件或额外上传、请求者拥有的本地直连智能体及已上线并声明来源快速创建能力的本机运行时。Go 校验预览令牌和容量，准备队列归因及上下文，并返回 202。Rust 锁定工作区、成员、智能体、运行时和来源，复核运行时版本及冻结内容，在同一事务写入队列任务、待附着快照和持久唤醒记录。Go 核验回执和持久状态后投递唤醒。丢回执由同一持久队列恢复。旧 daemon 继续领取、创建并附着快照。带项目、带文件、军团、非本地或离线运行时和非本人智能体继续由 Go 处理。
+
 继承项目且冻结来源附件的手动创建须在同一工作区启用上述四个试点开关。任一开关关闭时由 Go 处理。Rust 在同一事务写入带项目的子任务、快照和克隆附件，并核对实际消费的意图集合。Go 核验子任务项目和来源归属，再发布创建事件。
 
 `XSHADOW_ISSUES_RUST_CREATE_ATTACHMENTS_PILOT` 为 `POST /api/issues` 的普通成员创建时关联上传指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_CREATE_PILOT`。Go 只选同工作区的未绑定上传。Rust 在创建事务中先锁父任务，再按附件 ID 顺序关联尚未被占用的上传。可选关联回滚后仍返回已创建任务，创建修订保持原规则。Go 用回执和数据库读回生成原有文件信息及创建通知。已有归属、来源、命名工作流和智能体或军团派工继续使用原入口。
