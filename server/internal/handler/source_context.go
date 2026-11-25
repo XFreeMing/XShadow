@@ -781,9 +781,15 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 	}
 	workspaceIDStr := util.UUIDToString(workspaceID)
 	rustPlan, planErr := h.manualSourceContextCreateRustEligible(
-		r, workspaceID, input, capture, build, status, false,
+		r, workspaceID, input, capture, build, status,
 	)
 	if planErr != nil {
+		if errors.Is(planErr, service.ErrAnchorCommentDeleted) ||
+			errors.Is(planErr, service.ErrSourceIssueDeleted) ||
+			errors.Is(planErr, service.ErrSourceContextChanged) {
+			h.writeSourceContextError(w, planErr, limits)
+			return errSourceContextResponseWritten
+		}
 		return planErr
 	}
 	if rustPlan.useRust {

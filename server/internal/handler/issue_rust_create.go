@@ -566,7 +566,7 @@ func writeRustIssueCreateConflictForSourceContext(w http.ResponseWriter, body []
 	switch conflict.Code {
 	case "active_duplicate_issue", "source_context_changed", "anchor_comment_deleted",
 		"source_issue_deleted", "source_context_invalid_path", "source_context_already_attached",
-		"source_context_too_large":
+		"source_context_too_large", "issue_create_configuration_changed":
 		writeJSON(w, http.StatusConflict, map[string]any{"code": conflict.Code, "error": conflict.Error})
 		return true
 	default:

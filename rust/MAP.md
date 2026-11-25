@@ -42,7 +42,9 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 为 `POST /api/comments/{commentId}/sub-issues` 的手动创建指定试点工作区，须与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 同时启用。首批覆盖无项目、无附件的来源和未指派的普通待办子任务。Go 核对预览令牌并准备原始快照。Rust 锁定来源任务，核对工作区、来源正文、前缀、选中评论及此前线程的内容和顺序，在事务内写入子任务和附着快照。智能体创建、指派及复杂任务配置由 Go 处理。
 
-`XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 及 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 同时启用。首批覆盖无项目任务的普通来源附件克隆。Go 流式复制文件并登记持久清理意图。Rust 在来源锁内核对原附件，在同一事务写入子任务、冻结快照和克隆附件行，并验证实际消费的意图集合。任何对象标识、地址或领取状态不符均使事务回滚。显式子任务上传、指派、项目来源、复杂输入和智能体创建由 Go 处理。
+`XSHADOW_ISSUES_RUST_CREATE_SOURCE_PROJECT_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 及 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 同时启用。首批覆盖无附件、继承来源普通项目且无命名工作流的普通待办子任务。Go 从来源读取绑定可信项目标识，Rust 在同一来源子任务事务中复用 `guard_parent_projects_and_assignee` 并持有锁后复核成员与项目可见性。显式目标项目、命名工作流、来源附件、智能体快速创建及不受 Default 支持的配置仍走 Go。
+
+`XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 及 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 同时启用。首批覆盖无项目任务的普通来源附件克隆。Go 流式复制文件并登记持久清理意图。Rust 在来源锁内核对原附件，在同一事务写入子任务、冻结快照和克隆附件行，并验证实际消费的意图集合。任何对象标识、地址或领取状态不符均使事务回滚。显式子任务上传、指派、带附件的项目来源、复杂输入和智能体创建由 Go 处理。
 
 `XSHADOW_ISSUES_RUST_CREATE_ATTACHMENTS_PILOT` 为 `POST /api/issues` 的普通成员创建时关联上传指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_CREATE_PILOT`。Go 只选同工作区的未绑定上传。Rust 在创建事务中先锁父任务，再按附件 ID 顺序关联尚未被占用的上传。可选关联回滚后仍返回已创建任务，创建修订保持原规则。Go 用回执和数据库读回生成原有文件信息及创建通知。已有归属、来源、命名工作流和智能体或军团派工继续使用原入口。
 

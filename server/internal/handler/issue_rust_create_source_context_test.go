@@ -34,7 +34,6 @@ func TestManualSourceContextCreateRustRejectsOutOfScopeShapes(t *testing.T) {
 		capture,
 		service.SourceContextBuild{},
 		issuestatus.Todo,
-		false,
 	)
 	if err != nil || plan.useRust {
 		t.Fatalf("assignee uses rust = %v err=%v, want false", plan.useRust, err)
@@ -46,7 +45,6 @@ func TestManualSourceContextCreateRustRejectsOutOfScopeShapes(t *testing.T) {
 		capture,
 		service.SourceContextBuild{Rows: []db.Attachment{{}}},
 		issuestatus.Todo,
-		false,
 	)
 	if err != nil || plan.useRust {
 		t.Fatalf("attachment rows uses rust = %v err=%v, want false", plan.useRust, err)
@@ -59,7 +57,6 @@ func TestManualSourceContextCreateRustRejectsOutOfScopeShapes(t *testing.T) {
 		capture,
 		service.SourceContextBuild{},
 		issuestatus.Todo,
-		false,
 	)
 	if err != nil || plan.useRust {
 		t.Fatalf("missing source-context pilot uses rust = %v err=%v, want false", plan.useRust, err)
@@ -69,6 +66,7 @@ func TestManualSourceContextCreateRustRejectsOutOfScopeShapes(t *testing.T) {
 func TestIssueReadBridgeCreateSourceContextPilotEnv(t *testing.T) {
 	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_PILOT", "create-pilot")
 	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT", "create-source-context")
+	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_PROJECT_PILOT", "create-source-project")
 	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT", "create-source-files")
 	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
 	t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
@@ -76,8 +74,35 @@ func TestIssueReadBridgeCreateSourceContextPilotEnv(t *testing.T) {
 	if !reflect.DeepEqual(bridge.CreateSourceContextPilotScopes, []string{"create-source-context"}) {
 		t.Fatalf("CreateSourceContextPilotScopes = %v, want [create-source-context]", bridge.CreateSourceContextPilotScopes)
 	}
+	if !reflect.DeepEqual(bridge.CreateSourceProjectPilotScopes, []string{"create-source-project"}) {
+		t.Fatalf("CreateSourceProjectPilotScopes = %v, want [create-source-project]", bridge.CreateSourceProjectPilotScopes)
+	}
 	if !reflect.DeepEqual(bridge.CreateSourceFilesPilotScopes, []string{"create-source-files"}) {
 		t.Fatalf("CreateSourceFilesPilotScopes = %v, want [create-source-files]", bridge.CreateSourceFilesPilotScopes)
+	}
+}
+
+func TestManualSourceContextCreateRustRejectsExplicitDestinationProject(t *testing.T) {
+	t.Parallel()
+	h := &Handler{IssueReadBridge: &IssueReadBridge{
+		CreatePilotScopes:              []string{"*"},
+		CreateSourceContextPilotScopes: []string{"*"},
+		CreateSourceProjectPilotScopes: []string{"*"},
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	ws := util.MustParseUUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	sourceIssue := util.MustParseUUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+	project := util.UUIDToString(util.MustParseUUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc"))
+	capture := service.SourceContextCapture{SourceIssueID: sourceIssue}
+	plan, err := h.manualSourceContextCreateRustEligible(
+		req, ws,
+		CreateIssueRequest{Title: "child", Status: issuestatus.Todo, ProjectID: &project},
+		capture,
+		service.SourceContextBuild{},
+		issuestatus.Todo,
+	)
+	if err != nil || plan.useRust {
+		t.Fatalf("explicit project uses rust = %v err=%v, want false", plan.useRust, err)
 	}
 }
 
@@ -168,7 +193,7 @@ func TestManualSourceContextCreateRustFilesNeedDedicatedPilot(t *testing.T) {
 	plan, err := h.manualSourceContextCreateRustEligible(
 		req, ws,
 		CreateIssueRequest{Title: "child", Status: issuestatus.Todo},
-		capture, build, issuestatus.Todo, false,
+		capture, build, issuestatus.Todo,
 	)
 	if err != nil || plan.useRust {
 		t.Fatalf("missing files pilot uses rust = %v err=%v, want false", plan.useRust, err)

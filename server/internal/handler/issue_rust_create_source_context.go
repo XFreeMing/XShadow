@@ -17,6 +17,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -27,15 +28,16 @@ import (
 )
 
 type rustSourceContextCreateTrust struct {
-	ContextID             string                        `json:"context_id"`
-	SourceIssueID         string                        `json:"source_issue_id"`
-	AnchorCommentID       string                        `json:"anchor_comment_id"`
-	CaptureDigest         string                        `json:"capture_digest"`
-	CapturedByUserID      string                        `json:"captured_by_user_id"`
-	CapturedAt            string                        `json:"captured_at"`
-	Snapshot              json.RawMessage               `json:"snapshot"`
-	SourceCompareSnapshot json.RawMessage               `json:"source_compare_snapshot,omitempty"`
-	Clones                []rustSourceContextCloneTrust `json:"clones,omitempty"`
+	ContextID               string                        `json:"context_id"`
+	SourceIssueID           string                        `json:"source_issue_id"`
+	AnchorCommentID         string                        `json:"anchor_comment_id"`
+	CaptureDigest           string                        `json:"capture_digest"`
+	CapturedByUserID        string                        `json:"captured_by_user_id"`
+	CapturedAt              string                        `json:"captured_at"`
+	Snapshot                json.RawMessage               `json:"snapshot"`
+	SourceCompareSnapshot   json.RawMessage               `json:"source_compare_snapshot,omitempty"`
+	ExpectedSourceProjectID *string                       `json:"expected_source_project_id,omitempty"`
+	Clones                  []rustSourceContextCloneTrust `json:"clones,omitempty"`
 }
 
 type rustSourceContextCloneTrust struct {
@@ -49,8 +51,9 @@ type rustSourceContextCloneTrust struct {
 }
 
 type manualSourceContextCreateRustPlan struct {
-	useRust bool
-	issueID pgtype.UUID
+	useRust                 bool
+	issueID                 pgtype.UUID
+	expectedSourceProjectID pgtype.UUID
 }
 
 func rustSourceContextClonePlanMatchesCapture(build service.SourceContextBuild, capture service.SourceContextCapture) bool {
@@ -126,7 +129,6 @@ func (h *Handler) manualSourceContextCreateRustEligible(
 	capture service.SourceContextCapture,
 	build service.SourceContextBuild,
 	status string,
-	workflowNeedsGo bool,
 ) (manualSourceContextCreateRustPlan, error) {
 	plan := manualSourceContextCreateRustPlan{}
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.CreatePilotScopes) == 0 ||
@@ -174,7 +176,7 @@ func (h *Handler) manualSourceContextCreateRustEligible(
 	if input.Stage != nil || len(input.AttachmentIDs) > 0 {
 		return plan, nil
 	}
-	if !h.plainIssueCreateRustEligible(input, "member", pgtype.Text{}, status, pgtype.Text{}, nil, false, workflowNeedsGo) {
+	if !h.plainIssueCreateRustEligible(input, "member", pgtype.Text{}, status, pgtype.Text{}, nil, false, false) {
 		return plan, nil
 	}
 	sourceIssue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
@@ -187,7 +189,36 @@ func (h *Handler) manualSourceContextCreateRustEligible(
 		return plan, err
 	}
 	if sourceIssue.ProjectID.Valid {
-		return plan, nil
+		if hasSourceFiles {
+			return plan, nil
+		}
+		if len(h.IssueReadBridge.CreateSourceProjectPilotScopes) == 0 {
+			return plan, nil
+		}
+		inSourceProjectPilot, pilotErr := matchesIssuePilot(
+			r.Context(), h.Queries, h.IssueReadBridge.CreateSourceProjectPilotScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if pilotErr != nil || !inSourceProjectPilot {
+			return plan, pilotErr
+		}
+		hidden, hiddenErr := h.hiddenProjects(r, uuidToString(wsUUID))
+		if hiddenErr != nil {
+			return plan, hiddenErr
+		}
+		if !hidden.CanSeeProject(sourceIssue.ProjectID) {
+			return plan, service.ErrAnchorCommentDeleted
+		}
+		workflow, project, err := issueworkflow.ForProject(r.Context(), h.Queries, wsUUID, sourceIssue.ProjectID)
+		if err != nil || project.WorkflowID.Valid {
+			return plan, nil
+		}
+		if workflow != nil {
+			step, exists := workflow.Step(status)
+			if !exists || step.HandsOff() {
+				return plan, nil
+			}
+		}
+		plan.expectedSourceProjectID = sourceIssue.ProjectID
 	}
 	plan.useRust = true
 	plan.issueID = dbid.NewV7()
@@ -288,7 +319,7 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 			PolicyRevision: policy.PolicyRevision,
 		},
 	)
-	payload.SourceContextCreateTrust = &rustSourceContextCreateTrust{
+	contextTrust := &rustSourceContextCreateTrust{
 		ContextID:             util.UUIDToString(capture.ID),
 		SourceIssueID:         util.UUIDToString(capture.SourceIssueID),
 		AnchorCommentID:       util.UUIDToString(capture.AnchorCommentID),
@@ -299,6 +330,11 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		SourceCompareSnapshot: compareSnapshotJSON,
 		Clones:                cloneTrust,
 	}
+	if plan.expectedSourceProjectID.Valid {
+		projectID := uuidToString(plan.expectedSourceProjectID)
+		contextTrust.ExpectedSourceProjectID = &projectID
+	}
+	payload.SourceContextCreateTrust = contextTrust
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -331,7 +367,11 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		return errSourceContextResponseWritten
 	}
 	respIssue := receipt.Issue
-	if derefString(respIssue.ParentIssueID) != uuidToString(capture.SourceIssueID) || respIssue.ProjectID != nil ||
+	projectOK := !plan.expectedSourceProjectID.Valid && respIssue.ProjectID == nil
+	if plan.expectedSourceProjectID.Valid {
+		projectOK = derefString(respIssue.ProjectID) == uuidToString(plan.expectedSourceProjectID)
+	}
+	if derefString(respIssue.ParentIssueID) != uuidToString(capture.SourceIssueID) || !projectOK ||
 		respIssue.CreatorType != "member" || respIssue.CreatorID != memberID ||
 		respIssue.Title != payload.Title || respIssue.Status != status || respIssue.Priority != priority ||
 		respIssue.AssigneeType != nil || respIssue.AssigneeID != nil ||
@@ -339,7 +379,7 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		writeError(w, http.StatusBadGateway, "invalid rust issue create response")
 		return errSourceContextResponseWritten
 	}
-	if !rustIssueCreateSourceContextReceiptValid(r.Context(), h.Queries, wsUUID, issueID, capture) {
+	if !rustIssueCreateSourceContextReceiptValid(r.Context(), h.Queries, wsUUID, issueID, capture, plan.expectedSourceProjectID) {
 		writeError(w, http.StatusBadGateway, "invalid rust source context create response")
 		return errSourceContextResponseWritten
 	}
@@ -368,7 +408,21 @@ func rustIssueCreateSourceContextReceiptValid(
 	queries *db.Queries,
 	wsUUID, issueID pgtype.UUID,
 	capture service.SourceContextCapture,
+	expectedProjectID pgtype.UUID,
 ) bool {
+	issue, err := queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+		ID: issueID, WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		return false
+	}
+	if expectedProjectID.Valid {
+		if issue.ProjectID != expectedProjectID {
+			return false
+		}
+	} else if issue.ProjectID.Valid {
+		return false
+	}
 	row, err := queries.GetIssueSourceContextByIssue(ctx, db.GetIssueSourceContextByIssueParams{
 		WorkspaceID: wsUUID,
 		IssueID:     issueID,

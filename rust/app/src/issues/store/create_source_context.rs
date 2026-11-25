@@ -6,7 +6,7 @@ use sqlx::{PgConnection, Postgres, Row, Transaction};
 use std::collections::{HashMap, HashSet};
 
 use super::create_write::{IssueCreateError, IssueCreateRequest};
-use super::{CallerActor, is_uuid, resolve_caller_access_on};
+use super::is_uuid;
 
 pub const SOURCE_CONTEXT_VERSION: i16 = 1;
 pub const SOURCE_CONTEXT_MAX_COMMENTS: i32 = 256;
@@ -35,6 +35,8 @@ pub struct SourceContextCreateTrust {
     pub snapshot: serde_json::Value,
     #[serde(default)]
     pub source_compare_snapshot: Option<serde_json::Value>,
+    #[serde(default)]
+    pub expected_source_project_id: Option<String>,
     #[serde(default)]
     pub clones: Vec<SourceContextCloneTrust>,
 }
@@ -130,7 +132,7 @@ struct LiveSourceAttachment {
     created_at: String,
 }
 
-struct ParsedTrust<'a> {
+pub(super) struct ParsedTrust<'a> {
     frozen: TrustSnapshot,
     compare: Option<SnapshotBody>,
     clones: &'a [SourceContextCloneTrust],
@@ -473,19 +475,18 @@ fn compare_attachments_by_source_id(
     Ok(())
 }
 
-async fn lock_and_load_source_issue(
+async fn load_locked_source_issue(
     conn: &mut PgConnection,
     workspace_id: &str,
-    member_id: &str,
     source_issue_id: &str,
+    effective_project: Option<&str>,
 ) -> Result<LiveSourceIssue, IssueCreateError> {
     let row = sqlx::query(
         "SELECT i.title, i.number, i.description,
                 to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                 i.project_id::text
          FROM issue i
-         WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid
-         FOR UPDATE OF i",
+         WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid",
     )
     .bind(source_issue_id)
     .bind(workspace_id)
@@ -496,16 +497,7 @@ async fn lock_and_load_source_issue(
         return Err(IssueCreateError::SourceIssueDeleted);
     };
     let project_id: Option<String> = row.try_get(4)?;
-    if let Some(project_id) = project_id.as_deref() {
-        let actor = CallerActor::Member {
-            user_id: member_id.to_owned(),
-        };
-        let hidden = resolve_caller_access_on(conn, workspace_id, &actor)
-            .await
-            .map_err(IssueCreateError::Access)?;
-        if !hidden.can_see(Some(project_id)) {
-            return Err(IssueCreateError::AnchorCommentDeleted);
-        }
+    if project_id.as_deref() != effective_project {
         return Err(IssueCreateError::SourceContextChanged);
     }
     Ok(LiveSourceIssue {
@@ -694,8 +686,10 @@ fn validate_trust_ids(
     if request.parent_issue_id.as_deref() != Some(trust.source_issue_id.as_str()) {
         return Err(IssueCreateError::InvalidInput);
     }
-    if request.project_id.is_some()
-        || request.assignee_type.is_some()
+    if request.project_id.is_some() {
+        return Err(IssueCreateError::InvalidInput);
+    }
+    if request.assignee_type.is_some()
         || request.assignee_id.is_some()
         || !request.attachment_ids.is_empty()
         || request.prepared_enqueue.is_some()
@@ -715,19 +709,42 @@ fn validate_trust_ids(
     Ok(())
 }
 
-pub async fn validate_source_context_create_trust(
-    conn: &mut PgConnection,
+pub fn prepare_source_context_create_trust<'a>(
     workspace_id: &str,
     user_id: &str,
     request: &IssueCreateRequest,
-    trust: &SourceContextCreateTrust,
-) -> Result<String, IssueCreateError> {
+    trust: &'a SourceContextCreateTrust,
+) -> Result<ParsedTrust<'a>, IssueCreateError> {
     validate_trust_ids(user_id, request, trust)?;
     let parsed = parse_trust_inputs(trust)?;
     validate_frozen_shape(workspace_id, trust, &parsed)?;
+    Ok(parsed)
+}
 
-    let issue =
-        lock_and_load_source_issue(conn, workspace_id, user_id, &trust.source_issue_id).await?;
+pub fn reconcile_source_context_project(
+    trust: &SourceContextCreateTrust,
+    effective_project: Option<&str>,
+) -> Result<(), IssueCreateError> {
+    if trust.expected_source_project_id.as_deref() != effective_project {
+        return Err(IssueCreateError::SourceContextChanged);
+    }
+    Ok(())
+}
+
+pub async fn validate_source_context_create_trust(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    trust: &SourceContextCreateTrust,
+    parsed: &ParsedTrust<'_>,
+    effective_project: Option<&str>,
+) -> Result<String, IssueCreateError> {
+    let issue = load_locked_source_issue(
+        conn,
+        workspace_id,
+        &trust.source_issue_id,
+        effective_project,
+    )
+    .await?;
 
     let (anchor_issue_id, anchor_created_at) =
         load_anchor(conn, workspace_id, &trust.anchor_comment_id).await?;
@@ -953,6 +970,7 @@ mod tests {
             captured_at: "2026-11-26T03:00:00Z".to_owned(),
             snapshot: json!(null),
             source_compare_snapshot: None,
+            expected_source_project_id: None,
             clones: Vec::new(),
         };
         trust.snapshot = json!({

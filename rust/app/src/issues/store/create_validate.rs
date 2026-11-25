@@ -4,7 +4,10 @@ use serde_json::value::RawValue;
 use sqlx::{PgConnection, Row};
 
 use super::create_write::{IssueCreateError, IssueCreateRequest};
-use super::{IssueReadError, LabelResponse, format_issue_timestamp, is_uuid};
+use super::{
+    CallerActor, IssueReadError, LabelResponse, format_issue_timestamp, is_uuid,
+    resolve_caller_access_on,
+};
 
 pub(super) async fn validate_labels_before_number(
     conn: &mut PgConnection,
@@ -49,23 +52,37 @@ pub(super) async fn validate_labels_before_number(
     Ok(labels)
 }
 
+#[derive(Clone, Copy)]
+enum ParentIssueLock {
+    Unlocked,
+    Share,
+    Update,
+}
+
 async fn read_parent_project(
     conn: &mut PgConnection,
     workspace_id: &str,
     parent: &str,
-    lock: bool,
+    lock: ParentIssueLock,
+    missing: IssueCreateError,
 ) -> Result<Option<String>, IssueCreateError> {
-    let sql = if lock {
-        "SELECT project_id::text FROM issue WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE"
-    } else {
-        "SELECT project_id::text FROM issue WHERE id = $1::uuid AND workspace_id = $2::uuid"
+    let sql = match lock {
+        ParentIssueLock::Unlocked => {
+            "SELECT project_id::text FROM issue WHERE id = $1::uuid AND workspace_id = $2::uuid"
+        }
+        ParentIssueLock::Share => {
+            "SELECT project_id::text FROM issue WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE"
+        }
+        ParentIssueLock::Update => {
+            "SELECT project_id::text FROM issue WHERE id = $1::uuid AND workspace_id = $2::uuid FOR UPDATE"
+        }
     };
     sqlx::query_scalar(sql)
         .bind(parent)
         .bind(workspace_id)
         .fetch_optional(conn)
         .await?
-        .ok_or(IssueCreateError::ParentNotFound)
+        .ok_or(missing)
 }
 
 pub(super) async fn guard_parent_projects_and_assignee(
@@ -85,10 +102,25 @@ pub(super) async fn guard_parent_projects_and_assignee(
         "workspace not found",
     )))?;
     let privileged = matches!(role.as_str(), "owner" | "admin");
+    let source_capture = request.source_context_create_trust.is_some();
+    let missing_parent = || {
+        if source_capture {
+            IssueCreateError::SourceIssueDeleted
+        } else {
+            IssueCreateError::ParentNotFound
+        }
+    };
 
     let parent_project = match request.parent_issue_id.as_deref() {
         Some(parent) if is_uuid(parent) => {
-            read_parent_project(conn, workspace_id, parent, false).await?
+            read_parent_project(
+                conn,
+                workspace_id,
+                parent,
+                ParentIssueLock::Unlocked,
+                missing_parent(),
+            )
+            .await?
         }
         Some(_) => return Err(IssueCreateError::ParentNotFound),
         None => None,
@@ -164,10 +196,30 @@ pub(super) async fn guard_parent_projects_and_assignee(
     if default_accepts == Some(false) {
         return Err(IssueCreateError::ConfigurationChanged);
     }
-    if let Some(parent) = request.parent_issue_id.as_deref()
-        && read_parent_project(conn, workspace_id, parent, true).await? != parent_project
-    {
-        return Err(IssueCreateError::ConfigurationChanged);
+    // Source capture needs an exclusive issue lock to serialize comment and
+    // attachment edits. Taking it here avoids two creators upgrading SHARE.
+    let parent_lock = if source_capture {
+        ParentIssueLock::Update
+    } else {
+        ParentIssueLock::Share
+    };
+    if let Some(parent) = request.parent_issue_id.as_deref() {
+        let locked_project =
+            read_parent_project(conn, workspace_id, parent, parent_lock, missing_parent()).await?;
+        if locked_project != parent_project {
+            if source_capture && let Some(project) = locked_project.as_deref() {
+                let actor = CallerActor::Member {
+                    user_id: member_id.to_owned(),
+                };
+                let hidden = resolve_caller_access_on(conn, workspace_id, &actor)
+                    .await
+                    .map_err(IssueCreateError::Access)?;
+                if !hidden.can_see(Some(project)) {
+                    return Err(IssueCreateError::AnchorCommentDeleted);
+                }
+            }
+            return Err(IssueCreateError::ConfigurationChanged);
+        }
     }
     if let (Some(assignee_type), Some(assignee)) = (
         request.assignee_type.as_deref(),
