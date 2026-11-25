@@ -96,7 +96,7 @@ func TestRustIssueStatusReceiptHasBatchScopeExclusives(t *testing.T) {
 	if !ok {
 		t.Fatal("decode failed")
 	}
-	if !rustIssueStatusReceiptHasBatchScopeExclusives(receipt) {
+	if !receipt.hasQueue() {
 		t.Fatal("expected queue receipt to be rejected in batch scope")
 	}
 }

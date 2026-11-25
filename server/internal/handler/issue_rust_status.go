@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -20,15 +21,16 @@ type ordinaryActiveBatchTrust struct {
 }
 
 type issueStatusEdit struct {
-	ExpectedRevision    int64                     `json:"expected_revision"`
-	Status              string                    `json:"status"`
-	Position            *float64                  `json:"position,omitempty"`
-	SourceTaskID        *string                   `json:"source_task_id,omitempty"`
-	SuppressRun         bool                      `json:"suppress_run"`
-	ActivityID          string                    `json:"activity_id"`
-	PreparedEnqueue     *json.RawMessage          `json:"prepared_enqueue,omitempty"`
-	TerminalScope       *issueTerminalScope       `json:"terminal_scope,omitempty"`
-	OrdinaryActiveBatch *ordinaryActiveBatchTrust `json:"ordinary_active_batch,omitempty"`
+	ExpectedRevision      int64                     `json:"expected_revision"`
+	Status                string                    `json:"status"`
+	Position              *float64                  `json:"position,omitempty"`
+	SourceTaskID          *string                   `json:"source_task_id,omitempty"`
+	SuppressRun           bool                      `json:"suppress_run"`
+	ActivityID            string                    `json:"activity_id"`
+	PreparedEnqueue       *json.RawMessage          `json:"prepared_enqueue,omitempty"`
+	TerminalScope         *issueTerminalScope       `json:"terminal_scope,omitempty"`
+	OrdinaryActiveBatch   *ordinaryActiveBatchTrust `json:"ordinary_active_batch,omitempty"`
+	OrdinaryTerminalBatch bool                      `json:"ordinary_terminal_batch,omitempty"`
 }
 
 func isActiveBuiltInIssueStatus(key string) bool {
@@ -192,7 +194,7 @@ func (h *Handler) updateIssueStatusViaRust(
 		return after, before, "", "", nil, false
 	}
 	return h.finishRustIssueStatusSingleWrite(
-		w, r.Context(), current, result, receipt, prepared, terminalClose,
+		w, r.Context(), result, receipt, prepared, terminalClose,
 	)
 }
 
@@ -208,6 +210,7 @@ type rustIssueStatusWriteReceipt struct {
 type rustStatusWriteResult struct {
 	before, after    db.Issue
 	statusActivityID string
+	cancelledWakeups []db.AgentTaskQueue
 }
 
 type rustIssueStatusConflict struct {
@@ -286,9 +289,26 @@ func rustIssueStatusTrustedProjectMatch(before, after ordinaryIssueSnapshot, tru
 	return before.ProjectID == trusted && after.ProjectID == trusted
 }
 
-func rustIssueStatusReceiptHasBatchScopeExclusives(receipt rustIssueStatusWriteReceipt) bool {
-	return len(receipt.CancelledTasks) > 0 ||
-		derefString(receipt.QueuedTaskID) != "" || derefString(receipt.CoalescedQueuedTaskID) != ""
+func (receipt rustIssueStatusWriteReceipt) hasQueue() bool {
+	return derefString(receipt.QueuedTaskID) != "" || derefString(receipt.CoalescedQueuedTaskID) != ""
+}
+
+func (h *Handler) rustIssueStatusTerminalCancelledTasks(
+	w http.ResponseWriter,
+	ctx context.Context,
+	issue db.Issue,
+	receipt rustIssueStatusWriteReceipt,
+) ([]db.AgentTaskQueue, bool) {
+	var wire *[]rustCancelledTaskReceipt
+	if json.Unmarshal(receipt.CancelledTasks, &wire) != nil || wire == nil {
+		writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
+		return nil, false
+	}
+	tasks, ok := rustTerminalCancelledTasksValid(ctx, h.Queries, issue.ID, issue.WorkspaceID, *wire)
+	if !ok {
+		writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
+	}
+	return tasks, ok
 }
 
 func (h *Handler) checkRustIssueStatusReceipt(
@@ -299,8 +319,9 @@ func (h *Handler) checkRustIssueStatusReceipt(
 	plannedID pgtype.UUID,
 	receipt rustIssueStatusWriteReceipt,
 ) (rustStatusWriteResult, bool) {
+	projectScoped := edit.OrdinaryActiveBatch != nil || edit.TerminalScope != nil
 	if !rustStatusWriteSnapshotsValid(edit.ExpectedRevision, edit.Status, edit.Position, receipt.Before, receipt.After) ||
-		(edit.OrdinaryActiveBatch != nil && !rustIssueStatusTrustedProjectMatch(receipt.Before, receipt.After, issue.ProjectID)) {
+		(projectScoped && !rustIssueStatusTrustedProjectMatch(receipt.Before, receipt.After, issue.ProjectID)) {
 		writeError(w, http.StatusBadGateway, "invalid rust issue status snapshots")
 		return rustStatusWriteResult{}, false
 	}
@@ -312,13 +333,24 @@ func (h *Handler) checkRustIssueStatusReceipt(
 		writeError(w, http.StatusBadGateway, "invalid rust issue status activity receipt")
 		return rustStatusWriteResult{}, false
 	}
-	return rustStatusWriteResult{before: beforeIssue, after: afterIssue, statusActivityID: statusReceipt}, true
+	result := rustStatusWriteResult{before: beforeIssue, after: afterIssue, statusActivityID: statusReceipt}
+	if edit.TerminalScope != nil {
+		if receipt.hasQueue() {
+			writeError(w, http.StatusBadGateway, "unexpected rust issue status queue receipt")
+			return rustStatusWriteResult{}, false
+		}
+		cancelled, ok := h.rustIssueStatusTerminalCancelledTasks(w, ctx, issue, receipt)
+		if !ok {
+			return rustStatusWriteResult{}, false
+		}
+		result.cancelledWakeups = cancelled
+	}
+	return result, true
 }
 
 func (h *Handler) finishRustIssueStatusSingleWrite(
 	w http.ResponseWriter,
 	ctx context.Context,
-	current db.Issue,
 	result rustStatusWriteResult,
 	receipt rustIssueStatusWriteReceipt,
 	prepared *service.IssuePreparedAgentEnqueue,
@@ -326,28 +358,10 @@ func (h *Handler) finishRustIssueStatusSingleWrite(
 ) (after, before db.Issue, statusActivityID, queuedTaskID string, cancelled []db.AgentTaskQueue, ok bool) {
 	taskReceipt := derefString(receipt.QueuedTaskID)
 	coalescedReceipt := derefString(receipt.CoalescedQueuedTaskID)
-	var cancelledTasks *[]rustCancelledTaskReceipt
-	if len(receipt.CancelledTasks) > 0 && json.Unmarshal(receipt.CancelledTasks, &cancelledTasks) != nil {
-		writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
-		return after, before, "", "", nil, false
-	}
 	if terminalClose {
-		if prepared != nil || taskReceipt != "" || coalescedReceipt != "" {
-			writeError(w, http.StatusBadGateway, "unexpected rust issue status queue receipt")
-			return after, before, "", "", nil, false
-		}
-		if cancelledTasks == nil {
-			writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
-			return after, before, "", "", nil, false
-		}
-		cancelled, ok := rustTerminalCancelledTasksValid(ctx, h.Queries, current.ID, current.WorkspaceID, *cancelledTasks)
-		if !ok {
-			writeError(w, http.StatusBadGateway, "invalid rust issue terminal cancellation receipt")
-			return after, before, "", "", nil, false
-		}
-		return result.after, result.before, result.statusActivityID, "", cancelled, true
+		return result.after, result.before, result.statusActivityID, "", result.cancelledWakeups, true
 	}
-	if cancelledTasks != nil {
+	if len(receipt.CancelledTasks) > 0 && strings.TrimSpace(string(receipt.CancelledTasks)) != "null" {
 		writeError(w, http.StatusBadGateway, "unexpected rust issue terminal cancellation receipt")
 		return after, before, "", "", nil, false
 	}

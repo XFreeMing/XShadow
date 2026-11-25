@@ -34,6 +34,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_BATCH_STATUS_PILOT` 为 `POST /api/issues/batch-update` 的普通成员内置活动状态批量改写指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_STATUS_PILOT`。仅含 `status` 与可选 `suppress_run` 的请求可以在既有批量循环内按行复用单任务状态写入和时间线回执。需要实际派工的积压晋升、终态或自定义状态、命名工作流、交接、工作方法和组合字段继续使用原处理路径。隐藏、缺失、锁后冲突及确定回滚的行跳过。传输或提交回执不明时中止后续行，重试保留已提交行的原修订和时间线。
 
+`XSHADOW_ISSUES_RUST_BATCH_TERMINAL_STATUS_PILOT` 为 `POST /api/issues/batch-update` 的普通成员内置 `done`/`cancelled` 批量修改指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_STATUS_PILOT` 与 `XSHADOW_ISSUES_RUST_TERMINAL_STATUS_PILOT`。仅含 `status` 与可选 `suppress_run` 的请求按行复用单任务终态事务、取消回执和持久通知流程。入审、工作方法、重复标记、命名工作流和组合字段仍走 Go。隐藏、缺失、锁后冲突及确定回滚的行跳过。传输或提交回执不明时中止后续行，重试保留已提交行的修订和状态时间线。
+
 `XSHADOW_ISSUES_RUST_METHOD_ADOPT_PILOT` 为 `POST /api/issues/{id}/work-method` 中 `adopt_revision` 的普通成员采用试点。Go 沿用 `run.Adopt` 域计算与视图/事件组装，并向 Rust 提交同一工作区模板快照与计划运行。Rust 锁模板目录与事项行，核对修订与原始 `work_method_run`，仅在计划要求时写入新方法快照并推进事项修订。目标计划交付、项目交付绑定与军团执行绑定仍走 Go。试点上游不可用返回 `503`，回执异常返回 `502`，失败闭集不回退 Go 二次写入。
 
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。

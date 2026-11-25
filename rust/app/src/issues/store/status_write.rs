@@ -37,6 +37,8 @@ pub struct IssueStatusEdit {
     pub terminal_scope: Option<TerminalScope>,
     #[serde(default)]
     pub ordinary_active_batch: Option<OrdinaryActiveBatchTrust>,
+    #[serde(default)]
+    pub ordinary_terminal_batch: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +143,10 @@ pub async fn update_issue_status(
     let terminal_scope = edit.terminal_scope.as_ref();
     let prepared = edit.prepared_enqueue.as_ref();
     let batch_trust = edit.ordinary_active_batch.as_ref();
+    let terminal_batch = edit.ordinary_terminal_batch;
+    if batch_trust.is_some() && terminal_batch {
+        return Err(IssueStatusEditError::InvalidStatus);
+    }
     if !is_grid_builtin_status(&edit.status)
         || !is_uuid(&edit.activity_id)
         || terminal != terminal_scope.is_some()
@@ -150,6 +156,9 @@ pub async fn update_issue_status(
     }
     if terminal && prepared.is_some() {
         return Err(IssueStatusEditError::DispatchSensitive);
+    }
+    if terminal_batch && (!terminal || prepared.is_some() || terminal_scope.is_none()) {
+        return Err(IssueStatusEditError::InvalidStatus);
     }
     if batch_trust.is_some()
         && (!is_active_builtin_status(&edit.status)
@@ -249,6 +258,14 @@ pub async fn update_issue_status(
         {
             return Err(IssueStatusEditError::DispatchSensitive);
         }
+    }
+    if terminal_batch
+        && !matches!(
+            assignee_type.as_deref(),
+            None | Some("member" | "agent" | "squad")
+        )
+    {
+        return Err(IssueStatusEditError::DispatchSensitive);
     }
     if !is_grid_builtin_status(prev_status) || (prev_status == "cancelled" && has_duplicate) {
         return Err(IssueStatusEditError::DispatchSensitive);
@@ -538,6 +555,23 @@ mod tests {
         }
         assert!(is_terminal_builtin_status("done"));
         assert!(is_terminal_builtin_status("cancelled"));
+    }
+
+    #[test]
+    fn wire_accepts_terminal_batch_payload() {
+        let edit: IssueStatusEdit = serde_json::from_str(
+            r#"{
+                "expected_revision": 2,
+                "status": "done",
+                "activity_id": "22222222-2222-4222-8222-222222222222",
+                "terminal_scope": { "project_id": "33333333-3333-4333-8333-333333333333" },
+                "ordinary_terminal_batch": true
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(edit.status, "done");
+        assert!(edit.terminal_scope.is_some());
+        assert!(edit.ordinary_terminal_batch);
     }
 
     #[test]

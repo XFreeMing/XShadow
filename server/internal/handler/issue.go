@@ -5316,6 +5316,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	batchStatusPilot := false
+	batchTerminalPilot := false
 	if batchStatusKey != "" {
 		batchStatusPilot, err = h.batchOrdinaryActiveStatusPilotActive(r, wsUUID, rawUpdates, req.Updates, batchStatusKey)
 		if err != nil {
@@ -5324,6 +5325,16 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
 			}
 			return
+		}
+		if !batchStatusPilot && isTerminalBuiltInIssueStatus(batchStatusKey) {
+			batchTerminalPilot, err = h.batchOrdinaryTerminalStatusPilotActive(r, wsUUID, rawUpdates, req.Updates, batchStatusKey)
+			if err != nil {
+				if !writeQueryCancellation(w, r, err) {
+					slog.Warn("resolve rust batch ordinary terminal status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+					writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
+				}
+				return
+			}
 		}
 	}
 
@@ -5547,9 +5558,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				prevIssue, issue = result.before, result.after
 			}
 		}
-		if batchStatusPilot && h.batchStatusIssueUsesRust(r.Context(), prevIssue, issueStatusGuard, handoff, req.Updates.SuppressRun) {
+		batchRustTerminal := batchTerminalPilot && h.batchTerminalStatusIssueUsesRust(r.Context(), prevIssue, issueStatusGuard, handoff)
+		batchRustActive := !batchRustTerminal && batchStatusPilot &&
+			h.batchStatusIssueUsesRust(r.Context(), prevIssue, issueStatusGuard, handoff, req.Updates.SuppressRun)
+		if batchRustTerminal || batchRustActive {
 			outcome, result := h.tryBatchUpdateIssueStatusViaRust(
-				w, r, userID, prevIssue, issueStatusGuard, req.Updates.SuppressRun,
+				w, r, userID, prevIssue, issueStatusGuard, req.Updates.SuppressRun, batchRustTerminal,
 			)
 			switch outcome {
 			case batchStatusRustAbort:
@@ -5559,6 +5573,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			case batchStatusRustDone:
 				nativeStatus = result
 				prevIssue, issue = result.before, result.after
+				if len(result.cancelledWakeups) > 0 {
+					h.TaskService.CompleteNativeTerminalCloseAfterWrite(
+						r.Context(), uuidToString(prevIssue.WorkspaceID), result.cancelledWakeups,
+					)
+				}
 			}
 		}
 		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid {

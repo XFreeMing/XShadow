@@ -90,6 +90,7 @@ func (h *Handler) tryBatchUpdateIssueStatusViaRust(
 	prev db.Issue,
 	targetStatus string,
 	suppressRun bool,
+	terminalBatch bool,
 ) (batchStatusRustOutcome, rustStatusWriteResult) {
 	plannedActivityID := dbid.NewV7()
 	edit := issueStatusEdit{
@@ -98,9 +99,14 @@ func (h *Handler) tryBatchUpdateIssueStatusViaRust(
 		SourceTaskID:     uuidToPtr(h.wakeupSourceTaskID(r)),
 		SuppressRun:      suppressRun,
 		ActivityID:       uuidToString(plannedActivityID),
-		OrdinaryActiveBatch: &ordinaryActiveBatchTrust{
+	}
+	if terminalBatch {
+		edit.TerminalScope = &issueTerminalScope{ProjectID: uuidToPtr(prev.ProjectID)}
+		edit.OrdinaryTerminalBatch = true
+	} else {
+		edit.OrdinaryActiveBatch = &ordinaryActiveBatchTrust{
 			ExpectedProjectID: uuidToPtr(prev.ProjectID),
-		},
+		}
 	}
 	resp, body, transportOK := h.callRustIssueStatusPUT(w, r, userID, prev, edit)
 	if !transportOK {
@@ -117,7 +123,11 @@ func (h *Handler) tryBatchUpdateIssueStatusViaRust(
 		return batchStatusRustAbort, rustStatusWriteResult{}
 	case http.StatusOK:
 		receipt, decoded := decodeRustIssueStatusWriteReceipt(body, prev.ID, prev.WorkspaceID)
-		if !decoded || rustIssueStatusReceiptHasBatchScopeExclusives(receipt) {
+		if !decoded {
+			writeError(w, http.StatusBadGateway, "invalid rust issue status snapshots")
+			return batchStatusRustAbort, rustStatusWriteResult{}
+		}
+		if receipt.hasQueue() || (!terminalBatch && len(receipt.CancelledTasks) > 0) {
 			writeError(w, http.StatusBadGateway, "invalid rust issue status snapshots")
 			return batchStatusRustAbort, rustStatusWriteResult{}
 		}

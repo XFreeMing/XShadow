@@ -675,7 +675,7 @@ async fn update_issue_status(
     if !is_uuid(&id) {
         return error_response(StatusCode::NOT_FOUND, "issue not found");
     }
-    let batch_scope = edit.ordinary_active_batch.is_some();
+    let batch_scope = edit.ordinary_active_batch.is_some() || edit.ordinary_terminal_batch;
     match store::update_issue_status(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
         Ok(write) => Json(write).into_response(),
         Err(IssueStatusEditError::Access(error)) => {
