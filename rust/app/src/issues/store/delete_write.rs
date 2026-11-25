@@ -11,10 +11,19 @@ use super::{
     ordinary::{self, ISSUE_ROW_SNAPSHOT},
 };
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueDeleteAttachmentPlanItem {
+    pub attachment_id: String,
+    pub object_url: String,
+    pub storage_key: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IssueDeleteWrite {
     pub source_task_id: Option<String>,
+    pub attachment_cleanup: Option<Vec<IssueDeleteAttachmentPlanItem>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +39,8 @@ pub struct IssueDeleteWriteResult {
     pub detached_children: Vec<String>,
     pub cleared_duplicates: Vec<ClearedDuplicateSnapshot>,
     pub goal_links_changed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub object_cleanup_attachment_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -96,6 +107,69 @@ cleared_environment_configs AS (
 DELETE FROM issue WHERE issue.id IN (SELECT target.id FROM target)
 "#;
 
+fn scoped_storage_key_valid(workspace_id: &str, attachment_id: &str, key: &str) -> bool {
+    if !is_uuid(workspace_id) || !is_uuid(attachment_id) {
+        return false;
+    }
+    let basename = format!("workspaces/{workspace_id}/{attachment_id}");
+    if key == basename {
+        return true;
+    }
+    key.strip_prefix(&format!("{basename}."))
+        .is_some_and(|ext| {
+            !ext.is_empty()
+                && ext
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+}
+
+async fn verify_attachment_delete_plan(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    issue_id: &str,
+    plan: Option<&[IssueDeleteAttachmentPlanItem]>,
+) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
+    let rows = sqlx::query(
+        "SELECT a.id::text, a.workspace_id::text, a.url,
+                a.comment_id IS NULL AND a.chat_session_id IS NULL
+                 AND a.chat_message_id IS NULL AND a.task_id IS NULL
+                 AND a.source_context_id IS NULL AS direct_upload
+           FROM attachment a
+          WHERE a.issue_id = $1::uuid
+             OR a.comment_id IN (SELECT c.id FROM comment c WHERE c.issue_id = $1::uuid)
+          ORDER BY a.id
+          FOR UPDATE",
+    )
+    .bind(issue_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let Some(plan) = plan else {
+        return if rows.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(IssueDeleteWriteError::DeleteSensitive)
+        };
+    };
+    if rows.len() != plan.len() {
+        return Err(IssueDeleteWriteError::DeleteSensitive);
+    }
+    let mut planned = plan.to_vec();
+    planned.sort_by(|a, b| a.attachment_id.cmp(&b.attachment_id));
+    for (row, planned) in rows.iter().zip(&planned) {
+        if !row.try_get::<bool, _>(3)?
+            || row.try_get::<&str, _>(1)? != workspace_id
+            || row.try_get::<&str, _>(0)? != planned.attachment_id
+            || row.try_get::<&str, _>(2)? != planned.object_url
+            || !scoped_storage_key_valid(workspace_id, &planned.attachment_id, &planned.storage_key)
+        {
+            return Err(IssueDeleteWriteError::DeleteSensitive);
+        }
+    }
+    Ok(planned)
+}
+
 async fn pilot_shape_sensitive(
     tx: &mut PgConnection,
     workspace_id: &str,
@@ -103,7 +177,8 @@ async fn pilot_shape_sensitive(
     creator_type: &str,
     assignee_type: Option<&str>,
     origin_present: bool,
-) -> Result<(), IssueDeleteWriteError> {
+    attachment_plan: Option<&[IssueDeleteAttachmentPlanItem]>,
+) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
     if creator_type != "member" {
         return Err(IssueDeleteWriteError::DeleteSensitive);
     }
@@ -146,22 +221,43 @@ async fn pilot_shape_sensitive(
         .bind(issue_id)
         .execute(&mut *tx)
         .await?;
-    let has_attachments = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-            SELECT 1 FROM attachment a
-            WHERE a.workspace_id = $1::uuid
-              AND (
-                a.issue_id = $2::uuid
-                OR a.comment_id IN (SELECT c.id FROM comment c WHERE c.issue_id = $2::uuid)
-              )
-        )",
-    )
-    .bind(workspace_id)
-    .bind(issue_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if has_attachments {
-        return Err(IssueDeleteWriteError::DeleteSensitive);
+    verify_attachment_delete_plan(tx, workspace_id, issue_id, attachment_plan).await
+}
+
+async fn record_and_delete_direct_uploads(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    direct_uploads: &[IssueDeleteAttachmentPlanItem],
+) -> Result<(), IssueDeleteWriteError> {
+    for upload in direct_uploads {
+        sqlx::query(
+            "INSERT INTO issue_attachment_object_delete_outbox (
+                attachment_id, workspace_id, storage_key, object_url
+             ) VALUES ($1::uuid, $2::uuid, $3, $4)",
+        )
+        .bind(&upload.attachment_id)
+        .bind(workspace_id)
+        .bind(&upload.storage_key)
+        .bind(&upload.object_url)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if !direct_uploads.is_empty() {
+        let ids: Vec<String> = direct_uploads
+            .iter()
+            .map(|row| row.attachment_id.clone())
+            .collect();
+        let deleted = sqlx::query(
+            "DELETE FROM attachment
+             WHERE workspace_id = $1::uuid AND id = ANY($2::uuid[])",
+        )
+        .bind(workspace_id)
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await?;
+        if deleted.rows_affected() != ids.len() as u64 {
+            return Err(IssueDeleteWriteError::DeleteSensitive);
+        }
     }
     Ok(())
 }
@@ -230,12 +326,13 @@ async fn lock_delete_projects(
 async fn validate_locked_issue_for_delete(
     tx: &mut PgConnection,
     workspace_id: &str,
-    issue_id: &str,
-    preview_project: &Option<String>,
+    preview: &IssueDeletePreview,
     project_private: &HashMap<String, bool>,
     privileged: bool,
     user_id: &str,
-) -> Result<(), IssueDeleteWriteError> {
+    attachment_plan: Option<&[IssueDeleteAttachmentPlanItem]>,
+) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
+    let issue_id = &preview.issue_id;
     let locked = sqlx::query(
         "SELECT project_id::text, creator_type, creator_id::text, assignee_type,
                 origin_type IS NOT NULL AS has_origin
@@ -248,7 +345,7 @@ async fn validate_locked_issue_for_delete(
     .ok_or(IssueDeleteWriteError::AlreadyDeleted)?;
 
     let actual_project: Option<String> = locked.try_get(0)?;
-    if actual_project != *preview_project {
+    if actual_project != preview.preview_project {
         return Err(IssueDeleteWriteError::DeleteSensitive);
     }
 
@@ -286,6 +383,7 @@ async fn validate_locked_issue_for_delete(
         &creator_type,
         assignee_type.as_deref(),
         origin_present,
+        attachment_plan,
     )
     .await
 }
@@ -297,7 +395,8 @@ pub(super) async fn lock_issues_for_delete(
     workspace_id: &str,
     actor: &CallerActor,
     issue_ids: &[String],
-) -> Result<(), IssueDeleteWriteError> {
+    attachment_plan: Option<&[IssueDeleteAttachmentPlanItem]>,
+) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
     let CallerActor::Member { user_id } = actor else {
         return Err(IssueDeleteWriteError::Access(IssueReadError::Forbidden(
             "issue deletion requires a human or a bound agent identity",
@@ -308,8 +407,11 @@ pub(super) async fn lock_issues_for_delete(
             DELETE_FORBIDDEN,
         )));
     }
+    if attachment_plan.is_some_and(|plan| issue_ids.len() != 1 || plan.is_empty()) {
+        return Err(IssueDeleteWriteError::DeleteSensitive);
+    }
     if issue_ids.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     sqlx::query("SELECT 1 FROM workspace WHERE id = $1::uuid FOR KEY SHARE")
@@ -332,19 +434,22 @@ pub(super) async fn lock_issues_for_delete(
     )))?;
     let privileged = role_may_delete_any(&role);
 
+    let mut uploads = Vec::new();
     for preview in &previews {
-        validate_locked_issue_for_delete(
-            tx,
-            workspace_id,
-            &preview.issue_id,
-            &preview.preview_project,
-            &project_private,
-            privileged,
-            user_id,
-        )
-        .await?;
+        uploads.extend(
+            validate_locked_issue_for_delete(
+                tx,
+                workspace_id,
+                preview,
+                &project_private,
+                privileged,
+                user_id,
+                attachment_plan,
+            )
+            .await?,
+        );
     }
-    Ok(())
+    Ok(uploads)
 }
 
 pub(super) async fn execute_issue_delete_steps(
@@ -449,9 +554,22 @@ pub async fn delete_issue(
         )));
     }
     let mut tx = pool.begin().await?;
-    lock_issues_for_delete(&mut tx, workspace_id, actor, &[issue_id.to_owned()]).await?;
+    let direct_uploads = lock_issues_for_delete(
+        &mut tx,
+        workspace_id,
+        actor,
+        &[issue_id.to_owned()],
+        request.attachment_cleanup.as_deref(),
+    )
+    .await?;
 
     ordinary::set_write_actor(&mut tx, actor, request.source_task_id.as_deref()).await?;
+
+    record_and_delete_direct_uploads(&mut tx, workspace_id, &direct_uploads).await?;
+    let object_cleanup_attachment_ids: Vec<String> = direct_uploads
+        .iter()
+        .map(|row| row.attachment_id.clone())
+        .collect();
 
     let empty: &[String] = &[];
     let (detached_children, cleared_duplicates, goal_links_changed) =
@@ -464,12 +582,38 @@ pub async fn delete_issue(
         detached_children,
         cleared_duplicates,
         goal_links_changed,
+        object_cleanup_attachment_ids,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_storage_key_valid_accepts_workspace_upload_keys() {
+        let workspace = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let attachment = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        assert!(scoped_storage_key_valid(
+            workspace,
+            attachment,
+            &format!("workspaces/{workspace}/{attachment}.png")
+        ));
+        assert!(!scoped_storage_key_valid(
+            workspace,
+            attachment,
+            "workspaces/other/x.png"
+        ));
+    }
+
+    #[test]
+    fn delete_wire_accepts_optional_attachment_plan() {
+        let request: IssueDeleteWrite = serde_json::from_str(
+            r#"{"attachment_cleanup":[{"attachment_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","object_url":"http://x/u","storage_key":"workspaces/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(request.attachment_cleanup.as_ref().map(Vec::len), Some(1));
+    }
 
     #[test]
     fn delete_wire_accepts_optional_source_task_id() {

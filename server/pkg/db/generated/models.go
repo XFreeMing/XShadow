@@ -1135,6 +1135,18 @@ type Issue struct {
 	IssueTypeID        pgtype.UUID        `json:"issue_type_id"`
 }
 
+type IssueAttachmentObjectDeleteOutbox struct {
+	AttachmentID       pgtype.UUID        `json:"attachment_id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	StorageKey         string             `json:"storage_key"`
+	ObjectUrl          string             `json:"object_url"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	AttemptCount       int32              `json:"attempt_count"`
+	NextAttemptAt      pgtype.Timestamptz `json:"next_attempt_at"`
+	DeliveryLeaseToken pgtype.UUID        `json:"delivery_lease_token"`
+	LastError          pgtype.Text        `json:"last_error"`
+}
+
 type IssueChildEvent struct {
 	ID           pgtype.UUID        `json:"id"`
 	WorkspaceID  pgtype.UUID        `json:"workspace_id"`

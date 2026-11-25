@@ -17,7 +17,8 @@ import (
 )
 
 type rustIssueDeleteWrite struct {
-	SourceTaskID *string `json:"source_task_id,omitempty"`
+	SourceTaskID      *string                             `json:"source_task_id,omitempty"`
+	AttachmentCleanup []rustIssueDeleteAttachmentPlanItem `json:"attachment_cleanup,omitempty"`
 }
 
 type rustIssueDeleteClearedDuplicate struct {
@@ -26,11 +27,12 @@ type rustIssueDeleteClearedDuplicate struct {
 }
 
 type rustIssueDeleteResult struct {
-	Deleted           bool                              `json:"deleted"`
-	IssueID           string                            `json:"issue_id"`
-	DetachedChildren  []string                          `json:"detached_children"`
-	ClearedDuplicates []rustIssueDeleteClearedDuplicate `json:"cleared_duplicates"`
-	GoalLinksChanged  bool                              `json:"goal_links_changed"`
+	Deleted                    bool                              `json:"deleted"`
+	IssueID                    string                            `json:"issue_id"`
+	DetachedChildren           []string                          `json:"detached_children"`
+	ClearedDuplicates          []rustIssueDeleteClearedDuplicate `json:"cleared_duplicates"`
+	GoalLinksChanged           bool                              `json:"goal_links_changed"`
+	ObjectCleanupAttachmentIDs []string                          `json:"object_cleanup_attachment_ids,omitempty"`
 }
 
 // issueOrdinaryDeleteEligible reports whether a task matches the supported
@@ -75,27 +77,58 @@ func (h *Handler) issueOrdinaryDeleteEligible(ctx context.Context, issue db.Issu
 	return true, nil
 }
 
-// deleteIssueUsesRust selects member-authenticated deletes of member-created
+type rustIssueDeleteSelection struct {
+	UseRust        bool
+	AttachmentPlan []rustIssueDeleteAttachmentPlanItem
+}
+
+// selectRustIssueDelete selects member-authenticated deletes of member-created
 // tasks that do not need runtime queue cancellation, autopilot failure, or
-// source-context object intents. Eligibility is rechecked under the Rust lock.
-func (h *Handler) deleteIssueUsesRust(r *http.Request, issue db.Issue) (bool, error) {
+// source-context object intents. When direct uploads are included, the returned
+// attachment plan is fixed for the trusted Rust payload. Eligibility is
+// rechecked under the Rust lock.
+func (h *Handler) selectRustIssueDelete(r *http.Request, issue db.Issue) (rustIssueDeleteSelection, error) {
+	var none rustIssueDeleteSelection
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.DeletePilotScopes) == 0 {
-		return false, nil
+		return none, nil
 	}
 	ctx := r.Context()
 	inPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeletePilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
 	if err != nil || !inPilot {
-		return false, err
+		return none, err
 	}
 	actorType, _ := h.resolveActor(r, requestUserID(r), uuidToString(issue.WorkspaceID))
 	if actorType != "member" {
-		return false, nil
+		return none, nil
 	}
-	return h.issueOrdinaryDeleteEligible(ctx, issue)
+	if ok, err := h.issueOrdinaryDeleteEligible(ctx, issue); err != nil {
+		return none, err
+	} else if ok {
+		return rustIssueDeleteSelection{UseRust: true}, nil
+	}
+	if h.IssueReadBridge == nil || len(h.IssueReadBridge.DeleteAttachPilotScopes) == 0 {
+		return none, nil
+	}
+	inAttachPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeleteAttachPilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
+	if err != nil || !inAttachPilot {
+		return none, err
+	}
+	plan, withAttachments, err := h.buildRustIssueDeleteAttachmentPlan(ctx, issue)
+	if err != nil {
+		return none, err
+	}
+	if !withAttachments {
+		return none, nil
+	}
+	return rustIssueDeleteSelection{UseRust: true, AttachmentPlan: plan}, nil
 }
 
-func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, issue db.Issue, userID string) {
+func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, issue db.Issue, userID string, attachmentPlan []rustIssueDeleteAttachmentPlanItem) {
 	request := rustIssueDeleteWrite{SourceTaskID: uuidToPtr(h.wakeupSourceTaskID(r))}
+	withAttachments := len(attachmentPlan) > 0
+	if withAttachments {
+		request.AttachmentCleanup = attachmentPlan
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode issue delete")
@@ -132,6 +165,18 @@ func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, iss
 	}
 	var reply rustIssueDeleteResult
 	if json.Unmarshal(body, &reply) != nil || !reply.Deleted || reply.IssueID != uuidToString(issue.ID) {
+		writeError(w, http.StatusBadGateway, "invalid rust issue delete response")
+		return
+	}
+	if withAttachments {
+		if !rustIssueDeleteAttachmentIDsMatchPlan(attachmentPlan, reply.ObjectCleanupAttachmentIDs) {
+			writeError(w, http.StatusBadGateway, "invalid rust issue delete object cleanup receipt")
+			return
+		}
+		if h.TaskService != nil {
+			_, _ = h.TaskService.TryDeliverIssueAttachmentObjectDeletes(r.Context(), planAttachmentIDs(attachmentPlan))
+		}
+	} else if len(reply.ObjectCleanupAttachmentIDs) > 0 {
 		writeError(w, http.StatusBadGateway, "invalid rust issue delete response")
 		return
 	}

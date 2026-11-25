@@ -60,7 +60,7 @@ pub async fn batch_delete_issues(
 
     let mut tx = pool.begin().await?;
     ordinary::set_write_actor(&mut tx, actor, request.source_task_id.as_deref()).await?;
-    lock_issues_for_delete(&mut tx, workspace_id, actor, &issue_ids).await?;
+    lock_issues_for_delete(&mut tx, workspace_id, actor, &issue_ids, None).await?;
 
     let mut detached_children = Vec::new();
     let mut cleared_duplicates = Vec::new();

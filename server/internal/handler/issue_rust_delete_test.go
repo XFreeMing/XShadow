@@ -26,6 +26,16 @@ func TestIssueReadBridgeDeletePilotEnv(t *testing.T) {
 	}
 }
 
+func TestIssueReadBridgeDeleteAttachmentsPilotEnv(t *testing.T) {
+	t.Setenv("XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT", "del-att-pilot")
+	t.Setenv("XSHADOW_TABLES_UPSTREAM", "http://127.0.0.1:18080")
+	t.Setenv("XSHADOW_TABLES_INTERNAL_TOKEN", "shared-secret")
+	bridge := NewIssueReadBridgeFromEnv(nil)
+	if !reflect.DeepEqual(bridge.DeleteAttachPilotScopes, []string{"del-att-pilot"}) {
+		t.Fatalf("DeleteAttachPilotScopes = %v, want [del-att-pilot]", bridge.DeleteAttachPilotScopes)
+	}
+}
+
 func TestDeleteIssueUsesRustRejectsAgentCreatedIssues(t *testing.T) {
 	h := &Handler{IssueReadBridge: &IssueReadBridge{DeletePilotScopes: []string{"*"}}}
 	issue := db.Issue{
@@ -33,9 +43,9 @@ func TestDeleteIssueUsesRustRejectsAgentCreatedIssues(t *testing.T) {
 		CreatorType: "agent",
 	}
 	r := newRequest(http.MethodDelete, "/api/issues/x", nil)
-	useRust, err := h.deleteIssueUsesRust(r, issue)
-	if err != nil || useRust {
-		t.Fatalf("useRust=%v err=%v, want false", useRust, err)
+	selection, err := h.selectRustIssueDelete(r, issue)
+	if err != nil || selection.UseRust {
+		t.Fatalf("useRust=%v err=%v, want false", selection.UseRust, err)
 	}
 }
 

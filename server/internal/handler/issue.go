@@ -4988,14 +4988,14 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := requestUserID(r)
-	if useRust, err := h.deleteIssueUsesRust(r, issue); err != nil {
+	if selection, err := h.selectRustIssueDelete(r, issue); err != nil {
 		if !writeQueryCancellation(w, r, err) {
 			slog.Warn("resolve rust issue delete route failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to resolve issue delete route")
 		}
 		return
-	} else if useRust {
-		h.deleteIssueViaRust(w, r, issue, userID)
+	} else if selection.UseRust {
+		h.deleteIssueViaRust(w, r, issue, userID, selection.AttachmentPlan)
 		return
 	}
 

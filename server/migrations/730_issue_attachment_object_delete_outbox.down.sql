@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS issue_attachment_object_delete_outbox;

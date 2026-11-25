@@ -51,8 +51,8 @@ type TaskService struct {
 	// Entitlements supplies Cloud's workspace-scoped issue-count instruction.
 	// Nil keeps self-hosted and isolated test services unlimited.
 	Entitlements entitlement.Provider
-	// SourceContextStorage is used only by the bounded 30-day cleanup pass for
-	// terminal quick-create captures. Nil disables it where storage is absent.
+	// SourceContextStorage handles object cleanup for old captures and
+	// native issue deletion. Nil disables cleanup where storage is absent.
 	SourceContextStorage SourceContextObjectStore
 	// FeatureFlags is the server-side toggle router. Nil is valid and returns
 	// each call site's default.
@@ -97,6 +97,7 @@ type TaskService struct {
 type SourceContextObjectStore interface {
 	DeleteObject(ctx context.Context, key string) error
 	KeyFromURL(rawURL string) string
+	ObjectURL(key string) string
 }
 
 // ComposioOverlayBuilder is the seam TaskService uses to build the per-task

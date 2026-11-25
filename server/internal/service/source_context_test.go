@@ -35,6 +35,10 @@ func (s *concurrentSourceContextDeleteStore) KeyFromURL(rawURL string) string {
 	return strings.TrimPrefix(rawURL, "https://objects.example/")
 }
 
+func (s *concurrentSourceContextDeleteStore) ObjectURL(key string) string {
+	return "https://objects.example/" + key
+}
+
 func (s *concurrentSourceContextDeleteStore) DeleteObject(_ context.Context, key string) error {
 	s.arrived.Done()
 	<-s.release
@@ -46,6 +50,10 @@ func (s *concurrentSourceContextDeleteStore) DeleteObject(_ context.Context, key
 
 func (s *sourceContextObjectStoreFake) KeyFromURL(rawURL string) string {
 	return strings.TrimPrefix(rawURL, "https://objects.example/")
+}
+
+func (s *sourceContextObjectStoreFake) ObjectURL(key string) string {
+	return "https://objects.example/" + key
 }
 
 func (s *sourceContextObjectStoreFake) DeleteObject(_ context.Context, key string) error {

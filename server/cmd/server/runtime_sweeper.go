@@ -187,6 +187,22 @@ func runQueueNotificationSweeper(ctx context.Context, taskSvc *service.TaskServi
 	})
 }
 
+func runIssueAttachmentObjectDeleteSweeper(ctx context.Context, taskSvc *service.TaskService) {
+	runPeriodicSweep(ctx, queueNotificationSweepInterval, func() {
+		if ctx.Err() != nil {
+			return
+		}
+		result, err := taskSvc.RecoverPendingIssueAttachmentObjectDeletes(ctx, service.IssueAttachmentObjectDeleteSweepBatchSize)
+		if err != nil {
+			slog.Warn("issue attachment object delete sweeper: replay failed",
+				"delivered", result.Delivered,
+				"retried", result.Retried,
+				"error", err,
+			)
+		}
+	})
+}
+
 func sweepPendingCancelledClientNotifications(ctx context.Context, taskSvc *service.TaskService) (stats runtimeSweepStageStats) {
 	startedAt := time.Now()
 	defer func() {

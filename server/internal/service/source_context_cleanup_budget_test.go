@@ -46,6 +46,7 @@ type failingSourceContextObjectStore struct {
 }
 
 func (s *failingSourceContextObjectStore) KeyFromURL(rawURL string) string { return rawURL }
+func (s *failingSourceContextObjectStore) ObjectURL(key string) string      { return key }
 
 func (s *failingSourceContextObjectStore) DeleteObject(ctx context.Context, key string) error {
 	s.mu.Lock()
