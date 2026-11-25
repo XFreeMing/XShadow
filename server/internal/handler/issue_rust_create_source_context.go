@@ -189,9 +189,6 @@ func (h *Handler) manualSourceContextCreateRustEligible(
 		return plan, err
 	}
 	if sourceIssue.ProjectID.Valid {
-		if hasSourceFiles {
-			return plan, nil
-		}
 		if len(h.IssueReadBridge.CreateSourceProjectPilotScopes) == 0 {
 			return plan, nil
 		}

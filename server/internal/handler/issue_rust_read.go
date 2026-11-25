@@ -107,8 +107,9 @@ type IssueReadBridge struct {
 //     and CREATE_SOURCE_CONTEXT pilots on the same workspace).
 //   - XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT: comma-separated workspace
 //     slugs or UUIDs for native manual comment sub-issue creates that freeze
-//     ordinary source attachments (requires CREATE and CREATE_SOURCE_CONTEXT
-//     pilots on the same workspace).
+//     ordinary source attachments on projectless sources (requires CREATE and
+//     CREATE_SOURCE_CONTEXT pilots on the same workspace). Source issues that
+//     inherit a project also require CREATE_SOURCE_PROJECT on the same workspace.
 //   - XSHADOW_ISSUES_RUST_DELETE_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member issue deletes on DELETE /api/issues/{id}.
 //   - XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT: comma-separated workspace
