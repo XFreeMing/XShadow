@@ -11,7 +11,7 @@ use axum::{
 use serde_json::json;
 use sqlx::PgPool;
 
-use super::store::{self, CallerActor, IssueListQuery, IssueReadError, is_uuid};
+use super::store::{self, CallerActor, IssueListQuery, IssueReadError, IssueTableQuery, is_uuid};
 
 struct Issues {
     pool: PgPool,
@@ -123,9 +123,30 @@ pub fn router(pool: PgPool, token: String) -> Router {
     let state = Arc::new(Issues { pool, token });
     Router::new()
         .route("/internal/issues", post(list_issues))
+        .route("/internal/issues/table/rows", post(table_rows))
         .route("/internal/issues/{id}", get(get_issue))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn table_rows(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(query): Json<IssueTableQuery>,
+) -> Response {
+    match store::table_rows(&app.pool, &ctx.workspace_id, &ctx.actor, query).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(IssueReadError::NotFound(message)) => error_response(StatusCode::NOT_FOUND, message),
+        Err(IssueReadError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
+        Err(IssueReadError::ProjectAccessFailed) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve project access",
+        ),
+        Err(IssueReadError::DatabaseFailed) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list table rows",
+        ),
+    }
 }
 
 async fn list_issues(

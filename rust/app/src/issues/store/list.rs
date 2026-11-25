@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 
+mod table;
+pub use table::{IssueTableQuery, table_rows};
+
 use super::{
     CallerActor, HiddenProjects, ISSUE_SELECT_COLUMNS, IssueReadError, IssueResponse,
     duplicate_issue_refs, issue_from_row, labels_by_issue, resolve_caller_access,
@@ -23,15 +26,21 @@ pub struct IssueListQuery {
     assignee_id: Option<String>,
     assignee_ids: Vec<String>,
     assignee_types: Vec<String>,
+    scope_assignee: Option<ActorFilter>,
     assignee_filters: Vec<ActorFilter>,
     include_no_assignee: bool,
     creator_id: Option<String>,
+    scope_creator: Option<ActorFilter>,
     creator_filters: Vec<ActorFilter>,
     project_id: Option<String>,
     project_ids: Vec<String>,
+    project_statuses: Vec<String>,
     include_no_project: bool,
     label_ids: Vec<String>,
     ids: Option<Vec<String>>,
+    working_only: bool,
+    working_issue_ids: Option<Vec<String>>,
+    unread_issue_ids: Option<Vec<String>>,
     top_level_only: bool,
     search_patterns: Vec<String>,
     search_number: Option<i32>,
@@ -102,7 +111,7 @@ pub async fn list_issues(
     if query.open_only {
         page.push(" ORDER BY i.position ASC, i.created_at DESC");
     } else {
-        add_order(&mut page, &query);
+        IssueSort::from_query(&query).append_order(&mut page);
         page.push(" LIMIT ")
             .push_bind(query.limit.clamp(1, 100))
             .push(" OFFSET ")
@@ -240,15 +249,36 @@ fn add_filters<'a>(
         query.include_no_assignee,
     );
     add_actor_filter(sql, "creator", &query.creator_filters, false);
+    if let Some(actor) = &query.scope_assignee {
+        add_actor_filter(sql, "assignee", std::slice::from_ref(actor), false);
+    }
+    if let Some(actor) = &query.scope_creator {
+        add_actor_filter(sql, "creator", std::slice::from_ref(actor), false);
+    }
     add_project_filter(sql, query);
+    if !query.project_statuses.is_empty() {
+        sql.push(" AND EXISTS (SELECT 1 FROM project p WHERE p.id = i.project_id AND p.workspace_id = i.workspace_id AND p.status = ANY(")
+            .push_bind(&query.project_statuses)
+            .push("))");
+    }
     if !query.label_ids.is_empty() {
         sql.push(" AND EXISTS (SELECT 1 FROM issue_to_label l WHERE l.issue_id = i.id AND l.label_id = ANY(")
             .push_bind(&query.label_ids).push("::uuid[]))");
     }
-    if let Some(ids) = &query.ids {
+    for ids in [
+        &query.ids,
+        &query.working_issue_ids,
+        &query.unread_issue_ids,
+    ]
+    .into_iter()
+    .flatten()
+    {
         sql.push(" AND i.id = ANY(")
             .push_bind(ids)
             .push("::uuid[])");
+    }
+    if query.working_only {
+        sql.push(" AND EXISTS (SELECT 1 FROM agent_task_queue atq WHERE atq.issue_id = i.id AND atq.status = 'running')");
     }
     if query.top_level_only {
         sql.push(" AND i.parent_issue_id IS NULL");
@@ -451,97 +481,109 @@ fn add_property_filter<'a>(sql: &mut QueryBuilder<'a, Postgres>, pattern: &'a Va
     }
 }
 
-fn add_order<'a>(sql: &mut QueryBuilder<'a, Postgres>, query: &'a IssueListQuery) {
-    sql.push(" ORDER BY ");
-    let mut nullable = false;
-    let mut position = false;
-    match query.sort.as_str() {
-        "title" => {
-            sql.push("i.title");
-        }
-        "created_at" => {
-            sql.push("i.created_at");
-        }
-        "updated_at" => {
-            sql.push("i.updated_at");
-        }
-        "start_date" => {
-            sql.push("i.start_date");
-            nullable = true;
-        }
-        "due_date" => {
-            sql.push("i.due_date");
-            nullable = true;
-        }
-        "last_activity_at" => {
-            sql.push("i.last_activity_at");
-            nullable = true;
-        }
-        "priority" => {
-            sql.push("CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END");
-        }
-        "status" => {
-            sql.push("COALESCE(array_position(")
-                .push_bind(&query.status_order)
-                .push("::text[], i.status), 100000)");
-        }
-        "property" => {
-            nullable = query
-                .property_sort
-                .as_ref()
-                .is_some_and(|property| add_property_order(sql, property));
-            if !nullable {
-                sql.push("i.position");
-                position = true;
-            }
-        }
-        _ => {
-            sql.push("i.position");
-            position = true;
-        }
-    }
-    sql.push(if query.descending && !position {
-        " DESC"
-    } else {
-        " ASC"
-    });
-    if nullable {
-        sql.push(" NULLS LAST");
-    }
-    if query.sort != "last_activity_at" {
-        sql.push(", i.created_at DESC");
-    }
-    sql.push(", i.id DESC");
+enum IssueSortKey<'a> {
+    Position,
+    Column(&'static str),
+    Priority,
+    Status(&'a [String]),
+    Property(&'a PropertySort),
 }
 
-fn add_property_order<'a>(
-    sql: &mut QueryBuilder<'a, Postgres>,
-    property: &'a PropertySort,
-) -> bool {
-    match property.kind.as_str() {
-        "number" => {
-            sql.push("CASE WHEN jsonb_typeof(i.properties -> ")
-                .push_bind(&property.id)
-                .push(") = 'number' THEN (i.properties ->> ")
-                .push_bind(&property.id)
-                .push(")::numeric END");
+struct IssueSort<'a> {
+    key: IssueSortKey<'a>,
+    cast: &'static str,
+    descending: bool,
+    nulls_last: bool,
+    id_only_tie: bool,
+}
+
+impl<'a> IssueSort<'a> {
+    fn from_query(query: &'a IssueListQuery) -> Self {
+        use IssueSortKey::{Column, Position, Priority, Property, Status};
+        let (key, cast, nulls_last, id_only_tie) = match query.sort.as_str() {
+            "title" => (Column("i.title"), "text", false, false),
+            "created_at" => (Column("i.created_at"), "timestamptz", false, false),
+            "updated_at" => (Column("i.updated_at"), "timestamptz", false, false),
+            "start_date" => (Column("i.start_date"), "date", true, false),
+            "due_date" => (Column("i.due_date"), "date", true, false),
+            "last_activity_at" => (Column("i.last_activity_at"), "timestamptz", true, true),
+            "priority" => (Priority, "integer", false, false),
+            "status" => (Status(&query.status_order), "integer", false, false),
+            "property" => match query.property_sort.as_ref() {
+                Some(property)
+                    if property.kind == "number"
+                        || (property.kind == "select" && !property.options.is_empty()) =>
+                {
+                    (Property(property), "numeric", true, false)
+                }
+                Some(property) if matches!(property.kind.as_str(), "date" | "text" | "url") => {
+                    (Property(property), "text", true, false)
+                }
+                _ => (Position, "double precision", false, false),
+            },
+            _ => (Position, "double precision", false, false),
+        };
+        let descending = query.descending && !matches!(key, Position);
+        Self {
+            key,
+            cast,
+            descending,
+            nulls_last,
+            id_only_tie,
         }
-        "date" | "text" | "url" => {
-            sql.push("NULLIF(i.properties ->> ")
-                .push_bind(&property.id)
-                .push(", '')");
-        }
-        "select" => {
-            if property.options.is_empty() {
-                return false;
-            }
-            sql.push("array_position(")
-                .push_bind(&property.options)
-                .push("::text[], i.properties ->> ")
-                .push_bind(&property.id)
-                .push(")");
-        }
-        _ => return false,
     }
-    true
+
+    fn append_key(&self, sql: &mut QueryBuilder<'a, Postgres>) {
+        match self.key {
+            IssueSortKey::Position => {
+                sql.push("i.position");
+            }
+            IssueSortKey::Column(column) => {
+                sql.push(column);
+            }
+            IssueSortKey::Priority => {
+                sql.push("CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END");
+            }
+            IssueSortKey::Status(order) => {
+                sql.push("COALESCE(array_position(")
+                    .push_bind(order)
+                    .push("::text[], i.status), 100000)");
+            }
+            IssueSortKey::Property(property) => match property.kind.as_str() {
+                "number" => {
+                    sql.push("CASE WHEN jsonb_typeof(i.properties -> ")
+                        .push_bind(&property.id)
+                        .push(") = 'number' THEN (i.properties ->> ")
+                        .push_bind(&property.id)
+                        .push(")::numeric END");
+                }
+                "select" => {
+                    // Public cursors store the original zero-based sort key.
+                    sql.push("(array_position(")
+                        .push_bind(&property.options)
+                        .push("::text[], i.properties ->> ")
+                        .push_bind(&property.id)
+                        .push(") - 1)");
+                }
+                _ => {
+                    sql.push("NULLIF(i.properties ->> ")
+                        .push_bind(&property.id)
+                        .push(", '')");
+                }
+            },
+        }
+    }
+
+    fn append_order(&self, sql: &mut QueryBuilder<'a, Postgres>) {
+        sql.push(" ORDER BY ");
+        self.append_key(sql);
+        sql.push(if self.descending { " DESC" } else { " ASC" });
+        if self.nulls_last {
+            sql.push(" NULLS LAST");
+        }
+        if !self.id_only_tie {
+            sql.push(", i.created_at DESC");
+        }
+        sql.push(", i.id DESC");
+    }
 }

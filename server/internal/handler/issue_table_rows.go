@@ -31,11 +31,14 @@ type issueTableRowsResponse struct {
 }
 
 type resolvedIssueTableSort struct {
-	expression string
-	direction  string
-	castType   string
-	nullsLast  bool
-	idOnlyTie  bool
+	expression  string
+	direction   string
+	castType    string
+	nullsLast   bool
+	idOnlyTie   bool
+	nativeField string
+	statusOrder []string
+	property    *rustIssuePropertySort
 }
 
 func (sort resolvedIssueTableSort) orderBy() string {
@@ -139,41 +142,49 @@ func (h *Handler) issueTableOrderBy(
 		sortField = "position"
 	}
 	resolved := resolvedIssueTableSort{
-		expression: "i.position",
-		direction:  "asc",
-		castType:   "double precision",
+		expression:  "i.position",
+		direction:   "asc",
+		castType:    "double precision",
+		nativeField: "position",
 	}
 	switch sortField {
 	case "position":
 	case "title":
 		resolved.expression = "i.title"
 		resolved.castType = "text"
+		resolved.nativeField = sortField
 	case "created_at", "updated_at":
 		resolved.expression = "i." + sortField
 		resolved.castType = "timestamptz"
+		resolved.nativeField = sortField
 	case "last_activity":
 		resolved.expression = "i.last_activity_at"
 		resolved.castType = "timestamptz"
 		resolved.nullsLast = true
 		resolved.idOnlyTie = true
+		resolved.nativeField = "last_activity_at"
 	case "start_date", "due_date":
 		resolved.expression = "i." + sortField
 		resolved.castType = "date"
 		resolved.nullsLast = true
+		resolved.nativeField = sortField
 	case "status":
-		expr, err := h.issueStatusSortExpression(r.Context(), workspaceID, addArg)
+		order, err := h.issueStatusSortKeys(r.Context(), workspaceID)
 		if err != nil {
 			slog.Warn("resolve table status sort failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeIssueTableQueryFailure(w, r, "failed to resolve table sort")
 			return resolvedIssueTableSort{}, false
 		}
-		resolved.expression = expr
+		resolved.expression = issueStatusOrderSQL(addArg(order))
 		resolved.castType = "integer"
+		resolved.nativeField = sortField
+		resolved.statusOrder = order
 	case "priority":
 		resolved.expression = "CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
 		resolved.castType = "integer"
+		resolved.nativeField = sortField
 	default:
-		expr, handled, err := h.propertySortExpr(r, util.UUIDToString(workspaceID), sortField)
+		def, handled, err := h.propertySortDefinition(r, util.UUIDToString(workspaceID), sortField)
 		if !handled {
 			writeError(w, http.StatusBadRequest, "invalid query.sort.field")
 			return resolvedIssueTableSort{}, false
@@ -187,13 +198,18 @@ func (h *Handler) issueTableOrderBy(
 			}
 			return resolvedIssueTableSort{}, false
 		}
-		if expr != "" {
+		if expr := propertySortExpression(def); expr != "" {
 			resolved.expression = expr
 			resolved.castType = "text"
 			if strings.Contains(expr, "::numeric") {
 				resolved.castType = "numeric"
 			}
 			resolved.nullsLast = true
+			resolved.nativeField = "property"
+			resolved.property = &rustIssuePropertySort{ID: uuidToString(def.ID), Kind: def.Type}
+			if def.Type == "select" {
+				resolved.property.Options = selectPropertySortOptions(parsePropertyConfig(def.Config))
+			}
 		}
 	}
 
@@ -339,6 +355,25 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 	cursorPredicate, ok := resolvedSort.cursorPredicate(w, cursor, addArg)
 	if !ok {
 		return issueTableRowsResponse{}, false
+	}
+	pilot, ok := h.rustIssueTablePilot(w, r, compiled.workspaceID, request)
+	if !ok {
+		return issueTableRowsResponse{}, false
+	}
+	if pilot {
+		var cursorTimeZone string
+		if resolvedSort.castType == "timestamptz" {
+			if err := tx.QueryRow(r.Context(), "SHOW TimeZone").Scan(&cursorTimeZone); err != nil {
+				writeIssueTableQueryFailure(w, r, "failed to resolve table sort")
+				return issueTableRowsResponse{}, false
+			}
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeIssueTableQueryFailure(w, r, "failed to finish table query")
+			return issueTableRowsResponse{}, false
+		}
+		committed = true
+		return baseHandler.queryRustIssueTableRows(w, r, compiled, request, resolvedSort, cursor, limit, branchIdentity, cursorTimeZone)
 	}
 	limitRef := addArg(limit + 1)
 

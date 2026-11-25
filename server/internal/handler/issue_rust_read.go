@@ -37,10 +37,11 @@ var rustIssueReadClient = &http.Client{
 // the pilot stay on the default Go handler; workspaces inside the pilot never
 // silently fall back to Go if the Rust service is unconfigured or errors.
 type IssueReadBridge struct {
-	Upstream        string
-	Token           string
-	PilotScopes     []string
-	ListPilotScopes []string
+	Upstream         string
+	Token            string
+	PilotScopes      []string
+	ListPilotScopes  []string
+	TablePilotScopes []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -54,6 +55,7 @@ type IssueReadBridge struct {
 func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	scopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_READ_PILOT"))
 	listScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_LIST_PILOT"))
+	tableScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_TABLE_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
 	if upstream == "" {
 		upstream = strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_TABLES_UPSTREAM")), "/")
@@ -63,12 +65,13 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		token = strings.TrimSpace(os.Getenv("XSHADOW_TABLES_INTERNAL_TOKEN"))
 	}
 	bridge := &IssueReadBridge{
-		Upstream:        upstream,
-		Token:           token,
-		PilotScopes:     scopes,
-		ListPilotScopes: listScopes,
+		Upstream:         upstream,
+		Token:            token,
+		PilotScopes:      scopes,
+		ListPilotScopes:  listScopes,
+		TablePilotScopes: tableScopes,
 	}
-	if len(scopes)+len(listScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue read pilot configured without a valid loopback upstream and internal token")
 		}
@@ -248,6 +251,10 @@ func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, metho
 	resp, err := rustIssueReadClient.Do(upstreamReq)
 	if err != nil {
 		if writeQueryCancellation(w, r, err) {
+			return nil, false
+		}
+		if path == rustIssueTablePath && errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+			writeIssueTableQueryFailure(w, r, "failed to list table rows")
 			return nil, false
 		}
 		slog.Warn("rust issue read upstream failed", append(logger.RequestAttrs(r), "workspace_id", workspaceID, "error", err)...)

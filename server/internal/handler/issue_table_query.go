@@ -180,6 +180,7 @@ type issueTableFacetsRequest struct {
 }
 
 type issueTableSQL struct {
+	native      rustIssueListQuery
 	where       string
 	args        []any
 	fingerprint string
@@ -538,6 +539,16 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 	}
 
 	negated := make(map[string]bool, len(spec.Filters.Negate))
+	native := rustIssueListQuery{
+		Statuses: spec.Filters.Statuses, Priorities: spec.Filters.Priorities,
+		IncludeNoAssignee: spec.Filters.IncludeNoAssignee, IncludeNoProject: spec.Filters.IncludeNoProject,
+		ProjectStatuses: spec.Filters.ProjectStatuses, WorkingOnly: spec.Filters.WorkingOnly,
+	}
+	if spec.Filters.Assignees != nil && len(spec.Filters.Assignees) == 0 && !spec.Filters.IncludeNoAssignee {
+		empty := []pgtype.UUID{}
+		native.IDs = &empty
+	}
+	native.setSearch(spec.Search)
 	for _, field := range spec.Filters.Negate {
 		if !issueTableContainsString(issueTableNegatableFilters, field) {
 			writeError(w, http.StatusBadRequest, "invalid filters.negate")
@@ -593,6 +604,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		if len(spec.Scope.AssigneeTypes) > 0 {
 			where = append(where, fmt.Sprintf("i.assignee_type = ANY(%s::text[])", addArg(sortedUniqueStrings(spec.Scope.AssigneeTypes))))
 		}
+		native.AssigneeTypes = spec.Scope.AssigneeTypes
 		return true
 	}
 	switch spec.Scope.Kind {
@@ -607,6 +619,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 			return issueTableSQL{}, false
 		}
 		where = append(where, fmt.Sprintf("i.project_id = %s::uuid", addArg(projectID)))
+		native.ProjectID = uuidToPtr(projectID)
 		if !appendAssigneeTypes() {
 			return issueTableSQL{}, false
 		}
@@ -620,6 +633,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 			return issueTableSQL{}, false
 		}
 		where = append(where, fmt.Sprintf("i.assignee_type = %s::text AND i.assignee_id = %s::uuid", addArg(actor.actorType), addArg(actor.actorID)))
+		native.ScopeAssignee = &rustIssueActor{Type: actor.actorType, ID: uuidToString(actor.actorID)}
 	case "creator":
 		if spec.Scope.Actor == nil {
 			writeError(w, http.StatusBadRequest, "scope.actor is required")
@@ -630,6 +644,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 			return issueTableSQL{}, false
 		}
 		where = append(where, fmt.Sprintf("i.creator_type = %s::text AND i.creator_id = %s::uuid", addArg(actor.actorType), addArg(actor.actorID)))
+		native.ScopeCreator = &rustIssueActor{Type: actor.actorType, ID: uuidToString(actor.actorID)}
 	case "my":
 		userID, ok := requireUserID(w, r)
 		if !ok {
@@ -673,6 +688,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 				return issueTableSQL{}, false
 			}
 			ors = append(ors, fmt.Sprintf("(i.assignee_type = %s::text AND i.assignee_id = %s::uuid)", addArg(actor.actorType), addArg(actor.actorID)))
+			native.AssigneeFilters = append(native.AssigneeFilters, rustIssueActor{Type: actor.actorType, ID: uuidToString(actor.actorID)})
 		}
 		if spec.Filters.IncludeNoAssignee {
 			ors = append(ors, "(i.assignee_type IS NULL AND i.assignee_id IS NULL)")
@@ -695,6 +711,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 				return issueTableSQL{}, false
 			}
 			ors = append(ors, fmt.Sprintf("(i.creator_type = %s::text AND i.creator_id = %s::uuid)", addArg(actor.actorType), addArg(actor.actorID)))
+			native.CreatorFilters = append(native.CreatorFilters, rustIssueActor{Type: actor.actorType, ID: uuidToString(actor.actorID)})
 		}
 		appendFilter("creators", "("+strings.Join(ors, " OR ")+")")
 	}
@@ -737,6 +754,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		}
 		appendFilter("project_ids", "("+strings.Join(ors, " OR ")+")")
 	}
+	native.ProjectIDs = projectIDs
 
 	if len(spec.Filters.ProjectStatuses) > 0 {
 		for _, status := range spec.Filters.ProjectStatuses {
@@ -763,6 +781,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 	if len(labelIDs) > 0 {
 		appendFilter("label_ids", fmt.Sprintf("EXISTS (SELECT 1 FROM issue_to_label itl WHERE itl.issue_id = i.id AND itl.label_id = ANY(%s::uuid[]))", addArg(labelIDs)))
 	}
+	native.LabelIDs = labelIDs
 
 	var (
 		today         time.Time
@@ -841,6 +860,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		if len(compiled) > 0 {
 			where = append(where, propertiesFilterPredicate(compiled, addArg))
 		}
+		native.Properties = compiled
 	}
 
 	if spec.Filters.Date != nil {
@@ -859,6 +879,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 			return issueTableSQL{}, false
 		}
 		where = append(where, fmt.Sprintf("i.%s >= %s AND i.%s < %s", column, addArg(start), column, addArg(end)))
+		native.Date = &rustIssueDate{Column: column, Start: start, End: end}
 	}
 
 	if spec.Filters.WorkingOnly {
@@ -869,6 +890,8 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		return issueTableSQL{}, false
 	}
 	if spec.Filters.WorkingIssueIDs != nil {
+		normalized := append([]pgtype.UUID{}, workingIssueIDs...)
+		native.WorkingIssueIDs = &normalized
 		if len(workingIssueIDs) == 0 {
 			where = append(where, "FALSE")
 		} else {
@@ -883,6 +906,8 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		return issueTableSQL{}, false
 	}
 	if spec.Filters.UnreadIssueIDs != nil {
+		normalized := append([]pgtype.UUID{}, unreadIssueIDs...)
+		native.UnreadIssueIDs = &normalized
 		if len(unreadIssueIDs) == 0 {
 			where = append(where, "FALSE")
 		} else {
@@ -894,10 +919,12 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 	}
 	if spec.Filters.IncludeSubIssues != nil && !*spec.Filters.IncludeSubIssues {
 		where = append(where, "i.parent_issue_id IS NULL")
+		native.TopLevelOnly = true
 	}
 	where = appendIssueTableSearchFilter(where, addArg, spec.Search)
 
 	return issueTableSQL{
+		native:            native,
 		where:             strings.Join(where, " AND "),
 		args:              args,
 		fingerprint:       fingerprint,

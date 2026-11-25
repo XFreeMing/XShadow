@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 
 mod list;
-pub use list::{IssueListQuery, list_issues};
+pub use list::{IssueListQuery, IssueTableQuery, list_issues, table_rows};
 
 #[derive(Debug)]
 pub enum IssueReadError {
@@ -500,7 +500,7 @@ fn issue_from_row(row: &sqlx::postgres::PgRow) -> Result<IssueRow, IssueReadErro
 }
 
 async fn hidden_projects_for_member(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     workspace_id: &str,
     user_id: &str,
     role: &str,
@@ -519,7 +519,7 @@ async fn hidden_projects_for_member(
     )
     .bind(workspace_id)
     .bind(user_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(|_| IssueReadError::ProjectAccessFailed)?;
     Ok(HiddenProjects {
@@ -528,7 +528,7 @@ async fn hidden_projects_for_member(
 }
 
 async fn list_private_project_ids(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     workspace_id: &str,
 ) -> Result<Vec<String>, IssueReadError> {
     sqlx::query_scalar::<_, String>(
@@ -536,17 +536,17 @@ async fn list_private_project_ids(
          WHERE workspace_id = $1::uuid AND visibility = 'private'",
     )
     .bind(workspace_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(|_| IssueReadError::ProjectAccessFailed)
 }
 
 async fn hidden_projects_for_principals(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     workspace_id: &str,
     principals: &[String],
 ) -> Result<HiddenProjects, IssueReadError> {
-    let private = list_private_project_ids(pool, workspace_id).await?;
+    let private = list_private_project_ids(conn, workspace_id).await?;
     if private.is_empty() {
         return Ok(HiddenProjects::default());
     }
@@ -568,20 +568,20 @@ async fn hidden_projects_for_principals(
         )
         .bind(principal)
         .bind(workspace_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|_| IssueReadError::ProjectAccessFailed)?;
         let Some(role) = role else {
             return Ok(HiddenProjects { ids: all_private });
         };
-        let one = hidden_projects_for_member(pool, workspace_id, principal, &role).await?;
+        let one = hidden_projects_for_member(conn, workspace_id, principal, &role).await?;
         hidden.ids.extend(one.ids);
     }
     Ok(hidden)
 }
 
-async fn resolve_caller_access(
-    pool: &PgPool,
+async fn resolve_caller_access_on(
+    conn: &mut PgConnection,
     workspace_id: &str,
     actor: &CallerActor,
 ) -> Result<HiddenProjects, IssueReadError> {
@@ -592,13 +592,13 @@ async fn resolve_caller_access(
             )
             .bind(user_id)
             .bind(workspace_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await
             .map_err(|_| IssueReadError::ProjectAccessFailed)?;
             let Some(role) = role else {
                 return Err(IssueReadError::NotFound("workspace not found"));
             };
-            hidden_projects_for_member(pool, workspace_id, user_id, &role).await
+            hidden_projects_for_member(conn, workspace_id, user_id, &role).await
         }
         CallerActor::Agent {
             agent_id,
@@ -614,7 +614,7 @@ async fn resolve_caller_access(
                 )
                 .bind(uid)
                 .bind(workspace_id)
-                .fetch_one(pool)
+                .fetch_one(&mut *conn)
                 .await
                 .map_err(|_| IssueReadError::ProjectAccessFailed)?;
                 if !member_exists {
@@ -628,12 +628,12 @@ async fn resolve_caller_access(
                  WHERE id = $1::uuid",
             )
             .bind(task_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await
             .map_err(|_| IssueReadError::ProjectAccessFailed)?;
 
             let Some(task_row) = task_row else {
-                return hidden_projects_for_principals(pool, workspace_id, &[]).await;
+                return hidden_projects_for_principals(conn, workspace_id, &[]).await;
             };
             let task_agent_id: String = task_row
                 .try_get(0)
@@ -644,7 +644,7 @@ async fn resolve_caller_access(
                 ));
             }
 
-            let private = list_private_project_ids(pool, workspace_id).await?;
+            let private = list_private_project_ids(conn, workspace_id).await?;
             if private.is_empty() {
                 return Ok(HiddenProjects::default());
             }
@@ -655,12 +655,12 @@ async fn resolve_caller_access(
                  WHERE id = $1::uuid",
             )
             .bind(agent_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await
             .map_err(|_| IssueReadError::ProjectAccessFailed)?;
 
             let Some(agent_row) = agent_row else {
-                return hidden_projects_for_principals(pool, workspace_id, &[]).await;
+                return hidden_projects_for_principals(conn, workspace_id, &[]).await;
             };
             let agent_workspace_id: String = agent_row
                 .try_get(0)
@@ -688,9 +688,21 @@ async fn resolve_caller_access(
             if let Some(owner) = owner {
                 principals.push(owner);
             }
-            hidden_projects_for_principals(pool, workspace_id, &principals).await
+            hidden_projects_for_principals(conn, workspace_id, &principals).await
         }
     }
+}
+
+async fn resolve_caller_access(
+    pool: &PgPool,
+    workspace_id: &str,
+    actor: &CallerActor,
+) -> Result<HiddenProjects, IssueReadError> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|_| IssueReadError::ProjectAccessFailed)?;
+    resolve_caller_access_on(&mut conn, workspace_id, actor).await
 }
 
 async fn workspace_issue_prefix(

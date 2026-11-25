@@ -25,15 +25,21 @@ type rustIssueListQuery struct {
 	AssigneeID         *string                `json:"assignee_id,omitempty"`
 	AssigneeIDs        []pgtype.UUID          `json:"assignee_ids,omitempty"`
 	AssigneeTypes      []string               `json:"assignee_types,omitempty"`
+	ScopeAssignee      *rustIssueActor        `json:"scope_assignee,omitempty"`
 	AssigneeFilters    []rustIssueActor       `json:"assignee_filters,omitempty"`
 	IncludeNoAssignee  bool                   `json:"include_no_assignee,omitempty"`
 	CreatorID          *string                `json:"creator_id,omitempty"`
+	ScopeCreator       *rustIssueActor        `json:"scope_creator,omitempty"`
 	CreatorFilters     []rustIssueActor       `json:"creator_filters,omitempty"`
 	ProjectID          *string                `json:"project_id,omitempty"`
 	ProjectIDs         []pgtype.UUID          `json:"project_ids,omitempty"`
+	ProjectStatuses    []string               `json:"project_statuses,omitempty"`
 	IncludeNoProject   bool                   `json:"include_no_project,omitempty"`
 	LabelIDs           []pgtype.UUID          `json:"label_ids,omitempty"`
 	IDs                *[]pgtype.UUID         `json:"ids,omitempty"`
+	WorkingOnly        bool                   `json:"working_only,omitempty"`
+	WorkingIssueIDs    *[]pgtype.UUID         `json:"working_issue_ids,omitempty"`
+	UnreadIssueIDs     *[]pgtype.UUID         `json:"unread_issue_ids,omitempty"`
 	TopLevelOnly       bool                   `json:"top_level_only,omitempty"`
 	SearchPatterns     []string               `json:"search_patterns,omitempty"`
 	SearchNumber       *int32                 `json:"search_number,omitempty"`

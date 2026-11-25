@@ -10,6 +10,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 原生任务列表 `GET /api/issues` 与 `POST /api/issues/query` 可用 `XSHADOW_ISSUES_RUST_LIST_PILOT` 独立选择工作区。Go 验证请求参数，Rust 筛选任务、检查可见范围、查询分页和总数。该设置只作用于这两个列表入口。清空后，列表回到 Go。
 
+`XSHADOW_ISSUES_RUST_TABLE_PILOT` 独立指定 `POST /api/issues/table/rows` 的试点工作区。当前试点涵盖无分组表格、父子层级、工作区和项目范围、指派人和创建人范围、字段排序及常规筛选。Go 保留公开游标的校验与编码，Rust 在同一只读快照内检查项目可见范围并查询行窗口、子任务数和首屏总数。分组、个人任务范围、关系筛选、相对截止日期、取反和高级筛选继续走 Go。清空试点设置后，所有表格行查询回到 Go。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序
