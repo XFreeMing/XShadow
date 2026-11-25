@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -32,22 +33,9 @@ type rustIssueDeleteResult struct {
 	GoalLinksChanged  bool                              `json:"goal_links_changed"`
 }
 
-// deleteIssueUsesRust selects member-authenticated deletes of member-created
-// tasks that do not need runtime queue cancellation, autopilot failure, or
-// source-context object intents. Eligibility is rechecked under the Rust lock.
-func (h *Handler) deleteIssueUsesRust(r *http.Request, issue db.Issue) (bool, error) {
-	if h.IssueReadBridge == nil || len(h.IssueReadBridge.DeletePilotScopes) == 0 {
-		return false, nil
-	}
-	ctx := r.Context()
-	inPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeletePilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
-	if err != nil || !inPilot {
-		return false, err
-	}
-	actorType, _ := h.resolveActor(r, requestUserID(r), uuidToString(issue.WorkspaceID))
-	if actorType != "member" {
-		return false, nil
-	}
+// issueOrdinaryDeleteEligible reports whether a task matches the supported
+// delete shape without queue, storage, or source-context side effects.
+func (h *Handler) issueOrdinaryDeleteEligible(ctx context.Context, issue db.Issue) (bool, error) {
 	if issue.CreatorType != "member" {
 		return false, nil
 	}
@@ -85,6 +73,25 @@ func (h *Handler) deleteIssueUsesRust(r *http.Request, issue db.Issue) (bool, er
 		return false, err
 	}
 	return true, nil
+}
+
+// deleteIssueUsesRust selects member-authenticated deletes of member-created
+// tasks that do not need runtime queue cancellation, autopilot failure, or
+// source-context object intents. Eligibility is rechecked under the Rust lock.
+func (h *Handler) deleteIssueUsesRust(r *http.Request, issue db.Issue) (bool, error) {
+	if h.IssueReadBridge == nil || len(h.IssueReadBridge.DeletePilotScopes) == 0 {
+		return false, nil
+	}
+	ctx := r.Context()
+	inPilot, err := matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.DeletePilotScopes, uuidToString(issue.WorkspaceID), issue.WorkspaceID)
+	if err != nil || !inPilot {
+		return false, err
+	}
+	actorType, _ := h.resolveActor(r, requestUserID(r), uuidToString(issue.WorkspaceID))
+	if actorType != "member" {
+		return false, nil
+	}
+	return h.issueOrdinaryDeleteEligible(ctx, issue)
 }
 
 func (h *Handler) deleteIssueViaRust(w http.ResponseWriter, r *http.Request, issue db.Issue, userID string) {

@@ -22,7 +22,8 @@ use super::store::{
     OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{
-    IssueDeleteWrite, IssueDeleteWriteError, IssuePropertyWrite, IssuePropertyWriteError,
+    IssueBatchDeleteWrite, IssueDeleteWrite, IssueDeleteWriteError, IssuePropertyWrite,
+    IssuePropertyWriteError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -143,6 +144,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
         .route(
             "/internal/issues/create",
             post(create_issue).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/internal/issues/batch-delete",
+            post(batch_delete_issues_handler).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/internal/issues/table/rows",
@@ -753,6 +758,40 @@ async fn authorize(
             next.run(request).await
         }
         Err(failure) => error_response(failure.status, failure.message),
+    }
+}
+
+async fn batch_delete_issues_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(request): Json<IssueBatchDeleteWrite>,
+) -> Response {
+    if !matches!(ctx.actor, CallerActor::Member { .. }) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "issue deletion requires a human or a bound agent identity",
+        );
+    }
+    match store::batch_delete_issues(&app.pool, &ctx.workspace_id, &ctx.actor, request).await {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueDeleteWriteError::Access(error)) => {
+            issue_request_error(error, "failed to batch delete issues")
+        }
+        Err(IssueDeleteWriteError::AlreadyDeleted) => {
+            error_response(StatusCode::NOT_FOUND, "issue not found")
+        }
+        Err(IssueDeleteWriteError::DeleteSensitive) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "delete_sensitive": true })),
+        )
+            .into_response(),
+        Err(IssueDeleteWriteError::Database(error)) => {
+            eprintln!("rust issue batch delete failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to batch delete issues",
+            )
+        }
     }
 }
 

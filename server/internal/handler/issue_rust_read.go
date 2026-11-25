@@ -35,20 +35,21 @@ var rustIssueReadClient = &http.Client{
 // IssueReadBridge selects issue operations for the Rust service over trusted
 // loopback HTTP. Selected operations fail closed when Rust is unavailable.
 type IssueReadBridge struct {
-	Upstream              string
-	Token                 string
-	PilotScopes           []string
-	ListPilotScopes       []string
-	TablePilotScopes      []string
-	WritePilotScopes      []string
-	AcceptancePilotScopes []string
-	StatusPilotScopes     []string
-	WorkflowPilotScopes   []string
-	AssignPilotScopes     []string
-	CommentPilotScopes    []string
-	CreatePilotScopes     []string
-	DeletePilotScopes     []string
-	BatchPilotScopes      []string
+	Upstream               string
+	Token                  string
+	PilotScopes            []string
+	ListPilotScopes        []string
+	TablePilotScopes       []string
+	WritePilotScopes       []string
+	AcceptancePilotScopes  []string
+	StatusPilotScopes      []string
+	WorkflowPilotScopes    []string
+	AssignPilotScopes      []string
+	CommentPilotScopes     []string
+	CreatePilotScopes      []string
+	DeletePilotScopes      []string
+	BatchPilotScopes       []string
+	BatchDeletePilotScopes []string
 }
 
 // NewIssueReadBridgeFromEnv configures the Rust issue detail read pilot from
@@ -76,6 +77,9 @@ type IssueReadBridge struct {
 //   - XSHADOW_ISSUES_RUST_BATCH_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member scalar batch updates on POST …/batch-update
 //     (independent of the single-task write pilot).
+//   - XSHADOW_ISSUES_RUST_BATCH_DELETE_PILOT: comma-separated workspace slugs
+//     or UUIDs for native member batch deletes on POST …/batch-delete
+//     (independent of the single-task delete pilot).
 func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	scopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_READ_PILOT"))
 	listScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_LIST_PILOT"))
@@ -89,6 +93,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	createScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_PILOT"))
 	deleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_PILOT"))
 	batchScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_PILOT"))
+	batchDeleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_DELETE_PILOT"))
 	upstream := strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_ISSUES_UPSTREAM")), "/")
 	if upstream == "" {
 		upstream = strings.TrimRight(strings.TrimSpace(os.Getenv("XSHADOW_TABLES_UPSTREAM")), "/")
@@ -98,22 +103,23 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		token = strings.TrimSpace(os.Getenv("XSHADOW_TABLES_INTERNAL_TOKEN"))
 	}
 	bridge := &IssueReadBridge{
-		Upstream:              upstream,
-		Token:                 token,
-		PilotScopes:           scopes,
-		ListPilotScopes:       listScopes,
-		TablePilotScopes:      tableScopes,
-		WritePilotScopes:      writeScopes,
-		AcceptancePilotScopes: acceptanceScopes,
-		StatusPilotScopes:     statusScopes,
-		WorkflowPilotScopes:   workflowScopes,
-		AssignPilotScopes:     assignScopes,
-		CommentPilotScopes:    commentScopes,
-		CreatePilotScopes:     createScopes,
-		DeletePilotScopes:     deleteScopes,
-		BatchPilotScopes:      batchScopes,
+		Upstream:               upstream,
+		Token:                  token,
+		PilotScopes:            scopes,
+		ListPilotScopes:        listScopes,
+		TablePilotScopes:       tableScopes,
+		WritePilotScopes:       writeScopes,
+		AcceptancePilotScopes:  acceptanceScopes,
+		StatusPilotScopes:      statusScopes,
+		WorkflowPilotScopes:    workflowScopes,
+		AssignPilotScopes:      assignScopes,
+		CommentPilotScopes:     commentScopes,
+		CreatePilotScopes:      createScopes,
+		DeletePilotScopes:      deleteScopes,
+		BatchPilotScopes:       batchScopes,
+		BatchDeletePilotScopes: batchDeleteScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(deleteScopes)+len(batchScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(deleteScopes)+len(batchScopes)+len(batchDeleteScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}
@@ -263,10 +269,16 @@ func (h *Handler) getIssueViaRust(w http.ResponseWriter, r *http.Request, worksp
 func (h *Handler) requestRustIssue(w http.ResponseWriter, r *http.Request, method, path, workspaceID, userID string, payload []byte) (*http.Response, bool) {
 	unavailable := "rust issue read service unavailable"
 	switch method {
-	case http.MethodPut, http.MethodPost:
-		unavailable = "rust issue write service unavailable"
 	case http.MethodDelete:
 		unavailable = "rust issue delete service unavailable"
+	case http.MethodPost:
+		if strings.HasSuffix(path, "/batch-delete") {
+			unavailable = "rust issue batch delete service unavailable"
+		} else {
+			unavailable = "rust issue write service unavailable"
+		}
+	case http.MethodPut:
+		unavailable = "rust issue write service unavailable"
 	}
 	return h.requestRustIssueWithUnavailable(w, r, method, path, workspaceID, userID, payload, unavailable)
 }

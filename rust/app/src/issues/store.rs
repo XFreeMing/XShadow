@@ -23,6 +23,7 @@ pub use acceptance_write::{
     IssueAcceptanceWrite, IssueAcceptanceWriteError, write_issue_acceptance_trace,
 };
 mod assign_write;
+mod batch_delete_write;
 mod comment_write;
 mod create_validate;
 mod create_write;
@@ -31,6 +32,7 @@ mod status_dispatch;
 mod status_write;
 mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
+pub use batch_delete_write::{IssueBatchDeleteWrite, batch_delete_issues};
 pub use comment_write::{IssueCommentCreate, IssueCommentCreateError, create_issue_comment};
 pub use create_write::{IssueCreateError, IssueCreateRequest, create_issue};
 pub use delete_write::{IssueDeleteWrite, IssueDeleteWriteError, delete_issue};

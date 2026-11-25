@@ -5651,6 +5651,16 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	if !h.requireIssueDeletion(w, r, wsUUID, issues) {
 		return
 	}
+	if useRust, err := h.batchDeleteIssuesUsesRust(r, issues); err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust issue batch delete route failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue batch delete route")
+		}
+		return
+	} else if useRust {
+		h.batchDeleteIssuesViaRust(w, r, issues, userID, workspaceID)
+		return
+	}
 	for _, issue := range issues {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 		_ = h.AutopilotService.FailAutopilotRunsByIssue(r.Context(), issue.ID)
