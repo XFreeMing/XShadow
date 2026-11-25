@@ -1944,6 +1944,31 @@ func (q *Queries) ClearAgentThinkingLevel(ctx context.Context, id pgtype.UUID) (
 	return i, err
 }
 
+const commentHasActiveTriggerTask = `-- name: CommentHasActiveTriggerTask :one
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_task_queue
+    WHERE (trigger_comment_id = $1 OR $1 = ANY(coalesced_comment_ids))
+      AND issue_id = $2
+      AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+) AS exists
+`
+
+type CommentHasActiveTriggerTaskParams struct {
+	CommentID pgtype.UUID `json:"comment_id"`
+	IssueID   pgtype.UUID `json:"issue_id"`
+}
+
+// Active queue rows whose planned batch still references this comment as the
+// primary trigger or a coalesced input. Used to keep strict comment edits on Go
+// where cancellation is part of the public contract.
+func (q *Queries) CommentHasActiveTriggerTask(ctx context.Context, arg CommentHasActiveTriggerTaskParams) (bool, error) {
+	row := q.db.QueryRow(ctx, commentHasActiveTriggerTask, arg.CommentID, arg.IssueID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const completeAgentTask = `-- name: CompleteAgentTask :one
 UPDATE agent_task_queue
 SET status = 'completed', completed_at = now(), result = $2,

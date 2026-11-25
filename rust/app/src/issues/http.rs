@@ -21,10 +21,11 @@ use super::store::{
 };
 use super::store::{
     CommentResolutionError, IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueAssignEdit,
-    IssueAssignEditError, IssueCommentCreate, IssueCommentCreateError, IssueCreateError,
-    IssueCreateRequest, IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite,
-    IssueReactionWriteError, IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit,
-    IssueWorkflowSquadEditError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueAssignEditError, IssueCommentCreate, IssueCommentCreateError, IssueCommentEdit,
+    IssueCommentEditError, IssueCreateError, IssueCreateRequest, IssueMethodAdoptWrite,
+    IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError, IssueStatusEdit,
+    IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, OrdinaryIssueEdit,
+    OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -214,6 +215,10 @@ pub fn router(pool: PgPool, token: String) -> Router {
             post(add_issue_reaction_handler)
                 .delete(remove_issue_reaction_handler)
                 .layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/internal/comments/{id}",
+            put(update_comment_handler).layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/internal/comments/{id}/resolve",
@@ -824,6 +829,46 @@ async fn remove_issue_reaction_handler(
             error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to remove reaction",
+            )
+        }
+    }
+}
+
+async fn update_comment_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(edit): Json<IssueCommentEdit>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "comment not found");
+    }
+    match store::update_issue_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueCommentEditError::Access(error)) => {
+            issue_request_error(error, "failed to update comment")
+        }
+        Err(IssueCommentEditError::InvalidInput) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid comment edit request")
+        }
+        Err(IssueCommentEditError::RouteChanged) => {
+            (StatusCode::CONFLICT, Json(json!({ "route_changed": true }))).into_response()
+        }
+        Err(IssueCommentEditError::RevisionConflict { actual_revision }) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(IssueCommentEditError::ContentConflict) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "field_conflict": true })),
+        )
+            .into_response(),
+        Err(IssueCommentEditError::Database(error)) => {
+            eprintln!("rust comment edit failed: {error}");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to update comment",
             )
         }
     }

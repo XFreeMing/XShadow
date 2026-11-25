@@ -10,7 +10,7 @@ use super::{
     ordinary::set_write_actor, resolve_caller_access_on,
 };
 
-const COMMENT_ROW_RETURNING: &str = "id::text, issue_id::text, author_type, author_id::text, content, type, parent_id::text, \
+pub(super) const COMMENT_VERSION_COLUMNS: &str = "id::text, issue_id::text, author_type, author_id::text, content, type, parent_id::text, \
      to_json(created_at)#>>'{}', to_json(updated_at)#>>'{}', revision, to_json(resolved_at)#>>'{}', \
      resolved_by_type, resolved_by_id::text, source_task_id::text, to_json(deleted_at)#>>'{}'";
 
@@ -59,7 +59,9 @@ async fn lock_workspace_member(
     Ok(())
 }
 
-fn map_comment_row(row: &sqlx::postgres::PgRow) -> Result<IssueCommentRow, sqlx::Error> {
+pub(super) fn map_comment_version(
+    row: &sqlx::postgres::PgRow,
+) -> Result<IssueCommentRow, sqlx::Error> {
     let ts = |idx: usize| -> Result<String, sqlx::Error> {
         Ok(format_issue_timestamp(row.try_get::<String, _>(idx)?))
     };
@@ -218,14 +220,14 @@ async fn clear_other_thread_resolutions(
         WHERE comment.id IN (SELECT id FROM descendants)
           AND comment.id <> $1::uuid
           AND comment.resolved_at IS NOT NULL
-        RETURNING {COMMENT_ROW_RETURNING}"
+        RETURNING {COMMENT_VERSION_COLUMNS}"
     ))
     .bind(target_id)
     .bind(issue_id)
     .bind(workspace_id)
     .fetch_all(&mut *tx)
     .await?;
-    rows.iter().map(map_comment_row).collect()
+    rows.iter().map(map_comment_version).collect()
 }
 
 async fn apply_resolve(
@@ -242,7 +244,7 @@ async fn apply_resolve(
             revision = revision + CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END,
             updated_at = CASE WHEN resolved_at IS NULL THEN now() ELSE updated_at END
          WHERE id = $1::uuid AND deleted_at IS NULL
-         RETURNING {COMMENT_ROW_RETURNING}"
+         RETURNING {COMMENT_VERSION_COLUMNS}"
     ))
     .bind(comment_id)
     .bind(actor_type)
@@ -252,7 +254,7 @@ async fn apply_resolve(
     let Some(row) = row else {
         return Err(sqlx::Error::RowNotFound);
     };
-    map_comment_row(&row)
+    map_comment_version(&row)
 }
 
 async fn apply_unresolve(
@@ -267,12 +269,12 @@ async fn apply_unresolve(
             revision = revision + CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END,
             updated_at = CASE WHEN resolved_at IS NOT NULL THEN now() ELSE updated_at END
          WHERE id = $1::uuid
-         RETURNING {COMMENT_ROW_RETURNING}"
+         RETURNING {COMMENT_VERSION_COLUMNS}"
     ))
     .bind(comment_id)
     .fetch_one(&mut *tx)
     .await?;
-    map_comment_row(&row)
+    map_comment_version(&row)
 }
 
 pub async fn resolve_comment(

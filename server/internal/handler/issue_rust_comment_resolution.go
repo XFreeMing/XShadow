@@ -146,6 +146,7 @@ func (h *Handler) confirmRustCommentResolutionReceipt(
 ) (cleared []db.Comment, target db.Comment, wasResolvedBefore bool, ok bool) {
 	if receipt.TargetChanged == nil || receipt.Target.ID != uuidToString(routeComment.ID) ||
 		receipt.Target.DeletedAt != nil || receipt.Target.Revision < routeComment.Revision ||
+		(receipt.Target.ResolvedAt != nil) != resolve ||
 		(!resolve && len(receipt.Cleared) != 0) {
 		return nil, db.Comment{}, false, false
 	}
@@ -153,7 +154,7 @@ func (h *Handler) confirmRustCommentResolutionReceipt(
 	if changed && receipt.Target.Revision <= routeComment.Revision {
 		return nil, db.Comment{}, false, false
 	}
-	target, ok = h.confirmCommentResolutionRow(ctx, routeComment, receipt.Target, resolve)
+	target, ok = h.confirmRustCommentVersion(ctx, routeComment, receipt.Target)
 	if !ok || (resolve && changed &&
 		(target.ResolvedByType.String != actorType || uuidToString(target.ResolvedByID) != actorID)) {
 		return nil, db.Comment{}, false, false
@@ -168,7 +169,10 @@ func (h *Handler) confirmRustCommentResolutionReceipt(
 	seen := map[pgtype.UUID]bool{target.ID: true}
 	outCleared := make([]db.Comment, 0, len(receipt.Cleared))
 	for _, claim := range receipt.Cleared {
-		row, ok := h.confirmCommentResolutionRow(ctx, routeComment, claim, false)
+		if claim.ResolvedAt != nil {
+			return nil, db.Comment{}, false, false
+		}
+		row, ok := h.confirmRustCommentVersion(ctx, routeComment, claim)
 		if !ok || seen[row.ID] {
 			return nil, db.Comment{}, false, false
 		}
@@ -190,10 +194,10 @@ func commentResolutionTimestamp(value *string) (pgtype.Timestamptz, bool) {
 	return pgtype.Timestamptz{Time: parsed.Local(), Valid: err == nil}, err == nil
 }
 
-func (h *Handler) confirmCommentResolutionRow(
-	ctx context.Context, scope db.Comment, claim CommentResponse, resolved bool,
+func (h *Handler) confirmRustCommentVersion(
+	ctx context.Context, scope db.Comment, claim CommentResponse,
 ) (db.Comment, bool) {
-	if claim.IssueID != uuidToString(scope.IssueID) || claim.Revision < 1 || (claim.ResolvedAt != nil) != resolved {
+	if claim.IssueID != uuidToString(scope.IssueID) || claim.Revision < 1 {
 		return db.Comment{}, false
 	}
 	id, err := util.ParseUUID(claim.ID)
@@ -205,6 +209,7 @@ func (h *Handler) confirmCommentResolutionRow(
 		current.AuthorType != claim.AuthorType || uuidToString(current.AuthorID) != claim.AuthorID || current.Type != claim.Type {
 		return db.Comment{}, false
 	}
+	resolved := claim.ResolvedAt != nil
 	resolvedAt, timeOK := commentResolutionTimestamp(claim.ResolvedAt)
 	if !timeOK {
 		return db.Comment{}, false

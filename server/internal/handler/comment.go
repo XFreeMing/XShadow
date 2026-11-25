@@ -3460,15 +3460,9 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "content is required")
 		return
 	}
-	if req.ExpectedRevision != nil {
-		if *req.ExpectedRevision < 1 {
-			writeError(w, http.StatusBadRequest, "expected_revision must be a positive integer")
-			return
-		}
-		if existing.Revision != *req.ExpectedRevision {
-			writeRevisionConflict(w, "comment", existing.ID, *req.ExpectedRevision, existing.Revision)
-			return
-		}
+	if req.ExpectedRevision != nil && *req.ExpectedRevision < 1 {
+		writeError(w, http.StatusBadRequest, "expected_revision must be a positive integer")
+		return
 	}
 	strictContentEdit := req.ContentBase != nil || req.ExpectedRevision != nil
 
@@ -3486,6 +3480,61 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	editPlan := commentEditRequest{
+		Content:        req.Content,
+		ContentBase:    req.ContentBase,
+		ReplaceAttach:  replaceAttachments,
+		SuppressAgents: len(suppressAgentIDs) > 0,
+	}
+	if req.ExpectedRevision != nil {
+		editPlan.ExpectedRevision = *req.ExpectedRevision
+	}
+
+	var issue db.Issue
+	var useRustEdit bool
+	if pilotOn, pilotErr := h.commentEditPilotEnabled(r.Context(), existing.WorkspaceID); pilotErr != nil {
+		slog.Warn("comment edit rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(existing.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to update comment")
+		return
+	} else if pilotOn {
+		loaded, issueErr := h.Queries.GetIssue(r.Context(), existing.IssueID)
+		if issueErr != nil {
+			if errors.Is(issueErr, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "comment not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load issue")
+			return
+		}
+		issue = loaded
+		useRustEdit, pilotErr = h.commentEditUsesRust(r, issue, existing, actorType, actorID, editPlan)
+		if pilotErr != nil {
+			slog.Warn("comment edit rust plan failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(existing.ID))...)
+			writeError(w, http.StatusInternalServerError, "failed to update comment")
+			return
+		}
+	}
+	if req.ExpectedRevision != nil && !useRustEdit {
+		if existing.Revision != *req.ExpectedRevision {
+			writeRevisionConflict(w, "comment", existing.ID, *req.ExpectedRevision, existing.Revision)
+			return
+		}
+	}
+	if useRustEdit {
+		h.updateCommentViaRust(w, r, existing, workspaceID, actorType, actorID, editPlan)
+		return
+	}
+
+	issue, issueErr := h.Queries.GetIssue(r.Context(), existing.IssueID)
+	if issueErr != nil {
+		if errors.Is(issueErr, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "comment not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load issue")
+		return
+	}
+
 	// NOTE: See CreateComment — Markdown is sanitized at render/edit time, not here.
 
 	oldContent := existing.Content
@@ -3497,12 +3546,6 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 	var triggerIssue *db.Issue
 	var cancelled []db.AgentTaskQueue
 	if oldContent != req.Content {
-		issue, err := h.Queries.GetIssue(r.Context(), existing.IssueID)
-		if err != nil {
-			slog.Warn("load issue for edit post-processing failed", "issue_id", uuidToString(existing.IssueID), "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to load issue")
-			return
-		}
 		triggerIssue = &issue
 		// A content edit is a NEW action, so its delegation lineage must key on THIS
 		// edit. Only the AGENT author re-editing its OWN comment carries the lineage

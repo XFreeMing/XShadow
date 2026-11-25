@@ -719,6 +719,18 @@ WHERE (trigger_comment_id = $1 OR $1 = ANY(coalesced_comment_ids))
   AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
 RETURNING *;
 
+-- name: CommentHasActiveTriggerTask :one
+-- Active queue rows whose planned batch still references this comment as the
+-- primary trigger or a coalesced input. Used to keep strict comment edits on Go
+-- where cancellation is part of the public contract.
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_task_queue
+    WHERE (trigger_comment_id = @comment_id OR @comment_id = ANY(coalesced_comment_ids))
+      AND issue_id = @issue_id
+      AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+) AS exists;
+
 -- name: CancelAgentTasksByChatSession :many
 -- Cancels active tasks belonging to a chat session. Called from
 -- DeleteChatSession so the daemon doesn't keep running work whose result
