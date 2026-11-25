@@ -79,33 +79,6 @@ type issueCreateRustPlan struct {
 	nativeAttachmentIDs []string
 }
 
-func (h *Handler) loadOwnedSquadForIssueCreate(
-	ctx context.Context,
-	wsUUID, squadID pgtype.UUID,
-	memberUserID string,
-	requireReady bool,
-) (db.Squad, bool) {
-	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-		ID: squadID, WorkspaceID: wsUUID,
-	})
-	if err != nil || squad.ArchivedAt.Valid {
-		return db.Squad{}, false
-	}
-	leader, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-		ID: squad.LeaderID, WorkspaceID: wsUUID,
-	})
-	if err != nil || leader.ArchivedAt.Valid || uuidToString(leader.OwnerID) != memberUserID {
-		return db.Squad{}, false
-	}
-	if requireReady {
-		verdict, err := service.AgentReadiness(ctx, h.runtimeLookup(uuidToString(wsUUID)), leader)
-		if err != nil || !verdict.Ready() {
-			return db.Squad{}, false
-		}
-	}
-	return squad, true
-}
-
 func projectedIssueForCreate(
 	issueID, wsUUID pgtype.UUID,
 	req CreateIssueRequest,
@@ -256,7 +229,7 @@ func (h *Handler) planIssueCreateRust(
 		}
 		active := status != issuestatus.Backlog &&
 			issuestatus.Effective(r.Context(), h.Queries, wsUUID, status) != issuestatus.Backlog
-		squad, ok := h.loadOwnedSquadForIssueCreate(r.Context(), wsUUID, assigneeID, actualCreatorID, active)
+		squad, _, ok := h.loadMemberOwnedSquad(r.Context(), wsUUID, assigneeID, actualCreatorID, active)
 		if !ok {
 			return plan, nil
 		}

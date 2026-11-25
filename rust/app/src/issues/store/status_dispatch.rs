@@ -169,6 +169,7 @@ async fn issue_review_head_sha(
 pub struct LockedSquadLeader {
     pub leader_id: String,
     pub owner_id: Option<String>,
+    pub runtime_id: Option<String>,
 }
 
 /// Locks the squad before its current leader, matching both native writers.
@@ -212,6 +213,7 @@ pub async fn lock_active_squad_leader(
     Ok(LockedSquadLeader {
         leader_id,
         owner_id,
+        runtime_id,
     })
 }
 

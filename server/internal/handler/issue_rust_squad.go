@@ -5,11 +5,42 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 var errNativeSquadLeaderGate = errors.New("native squad leader invocation gate")
+
+// loadMemberOwnedSquad resolves a squad whose leader is owned by memberUserID.
+// When requireReady is set, the leader must also be enqueue-ready.
+func (h *Handler) loadMemberOwnedSquad(
+	ctx context.Context,
+	wsUUID, squadID pgtype.UUID,
+	memberUserID string,
+	requireReady bool,
+) (db.Squad, db.Agent, bool) {
+	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		ID: squadID, WorkspaceID: wsUUID,
+	})
+	if err != nil || squad.ArchivedAt.Valid {
+		return db.Squad{}, db.Agent{}, false
+	}
+	leader, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID: squad.LeaderID, WorkspaceID: wsUUID,
+	})
+	if err != nil || leader.ArchivedAt.Valid || uuidToString(leader.OwnerID) != memberUserID {
+		return db.Squad{}, db.Agent{}, false
+	}
+	if requireReady {
+		verdict, err := service.AgentReadiness(ctx, h.runtimeLookup(uuidToString(wsUUID)), leader)
+		if err != nil || !verdict.Ready() {
+			return db.Squad{}, db.Agent{}, false
+		}
+	}
+	return squad, leader, true
+}
 
 // prepareNativeIssueEnqueue builds the trusted queue row for a native assign or
 // promotion when the write will enqueue. Squad plans pass the same

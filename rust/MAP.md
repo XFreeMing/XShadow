@@ -38,6 +38,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_BATCH_TERMINAL_STATUS_PILOT` 为 `POST /api/issues/batch-update` 的普通成员内置 `done`/`cancelled` 批量修改指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_STATUS_PILOT` 与 `XSHADOW_ISSUES_RUST_TERMINAL_STATUS_PILOT`。仅含 `status` 与可选 `suppress_run` 的请求按行复用单任务终态事务、取消回执和持久通知流程。入审、工作方法、重复标记、命名工作流和组合字段仍走 Go。隐藏、缺失、锁后冲突及确定回滚的行跳过。传输或提交回执不明时中止后续行，重试保留已提交行的修订和状态时间线。
 
+`XSHADOW_ISSUES_RUST_BATCH_WORKFLOW_PILOT` 为 `POST /api/issues/batch-update` 的普通成员命名工作流军团交接指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_STATUS_PILOT` 与 `XSHADOW_ISSUES_RUST_WORKFLOW_PILOT`。仅含 `status` 与可选 `suppress_run` 的请求在既有批量循环内复用单任务事务。调用者拥有在线运行时可用的军团负责人时，Rust 在同一事务中核对可见范围、流程、负责人和运行时，再保存状态、时间线和派发义务。默认工作流、终态或自定义状态、积压晋升、工作方法、组合字段及其他军团由 Go 处理。隐藏、缺失、锁后冲突及确定回滚的行跳过。传输或提交回执不明时中止后续行，重试保留已提交行的原修订与时间线。
+
 `XSHADOW_ISSUES_RUST_CREATE_ATTACHMENTS_PILOT` 为 `POST /api/issues` 的普通成员创建时关联上传指定试点工作区，须在同一工作区同时启用 `XSHADOW_ISSUES_RUST_CREATE_PILOT`。Go 只选同工作区的未绑定上传。Rust 在创建事务中先锁父任务，再按附件 ID 顺序关联尚未被占用的上传。可选关联回滚后仍返回已创建任务，创建修订保持原规则。Go 用回执和数据库读回生成原有文件信息及创建通知。已有归属、来源、命名工作流和智能体或军团派工继续使用原入口。
 
 `XSHADOW_ISSUES_RUST_METHOD_ADOPT_PILOT` 为 `POST /api/issues/{id}/work-method` 中 `adopt_revision` 的普通成员采用试点。Go 沿用 `run.Adopt` 域计算与视图/事件组装，并向 Rust 提交同一工作区模板快照与计划运行。Rust 锁模板目录与事项行，核对修订与原始 `work_method_run`，仅在计划要求时写入新方法快照并推进事项修订。目标计划交付、项目交付绑定与军团执行绑定仍走 Go。试点上游不可用返回 `503`，回执异常返回 `502`，失败闭集不回退 Go 二次写入。

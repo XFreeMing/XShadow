@@ -628,6 +628,7 @@ async fn update_issue_workflow_squad_handoff(
     if !is_uuid(&id) {
         return error_response(StatusCode::NOT_FOUND, "issue not found");
     }
+    let batch_scope = edit.workflow_squad_batch.is_some();
     match store::update_issue_workflow_squad_handoff(
         &app.pool,
         &ctx.workspace_id,
@@ -655,8 +656,23 @@ async fn update_issue_workflow_squad_handoff(
             Json(json!({ "actual_revision": actual_revision })),
         )
             .into_response(),
+        Err(
+            error @ (IssueWorkflowSquadEditError::Database(_)
+            | IssueWorkflowSquadEditError::Snapshot(_)),
+        ) if batch_scope => {
+            eprintln!("rust issue batch workflow squad handoff rolled back: {error:?}");
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "batch_rollback": true })),
+            )
+                .into_response()
+        }
         Err(IssueWorkflowSquadEditError::Database(error)) => {
             eprintln!("rust issue workflow squad write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+        Err(IssueWorkflowSquadEditError::CommitFailed(error)) => {
+            eprintln!("rust issue workflow squad handoff commit failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
         }
         Err(IssueWorkflowSquadEditError::Snapshot(error)) => {

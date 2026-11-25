@@ -33,6 +33,13 @@ pub struct WorkflowHandoffPlan {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WorkflowSquadBatchTrust {
+    pub leader_id: String,
+    pub runtime_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueWorkflowSquadEdit {
     pub expected_revision: i64,
     pub status: String,
@@ -47,6 +54,7 @@ pub struct IssueWorkflowSquadEdit {
     #[serde(default)]
     pub activity_handoff: HashMap<String, String>,
     pub prepared_workflow_enqueue: Option<PreparedWorkflowHandoffEnqueue>,
+    pub workflow_squad_batch: Option<WorkflowSquadBatchTrust>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +86,7 @@ pub enum IssueWorkflowSquadEditError {
     DispatchSensitive,
     RevisionConflict(i64),
     Database(sqlx::Error),
+    CommitFailed(sqlx::Error),
     Snapshot(serde_json::Error),
 }
 
@@ -117,6 +126,7 @@ async fn validate_workflow_handoff_plan(
     conn: &mut PgConnection,
     workspace_id: &str,
     plan: &WorkflowHandoffPlan,
+    require_named: bool,
 ) -> Result<(), StatusPromotionError> {
     if !is_uuid(&plan.project_id) || !is_uuid(&plan.squad_id) {
         return Err(StatusPromotionError::RouteChanged);
@@ -127,7 +137,7 @@ async fn validate_workflow_handoff_plan(
     if plan.target_status != plan.target_status.trim() || plan.workflow_name.is_empty() {
         return Err(StatusPromotionError::RouteChanged);
     }
-    let row: Option<(String, String, Value)> = sqlx::query_as(
+    let row: Option<(String, String, Value, bool)> = sqlx::query_as(
         "SELECT
             CASE
                 WHEN named.id IS NOT NULL THEN named.id::text
@@ -143,7 +153,8 @@ async fn validate_workflow_handoff_plan(
                 WHEN named.id IS NOT NULL THEN named.steps
                 WHEN default_wf.id IS NOT NULL THEN default_wf.steps
                 ELSE '[]'::jsonb
-            END
+            END,
+            COALESCE(NOT named.is_default, false)
          FROM project p
          LEFT JOIN issue_workflow named
            ON named.id = p.workflow_id AND named.workspace_id = p.workspace_id
@@ -157,10 +168,13 @@ async fn validate_workflow_handoff_plan(
     .fetch_optional(&mut *conn)
     .await
     .map_err(StatusPromotionError::Database)?;
-    let Some((workflow_id, workflow_name, steps)) = row else {
+    let Some((workflow_id, workflow_name, steps, is_named)) = row else {
         return Err(StatusPromotionError::RouteChanged);
     };
-    if workflow_name != plan.workflow_name || workflow_id != plan.workflow_id {
+    if workflow_name != plan.workflow_name
+        || workflow_id != plan.workflow_id
+        || (require_named && !is_named)
+    {
         return Err(StatusPromotionError::RouteChanged);
     }
     let step = steps
@@ -339,6 +353,11 @@ pub async fn update_issue_workflow_squad_handoff(
         return Err(IssueWorkflowSquadEditError::DispatchSensitive);
     }
 
+    let batch_trust = edit.workflow_squad_batch.as_ref();
+    if batch_trust.is_some() && !matches!(actor, CallerActor::Member { .. }) {
+        return Err(IssueWorkflowSquadEditError::InvalidInput);
+    }
+
     let mut tx = pool.begin().await?;
     let prep = edit.prepared_workflow_enqueue.as_ref();
     if prep.is_some() {
@@ -361,7 +380,13 @@ pub async fn update_issue_workflow_squad_handoff(
     .bind(workspace_id)
     .execute(&mut *tx)
     .await?;
-    validate_workflow_handoff_plan(&mut tx, workspace_id, &edit.workflow_plan).await?;
+    validate_workflow_handoff_plan(
+        &mut tx,
+        workspace_id,
+        &edit.workflow_plan,
+        batch_trust.is_some(),
+    )
+    .await?;
 
     let locked_leader = status_dispatch::lock_active_squad_leader(
         &mut tx,
@@ -376,6 +401,7 @@ pub async fn update_issue_workflow_squad_handoff(
         "SELECT i.project_id::text, i.revision, i.status,
                 i.triage_state IS NOT NULL AS triage_state_present,
                 i.duplicate_of_issue_id IS NOT NULL AS has_duplicate,
+                i.work_method_run IS NOT NULL AS has_work_method,
                 {ISSUE_ROW_SNAPSHOT} AS snapshot
          FROM issue i WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid FOR UPDATE"
     ))
@@ -408,6 +434,24 @@ pub async fn update_issue_workflow_squad_handoff(
     let prev_status: &str = locked.try_get("status")?;
     let triage_state_present: bool = locked.try_get("triage_state_present")?;
     let has_duplicate: bool = locked.try_get("has_duplicate")?;
+    let has_work_method: bool = locked.try_get("has_work_method")?;
+    if let Some(trust) = batch_trust {
+        if has_work_method
+            || agent_owner.as_deref() != Some(actor_id)
+            || trust.leader_id != locked_leader.leader_id
+            || locked_leader.runtime_id.as_deref() != Some(trust.runtime_id.as_str())
+        {
+            return Err(IssueWorkflowSquadEditError::DispatchSensitive);
+        }
+        status_dispatch::validate_runtime_for_active_enqueue(
+            &mut tx,
+            workspace_id,
+            actor_id,
+            &trust.runtime_id,
+            status_dispatch::RuntimeEnqueueCaller::SquadLeader,
+        )
+        .await?;
+    }
     if (!is_active_builtin_status(prev_status) && !matches!(prev_status, "done" | "cancelled"))
         || (prev_status == "cancelled" && has_duplicate)
         || triage_state_present
@@ -497,7 +541,9 @@ pub async fn update_issue_workflow_squad_handoff(
         deferred_task_id,
         coalesced_deferred_task_id,
     };
-    tx.commit().await?;
+    tx.commit()
+        .await
+        .map_err(IssueWorkflowSquadEditError::CommitFailed)?;
     Ok(write)
 }
 
@@ -621,6 +667,33 @@ async fn apply_workflow_handoff_write(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_batch_wire_accepts_expected_leader_and_runtime() {
+        let edit: IssueWorkflowSquadEdit = serde_json::from_str(
+            r#"{
+                "expected_revision": 1,
+                "status": "in_progress",
+                "assignee_type": "squad",
+                "assignee_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "activity_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "workflow_plan": {
+                    "project_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    "workflow_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                    "workflow_name": "Flow",
+                    "target_status": "in_progress",
+                    "squad_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                },
+                "suppress_run": true,
+                "workflow_squad_batch": {
+                    "leader_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                    "runtime_id": "ffffffff-ffff-4fff-8fff-ffffffffffff"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(edit.workflow_squad_batch.is_some());
+    }
 
     #[test]
     fn workflow_edit_requires_squad_assignee() {

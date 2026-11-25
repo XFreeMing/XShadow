@@ -5337,6 +5337,17 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	batchWorkflowPilot := false
+	if batchStatusKey != "" {
+		batchWorkflowPilot, err = h.batchWorkflowSquadHandoffPilotActive(r, wsUUID, rawUpdates, req.Updates)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				slog.Warn("resolve rust batch workflow squad handoff pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue workflow route")
+			}
+			return
+		}
+	}
 
 	rustBatch, err := h.batchOrdinaryIssueEditUsesRust(r, wsUUID, rawUpdates)
 	if err != nil {
@@ -5542,6 +5553,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		var issue db.Issue
 		var nativeAssignment rustAssignWriteResult
 		var nativeStatus rustStatusWriteResult
+		var nativeWorkflow rustWorkflowWriteResult
 		if batchAssignPilot && handoff == nil &&
 			h.batchAssignIssueUsesOwnedNative(r.Context(), userID, prevIssue, params) {
 			actorType, actorID := h.resolveActor(r, userID, workspaceID)
@@ -5555,6 +5567,23 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				continue
 			case batchAssignRustDone:
 				nativeAssignment = result
+				prevIssue, issue = result.before, result.after
+			}
+		}
+		if batchWorkflowPilot && batchWorkflowSquadHandoffIssueEligible(
+			prevIssue, issueStatusGuard, handoff, req.Updates.SuppressRun, callerRun,
+		) {
+			actorType, actorID := h.resolveActor(r, userID, workspaceID)
+			outcome, result := h.tryBatchUpdateIssueWorkflowSquadHandoffViaRust(
+				w, r, userID, prevIssue, params, handoff, req.Updates.SuppressRun, actorType, actorID,
+			)
+			switch outcome {
+			case batchWorkflowRustAbort:
+				return
+			case batchWorkflowRustSkipRow:
+				continue
+			case batchWorkflowRustDone:
+				nativeWorkflow = result
 				prevIssue, issue = result.before, result.after
 			}
 		}
@@ -5580,7 +5609,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid {
+		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid && !nativeWorkflow.after.ID.Valid {
 			writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 			if req.Updates.Description != nil {
 				// One batch-level base cannot describe multiple issue documents.
@@ -5633,6 +5662,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 		)
 		willRun = willRun && !req.Updates.SuppressRun
+		if nativeWorkflow.after.ID.Valid {
+			willRun = nativeWorkflow.queuedTaskID != ""
+		}
 		batchPayload := map[string]any{
 			"issue":                      resp,
 			"assignee_changed":           assigneeChanged,
@@ -5654,6 +5686,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if batchActivityReceipt == "" {
 			batchActivityReceipt = nativeStatus.statusActivityID
 		}
+		if batchActivityReceipt == "" {
+			batchActivityReceipt = nativeWorkflow.statusActivityID
+		}
 		h.publishIssueUpdated(workspaceID, actorType, actorID, batchPayload, batchActivityReceipt)
 
 		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
@@ -5665,7 +5700,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if handoff != nil && req.Updates.StopPreviousAssigneeRuns {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 		}
-		if nativeAssignment.after.ID.Valid {
+		if nativeWorkflow.after.ID.Valid {
+			if taskID, parseErr := util.ParseUUID(nativeWorkflow.queuedTaskID); parseErr == nil {
+				h.TaskService.CompleteWorkflowSquadHandoffAfterNativeWrite(r.Context(), taskID)
+			}
+		} else if nativeAssignment.after.ID.Valid {
 			if taskID, parseErr := util.ParseUUID(nativeAssignment.queuedTaskID); parseErr == nil {
 				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
 			}

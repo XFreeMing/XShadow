@@ -28,18 +28,36 @@ type workflowHandoffPlan struct {
 	BackStatusKey string `json:"back_status_key,omitempty"`
 }
 
+type workflowSquadBatchTrust struct {
+	LeaderID  string `json:"leader_id"`
+	RuntimeID string `json:"runtime_id"`
+}
+
 type issueWorkflowSquadEdit struct {
-	ExpectedRevision      int64               `json:"expected_revision"`
-	Status                string              `json:"status"`
-	AssigneeType          string              `json:"assignee_type"`
-	AssigneeID            string              `json:"assignee_id"`
-	Position              *float64            `json:"position,omitempty"`
-	SourceTaskID          *string             `json:"source_task_id,omitempty"`
-	SuppressRun           bool                `json:"suppress_run"`
-	ActivityID            string              `json:"activity_id"`
-	WorkflowPlan          workflowHandoffPlan `json:"workflow_plan"`
-	ActivityHandoff       map[string]string   `json:"activity_handoff,omitempty"`
-	PreparedWorkflowQueue *json.RawMessage    `json:"prepared_workflow_enqueue,omitempty"`
+	ExpectedRevision      int64                    `json:"expected_revision"`
+	Status                string                   `json:"status"`
+	AssigneeType          string                   `json:"assignee_type"`
+	AssigneeID            string                   `json:"assignee_id"`
+	Position              *float64                 `json:"position,omitempty"`
+	SourceTaskID          *string                  `json:"source_task_id,omitempty"`
+	SuppressRun           bool                     `json:"suppress_run"`
+	ActivityID            string                   `json:"activity_id"`
+	WorkflowPlan          workflowHandoffPlan      `json:"workflow_plan"`
+	ActivityHandoff       map[string]string        `json:"activity_handoff,omitempty"`
+	PreparedWorkflowQueue *json.RawMessage         `json:"prepared_workflow_enqueue,omitempty"`
+	WorkflowSquadBatch    *workflowSquadBatchTrust `json:"workflow_squad_batch,omitempty"`
+}
+
+type rustWorkflowWriteResult struct {
+	before, after    db.Issue
+	statusActivityID string
+	queuedTaskID     string
+}
+
+type rustWorkflowSquadConflict struct {
+	ActualRevision    int64 `json:"actual_revision"`
+	DispatchSensitive bool  `json:"dispatch_sensitive"`
+	BatchRollback     bool  `json:"batch_rollback"`
 }
 
 // statusWorkflowSquadHandoffUsesRust selects squad workflow handoffs the native
@@ -100,29 +118,30 @@ func (h *Handler) statusWorkflowSquadHandoffUsesRust(
 	return matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.WorkflowPilotScopes, uuidToString(workspaceID), workspaceID)
 }
 
-func (h *Handler) updateIssueWorkflowSquadHandoffViaRust(
-	w http.ResponseWriter,
-	r *http.Request,
-	userID string,
+func (h *Handler) buildIssueWorkflowSquadEdit(
+	ctx context.Context,
 	current db.Issue,
+	expectedRevision int64,
 	params db.UpdateIssueParams,
-	req UpdateIssueRequest,
 	handoff *workflowHandoff,
+	sourceTaskID pgtype.UUID,
+	suppressRun bool,
+	plannedActivityID pgtype.UUID,
 	prepared *service.IssuePreparedWorkflowHandoffEnqueue,
 	runStarted bool,
-) (after, before db.Issue, statusActivityID, deferredTaskID string, ok bool) {
-	plannedActivityID := dbid.NewV7()
+	batch *workflowSquadBatchTrust,
+) (issueWorkflowSquadEdit, error) {
 	projected := current
 	projected.Status = params.Status.String
 	projected.AssigneeType = params.AssigneeType
 	projected.AssigneeID = params.AssigneeID
 	edit := issueWorkflowSquadEdit{
-		ExpectedRevision: *req.ExpectedRevision,
+		ExpectedRevision: expectedRevision,
 		Status:           params.Status.String,
 		AssigneeType:     params.AssigneeType.String,
 		AssigneeID:       uuidToString(params.AssigneeID),
-		SourceTaskID:     uuidToPtr(h.wakeupSourceTaskID(r)),
-		SuppressRun:      req.SuppressRun,
+		SourceTaskID:     uuidToPtr(sourceTaskID),
+		SuppressRun:      suppressRun,
 		ActivityID:       uuidToString(plannedActivityID),
 		WorkflowPlan: workflowHandoffPlan{
 			ProjectID:     uuidToString(current.ProjectID),
@@ -136,9 +155,10 @@ func (h *Handler) updateIssueWorkflowSquadHandoffViaRust(
 		},
 		ActivityHandoff: workflowHandoffPayload(
 			projected, handoff,
-			h.workflowHandoffBrief(r.Context(), projected, handoff),
+			h.workflowHandoffBrief(ctx, projected, handoff),
 			runStarted,
 		),
+		WorkflowSquadBatch: batch,
 	}
 	if params.Position.Valid {
 		edit.Position = &params.Position.Float64
@@ -146,44 +166,167 @@ func (h *Handler) updateIssueWorkflowSquadHandoffViaRust(
 	if prepared != nil {
 		raw, err := marshalIssueWorkflowHandoffEnqueue(*prepared)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to encode workflow handoff enqueue")
-			return after, before, "", "", false
+			return issueWorkflowSquadEdit{}, err
 		}
 		rawMsg := json.RawMessage(raw)
 		edit.PreparedWorkflowQueue = &rawMsg
 	}
+	return edit, nil
+}
+
+func parseRustWorkflowSquadConflict(body []byte) (rustWorkflowSquadConflict, bool) {
+	var conflict rustWorkflowSquadConflict
+	if json.Unmarshal(body, &conflict) != nil {
+		return conflict, false
+	}
+	switch {
+	case conflict.DispatchSensitive:
+		return conflict, conflict.ActualRevision == 0 && !conflict.BatchRollback
+	case conflict.BatchRollback:
+		return conflict, conflict.ActualRevision == 0 && !conflict.DispatchSensitive
+	default:
+		return conflict, conflict.ActualRevision > 0 && !conflict.BatchRollback && !conflict.DispatchSensitive
+	}
+}
+
+func rustWorkflowSquadHandoffReadBodyLimit(issue db.Issue, statusCode int) int64 {
+	limit := int64(maxRustIssueReadBody)
+	if statusCode == http.StatusOK {
+		limit += int64(len(issue.Description.String)+len(issue.AcceptanceCriteria)) * 2
+	}
+	return limit
+}
+
+func (h *Handler) callRustWorkflowSquadHandoffPUT(
+	w http.ResponseWriter,
+	r *http.Request,
+	userID string,
+	issue db.Issue,
+	edit issueWorkflowSquadEdit,
+) (*http.Response, []byte, bool) {
 	payload, err := json.Marshal(edit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode workflow squad handoff edit")
-		return after, before, "", "", false
+		return nil, nil, false
 	}
-	path := "/internal/issues/" + uuidToString(current.ID) + "/workflow-squad-handoff"
-	resp, requested := h.requestRustIssue(w, r, http.MethodPut, path, uuidToString(current.WorkspaceID), userID, payload)
+	path := "/internal/issues/" + uuidToString(issue.ID) + "/workflow-squad-handoff"
+	resp, requested := h.requestRustIssue(w, r, http.MethodPut, path, uuidToString(issue.WorkspaceID), userID, payload)
 	if !requested {
-		return after, before, "", "", false
+		return nil, nil, false
 	}
 	defer resp.Body.Close()
-	limit := int64(maxRustIssueReadBody)
-	if resp.StatusCode == http.StatusOK {
-		limit += int64(len(current.Description.String)+len(current.AcceptanceCriteria)) * 2
-	}
+	limit := rustWorkflowSquadHandoffReadBodyLimit(issue, resp.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil || int64(len(body)) > limit {
-		if !writeQueryCancellation(w, r, err) {
-			if err != nil {
-				writeError(w, http.StatusServiceUnavailable, "rust issue write service unavailable")
-			} else {
-				writeError(w, http.StatusBadGateway, "failed to read rust workflow squad handoff response")
-			}
+		if writeQueryCancellation(w, r, err) {
+			return nil, nil, false
 		}
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "rust issue write service unavailable")
+		} else {
+			writeError(w, http.StatusBadGateway, "failed to read rust workflow squad handoff response")
+		}
+		return nil, nil, false
+	}
+	return resp, body, true
+}
+
+func (h *Handler) validateRustWorkflowSquadHandoffWriteBody(
+	w http.ResponseWriter,
+	ctx context.Context,
+	current db.Issue,
+	expectedRevision int64,
+	params db.UpdateIssueParams,
+	plannedActivityID pgtype.UUID,
+	prepared *service.IssuePreparedWorkflowHandoffEnqueue,
+	body []byte,
+) (rustWorkflowWriteResult, bool) {
+	var snapshots struct {
+		Before                  ordinaryIssueSnapshot `json:"before"`
+		After                   ordinaryIssueSnapshot `json:"after"`
+		StatusActivityID        *string               `json:"status_activity_id"`
+		DeferredTaskID          *string               `json:"deferred_task_id"`
+		CoalescedDeferredTaskID *string               `json:"coalesced_deferred_task_id"`
+	}
+	if json.Unmarshal(body, &snapshots) != nil ||
+		snapshots.Before.ID != current.ID || snapshots.Before.WorkspaceID != current.WorkspaceID ||
+		snapshots.After.ID != current.ID || snapshots.After.WorkspaceID != current.WorkspaceID ||
+		!rustWorkflowHandoffWriteSnapshotsValid(expectedRevision, params, snapshots.Before, snapshots.After) {
+		writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff snapshots")
+		return rustWorkflowWriteResult{}, false
+	}
+	beforeIssue := snapshots.Before.issue()
+	afterIssue := snapshots.After.issue()
+	if params.ProjectID.Valid &&
+		!rustIssueStatusTrustedProjectMatch(snapshots.Before, snapshots.After, current.ProjectID) {
+		writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff snapshots")
+		return rustWorkflowWriteResult{}, false
+	}
+	statusChanged := beforeIssue.Status != afterIssue.Status
+	receipt := derefString(snapshots.StatusActivityID)
+	if !rustStatusActivityReceiptValid(ctx, h.Queries, plannedActivityID, current.WorkspaceID, current.ID, beforeIssue.Status, afterIssue.Status, statusChanged, receipt) {
+		writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff activity receipt")
+		return rustWorkflowWriteResult{}, false
+	}
+	deferredReceipt := derefString(snapshots.DeferredTaskID)
+	coalescedReceipt := derefString(snapshots.CoalescedDeferredTaskID)
+	if prepared != nil {
+		switch {
+		case deferredReceipt != "" && coalescedReceipt != "":
+			writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
+			return rustWorkflowWriteResult{}, false
+		case deferredReceipt != "":
+			if !rustWorkflowDeferredTaskValid(ctx, h.Queries, deferredReceipt, *prepared) {
+				writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
+				return rustWorkflowWriteResult{}, false
+			}
+		case coalescedReceipt != "":
+			if !rustWorkflowCoalescedDeferredTaskValid(ctx, h.Queries, coalescedReceipt, *prepared) {
+				writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
+				return rustWorkflowWriteResult{}, false
+			}
+		default:
+			writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
+			return rustWorkflowWriteResult{}, false
+		}
+	} else if deferredReceipt != "" || coalescedReceipt != "" {
+		writeError(w, http.StatusBadGateway, "unexpected rust workflow squad handoff queue receipt")
+		return rustWorkflowWriteResult{}, false
+	}
+	return rustWorkflowWriteResult{
+		before:           beforeIssue,
+		after:            afterIssue,
+		statusActivityID: receipt,
+		queuedTaskID:     cmp.Or(deferredReceipt, coalescedReceipt),
+	}, true
+}
+
+func (h *Handler) updateIssueWorkflowSquadHandoffViaRust(
+	w http.ResponseWriter,
+	r *http.Request,
+	userID string,
+	current db.Issue,
+	params db.UpdateIssueParams,
+	req UpdateIssueRequest,
+	handoff *workflowHandoff,
+	prepared *service.IssuePreparedWorkflowHandoffEnqueue,
+	runStarted bool,
+) (after, before db.Issue, statusActivityID, deferredTaskID string, ok bool) {
+	plannedActivityID := dbid.NewV7()
+	edit, err := h.buildIssueWorkflowSquadEdit(
+		r.Context(), current, *req.ExpectedRevision, params, handoff,
+		h.wakeupSourceTaskID(r), req.SuppressRun, plannedActivityID, prepared, runStarted, nil,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode workflow handoff enqueue")
+		return after, before, "", "", false
+	}
+	resp, body, transportOK := h.callRustWorkflowSquadHandoffPUT(w, r, userID, current, edit)
+	if !transportOK {
 		return after, before, "", "", false
 	}
 	if resp.StatusCode == http.StatusConflict {
-		var conflict struct {
-			ActualRevision    int64 `json:"actual_revision"`
-			DispatchSensitive bool  `json:"dispatch_sensitive"`
-		}
-		if json.Unmarshal(body, &conflict) == nil {
+		if conflict, recognized := parseRustWorkflowSquadConflict(body); recognized {
 			if conflict.DispatchSensitive {
 				writeErrorCode(w, http.StatusConflict, "status_route_changed", "task status requirements changed; reload before moving the task")
 				return after, before, "", "", false
@@ -200,55 +343,13 @@ func (h *Handler) updateIssueWorkflowSquadHandoffViaRust(
 		writeRustIssueResponse(w, resp, bytes.NewReader(body))
 		return after, before, "", "", false
 	}
-	var snapshots struct {
-		Before                  ordinaryIssueSnapshot `json:"before"`
-		After                   ordinaryIssueSnapshot `json:"after"`
-		StatusActivityID        *string               `json:"status_activity_id"`
-		DeferredTaskID          *string               `json:"deferred_task_id"`
-		CoalescedDeferredTaskID *string               `json:"coalesced_deferred_task_id"`
-	}
-	if json.Unmarshal(body, &snapshots) != nil ||
-		snapshots.Before.ID != current.ID || snapshots.Before.WorkspaceID != current.WorkspaceID ||
-		snapshots.After.ID != current.ID || snapshots.After.WorkspaceID != current.WorkspaceID ||
-		!rustWorkflowHandoffWriteSnapshotsValid(*req.ExpectedRevision, params, snapshots.Before, snapshots.After) {
-		writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff snapshots")
+	result, ok := h.validateRustWorkflowSquadHandoffWriteBody(
+		w, r.Context(), current, *req.ExpectedRevision, params, plannedActivityID, prepared, body,
+	)
+	if !ok {
 		return after, before, "", "", false
 	}
-	beforeIssue := snapshots.Before.issue()
-	afterIssue := snapshots.After.issue()
-	statusChanged := beforeIssue.Status != afterIssue.Status
-	receipt := derefString(snapshots.StatusActivityID)
-	if !rustStatusActivityReceiptValid(r.Context(), h.Queries, plannedActivityID, current.WorkspaceID, current.ID, beforeIssue.Status, afterIssue.Status, statusChanged, receipt) {
-		writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff activity receipt")
-		return after, before, "", "", false
-	}
-	deferredReceipt := derefString(snapshots.DeferredTaskID)
-	coalescedReceipt := derefString(snapshots.CoalescedDeferredTaskID)
-	if prepared != nil {
-		switch {
-		case deferredReceipt != "" && coalescedReceipt != "":
-			writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
-			return after, before, "", "", false
-		case deferredReceipt != "":
-			if !rustWorkflowDeferredTaskValid(r.Context(), h.Queries, deferredReceipt, *prepared) {
-				writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
-				return after, before, "", "", false
-			}
-		case coalescedReceipt != "":
-			if !rustWorkflowCoalescedDeferredTaskValid(r.Context(), h.Queries, coalescedReceipt, *prepared) {
-				writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
-				return after, before, "", "", false
-			}
-		default:
-			writeError(w, http.StatusBadGateway, "invalid rust workflow squad handoff queue receipt")
-			return after, before, "", "", false
-		}
-	} else if deferredReceipt != "" || coalescedReceipt != "" {
-		writeError(w, http.StatusBadGateway, "unexpected rust workflow squad handoff queue receipt")
-		return after, before, "", "", false
-	}
-	taskReceipt := cmp.Or(deferredReceipt, coalescedReceipt)
-	return afterIssue, beforeIssue, receipt, taskReceipt, true
+	return result.after, result.before, result.statusActivityID, result.queuedTaskID, true
 }
 
 func rustWorkflowHandoffWriteSnapshotsValid(
