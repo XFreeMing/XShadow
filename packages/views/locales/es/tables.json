@@ -1,0 +1,55 @@
+{
+  "list": {
+    "title": "Tablas",
+    "empty": "Todavía no hay tablas",
+    "name": "Nombre de la tabla",
+    "create": "Nueva tabla",
+    "loading": "Cargando"
+  },
+  "sheet": {
+    "back": "Todas las tablas",
+    "add_field": "Añadir campo",
+    "field_name": "Nombre del campo",
+    "kind": "Tipo",
+    "options": "Opciones",
+    "options_hint": "Una opción por línea",
+    "add": "Añadir",
+    "add_record": "Añadir registro",
+    "save_view": "Guardar vista",
+    "new_view": "Nueva vista",
+    "view_name": "Nombre de la vista",
+    "columns": "Columnas visibles",
+    "filter": "Filtro",
+    "sort": "Orden",
+    "clear": "Vaciar",
+    "refresh": "Actualizar",
+    "conflict": "Este registro se actualizó en otra ventana. El cambio no se guardó.",
+    "save_failed": "No se pudo guardar",
+    "empty_fields": "Añade un campo antes de los registros.",
+    "empty_records": "Todavía no hay registros",
+    "none": "Ninguno",
+    "empty_value": "Vacío",
+    "checked": "Marcado",
+    "unchecked": "Sin marcar",
+    "move_up": "Subir",
+    "move_down": "Bajar",
+    "rename": "Renombrar campo",
+    "kinds": {
+      "text": "Texto",
+      "number": "Número",
+      "date": "Fecha",
+      "single_select": "Selección única",
+      "checkbox": "Casilla"
+    },
+    "ops": {
+      "eq": "Igual a",
+      "contains": "Contiene",
+      "is_empty": "Está vacío",
+      "is_not_empty": "No está vacío"
+    },
+    "directions": {
+      "asc": "Ascendente",
+      "desc": "Descendente"
+    }
+  }
+}

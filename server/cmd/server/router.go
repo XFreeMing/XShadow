@@ -45,6 +45,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
+	"github.com/multica-ai/multica/server/internal/tablesbridge"
 	"github.com/multica-ai/multica/server/internal/themestore"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
@@ -2310,6 +2311,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/plan/generations/{generationId}", h.GetGoalPlanGeneration)
 					r.Post("/plan/generations/{generationId}/result", h.SubmitGoalPlanGenerationResult)
 				})
+			})
+
+			// Generic tables live in the Rust service. This route only checks
+			// the member already resolved above and forwards that workspace id.
+			tablesBridge := tablesbridge.FromEnv(slog.Default())
+			r.Route("/api/tables", func(r chi.Router) {
+				r.HandleFunc("/", tablesBridge.ServeHTTP)
+				r.HandleFunc("/*", tablesBridge.ServeHTTP)
 			})
 
 			// Projects

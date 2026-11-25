@@ -293,6 +293,23 @@ import type {
   ListCloudRuntimeNodesParams,
 } from "../runtimes/cloud-runtime";
 import { type Logger, noopLogger } from "../logger";
+import {
+  EMPTY_GENERIC_FIELD,
+  EMPTY_GENERIC_RECORD,
+  EMPTY_GENERIC_SHEET,
+  EMPTY_GENERIC_TABLE_CREATED,
+  EMPTY_GENERIC_TABLE_LIST,
+  EMPTY_GENERIC_VIEW,
+  genericFieldResponseSchema,
+  genericRecordResponseSchema,
+  genericSheetSchema,
+  genericTableCreatedSchema,
+  genericTableListSchema,
+  genericViewResponseSchema,
+  type GenericCellValue,
+  type GenericFieldWrite,
+  type GenericViewWrite,
+} from "../tables/schema";
 import { createRequestId, createSafeId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
@@ -6258,5 +6275,116 @@ export class ApiClient {
       EMPTY_REDEEM_TELEGRAM_BINDING_TOKEN_RESPONSE,
       { endpoint: "POST /api/telegram/binding/redeem" },
     );
+  }
+
+  async listGenericTables() {
+    const raw = await this.fetch<unknown>("/api/tables");
+    return parseWithFallback(raw, genericTableListSchema, EMPTY_GENERIC_TABLE_LIST, {
+      endpoint: "GET /api/tables",
+    });
+  }
+
+  async createGenericTable(name: string) {
+    const raw = await this.fetch<unknown>("/api/tables", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    const parsed = parseWithFallback(raw, genericTableCreatedSchema, EMPTY_GENERIC_TABLE_CREATED, {
+      endpoint: "POST /api/tables",
+    });
+    if (!parsed.table.id) throw new Error("表格响应无法读取");
+    return parsed;
+  }
+
+  async getGenericSheet(tableId: string, viewId: string | null) {
+    const search = new URLSearchParams();
+    if (viewId) search.set("view", viewId);
+    const query = search.toString();
+    const raw = await this.fetch<unknown>(`/api/tables/${encodeURIComponent(tableId)}${query ? `?${query}` : ""}`);
+    const parsed = parseWithFallback(raw, genericSheetSchema, EMPTY_GENERIC_SHEET, {
+      endpoint: "GET /api/tables/:id",
+    });
+    if (!parsed.table.id) throw new Error("表格响应无法读取");
+    return parsed;
+  }
+
+  async createGenericField(tableId: string, body: GenericFieldWrite) {
+    const raw = await this.fetch<unknown>(`/api/tables/${encodeURIComponent(tableId)}/fields`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const parsed = parseWithFallback(raw, genericFieldResponseSchema, { field: EMPTY_GENERIC_FIELD }, {
+      endpoint: "POST /api/tables/:id/fields",
+    });
+    if (!parsed.field.id) throw new Error("字段响应无法读取");
+    return parsed.field;
+  }
+
+  async renameGenericField(tableId: string, fieldId: string, name: string) {
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/fields/${encodeURIComponent(fieldId)}`,
+      { method: "PATCH", body: JSON.stringify({ name }) },
+    );
+    const parsed = parseWithFallback(raw, genericFieldResponseSchema, { field: EMPTY_GENERIC_FIELD }, {
+      endpoint: "PATCH /api/tables/:id/fields/:fieldId",
+    });
+    if (!parsed.field.id) throw new Error("字段响应无法读取");
+    return parsed.field;
+  }
+
+  async createGenericRecord(tableId: string, values: Record<string, GenericCellValue> = {}) {
+    const raw = await this.fetch<unknown>(`/api/tables/${encodeURIComponent(tableId)}/records`, {
+      method: "POST",
+      body: JSON.stringify({ values }),
+    });
+    const parsed = parseWithFallback(raw, genericRecordResponseSchema, { record: EMPTY_GENERIC_RECORD }, {
+      endpoint: "POST /api/tables/:id/records",
+    });
+    if (!parsed.record.id) throw new Error("记录响应无法读取");
+    return parsed.record;
+  }
+
+  async updateGenericRecord(
+    tableId: string,
+    recordId: string,
+    expectedRevision: number,
+    values: Record<string, GenericCellValue>,
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ expected_revision: expectedRevision, values }),
+      },
+    );
+    const parsed = parseWithFallback(raw, genericRecordResponseSchema, { record: EMPTY_GENERIC_RECORD }, {
+      endpoint: "PATCH /api/tables/:id/records/:recordId",
+    });
+    if (!parsed.record.id) throw new Error("记录响应无法读取");
+    return parsed.record;
+  }
+
+  async createGenericView(tableId: string, body: GenericViewWrite) {
+    const raw = await this.fetch<unknown>(`/api/tables/${encodeURIComponent(tableId)}/views`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const parsed = parseWithFallback(raw, genericViewResponseSchema, { view: EMPTY_GENERIC_VIEW }, {
+      endpoint: "POST /api/tables/:id/views",
+    });
+    if (!parsed.view.id) throw new Error("视图响应无法读取");
+    return parsed.view;
+  }
+
+  async saveGenericView(tableId: string, viewId: string, body: GenericViewWrite) {
+    const raw = await this.fetch<unknown>(
+      `/api/tables/${encodeURIComponent(tableId)}/views/${encodeURIComponent(viewId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+    const parsed = parseWithFallback(raw, genericViewResponseSchema, { view: EMPTY_GENERIC_VIEW }, {
+      endpoint: "PATCH /api/tables/:id/views/:viewId",
+    });
+    if (!parsed.view.id) throw new Error("视图响应无法读取");
+    return parsed.view;
   }
 }

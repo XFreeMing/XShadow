@@ -121,7 +121,7 @@ impl Health {
     }
 }
 
-pub fn router(database: PgPool) -> Router {
+pub fn router(database: PgPool, extra: Router) -> Router {
     let health = Arc::new(Health {
         started_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         database,
@@ -140,9 +140,10 @@ pub fn router(database: PgPool) -> Router {
         .route("/health", liveness)
         .route("/readyz", readiness.clone())
         .route("/healthz", readiness)
+        .with_state(health)
+        .merge(extra)
         .fallback(not_found)
         .layer(middleware::from_fn(probe_headers))
-        .with_state(health)
 }
 
 async fn live(State(health): State<Arc<Health>>) -> Response {

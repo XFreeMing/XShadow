@@ -13,7 +13,8 @@
     "runtimes": "런타임",
     "skills": "스킬",
     "settings": "설정",
-    "views": "뷰"
+    "views": "뷰",
+    "tables": "표"
   },
   "tab": {
     "issue": "태스크",

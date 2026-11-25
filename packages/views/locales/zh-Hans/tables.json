@@ -1,0 +1,55 @@
+{
+  "list": {
+    "title": "表格",
+    "empty": "还没有表格",
+    "name": "表名",
+    "create": "新建表格",
+    "loading": "正在加载"
+  },
+  "sheet": {
+    "back": "全部表格",
+    "add_field": "添加字段",
+    "field_name": "字段名称",
+    "kind": "类型",
+    "options": "选项",
+    "options_hint": "每行一个选项",
+    "add": "添加",
+    "add_record": "添加记录",
+    "save_view": "保存视图",
+    "new_view": "新建视图",
+    "view_name": "视图名称",
+    "columns": "可见列",
+    "filter": "筛选",
+    "sort": "排序",
+    "clear": "清空",
+    "refresh": "刷新",
+    "conflict": "这条记录已在其他窗口更新，刚才的修改没有写入。",
+    "save_failed": "无法保存",
+    "empty_fields": "先添加字段，再添加记录。",
+    "empty_records": "还没有记录",
+    "none": "无",
+    "empty_value": "空",
+    "checked": "已勾选",
+    "unchecked": "未勾选",
+    "move_up": "上移",
+    "move_down": "下移",
+    "rename": "重命名字段",
+    "kinds": {
+      "text": "文本",
+      "number": "数字",
+      "date": "日期",
+      "single_select": "单选",
+      "checkbox": "勾选"
+    },
+    "ops": {
+      "eq": "等于",
+      "contains": "包含",
+      "is_empty": "为空",
+      "is_not_empty": "不为空"
+    },
+    "directions": {
+      "asc": "升序",
+      "desc": "降序"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 mod health;
+mod tables;
 
 use std::{env, error::Error, net::Ipv4Addr};
 
@@ -16,7 +17,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .max_connections(2)
         .connect_lazy(&database_url)?;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
-    let app = health::router(database);
+    let tables_token = env::var("XSHADOW_TABLES_INTERNAL_TOKEN").unwrap_or_default();
+    let app = health::router(database.clone(), tables::router(database, tables_token));
     eprintln!(
         "XShadow Rust API candidate listening on {}",
         listener.local_addr()?

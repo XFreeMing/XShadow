@@ -1,0 +1,55 @@
+{
+  "list": {
+    "title": "Tableaux",
+    "empty": "Aucun tableau",
+    "name": "Nom du tableau",
+    "create": "Nouveau tableau",
+    "loading": "Chargement"
+  },
+  "sheet": {
+    "back": "Tous les tableaux",
+    "add_field": "Ajouter un champ",
+    "field_name": "Nom du champ",
+    "kind": "Type",
+    "options": "Options",
+    "options_hint": "Une option par ligne",
+    "add": "Ajouter",
+    "add_record": "Ajouter un enregistrement",
+    "save_view": "Enregistrer la vue",
+    "new_view": "Nouvelle vue",
+    "view_name": "Nom de la vue",
+    "columns": "Colonnes visibles",
+    "filter": "Filtre",
+    "sort": "Tri",
+    "clear": "Effacer",
+    "refresh": "Actualiser",
+    "conflict": "Cet enregistrement a été modifié dans une autre fenêtre. Le changement n'a pas été enregistré.",
+    "save_failed": "Enregistrement impossible",
+    "empty_fields": "Ajoutez un champ avant les enregistrements.",
+    "empty_records": "Aucun enregistrement",
+    "none": "Aucun",
+    "empty_value": "Vide",
+    "checked": "Coché",
+    "unchecked": "Non coché",
+    "move_up": "Monter",
+    "move_down": "Descendre",
+    "rename": "Renommer le champ",
+    "kinds": {
+      "text": "Texte",
+      "number": "Nombre",
+      "date": "Date",
+      "single_select": "Choix unique",
+      "checkbox": "Case"
+    },
+    "ops": {
+      "eq": "Égal à",
+      "contains": "Contient",
+      "is_empty": "Est vide",
+      "is_not_empty": "N'est pas vide"
+    },
+    "directions": {
+      "asc": "Croissant",
+      "desc": "Décroissant"
+    }
+  }
+}

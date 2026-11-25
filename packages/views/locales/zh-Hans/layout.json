@@ -13,7 +13,8 @@
     "runtimes": "运行时",
     "skills": "Skills",
     "settings": "设置",
-    "views": "视图"
+    "views": "视图",
+    "tables": "表格"
   },
   "tab": {
     "issue": "任务",

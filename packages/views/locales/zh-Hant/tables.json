@@ -1,0 +1,55 @@
+{
+  "list": {
+    "title": "表格",
+    "empty": "還沒有表格",
+    "name": "表名",
+    "create": "新建表格",
+    "loading": "正在載入"
+  },
+  "sheet": {
+    "back": "全部表格",
+    "add_field": "新增欄位",
+    "field_name": "欄位名稱",
+    "kind": "類型",
+    "options": "選項",
+    "options_hint": "每行一個選項",
+    "add": "新增",
+    "add_record": "新增記錄",
+    "save_view": "儲存檢視",
+    "new_view": "新建檢視",
+    "view_name": "檢視名稱",
+    "columns": "可見欄",
+    "filter": "篩選",
+    "sort": "排序",
+    "clear": "清除",
+    "refresh": "重新整理",
+    "conflict": "這筆記錄已在其他視窗更新，剛才的修改沒有寫入。",
+    "save_failed": "無法儲存",
+    "empty_fields": "先新增欄位，再新增記錄。",
+    "empty_records": "還沒有記錄",
+    "none": "無",
+    "empty_value": "空",
+    "checked": "已勾選",
+    "unchecked": "未勾選",
+    "move_up": "上移",
+    "move_down": "下移",
+    "rename": "重新命名欄位",
+    "kinds": {
+      "text": "文字",
+      "number": "數字",
+      "date": "日期",
+      "single_select": "單選",
+      "checkbox": "勾選"
+    },
+    "ops": {
+      "eq": "等於",
+      "contains": "包含",
+      "is_empty": "為空",
+      "is_not_empty": "不為空"
+    },
+    "directions": {
+      "asc": "升序",
+      "desc": "降序"
+    }
+  }
+}

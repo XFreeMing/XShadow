@@ -1,0 +1,55 @@
+{
+  "list": {
+    "title": "Tables",
+    "empty": "No tables yet",
+    "name": "Table name",
+    "create": "New table",
+    "loading": "Loading"
+  },
+  "sheet": {
+    "back": "All tables",
+    "add_field": "Add field",
+    "field_name": "Field name",
+    "kind": "Type",
+    "options": "Options",
+    "options_hint": "One option per line",
+    "add": "Add",
+    "add_record": "Add record",
+    "save_view": "Save view",
+    "new_view": "New view",
+    "view_name": "View name",
+    "columns": "Visible columns",
+    "filter": "Filter",
+    "sort": "Sort",
+    "clear": "Clear",
+    "refresh": "Refresh",
+    "conflict": "This record was updated in another window. The change was not saved.",
+    "save_failed": "Could not save",
+    "empty_fields": "Add a field before adding records.",
+    "empty_records": "No records yet",
+    "none": "None",
+    "empty_value": "Empty",
+    "checked": "Checked",
+    "unchecked": "Unchecked",
+    "move_up": "Move up",
+    "move_down": "Move down",
+    "rename": "Rename field",
+    "kinds": {
+      "text": "Text",
+      "number": "Number",
+      "date": "Date",
+      "single_select": "Single select",
+      "checkbox": "Checkbox"
+    },
+    "ops": {
+      "eq": "Equals",
+      "contains": "Contains",
+      "is_empty": "Is empty",
+      "is_not_empty": "Is not empty"
+    },
+    "directions": {
+      "asc": "Ascending",
+      "desc": "Descending"
+    }
+  }
+}

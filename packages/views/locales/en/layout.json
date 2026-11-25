@@ -13,7 +13,8 @@
     "runtimes": "Runtimes",
     "skills": "Skills",
     "settings": "Settings",
-    "views": "Views"
+    "views": "Views",
+    "tables": "Tables"
   },
   "tab": {
     "issue": "Issue",

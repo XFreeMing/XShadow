@@ -15,6 +15,7 @@ import enInbox from "./en/inbox.json";
 import enWorkspace from "./en/workspace.json";
 import enProjects from "./en/projects.json";
 import enGoals from "./en/goals.json";
+import enTables from "./en/tables.json";
 import enAutopilots from "./en/autopilots.json";
 import enSkills from "./en/skills.json";
 import enChat from "./en/chat.json";
@@ -41,6 +42,7 @@ import zhHansInbox from "./zh-Hans/inbox.json";
 import zhHansWorkspace from "./zh-Hans/workspace.json";
 import zhHansProjects from "./zh-Hans/projects.json";
 import zhHansGoals from "./zh-Hans/goals.json";
+import zhHansTables from "./zh-Hans/tables.json";
 import zhHansAutopilots from "./zh-Hans/autopilots.json";
 import zhHansSkills from "./zh-Hans/skills.json";
 import zhHansChat from "./zh-Hans/chat.json";
@@ -67,6 +69,7 @@ import zhHantInbox from "./zh-Hant/inbox.json";
 import zhHantWorkspace from "./zh-Hant/workspace.json";
 import zhHantProjects from "./zh-Hant/projects.json";
 import zhHantGoals from "./zh-Hant/goals.json";
+import zhHantTables from "./zh-Hant/tables.json";
 import zhHantAutopilots from "./zh-Hant/autopilots.json";
 import zhHantSkills from "./zh-Hant/skills.json";
 import zhHantChat from "./zh-Hant/chat.json";
@@ -93,6 +96,7 @@ import koInbox from "./ko/inbox.json";
 import koWorkspace from "./ko/workspace.json";
 import koProjects from "./ko/projects.json";
 import koGoals from "./ko/goals.json";
+import koTables from "./ko/tables.json";
 import koAutopilots from "./ko/autopilots.json";
 import koSkills from "./ko/skills.json";
 import koChat from "./ko/chat.json";
@@ -119,6 +123,7 @@ import jaInbox from "./ja/inbox.json";
 import jaWorkspace from "./ja/workspace.json";
 import jaProjects from "./ja/projects.json";
 import jaGoals from "./ja/goals.json";
+import jaTables from "./ja/tables.json";
 import jaAutopilots from "./ja/autopilots.json";
 import jaSkills from "./ja/skills.json";
 import jaChat from "./ja/chat.json";
@@ -145,6 +150,7 @@ import ruInbox from "./ru/inbox.json";
 import ruWorkspace from "./ru/workspace.json";
 import ruProjects from "./ru/projects.json";
 import ruGoals from "./ru/goals.json";
+import ruTables from "./ru/tables.json";
 import ruAutopilots from "./ru/autopilots.json";
 import ruSkills from "./ru/skills.json";
 import ruChat from "./ru/chat.json";
@@ -171,6 +177,7 @@ import frInbox from "./fr/inbox.json";
 import frWorkspace from "./fr/workspace.json";
 import frProjects from "./fr/projects.json";
 import frGoals from "./fr/goals.json";
+import frTables from "./fr/tables.json";
 import frAutopilots from "./fr/autopilots.json";
 import frSkills from "./fr/skills.json";
 import frChat from "./fr/chat.json";
@@ -197,6 +204,7 @@ import esInbox from "./es/inbox.json";
 import esWorkspace from "./es/workspace.json";
 import esProjects from "./es/projects.json";
 import esGoals from "./es/goals.json";
+import esTables from "./es/tables.json";
 import esAutopilots from "./es/autopilots.json";
 import esSkills from "./es/skills.json";
 import esChat from "./es/chat.json";
@@ -229,6 +237,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: enWorkspace,
     projects: enProjects,
     goals: enGoals,
+    tables: enTables,
     autopilots: enAutopilots,
     skills: enSkills,
     chat: enChat,
@@ -257,6 +266,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: zhHansWorkspace,
     projects: zhHansProjects,
     goals: zhHansGoals,
+    tables: zhHansTables,
     autopilots: zhHansAutopilots,
     skills: zhHansSkills,
     chat: zhHansChat,
@@ -285,6 +295,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: zhHantWorkspace,
     projects: zhHantProjects,
     goals: zhHantGoals,
+    tables: zhHantTables,
     autopilots: zhHantAutopilots,
     skills: zhHantSkills,
     chat: zhHantChat,
@@ -313,6 +324,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: koWorkspace,
     projects: koProjects,
     goals: koGoals,
+    tables: koTables,
     autopilots: koAutopilots,
     skills: koSkills,
     chat: koChat,
@@ -341,6 +353,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: jaWorkspace,
     projects: jaProjects,
     goals: jaGoals,
+    tables: jaTables,
     autopilots: jaAutopilots,
     skills: jaSkills,
     chat: jaChat,
@@ -369,6 +382,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: ruWorkspace,
     projects: ruProjects,
     goals: ruGoals,
+    tables: ruTables,
     autopilots: ruAutopilots,
     skills: ruSkills,
     chat: ruChat,
@@ -397,6 +411,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: frWorkspace,
     projects: frProjects,
     goals: frGoals,
+    tables: frTables,
     autopilots: frAutopilots,
     skills: frSkills,
     chat: frChat,
@@ -425,6 +440,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workspace: esWorkspace,
     projects: esProjects,
     goals: esGoals,
+    tables: esTables,
     autopilots: esAutopilots,
     skills: esSkills,
     chat: esChat,
