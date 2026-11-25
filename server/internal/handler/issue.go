@@ -3724,6 +3724,27 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// request rather than once per payload. (MUL-6243)
 	fillCreated := h.newStatusCategoryFiller(r.Context(), wsUUID, projectaccess.Hidden{})
 
+	useAttach, attachPlan, attachErr := h.prepareAgentQuickCreateAttachRust(
+		r, wsUUID, creatorType, actualCreatorID, originType, originID, req,
+		parentIssueID, projectID, issueTypeID, assigneeType, attachmentIDs, labelIDs, status, workflowNeedsGo,
+	)
+	if attachErr != nil {
+		if !writeQueryCancellation(w, r, attachErr) {
+			slog.Error("resolve agent quick-create attach route failed", append(logger.RequestAttrs(r), "error", attachErr)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue create route")
+		}
+		return
+	}
+	if useAttach {
+		rustPlan := issueCreateRustPlan{
+			useRust:            true,
+			issueID:            attachPlan.IssueID,
+			pendingAgentAttach: &attachPlan,
+		}
+		h.createIssueViaRust(w, r, workspaceID, wsUUID, creatorID, creatorType, actualCreatorID, req, status, priority,
+			assigneeType, assigneeID, parentIssueID, projectID, startDate, dueDate, issueTypeID, properties, labelIDs, fillCreated, rustPlan)
+		return
+	}
 	rustPlan, err := h.planIssueCreateRust(
 		r, wsUUID, req, creatorType, actualCreatorID, priority,
 		assigneeType, assigneeID, status, originType, attachmentIDs, workflowNeedsGo, workflowProjectID,

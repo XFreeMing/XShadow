@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sqlx::{Acquire, PgConnection, PgPool, Postgres, Row, Transaction};
 
+use super::attach_agent_source_issue::{
+    PendingAgentOriginTrust, attach_pending_agent_origin_context, lock_agent_origin_and_source,
+    lock_pending_agent_origin_context, validate_pending_agent_origin_request,
+};
 use super::create_source_context::{
     SourceContextCreateTrust, insert_attached_source_context, prepare_source_context_create_trust,
     reconcile_source_context_project, validate_source_context_create_trust,
@@ -75,6 +79,7 @@ pub struct IssueCreateRequest {
     #[serde(default)]
     pub attachment_ids: Vec<String>,
     pub source_context_create_trust: Option<SourceContextCreateTrust>,
+    pub pending_agent_origin_trust: Option<PendingAgentOriginTrust>,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,7 +144,7 @@ impl From<sqlx::Error> for IssueCreateError {
     }
 }
 
-fn duplicate_lock_key(
+pub(super) fn duplicate_lock_key(
     workspace_id: &str,
     project_id: Option<&str>,
     parent_issue_id: Option<&str>,
@@ -258,7 +263,7 @@ async fn heal_issue_counter(pool: &PgPool, workspace_id: &str) -> Result<bool, s
     Ok(healed.is_some())
 }
 
-async fn find_active_duplicate(
+pub(super) async fn find_active_duplicate(
     conn: &mut PgConnection,
     workspace_id: &str,
     project_id: Option<&str>,
@@ -304,13 +309,13 @@ async fn find_active_duplicate(
     Ok(Some(map_create_row_to_response(&row, &prefix)?))
 }
 
-fn duplicate_message(identifier: &str, title: &str, status: &str) -> String {
+pub(super) fn duplicate_message(identifier: &str, title: &str, status: &str) -> String {
     format!(
         "Active duplicate issue exists: {identifier} {title} (status: {status}). Set allow_duplicate=true or use --allow-duplicate to create another."
     )
 }
 
-fn map_create_row_to_response(
+pub(super) fn map_create_row_to_response(
     row: &sqlx::postgres::PgRow,
     prefix: &str,
 ) -> Result<IssueResponse, sqlx::Error> {
@@ -426,13 +431,21 @@ async fn create_issue_attempt(
     actor: &CallerActor,
     request: &IssueCreateRequest,
 ) -> Result<IssueCreatePayload, IssueCreateError> {
-    let CallerActor::Member { user_id } = actor else {
-        return Err(IssueCreateError::InvalidInput);
+    let pending_origin = request.pending_agent_origin_trust.as_ref();
+    let member_id = match (actor, pending_origin) {
+        (CallerActor::Member { user_id }, None)
+            if request.creator_type == "member" && request.creator_id == *user_id =>
+        {
+            user_id.as_str()
+        }
+        (CallerActor::Agent { .. }, Some(trust)) => {
+            validate_pending_agent_origin_request(actor, request, trust)?;
+            trust.expected_requester_id.as_str()
+        }
+        _ => return Err(IssueCreateError::InvalidInput),
     };
     if !is_uuid(&request.id)
         || !is_uuid(workspace_id)
-        || request.creator_type != "member"
-        || request.creator_id != *user_id
         || request.title.is_empty()
         || request.creator_id.is_empty()
         || !matches!(
@@ -486,6 +499,9 @@ async fn create_issue_attempt(
     .bind(workspace_id)
     .execute(&mut *tx)
     .await?;
+    if let Some(trust) = pending_origin {
+        lock_agent_origin_and_source(&mut tx, workspace_id, member_id, trust).await?;
+    }
     let mut source_context_prepared = None;
     if let Some(trust) = request.source_context_create_trust.as_ref() {
         if request.status != "todo" {
@@ -493,12 +509,12 @@ async fn create_issue_attempt(
         }
         source_context_prepared = Some((
             trust,
-            prepare_source_context_create_trust(workspace_id, user_id, request, trust)?,
+            prepare_source_context_create_trust(workspace_id, member_id, request, trust)?,
         ));
     }
     revalidate_type_and_properties(&mut tx, workspace_id, request).await?;
     let effective_project =
-        match guard_parent_projects_and_assignee(&mut tx, workspace_id, user_id, request).await {
+        match guard_parent_projects_and_assignee(&mut tx, workspace_id, member_id, request).await {
             Err(IssueCreateError::ParentNotFound | IssueCreateError::ProjectNotFound)
                 if source_context_prepared.is_some() =>
             {
@@ -523,7 +539,8 @@ async fn create_issue_attempt(
     } else {
         None
     };
-    set_write_actor(&mut tx, actor, None).await?;
+    let source_task_id = pending_origin.map(|trust| trust.expected_origin_task_id.as_str());
+    set_write_actor(&mut tx, actor, source_task_id).await?;
 
     if request.assignee_type.as_deref() == Some("agent") {
         let Some(assignee_id) = request.assignee_id.as_deref() else {
@@ -550,14 +567,14 @@ async fn create_issue_attempt(
             .await
             .map_err(map_dispatch_error)?,
         };
-        if agent_owner.as_deref() != Some(user_id) {
+        if agent_owner.as_deref() != Some(member_id) {
             return Err(IssueCreateError::AgentInvokeForbidden);
         }
         if let Some(plan) = prepared {
             status_dispatch::validate_runtime_for_active_enqueue(
                 &mut tx,
                 workspace_id,
-                user_id,
+                member_id,
                 &plan.runtime_id,
                 status_dispatch::RuntimeEnqueueCaller::DirectAgent,
             )
@@ -568,7 +585,7 @@ async fn create_issue_attempt(
                 workspace_id,
                 &request.id,
                 effective_project.as_deref(),
-                Some(user_id.to_string()),
+                Some(member_id.to_owned()),
                 plan,
             )
             .await
@@ -578,7 +595,7 @@ async fn create_issue_attempt(
                 &mut tx,
                 workspace_id,
                 effective_project.as_deref(),
-                vec![user_id.to_string()],
+                vec![member_id.to_owned()],
             )
             .await
             .map_err(map_dispatch_error)?;
@@ -610,14 +627,14 @@ async fn create_issue_attempt(
         if leader.leader_id != trust.expected_leader_id {
             return Err(IssueCreateError::DispatchSensitive);
         }
-        if leader.owner_id.as_deref() != Some(user_id) {
+        if leader.owner_id.as_deref() != Some(member_id) {
             return Err(IssueCreateError::SquadInvokeForbidden);
         }
         if let Some(plan) = prepared {
             status_dispatch::validate_runtime_for_active_enqueue(
                 &mut tx,
                 workspace_id,
-                user_id,
+                member_id,
                 &plan.runtime_id,
                 status_dispatch::RuntimeEnqueueCaller::SquadLeader,
             )
@@ -638,7 +655,7 @@ async fn create_issue_attempt(
                 &mut tx,
                 workspace_id,
                 effective_project.as_deref(),
-                vec![user_id.to_owned()],
+                vec![member_id.to_owned()],
             )
             .await
             .map_err(map_dispatch_error)?;
@@ -706,6 +723,11 @@ async fn create_issue_attempt(
         }
     }
 
+    if let Some(trust) = pending_origin {
+        // The legacy writer reserves the issue number before locking the pending capture.
+        lock_pending_agent_origin_context(&mut tx, workspace_id, trust).await?;
+    }
+
     let min_position: f64 = sqlx::query_scalar(
         "SELECT COALESCE(MIN(position), 0)::double precision FROM issue WHERE workspace_id = $1::uuid AND status = $2",
     )
@@ -715,16 +737,28 @@ async fn create_issue_attempt(
     .await?;
     let position = min_position - 1.0;
 
+    let (origin_type, origin_id, requester_user_id) = if let Some(trust) = pending_origin {
+        (
+            Some("quick_create"),
+            Some(trust.expected_origin_task_id.as_str()),
+            Some(member_id),
+        )
+    } else {
+        (None, None, None)
+    };
+
     let inserted = sqlx::query(
         "INSERT INTO issue (
             id, workspace_id, title, description, status, priority,
             assignee_type, assignee_id, creator_type, creator_id,
             parent_issue_id, position, start_date, due_date, number, project_id,
-            properties, issue_type_id, last_activity_at, work_method_run
+            properties, issue_type_id, last_activity_at, work_method_run,
+            origin_type, origin_id, requester_user_id
          ) VALUES (
             $1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::uuid, $9, $10::uuid,
             $11::uuid, $12, $13::date, $14::date, $15, $16::uuid,
-            $17::jsonb, $18::uuid, now(), CASE WHEN $19::jsonb IS NULL THEN NULL ELSE $19::jsonb END
+            $17::jsonb, $18::uuid, now(), CASE WHEN $19::jsonb IS NULL THEN NULL ELSE $19::jsonb END,
+            $20, $21::uuid, $22::uuid
          )
          RETURNING id::text, workspace_id::text, number, title, description, status, priority,
                    assignee_type, assignee_id::text, creator_type, creator_id::text,
@@ -756,6 +790,9 @@ async fn create_issue_attempt(
     .bind(request.properties.get())
     .bind(request.issue_type_id.as_deref())
     .bind(request.work_method_run.as_deref().map(RawValue::get))
+    .bind(origin_type)
+    .bind(origin_id)
+    .bind(requester_user_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|error| {
@@ -772,6 +809,9 @@ async fn create_issue_attempt(
 
     if let Some((trust, plan)) = source_context {
         insert_attached_source_context(&mut tx, workspace_id, &request.id, trust, &plan).await?;
+    }
+    if let Some(trust) = pending_origin {
+        attach_pending_agent_origin_context(&mut tx, workspace_id, &request.id, trust).await?;
     }
 
     if request.pr_auto_complete_disabled {

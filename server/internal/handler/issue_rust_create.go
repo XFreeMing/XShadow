@@ -57,6 +57,7 @@ type rustIssueCreate struct {
 	SquadCreateTrust         *rustSquadCreateTrust         `json:"squad_create_trust,omitempty"`
 	AttachmentIDs            []string                      `json:"attachment_ids,omitempty"`
 	SourceContextCreateTrust *rustSourceContextCreateTrust `json:"source_context_create_trust,omitempty"`
+	PendingAgentOriginTrust  *rustPendingAgentOriginTrust  `json:"pending_agent_origin_trust,omitempty"`
 }
 
 type rustSquadCreateTrust struct {
@@ -78,6 +79,7 @@ type issueCreateRustPlan struct {
 	dispatchPrep        *service.IssuePreparedAgentEnqueue
 	squadTrust          *rustSquadCreateTrust
 	nativeAttachmentIDs []string
+	pendingAgentAttach  *preparedAgentQuickCreateAttach
 }
 
 func projectedIssueForCreate(
@@ -396,6 +398,10 @@ func (h *Handler) createIssueViaRust(
 	if len(plan.nativeAttachmentIDs) > 0 {
 		payload.AttachmentIDs = append([]string(nil), plan.nativeAttachmentIDs...)
 	}
+	if plan.pendingAgentAttach != nil {
+		trust := plan.pendingAgentAttach.Trust
+		payload.PendingAgentOriginTrust = &trust
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -430,6 +436,18 @@ func (h *Handler) createIssueViaRust(
 			writeJSON(w, http.StatusConflict, conflict)
 			return
 		}
+		if plan.pendingAgentAttach != nil {
+			var race struct {
+				Code string `json:"code"`
+			}
+			if json.Unmarshal(bodyBytes, &race) == nil && race.Code == "source_context_already_attached" {
+				writeError(w, http.StatusInternalServerError, "failed to create issue")
+				return
+			}
+		}
+		if writeRustIssueCreateConflictForSourceContext(w, bodyBytes) {
+			return
+		}
 		writeRustIssueResponse(w, resp, bytes.NewReader(bodyBytes))
 		return
 	}
@@ -441,6 +459,12 @@ func (h *Handler) createIssueViaRust(
 	if json.Unmarshal(bodyBytes, &receipt) != nil || !rustIssueCreateReceiptValid(issueID, wsUUID, receipt) {
 		writeError(w, http.StatusBadGateway, "invalid rust issue create response")
 		return
+	}
+	if plan.pendingAgentAttach != nil {
+		if !h.agentQuickCreateAttachCommitted(r.Context(), *plan.pendingAgentAttach, receipt) {
+			writeError(w, http.StatusBadGateway, "invalid rust issue create response")
+			return
+		}
 	}
 	if len(plan.nativeAttachmentIDs) > 0 {
 		if receipt.LinkedAttachmentIDs == nil {
@@ -483,7 +507,11 @@ func (h *Handler) createIssueViaRust(
 	}
 
 	issue := receipt.Issue
-	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", issue.ID, "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
+	createLog := append(logger.RequestAttrs(r), "issue_id", issue.ID, "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)
+	if plan.pendingAgentAttach != nil {
+		createLog = append(createLog, "backend", "rust", "shape", "agent_quick_create_attach")
+	}
+	slog.Info("issue created", createLog...)
 
 	var linkedAttachments []db.Attachment
 	if len(plan.nativeAttachmentIDs) > 0 {

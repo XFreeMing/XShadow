@@ -28,6 +28,7 @@ pub use method_adopt_write::{
 };
 mod agent_source_queue_lock;
 mod assign_write;
+mod attach_agent_source_issue;
 mod batch_delete_write;
 mod comment_write;
 mod create_agent_source_context;
