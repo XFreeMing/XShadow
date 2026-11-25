@@ -255,6 +255,9 @@ type Handler struct {
 	// distinguishes the current one-read derivation from the N+1 it replaced.
 	// (MUL-6243)
 	IssueStatusCatalog issuestatus.Querier
+	// IssueReadBridge optionally routes pilot-scoped GET /api/issues/{id} reads
+	// to the Rust service over loopback HTTP. Nil keeps the default Go path.
+	IssueReadBridge    *IssueReadBridge
 	LivenessStore      LivenessStore
 	HeartbeatScheduler HeartbeatScheduler
 	Storage            storage.Storage

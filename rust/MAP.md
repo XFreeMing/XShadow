@@ -4,7 +4,9 @@
 
 ## 当前交付
 
-Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/healthz`，并在同一进程提供工作区通用表格。表格不是下面「HTTP 请求入口和数据访问」阶段的完成标记：Go 仍承载原有 API，只把已通过成员校验的表格请求转到本机 Rust。Go 参考版本为 `883566da7e2d8d256b4c775feec2be875a827d00`。候选仅监听 IPv4 回环地址。日常工作台仍按已发布版本启动 Go 服务。未设置表格上游时，原有入口不受影响。
+Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/healthz`，并在同一进程提供工作区通用表格。Go 承载公开 API 和认证，将通过成员校验的表格请求转到本机 Rust。Go 健康检查参考版本为 `883566da7e2d8d256b4c775feec2be875a827d00`。候选仅监听 IPv4 回环地址。日常工作台按已发布版本启动 Go 服务。
+
+原生任务详情 `GET /api/issues/{id}` 支持按工作区试点。设置 `XSHADOW_ISSUES_RUST_READ_PILOT` 为工作区 UUID 或 slug 后，Rust 在同一 PostgreSQL 中读取原任务并检查项目可见性，Go 补齐附件 URL 和冻结来源。连接可复用 `XSHADOW_TABLES_UPSTREAM` 与 `XSHADOW_TABLES_INTERNAL_TOKEN`。清空试点设置后，详情回到 Go。试点期间 Rust 不可用时，选定工作区收到 `503`，其他工作区继续经由 Go 提供详情。
 
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 

@@ -1,4 +1,5 @@
 mod health;
+mod issues;
 mod tables;
 
 use std::{env, error::Error, net::Ipv4Addr};
@@ -14,11 +15,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map_or(Ok(8080), |value| value.parse::<u16>())?;
     let database_url = env::var("DATABASE_URL")?;
     let database = PgPoolOptions::new()
-        .max_connections(2)
+        .max_connections(4)
         .connect_lazy(&database_url)?;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     let tables_token = env::var("XSHADOW_TABLES_INTERNAL_TOKEN").unwrap_or_default();
-    let app = health::router(database.clone(), tables::router(database, tables_token));
+    let issues_token = env::var("XSHADOW_ISSUES_INTERNAL_TOKEN")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| tables_token.clone());
+    let extra = tables::router(database.clone(), tables_token)
+        .merge(issues::router(database.clone(), issues_token));
+    let app = health::router(database, extra);
     eprintln!(
         "XShadow Rust API candidate listening on {}",
         listener.local_addr()?
