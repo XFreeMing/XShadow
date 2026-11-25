@@ -69,8 +69,8 @@ vi.mock("@multica/core/analytics", () => ({ captureEvent: vi.fn() }));
 vi.mock("@multica/ui/components/common/theme-provider", () => ({
   ThemeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
-vi.mock("@multica/ui/components/common/multica-icon", () => ({
-  MulticaIcon: () => <div data-testid="app-loading" />,
+vi.mock("@multica/ui/components/common/baishadow-icon", () => ({
+  BaiShadowIcon: () => <div data-testid="app-loading" />,
 }));
 vi.mock("@multica/ui/components/ui/sonner", () => ({ Toaster: () => null }));
 vi.mock("@multica/views/locales", () => ({ RESOURCES: { en: {} } }));

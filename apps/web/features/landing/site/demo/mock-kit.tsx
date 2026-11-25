@@ -22,7 +22,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { ShimmerText } from "@multica/ui/components/common/shimmer-text";
 import { HERO_PROVIDERS } from "../../components/provider-marks";
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import { useLocale } from "../../i18n";
 import type { DemoDict } from "../../i18n/types";
 
@@ -462,7 +462,7 @@ export function Working({ label, agents }: { label?: string; agents?: Actor[] })
   return (
     <span className="inline-flex shrink-0 items-center gap-1">
       {agents ? <AvatarStack actors={agents} size={16} /> : null}
-      <MulticaIcon mode="think" size={12} />
+      <BaiShadowIcon mode="think" size={12} />
       <ShimmerText className="text-micro text-muted-foreground">{label ?? working}</ShimmerText>
     </span>
   );

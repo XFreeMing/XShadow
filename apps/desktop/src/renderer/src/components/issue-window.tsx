@@ -11,7 +11,7 @@ import { setCurrentWorkspace } from "@multica/core/platform";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
 import { useWorkspaceList } from "@multica/core/workspace";
 import { Button } from "@multica/ui/components/ui/button";
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import { ModalRegistry } from "@multica/views/modals/registry";
 import { WorkspacePresencePrefetch } from "@multica/views/layout";
 import { DragStrip, WindowTitleBarProvider } from "@multica/views/platform";
@@ -68,7 +68,7 @@ function IssueWindowRoute() {
     return (
       <IssueWindowFrame>
         <div className="flex min-h-0 flex-1 items-center justify-center">
-          <MulticaIcon mode="think" size={40} />
+          <BaiShadowIcon mode="think" size={40} />
         </div>
       </IssueWindowFrame>
     );

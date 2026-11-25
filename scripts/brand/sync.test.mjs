@@ -7,7 +7,7 @@ import test from "node:test";
 import { sync, targets } from "./sync.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const SOURCE = "packages/ui/lib/multica-brand.ts";
+const SOURCE = "packages/ui/lib/baishadow-brand.ts";
 
 function copyOfRepo(t) {
   const root = mkdtempSync(join(tmpdir(), "brand-sync-"));
@@ -17,16 +17,16 @@ function copyOfRepo(t) {
   return root;
 }
 
-test("the committed copies match multica-brand.ts", async () => {
+test("the committed copies match baishadow-brand.ts", async () => {
   assert.deepEqual(await sync(repo, { check: true }), []);
 });
 
 for (const { name, from, to, drift, stay } of [
   {
     name: "a wordmark coordinate",
-    from: "const gap = 12;",
-    to: "const gap = 13;",
-    drift: ["apps/mobile/components/brand/multica-logo.tsx", "server/cmd/multica/cmd_auth.go", "docs/assets/logo-light.svg"],
+    from: "119, 10",
+    to: "120, 10",
+    drift: ["apps/mobile/components/brand/baishadow-logo.tsx", "docs/assets/logo-light.svg", "server/cmd/multica/cmd_auth.go"],
     stay: ["apps/web/public/favicon.svg"],
   },
   {
@@ -34,7 +34,7 @@ for (const { name, from, to, drift, stay } of [
     from: "export const ICON_TILE_RADIUS = 22.5;",
     to: "export const ICON_TILE_RADIUS = 30;",
     drift: ["apps/web/public/favicon.svg", "apps/docs/app/icon.svg"],
-    stay: ["apps/web/public/icons/icon.svg", "server/cmd/multica/cmd_auth.go"],
+    stay: ["apps/web/public/icons/icon.svg"],
   },
 ]) {
   test(`changing ${name} without regenerating fails the check, and regenerating fixes it`, async (t) => {

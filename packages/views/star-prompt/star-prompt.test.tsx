@@ -118,7 +118,7 @@ describe("StarPrompt", () => {
     await agentFinishesIssue();
 
     expect(await screen.findByText("Lambda has completed 4 issues")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Star Multica on GitHub" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Star BaiShadow on GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/multica-ai/multica",
     );
@@ -133,7 +133,7 @@ describe("StarPrompt", () => {
   it("retires the prompt when the user clicks through to GitHub", async () => {
     renderPrompt();
     await agentFinishesIssue();
-    fireEvent.click(await screen.findByRole("link", { name: "Star Multica on GitHub" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Star BaiShadow on GitHub" }));
 
     expect(markStarPromptStarred).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Lambda has completed 4 issues")).not.toBeInTheDocument();

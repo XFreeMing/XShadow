@@ -6,7 +6,7 @@ import * as Haptics from "expo-haptics";
 import { Text } from "@/components/ui/text";
 import { OtpInput, type OtpInputRef } from "@/components/ui/otp-input";
 import { Button } from "@/components/ui/button";
-import { MulticaLogo } from "@/components/brand/multica-logo";
+import { BaiShadowLogo } from "@/components/brand/baishadow-logo";
 import { useAuthStore } from "@/data/auth-store";
 import { i18n, useT } from "@/lib/i18n";
 import { mapAuthError } from "@/lib/auth-error";
@@ -78,7 +78,7 @@ export default function Verify() {
       >
         <View className="flex-1 justify-center px-6 gap-6">
           <View className="items-center gap-3">
-            <MulticaLogo size={30} />
+            <BaiShadowLogo size={30} />
             <View className="gap-1 items-center">
               <Text className="text-2xl font-semibold text-foreground">
                 {t("verify.enter_title")}

@@ -2,7 +2,7 @@
 
 import { Suspense } from "react";
 import { DashboardLayout } from "@multica/views/layout";
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import { SearchCommand } from "@multica/views/search";
 import { FloatingChat } from "@multica/views/chat/floating-chat";
 import { StarPrompt } from "@multica/views/star-prompt";
@@ -19,7 +19,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <WorkspaceDocumentTitle />
       </Suspense>
       <DashboardLayout
-        loadingIndicator={<MulticaIcon mode="think" size={40} />}
+        loadingIndicator={<BaiShadowIcon mode="think" size={40} />}
         extra={
           <>
             <SearchCommand />

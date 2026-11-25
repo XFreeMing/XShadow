@@ -14,7 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import { STAR_STROKE, starPath } from "@multica/ui/lib/multica-brand";
+import { MARK_PATH } from "@multica/ui/lib/baishadow-brand";
 import { cn } from "@multica/ui/lib/utils";
 import { ActionShortcutKeycaps } from "../../common/shortcut-keycaps";
 import { useT } from "../../i18n";
@@ -23,20 +23,19 @@ import { ChatBarHistory } from "./chat-bar-history";
 import { chatActivity, selectChatBarSessions, type ChatBarSession } from "./chat-bar-sessions";
 
 const EMPTY_SESSIONS: ChatSession[] = [];
-const STAR = starPath(STAR_STROKE);
 
-/** The star from the Multica mark, in the text colour. */
-function MulticaStar() {
+/** The BaiShadow mark, in the text colour. */
+function BaiShadowMark() {
   return (
     <svg aria-hidden viewBox="0 0 100 100" fill="currentColor">
-      <path d={STAR} />
+      <path d={MARK_PATH} />
     </svg>
   );
 }
 const DEFAULT_MAX_CHIPS = 3;
 
 /**
- * How many chips fit. The bar's other content (workspace status, Ask Multica,
+ * How many chips fit. The bar's other content (workspace status, Ask BaiShadow,
  * history) takes about 560px and a chip up to 170px; a narrow window gives up
  * chips before it squeezes the status.
  */
@@ -82,7 +81,7 @@ function SessionMark({ item }: { item: ChatBarSession }) {
 
 /**
  * Quick chat in the bottom bar: a chip per chat that needs watching or was
- * opened here, then Ask Multica, which starts a new chat, and the history.
+ * opened here, then Ask BaiShadow, which starts a new chat, and the history.
  * The chat window opens above whichever control is pressed:
  * `useChatWindowAnchor` finds it by `data-chat-anchor`, and re-places the
  * window on a click that carries that attribute or `data-chat-anchor-trigger`.
@@ -148,7 +147,7 @@ export function ChatBar() {
     dismissChatFromBar(item.session.id, chatActivity(item.session));
   };
 
-  const askMultica = () => {
+  const askBaiShadow = () => {
     if (askPressed) setOpen(false);
     else startNewChat();
   };
@@ -229,10 +228,10 @@ export function ChatBar() {
           type="button"
           data-chat-anchor="new"
           aria-pressed={askPressed}
-          onClick={askMultica}
+          onClick={askBaiShadow}
           className={BOTTOM_BAR_ITEM_CLASS}
         >
-          <MulticaStar />
+          <BaiShadowMark />
           {askLabel}
         </button>
       </TooltipHint>

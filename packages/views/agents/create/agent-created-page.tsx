@@ -13,7 +13,7 @@ import {
   agentListOptions,
   squadListOptions,
 } from "@multica/core/workspace/queries";
-import { MulticaStarRow } from "@multica/ui/components/common/multica-graphics";
+import { BaiShadowMarkRow } from "@multica/ui/components/common/baishadow-graphics";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
@@ -58,9 +58,9 @@ export function AgentCreatedPage({ agentId }: { agentId: string }) {
         <div className="m-auto w-full max-w-xl">
           <div aria-hidden="true" className="relative mb-10 h-36 overflow-hidden rounded-xl bg-multica-ink">
             {stars && agent ? (
-              <MulticaStarRow
+              <BaiShadowMarkRow
                 count={stars}
-                join
+                enter="join"
                 delay={0.2}
                 className="absolute top-1/2 left-1/2 h-8 w-auto -translate-x-1/2 -translate-y-1/2 text-multica-paper/15"
                 lastClassName="fill-multica-paper"

@@ -37,6 +37,8 @@
     --color-priority-high: var(--priority-high);
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
+    --color-baishadow-ink: #14263d;
+    --color-baishadow-paper: #ffffff;
     --color-multica-ink: var(--multica-ink);
     --color-multica-paper: var(--multica-paper);
     --color-accent-foreground: var(--accent-foreground);

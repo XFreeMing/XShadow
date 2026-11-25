@@ -17,7 +17,7 @@ import {
   type IconComponent,
 } from "@multica/ui/icons";
 import { cn } from "@multica/ui/lib/utils";
-import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { BaiShadowIcon } from "@multica/ui/components/common/baishadow-icon";
 import { StatusIcon } from "@multica/views/issues/components/status-icon";
 import { useLocale } from "../../i18n";
 import type { Status } from "./hero-board";
@@ -297,7 +297,7 @@ export function ChatVisual() {
             <p className="px-1.5 pb-1 text-micro">{copy.apps}</p>
             <p className="flex items-center gap-1.5 rounded-md px-1.5 py-1">
               <span className="flex size-3.5 shrink-0 items-center justify-center rounded-sm bg-white text-[#3f0e40]">
-                <MulticaIcon className="size-2.5" />
+                <BaiShadowIcon className="size-2.5" />
               </span>
               Multica
             </p>
@@ -318,7 +318,7 @@ export function ChatVisual() {
               {copy.reply}
               <div className="mt-1.5 border-l-4 border-border pl-2.5">
                 <p className="flex items-center gap-1 text-micro text-muted-foreground">
-                  <MulticaIcon className="size-2.5" /> Multica
+                  <BaiShadowIcon className="size-2.5" /> Multica
                 </p>
                 <p className="mt-0.5 truncate font-bold text-[#1264a3]">ACM-151 {copy.issue}</p>
                 <p className="mt-0.5 flex items-center gap-1.5 text-caption text-muted-foreground">

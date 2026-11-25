@@ -1,68 +1,63 @@
 #!/usr/bin/env node
-// Writes every text copy of the brand geometry from packages/ui/lib/multica-brand.ts:
+// Writes every text copy of the brand geometry from packages/ui/lib/baishadow-brand.ts:
 // favicons, the PWA icon source, the README wordmark SVGs, the mobile wordmark and
-// the inline SVG on the `multica login` callback page.
+// the app-icon previews.
 //
 //   node scripts/brand/sync.mjs           rewrite the copies
 //   node scripts/brand/sync.mjs --check   exit 1 if any copy drifted (CI)
 //
 // Dependency-free on purpose: CI runs it without installing node_modules.
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const INK = "#0b0b0c";
-export const PAPER = "#ffffff";
-const CLI_WORDMARK_HEIGHT = 19.5;
-
 export async function loadBrand(root) {
-  return import(pathToFileURL(join(root, "packages/ui/lib/multica-brand.ts")).href);
+  return import(pathToFileURL(join(root, "packages/ui/lib/baishadow-brand.ts")).href);
 }
 
 export function svgs(brand) {
-  const { WORDMARK, WORDMARK_STROKE, ICON_TILE_RADIUS, starPath, iconStar, iconStarTransform } = brand;
-  const star = (px, attrs) => {
-    const { scale, stroke } = iconStar(px);
-    return `<path ${attrs} transform="${iconStarTransform(scale)}" d="${starPath(stroke)}"/>`;
-  };
-  const wordmark = (color, extra = "") =>
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${WORDMARK.viewBox}" role="img" aria-label="Multica"${extra}><g fill="none" stroke="${color}" stroke-width="${WORDMARK_STROKE}">${WORDMARK.letters.map((l) => `<path d="${l.d}"/>${l.star ? `<path d="${l.star}" fill="${color}" stroke="none"/>` : ""}`).join("")}</g></svg>`;
-  const tile = (px, { bleed = false, bg = INK, fg = PAPER } = {}) =>
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="${px}" height="${px}"><rect width="100" height="100"${bleed ? "" : ` rx="${ICON_TILE_RADIUS}"`} fill="${bg}"/>${star(px, `fill="${fg}"`)}</svg>`;
+  const {
+    WORDMARK, ICON_TILE_RADIUS, MARK_PATH, BRAND_COLORS: C,
+    MARK_GRADIENT, MARK_STOPS, REVERSE_MARK_STOPS, TILE_GRADIENT, TILE_STOPS,
+    iconMarkScale, markTransform,
+  } = brand;
+  const gradient = (id, { x1, y1, x2, y2 }, stops) =>
+    `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops.map(({ offset, color }) => `<stop offset="${offset}" stop-color="${color}"/>`).join("")}</linearGradient>`;
+  const markGradient = (id, reverse) => gradient(id, MARK_GRADIENT, reverse ? REVERSE_MARK_STOPS : MARK_STOPS);
 
-  const [, , vbW, vbH] = WORDMARK.viewBox.split(" ").map(Number);
+  const wordmark = ({ dark = false, extra = "", id = "wordmark", lettering = dark ? C.white : C.navy } = {}) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${WORDMARK.viewBox}" role="img" aria-label="百影 BaiShadow"${extra}><defs>${markGradient(id, dark)}</defs><g fill="${lettering}" fill-rule="evenodd"><path fill="url(#${id})" d="${WORDMARK.symbol}"/><path d="${WORDMARK.name}"/><path opacity=".82" d="${WORDMARK.english}"/></g></svg>`;
+
+  const tile = (px, { bleed = false, mono = false, id = "icon" } = {}) => {
+    const tileId = `${id}-tile`;
+    const markId = `${id}-mark`;
+    const defs = mono ? "" : `<defs>${gradient(tileId, TILE_GRADIENT, TILE_STOPS)}${markGradient(markId, true)}</defs>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="${px}" height="${px}" role="img" aria-label="百影">${defs}<rect width="100" height="100"${bleed ? "" : ` rx="${ICON_TILE_RADIUS}"`} fill="${mono ? C.navy : `url(#${tileId})`}"/><path fill="${mono ? C.white : `url(#${markId})`}" transform="${markTransform(iconMarkScale(px))}" d="${MARK_PATH}"/></svg>`;
+  };
+
   return {
     tile,
     wordmark,
-    favicon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Multica"><style>.t{fill:${INK}}.m{fill:${PAPER}}@media (prefers-color-scheme:dark){.t{fill:${PAPER}}.m{fill:${INK}}}</style><rect class="t" width="100" height="100" rx="${ICON_TILE_RADIUS}"/>${star(16, `class="m"`)}</svg>\n`,
-    pwaIcon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Multica">
-  <!--
-    Full-bleed source for the generated home-screen icons (apple-touch-icon.png,
-    icon-maskable-512.png). Full-bleed because both surfaces mask the artwork
-    themselves: iOS rounds the corners, Android crops to the launcher shape.
-    Geometry is packages/ui/lib/multica-brand.ts (starPath, iconStar).
-  --><rect width="100" height="100" fill="${INK}"/>${star(512, `fill="${PAPER}"`)}</svg>\n`,
-    cliWordmark: wordmark("currentColor", ` height="${CLI_WORDMARK_HEIGHT}" width="${Math.round((CLI_WORDMARK_HEIGHT * vbW) / vbH)}"`),
+    mark: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="百影"><defs>${markGradient("mark", false)}</defs><path fill="url(#mark)" d="${MARK_PATH}"/></svg>\n`,
+    favicon: tile(16) + "\n",
+    pwaIcon: tile(512, { bleed: true }) + "\n",
   };
 }
 
-function mobileBlock({ WORDMARK, WORDMARK_STROKE }) {
-  const [x, y, w, h] = WORDMARK.viewBox.split(" ").map(Number);
-  const star = WORDMARK.letters.find((l) => l.star).star;
+function mobileBlock({ WORDMARK, BRAND_COLORS, MARK_GRADIENT, MARK_STOPS, REVERSE_MARK_STOPS }) {
+  const [, , w, h] = WORDMARK.viewBox.split(" ").map(Number);
   return [
-    `const VIEW_BOX = { x: ${x}, y: ${y}, w: ${w}, h: ${h} };`,
-    `const STROKE = ${WORDMARK_STROKE};`,
-    "const LETTERS = [",
-    ...WORDMARK.letters.map((l) => `  "${l.d}",`),
-    "];",
-    "/** The star on the i, filled. */",
-    "const STAR =",
-    `  "${star}";`,
+    `const VIEW_BOX = { w: ${w}, h: ${h} };`,
+    `const BRAND_COLORS = ${JSON.stringify(BRAND_COLORS)};`,
+    `const MARK_GRADIENT = ${JSON.stringify(MARK_GRADIENT)};`,
+    `const MARK_STOPS = ${JSON.stringify(MARK_STOPS)};`,
+    `const REVERSE_MARK_STOPS = ${JSON.stringify(REVERSE_MARK_STOPS)};`,
+    `const PATHS = ${JSON.stringify([WORDMARK.symbol, WORDMARK.name, WORDMARK.english], null, 2)};`,
   ].join("\n");
 }
 
-const MOBILE_BEGIN = "// BEGIN GENERATED by scripts/brand/sync.mjs from WORDMARK in packages/ui/lib/multica-brand.ts\n";
-const MOBILE_END = "\n// END GENERATED";
+const MOBILE_BEGIN = "// BEGIN GENERATED by scripts/brand/sync.mjs from WORDMARK in packages/ui/lib/baishadow-brand.ts\n";
+const MOBILE_END = "// END GENERATED";
 const CLI_SVG = /(<div class="brand">)<svg[^]*?<\/svg>(<\/div>)/;
 
 function splice(text, file, re, body) {
@@ -75,17 +70,24 @@ export async function targets(root) {
   const brand = await loadBrand(root);
   const s = svgs(brand);
   const read = (rel) => readFileSync(join(root, rel), "utf8");
-  const mobile = "apps/mobile/components/brand/multica-logo.tsx";
+  const mobile = "apps/mobile/components/brand/baishadow-logo.tsx";
   const cli = "server/cmd/multica/cmd_auth.go";
+  const [, , width, height] = brand.WORDMARK.viewBox.split(" ").map(Number);
+  const cliLogoHeight = 32;
+  const cliLogo = s.wordmark({
+    lettering: "currentColor",
+    extra: ` height="${cliLogoHeight}" width="${Math.round(cliLogoHeight * width / height)}"`,
+  });
   const between = new RegExp(`(${escapeRe(MOBILE_BEGIN)})[^]*?(${escapeRe(MOBILE_END)})`);
   return [
     ["apps/web/public/favicon.svg", s.favicon],
     ["apps/docs/app/icon.svg", s.favicon],
     ["apps/web/public/icons/icon.svg", s.pwaIcon],
-    ["docs/assets/logo-light.svg", s.wordmark(INK) + "\n"],
-    ["docs/assets/logo-dark.svg", s.wordmark(PAPER) + "\n"],
-    [mobile, splice(read(mobile), mobile, between, mobileBlock(brand))],
-    [cli, splice(read(cli), cli, CLI_SVG, s.cliWordmark)],
+    ["docs/assets/logo-light.svg", s.wordmark() + "\n"],
+    ["docs/assets/logo-dark.svg", s.wordmark({ dark: true }) + "\n"],
+    ["docs/assets/brand/mark.svg", s.mark],
+    [mobile, splice(read(mobile), mobile, between, mobileBlock(brand) + "\n")],
+    [cli, splice(read(cli), cli, CLI_SVG, cliLogo)],
   ];
 }
 
@@ -108,14 +110,14 @@ export async function sync(root, { check = false } = {}) {
   return drifted;
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const check = args.includes("--check");
   const rootAt = args.indexOf("--root");
   const root = rootAt >= 0 ? resolve(args[rootAt + 1]) : resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const drifted = await sync(root, { check });
   if (check && drifted.length) {
-    console.error(`Out of sync with packages/ui/lib/multica-brand.ts:\n${drifted.map((f) => `  ${f}`).join("\n")}\nRun: node scripts/brand/sync.mjs`);
+    console.error(`Out of sync with packages/ui/lib/baishadow-brand.ts:\n${drifted.map((f) => `  ${f}`).join("\n")}\nRun: node scripts/brand/sync.mjs`);
     process.exit(1);
   }
   console.log(drifted.length ? `updated ${drifted.join(", ")}` : "brand copies in sync");

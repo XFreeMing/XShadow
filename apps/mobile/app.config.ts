@@ -17,10 +17,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     name: isProd
-      ? "Multica"
+      ? "百影"
       : isStaging
-        ? "Multica (Staging)"
-        : "Multica (Dev)",
+        ? "百影 (Staging)"
+        : "百影 (Dev)",
     slug: "multica-mobile",
     version: "0.1.0",
     orientation: "portrait",
@@ -77,7 +77,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           // iOS 14+. Camera + microphone are disabled — we only ever read
           // from the existing photo library.
           photosPermission:
-            "Allow Multica to access your photos to attach images to issues and comments.",
+            "Allow BaiShadow to access your photos to attach images to issues and comments.",
           cameraPermission: false,
           microphonePermission: false,
         },

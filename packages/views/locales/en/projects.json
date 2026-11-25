@@ -148,7 +148,7 @@
     "mode_worktree_title": "Run in parallel",
     "mode_worktree_description": "Runs happen side by side without touching your working copy. Each hands back an agent/… branch to review and merge.",
     "mode_worktree_needs_git": "This folder is not a git repository, so runs can't be parallel.",
-    "mode_worktree_needs_server_upgrade": "Your Multica server is too old for parallel runs and would run them in this folder instead. Update the server first.",
+    "mode_worktree_needs_server_upgrade": "Your BaiShadow server is too old for parallel runs and would run them in this folder instead. Update the server first.",
     "mode_cancel": "Cancel",
     "mode_add": "Add folder",
     "mode_edit_tooltip": "Change run mode",

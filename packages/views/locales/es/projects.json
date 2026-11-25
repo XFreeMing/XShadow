@@ -148,7 +148,7 @@
     "mode_worktree_title": "Ejecutar en paralelo",
     "mode_worktree_description": "Las ejecuciones van a la vez sin tocar tu copia de trabajo. Cada una devuelve una rama agent/… para revisar y fusionar.",
     "mode_worktree_needs_git": "Esta carpeta no es un repositorio git, así que no puede ejecutarse en paralelo.",
-    "mode_worktree_needs_server_upgrade": "Tu servidor de Multica es demasiado antiguo para ejecuciones en paralelo y las haría en esta carpeta. Actualiza primero el servidor.",
+    "mode_worktree_needs_server_upgrade": "Tu servidor de BaiShadow es demasiado antiguo para ejecuciones en paralelo y las haría en esta carpeta. Actualiza primero el servidor.",
     "mode_cancel": "Cancelar",
     "mode_add": "Añadir carpeta",
     "mode_edit_tooltip": "Cambiar modo de ejecución",
