@@ -72,6 +72,12 @@ export const WorkMethodRunSchema = z
       .array(
         z.object({
           action: z.string(),
+          candidate_failure: z.object({
+            commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+            worker_task_id: nonEmpty,
+            cases: z.array(nonEmpty).min(1),
+            trace_revision: z.number().int().positive(),
+          }).optional(),
           closeout: AcceptanceCloseoutSchema.optional().catch(undefined),
           step: index,
           from_step: index.optional(),

@@ -274,7 +274,7 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 				return db.Issue{}, false
 			}
 			if event.Action == "advance" && len(issue.WorkMethodRun) > 0 {
-				if err := checkGoalCandidateReview(ctx, q, issue, execution.ID, agentID); err != nil {
+				if err := checkGoalCandidateReview(ctx, q, issue, execution.ID, agentID, event.CandidateFailure); err != nil {
 					writeError(w, http.StatusConflict, err.Error())
 					return db.Issue{}, false
 				}
@@ -346,6 +346,9 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	var task db.AgentTaskQueue
 	if agentID.Valid {
 		note := fmt.Sprintf("Work method %s, step %d (%s), revision %d. Read the current method before acting.", run.Method.Name, run.Step+1, run.State, run.Revision)
+		if failure := run.CandidateFailureReview(); failure != nil {
+			note += "\n" + failure.ReviewBrief()
+		}
 		task, err = h.TaskService.CreateWorkMethodHandoff(ctx, q, updated, agentID, squadID, run.Revision, note, human, parent, executionID)
 		if err != nil {
 			slog.Warn("work method dispatch failed", "issue_id", uuidToString(issue.ID), "error", err)

@@ -86,12 +86,22 @@ func (h *Handler) dispatchGoalCandidate(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-func checkGoalCandidateReview(ctx context.Context, q *db.Queries, issue db.Issue, executionID, reviewerID pgtype.UUID) error {
+func checkGoalCandidateReview(ctx context.Context, q *db.Queries, issue db.Issue, executionID, reviewerID pgtype.UUID, failure *workmethod.CandidateFailure) error {
 	var before workmethod.Run
 	if err := json.Unmarshal(issue.WorkMethodRun, &before); err != nil {
 		return err
 	}
 	if !before.CanDelegateCandidate() {
+		return nil
+	}
+	if failure != nil {
+		worker, err := service.GoalCandidateFailureWorker(ctx, q, issue, before, executionID, *failure)
+		if err != nil {
+			return errors.New("失败记录须来自本步骤已完成的候选实现运行")
+		}
+		if worker.AgentID == reviewerID {
+			return errors.New("the candidate implementer cannot independently review their own work")
+		}
 		return nil
 	}
 	worker, err := service.GoalCandidateWorker(ctx, q, issue, before, executionID)

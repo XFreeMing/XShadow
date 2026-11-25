@@ -251,6 +251,7 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	var closeout *acceptance.Closeout
+	var candidateFailure *workmethod.CandidateFailure
 	if change.Action == "advance" || change.Action == "approve" {
 		gate := run.EvidenceGate()
 		closing := change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1
@@ -265,8 +266,12 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 			acceptanceTrace, err := acceptance.Decode(criteria)
 			if err == nil {
 				err = developmentReview(acceptanceTrace, gate)
+				if err != nil && gate == "candidate" && change.Action == "advance" && binding.ID.Valid &&
+					run.CanDelegateCandidate() && run.Method.Steps[run.Step].Reviewer != nil {
+					candidateFailure = workmethod.FailedCandidate(acceptanceTrace)
+				}
 			}
-			if err != nil {
+			if err != nil && candidateFailure == nil {
 				writeError(w, 409, err.Error())
 				return
 			}
@@ -307,7 +312,7 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := run.Apply(change, methods, actorType+"/"+actorID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		status := http.StatusBadRequest
-		if errors.Is(err, workmethod.ErrConflict) {
+		if errors.Is(err, workmethod.ErrConflict) || errors.Is(err, workmethod.ErrCandidateFailureApproval) {
 			status = http.StatusConflict
 		}
 		writeError(w, status, err.Error())
@@ -315,6 +320,11 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	}
 	if closeout != nil {
 		run.History[len(run.History)-1].Closeout = closeout
+	}
+	if candidateFailure != nil {
+		event := &run.History[len(run.History)-1]
+		event.CandidateFailure = candidateFailure
+		event.Evidence = candidateFailure.Summary() + "交独立评审判定应修订用例还是实现。\n" + event.Evidence
 	}
 	updated, ok := h.persistMethodTransition(w, r, issue, &run, trace, lesson)
 	if !ok {

@@ -38,6 +38,21 @@ it("rejects a working run that has lost its pinned method", async () => {
   ).rejects.toThrow("Malformed");
 });
 
+it("requires fixed failure evidence when an independent rework decision is pending", async () => {
+  const failure = { commit: "a".repeat(40), cases: ["T1"], worker_task_id: "worker-1", trace_revision: 2 };
+  const body = (cases: string[]) => ({
+    method, step: 0, state: "review", revision: 2,
+    history: [{ action: "advance", step: 0, actor: "agent/A", at: "today", candidate_failure: { ...failure, cases } }],
+  });
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json(body(failure.cases)))
+    .mockResolvedValueOnce(Response.json(body([])));
+  vi.stubGlobal("fetch", fetch);
+  const client = new ApiClient("https://example.test");
+  expect((await client.getIssueWorkMethod("DEV-1")).history[0]?.candidate_failure).toEqual(failure);
+  await expect(client.getIssueWorkMethod("DEV-1")).rejects.toThrow("Malformed");
+});
+
 it("reads a goal recommendation without creating a run", async () => {
   const fetch = vi.fn(async (_input: RequestInfo | URL) =>
     Response.json({ method, step: 0, state: "ready", revision: 0 }),

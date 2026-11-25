@@ -153,6 +153,7 @@ function MethodCard({
   const reviewComplete =
     !step?.reviewer || checks.every((_, i) => checked.includes(i));
   const latest = [...run.history].reverse();
+  const failedCandidateReview = reviewed && !!latest[0]?.candidate_failure;
   const closeout = run.state === "closed" ? latest[0]?.closeout : undefined;
   const delivery = latest.find((event) => event.action === "advance");
   const returned = latest.find(
@@ -169,7 +170,7 @@ function MethodCard({
       disabled ||
       !method ||
       !canAct ||
-      (action === "approve" && !reviewComplete)
+      (action === "approve" && (failedCandidateReview || !reviewComplete))
     )
       return;
     const base = { base_revision: run.revision, evidence };
@@ -460,15 +461,17 @@ function MethodCard({
                     <div className="flex flex-wrap gap-2">
                       {reviewed ? (
                         <>
-                          <Button
-                            size="sm"
-                            disabled={disabled || !reviewComplete}
-                            onClick={() => act("approve")}
-                          >
-                            {lastStep
-                              ? t(($) => $.method.approve)
-                              : t(($) => $.method.approve_next)}
-                          </Button>
+                          {!failedCandidateReview && (
+                            <Button
+                              size="sm"
+                              disabled={disabled || !reviewComplete}
+                              onClick={() => act("approve")}
+                            >
+                              {lastStep
+                                ? t(($) => $.method.approve)
+                                : t(($) => $.method.approve_next)}
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             variant="outline"
