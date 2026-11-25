@@ -546,6 +546,9 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		var err error
 		localWorktree, err = PrepareLocalWorktree(wtParams, logger)
 		if err != nil {
+			if wtParams.CandidateCheckout != nil && !errors.Is(err, ErrCandidateCheckoutUnavailable) {
+				err = fmt.Errorf("%w: %v", ErrCandidateCheckoutUnavailable, err)
+			}
 			return nil, err
 		}
 		defer func() {

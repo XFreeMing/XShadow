@@ -84,6 +84,9 @@ func (e *preparationKindError) Unwrap() error { return e.kind }
 // preparationErrorKind names the class of err for the wire, or "" when it has
 // none.
 func preparationErrorKind(err error) string {
+	if errors.Is(err, ErrCandidateCheckoutUnavailable) {
+		return "candidate_checkout_unavailable"
+	}
 	if errors.Is(err, ErrOpenclawCLITimeout) {
 		return preparationErrorKindOpenclawCLITimeout
 	}
@@ -95,6 +98,8 @@ func preparationErrorKind(err error) string {
 // the original message rather than being dropped.
 func rehydratePreparationError(message, kind string) error {
 	switch kind {
+	case "candidate_checkout_unavailable":
+		return &preparationKindError{msg: message, kind: ErrCandidateCheckoutUnavailable}
 	case preparationErrorKindOpenclawCLITimeout:
 		return &preparationKindError{msg: message, kind: ErrOpenclawCLITimeout}
 	default:

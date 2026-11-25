@@ -6073,6 +6073,9 @@ func taskCancelAcknowledgement(result TaskResult, runErr error, provider string)
 }
 
 func taskRunFailureReason(err error) string {
+	if errors.Is(err, execenv.ErrCandidateCheckoutUnavailable) {
+		return taskfailure.ReasonCandidateCheckoutUnavailable.String()
+	}
 	if errors.Is(err, errInvalidTaskIdentity) {
 		return taskfailure.ReasonInvalidTaskIdentity.String()
 	}
@@ -6177,11 +6180,15 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task *Ta
 	assignment, err := localDirectoryAssignmentForTask(*task, d.cfg.DaemonID)
 	if err != nil {
 		taskLog.Error("local_directory: resolve resource failed", "error", err)
+		reason := "local_directory_error"
+		if errors.Is(err, execenv.ErrCandidateCheckoutUnavailable) {
+			reason = taskRunFailureReason(err)
+		}
 		if failErr := d.reportTerminalTask(ctx, terminalTaskReport{
 			kind:          terminalTaskReportFail,
 			taskID:        task.ID,
 			errorMessage:  err.Error(),
-			failureReason: "local_directory_error",
+			failureReason: reason,
 		}); failErr != nil {
 			taskLog.Error("fail task after local_directory resolve error", "error", failErr)
 		}
@@ -8446,7 +8453,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
-			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath, CommittedOnly: localAssignment.CommittedOnly}
+			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath, CommittedOnly: localAssignment.CommittedOnly, CandidateCheckout: task.CandidateCheckout}
 		}
 		if localAssignment != nil && localAssignment.CommittedOnly {
 			env, err = d.prepareExecutionEnvironment(prepareCtx, prepParams)

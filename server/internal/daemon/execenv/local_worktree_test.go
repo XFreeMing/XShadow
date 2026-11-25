@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func worktreeTestLogger() *slog.Logger {
@@ -827,6 +829,62 @@ const (
 	turnTwoTask   = "11112222-3333-4444-5555-bbbbbbbbbbbb"
 	turnThreeTask = "11112222-3333-4444-5555-cccccccccccc"
 )
+
+func TestPrepareLocalWorktreePinsCandidateAcrossRuntimeRename(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	oldBranch := "agent/rust/dev-9"
+	oldCheckout := filepath.Join(t.TempDir(), "candidate")
+	gitRun(t, repo, "worktree", "add", "-b", oldBranch, oldCheckout)
+	writeFile(t, filepath.Join(oldCheckout, "frozen-test.txt"), "original frozen case\n")
+	gitRun(t, oldCheckout, "add", "frozen-test.txt")
+	gitRun(t, oldCheckout, "commit", "-m", "Record candidate and frozen case")
+	commit := gitRun(t, oldCheckout, "rev-parse", "HEAD")
+	wrongBranch := "agent/rust-tauri/dev-9"
+	gitRun(t, repo, "branch", wrongBranch)
+	wrongTip := gitRun(t, repo, "rev-parse", wrongBranch)
+	writeFile(t, filepath.Join(repo, "user-draft.txt"), "private local edits\n")
+	params := LocalWorktreeParams{
+		LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "Rust Tauri", TaskID: turnOneTask,
+		ConversationKey: "DEV-9", WorkspaceID: testBranchOwner.WorkspaceID,
+		AgentID: testBranchOwner.AgentID, ConversationID: testBranchOwner.ConversationID,
+		CandidateCheckout: &protocol.CandidateCheckout{Repository: "org/project", Branch: oldBranch, Commit: commit},
+	}
+	wt, err := PrepareLocalWorktree(params, worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, wt.WorkDir, "merge-base", "--is-ancestor", commit, "HEAD")
+	if got := readFile(t, filepath.Join(wt.WorkDir, "frozen-test.txt")); got != "original frozen case\n" {
+		t.Fatalf("worktree lost the frozen candidate case: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(wt.WorkDir, "user-draft.txt")); !os.IsNotExist(err) {
+		t.Fatalf("pinned worktree replayed the user's draft: %v", err)
+	}
+	writeFile(t, filepath.Join(wt.WorkDir, "rework.txt"), "partial rework\n")
+	finalizeOK(t, wt)
+	params.EnvRoot, params.AgentName, params.TaskID = t.TempDir(), "Renamed Rust", turnTwoTask
+	resumed, err := PrepareLocalWorktree(params, worktreeTestLogger())
+	if err != nil || !resumed.Continued || resumed.Branch != wt.Branch {
+		t.Fatalf("resume chose a different work line: %+v, %v", resumed, err)
+	}
+	if got := readFile(t, filepath.Join(resumed.WorkDir, "rework.txt")); got != "partial rework\n" {
+		t.Fatalf("resume lost partial changes: %q", got)
+	}
+	finalizeOK(t, resumed)
+	if gitRun(t, repo, "rev-parse", oldBranch) != commit || gitRun(t, repo, "rev-parse", wrongBranch) != wrongTip {
+		t.Fatal("rework moved an existing branch it did not own")
+	}
+	before := gitRun(t, repo, "for-each-ref", "--format=%(refname)", "refs/heads")
+	params.EnvRoot, params.TaskID, params.CandidateCheckout.Commit = t.TempDir(), turnThreeTask, strings.Repeat("1", 40)
+	_, err = PrepareLocalWorktree(params, worktreeTestLogger())
+	if !errors.Is(err, ErrCandidateCheckoutUnavailable) || !errors.Is(rehydratePreparationError(err.Error(), preparationErrorKind(err)), ErrCandidateCheckoutUnavailable) {
+		t.Fatalf("missing candidate must survive the helper boundary as a checkout failure: %v", err)
+	}
+	if got := gitRun(t, repo, "for-each-ref", "--format=%(refname)", "refs/heads"); got != before {
+		t.Fatalf("missing candidate produced another branch: %s", got)
+	}
+}
 
 // The bug this fixes: every comment on one issue produced a new branch forked
 // from HEAD, so the second turn stood in a tree that did not contain the first

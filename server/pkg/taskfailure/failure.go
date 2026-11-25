@@ -177,7 +177,8 @@ const (
 	// holding the directory) before it fails. Written by
 	// taskRunFailureReason in daemon/daemon.go; resume-safe, because no
 	// session was touched.
-	ReasonEnvironmentPrepareFailed Reason = "environment_prepare_failed"
+	ReasonEnvironmentPrepareFailed     Reason = "environment_prepare_failed"
+	ReasonCandidateCheckoutUnavailable Reason = "candidate_checkout_unavailable"
 
 	// ReasonInvalidTaskIdentity: the daemon refused a claimed task because
 	// the task row's authoritative agent_id was absent or disagreed with the
@@ -302,6 +303,7 @@ var allReasons = []Reason{
 	ReasonSkillBundleUnavailable,
 	ReasonRuntimeCLITimeout,
 	ReasonEnvironmentPrepareFailed,
+	ReasonCandidateCheckoutUnavailable,
 	ReasonInvalidTaskIdentity,
 	ReasonRuntimeAccessDenied,
 

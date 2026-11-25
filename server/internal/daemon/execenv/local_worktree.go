@@ -15,7 +15,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+var ErrCandidateCheckoutUnavailable = errors.New("candidate checkout unavailable")
 
 // Local worktree mode gives every task on a local_directory resource its own
 // git worktree of the user's repo, created inside the daemon-owned env root.
@@ -96,7 +100,8 @@ type LocalWorktreeParams struct {
 	LocalPath string
 	// CommittedOnly isolates an overlapping writer from the in-place run's
 	// uncommitted changes.
-	CommittedOnly bool
+	CommittedOnly     bool
+	CandidateCheckout *protocol.CandidateCheckout
 	// EnvRoot is the daemon-owned task env root. The worktree is created
 	// inside it so the ordinary env-root GC reclaims it.
 	EnvRoot string
@@ -393,6 +398,16 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	// The commit describing the user's directory as this task sees it — their
 	// tracked edits and their untracked files in one tree. Everything below
 	// reasons about the user's state through this single object.
+	var plan taskBranchPlan
+	if params.CandidateCheckout != nil {
+		plan, err = resolveCandidateBranch(gitRoot, params, headSHA, logger)
+		if err != nil {
+			return nil, err
+		}
+		params.CommittedOnly = true
+	} else {
+		plan = resolveTaskBranch(gitRoot, params, headSHA, logger)
+	}
 	userState := headSHA
 	if !params.CommittedOnly {
 		if err := checkUntrackedReplayable(gitRoot, logger); err != nil {
@@ -405,9 +420,11 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 		}
 	}
 
-	plan := resolveTaskBranch(gitRoot, params, headSHA, logger)
 	actualBranch, createdBranch, err := addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
 	if err != nil {
+		if params.CandidateCheckout != nil {
+			return nil, fmt.Errorf("%w: %v", ErrCandidateCheckoutUnavailable, err)
+		}
 		return nil, err
 	}
 
@@ -1442,6 +1459,42 @@ func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA strin
 		}
 	}
 	return taskScoped
+}
+
+func resolveCandidateBranch(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) (taskBranchPlan, error) {
+	checkout := *params.CandidateCheckout
+	owner := params.owner()
+	if _, err := hex.DecodeString(checkout.Commit); err != nil ||
+		(len(checkout.Commit) != 40 && len(checkout.Commit) != 64) || !owner.valid() || params.ConversationKey == "" {
+		return taskBranchPlan{}, fmt.Errorf("%w: invalid candidate or issue identity", ErrCandidateCheckoutUnavailable)
+	}
+	commit, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", checkout.Commit+"^{commit}")
+	if err != nil || commit != checkout.Commit {
+		return taskBranchPlan{}, fmt.Errorf("%w: %s@%s is missing from the configured project repository", ErrCandidateCheckoutUnavailable, checkout.Repository, checkout.Commit)
+	}
+	name := fmt.Sprintf("agent/rework/%s-%s-%s", sanitizeName(params.ConversationKey), owner.fingerprint(), commit[:12])
+	// Reuse owned progress when it descends from the pinned candidate. A branch
+	// recorded only in the acceptance ledger supplies the commit, never a ref
+	// we may move. The generated name is independent of the agent's display name.
+	for _, ref := range []string{name, checkout.Branch} {
+		if strings.HasPrefix(ref, "-") {
+			continue
+		}
+		if _, err := runGit(gitRoot, "check-ref-format", "refs/heads/"+ref); err != nil {
+			continue
+		}
+		plan, ok := planForConversationBranch(gitRoot, ref, headSHA, owner, logger)
+		if !ok || !plan.continues {
+			continue
+		}
+		if _, err := runGit(gitRoot, "merge-base", "--is-ancestor", commit, plan.base); err == nil {
+			return plan, nil
+		}
+	}
+	if out, _ := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+name); out != "" {
+		name += "-" + taskKey(params.TaskID)
+	}
+	return taskBranchPlan{name: name, base: commit, conversational: true, tracksState: true, owner: owner}, nil
 }
 
 // HasUnmergedLocalWorktree keeps follow-up runs on their existing delivery

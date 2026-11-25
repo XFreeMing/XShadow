@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/projectaccess"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
@@ -192,10 +193,11 @@ func goalReviewHoldsNewWork(ctx context.Context, q *db.Queries, plan db.GoalPlan
 }
 
 type GoalExecutionTask struct {
-	ID             pgtype.UUID `json:"goal_execution_id"`
-	Revision       int         `json:"work_method_revision"`
-	Role           string      `json:"continuation_role"`
-	CandidateOffer bool        `json:"goal_candidate_offer"`
+	ID                pgtype.UUID                 `json:"goal_execution_id"`
+	Revision          int                         `json:"work_method_revision"`
+	Role              string                      `json:"continuation_role"`
+	CandidateOffer    bool                        `json:"goal_candidate_offer"`
+	CandidateCheckout *protocol.CandidateCheckout `json:"candidate_checkout,omitempty"`
 }
 
 func ReadGoalExecutionTask(task db.AgentTaskQueue) GoalExecutionTask {
