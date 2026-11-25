@@ -56,6 +56,7 @@ type IssueReadBridge struct {
 	CreateSourceFilesPilotScopes   []string
 	DeletePilotScopes              []string
 	DeleteAttachPilotScopes        []string
+	DeleteSourceContextPilotScopes []string
 	BatchPilotScopes               []string
 	BatchAssignPilotScopes         []string
 	BatchDeletePilotScopes         []string
@@ -115,6 +116,10 @@ type IssueReadBridge struct {
 //   - XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT: comma-separated workspace
 //     slugs or UUIDs for native member deletes with direct first-party issue
 //     uploads (requires DELETE pilot on the same workspace).
+//   - XSHADOW_ISSUES_RUST_DELETE_SOURCE_CONTEXT_PILOT: comma-separated workspace
+//     slugs or UUIDs for native member deletes of projectless tasks with one
+//     file-free manual attached source context (requires DELETE pilot on the
+//     same workspace).
 //   - XSHADOW_ISSUES_RUST_BATCH_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member scalar batch updates on POST …/batch-update
 //     (independent of the single-task write pilot).
@@ -156,6 +161,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	createSourceFilesScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT"))
 	deleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_PILOT"))
 	deleteAttachScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT"))
+	deleteSourceContextScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_SOURCE_CONTEXT_PILOT"))
 	batchScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_PILOT"))
 	batchAssignScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_ASSIGN_PILOT"))
 	batchStatusScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_BATCH_STATUS_PILOT"))
@@ -193,6 +199,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		CreateSourceFilesPilotScopes:   createSourceFilesScopes,
 		DeletePilotScopes:              deleteScopes,
 		DeleteAttachPilotScopes:        deleteAttachScopes,
+		DeleteSourceContextPilotScopes: deleteSourceContextScopes,
 		BatchPilotScopes:               batchScopes,
 		BatchAssignPilotScopes:         batchAssignScopes,
 		BatchDeletePilotScopes:         batchDeleteScopes,
@@ -201,7 +208,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		BatchWorkflowPilotScopes:       batchWorkflowScopes,
 		MethodAdoptPilotScopes:         methodAdoptScopes,
 	}
-	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(createSourceProjectScopes)+len(createSourceFilesScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
+	if len(scopes)+len(listScopes)+len(tableScopes)+len(writeScopes)+len(acceptanceScopes)+len(statusScopes)+len(terminalStatusScopes)+len(workflowScopes)+len(assignScopes)+len(commentScopes)+len(createScopes)+len(createDispatchScopes)+len(createSquadScopes)+len(createAttachmentsScopes)+len(createSourceContextScopes)+len(createSourceProjectScopes)+len(createSourceFilesScopes)+len(deleteScopes)+len(deleteAttachScopes)+len(deleteSourceContextScopes)+len(batchScopes)+len(batchAssignScopes)+len(batchStatusScopes)+len(batchTerminalStatusScopes)+len(batchWorkflowScopes)+len(batchDeleteScopes)+len(methodAdoptScopes) > 0 && (!isLoopbackURL(upstream) || token == "") {
 		if log != nil {
 			log.Error("rust issue pilot configured without a valid loopback upstream and internal token")
 		}

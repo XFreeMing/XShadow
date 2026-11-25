@@ -7,8 +7,8 @@ use sqlx::PgPool;
 use super::{
     CallerActor, IssueReadError,
     delete_write::{
-        ClearedDuplicateSnapshot, IssueDeleteWriteError, execute_issue_delete_steps,
-        lock_issues_for_delete,
+        ClearedDuplicateSnapshot, IssueDeletePlan, IssueDeleteWriteError,
+        execute_issue_delete_steps, lock_issues_for_delete,
     },
     is_uuid, ordinary,
 };
@@ -60,15 +60,22 @@ pub async fn batch_delete_issues(
 
     let mut tx = pool.begin().await?;
     ordinary::set_write_actor(&mut tx, actor, request.source_task_id.as_deref()).await?;
-    lock_issues_for_delete(&mut tx, workspace_id, actor, &issue_ids, None).await?;
+    lock_issues_for_delete(
+        &mut tx,
+        workspace_id,
+        actor,
+        &issue_ids,
+        IssueDeletePlan::Ordinary,
+    )
+    .await?;
 
     let mut detached_children = Vec::new();
     let mut cleared_duplicates = Vec::new();
     let mut goal_links_changed = false;
     let excluded = issue_ids.clone();
     for issue_id in &issue_ids {
-        let (detached, cleared, goal_changed) =
-            execute_issue_delete_steps(&mut tx, workspace_id, issue_id, &excluded).await?;
+        let (detached, cleared, goal_changed, _) =
+            execute_issue_delete_steps(&mut tx, workspace_id, issue_id, &excluded, None).await?;
         detached_children.extend(detached);
         cleared_duplicates.extend(cleared);
         goal_links_changed = goal_links_changed || goal_changed;

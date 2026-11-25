@@ -49,31 +49,14 @@ func (h *Handler) buildRustIssueDeleteAttachmentPlan(ctx context.Context, issue 
 }
 
 func (h *Handler) issueOrdinaryDeleteWithDirectUploadsEligible(ctx context.Context, issue db.Issue) (bool, error) {
-	if issue.CreatorType != "member" {
-		return false, nil
-	}
-	if issue.OriginType.Valid {
-		return false, nil
-	}
-	if issue.AssigneeType.Valid && issue.AssigneeType.String != "member" {
-		return false, nil
+	ok, err := h.issueOrdinaryDeleteMemberRuntimeBaseline(ctx, issue)
+	if err != nil || !ok {
+		return false, err
 	}
 	if _, err := h.Queries.GetIssueSourceContextByIssue(ctx, db.GetIssueSourceContextByIssueParams{
 		WorkspaceID: issue.WorkspaceID,
 		IssueID:     issue.ID,
 	}); err == nil {
-		return false, nil
-	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return false, err
-	}
-	hasTask, err := h.Queries.HasTaskForIssue(ctx, issue.ID)
-	if err != nil {
-		return false, err
-	}
-	if hasTask {
-		return false, nil
-	}
-	if _, err := h.Queries.GetAutopilotRunByIssue(ctx, issue.ID); err == nil {
 		return false, nil
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, err

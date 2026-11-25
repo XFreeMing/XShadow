@@ -24,6 +24,7 @@ pub struct IssueDeleteAttachmentPlanItem {
 pub struct IssueDeleteWrite {
     pub source_task_id: Option<String>,
     pub attachment_cleanup: Option<Vec<IssueDeleteAttachmentPlanItem>>,
+    pub source_context_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,6 +42,8 @@ pub struct IssueDeleteWriteResult {
     pub goal_links_changed: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub object_cleanup_attachment_ids: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub deleted_source_context_id: String,
 }
 
 #[derive(Debug)]
@@ -170,33 +173,73 @@ async fn verify_attachment_delete_plan(
     Ok(planned)
 }
 
-async fn pilot_shape_sensitive(
+async fn verify_source_context_delete_plan(
     tx: &mut PgConnection,
     workspace_id: &str,
     issue_id: &str,
-    creator_type: &str,
-    assignee_type: Option<&str>,
-    origin_present: bool,
-    attachment_plan: Option<&[IssueDeleteAttachmentPlanItem]>,
-) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
-    if creator_type != "member" {
+    planned_id: &str,
+    project_id: Option<&str>,
+) -> Result<(), IssueDeleteWriteError> {
+    if !is_uuid(planned_id) || project_id.is_some() {
         return Err(IssueDeleteWriteError::DeleteSensitive);
     }
-    if assignee_type.is_some_and(|kind| kind != "member") {
-        return Err(IssueDeleteWriteError::DeleteSensitive);
-    }
-    if origin_present {
-        return Err(IssueDeleteWriteError::DeleteSensitive);
-    }
-    let source_context = sqlx::query(
-        "SELECT 1 FROM issue_source_context WHERE workspace_id = $1::uuid AND issue_id = $2::uuid",
+    let locked_id: Option<String> = sqlx::query_scalar(
+        "SELECT id::text
+           FROM issue_source_context
+          WHERE workspace_id = $1::uuid
+            AND issue_id = $2::uuid
+            AND state = 'attached'
+            AND origin_task_id IS NULL
+            AND NOT EXISTS (
+                  SELECT 1 FROM attachment a
+                   WHERE a.workspace_id = $1::uuid
+                     AND a.source_context_id = issue_source_context.id
+                )
+            AND NOT EXISTS (
+                  SELECT 1 FROM issue_source_context_object_intent i
+                   WHERE i.workspace_id = $1::uuid
+                     AND i.source_context_id = issue_source_context.id
+                )
+          FOR UPDATE",
     )
     .bind(workspace_id)
     .bind(issue_id)
     .fetch_optional(&mut *tx)
     .await?;
-    if source_context.is_some() {
+    if locked_id.as_deref() != Some(planned_id) {
         return Err(IssueDeleteWriteError::DeleteSensitive);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum IssueDeletePlan<'a> {
+    Ordinary,
+    DirectUploads(&'a [IssueDeleteAttachmentPlanItem]),
+    ManualSource(&'a str),
+}
+
+async fn validate_delete_side_effects(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    issue_id: &str,
+    project_id: Option<&str>,
+    plan: IssueDeletePlan<'_>,
+) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
+    if let IssueDeletePlan::ManualSource(planned_id) = plan {
+        verify_source_context_delete_plan(tx, workspace_id, issue_id, planned_id, project_id)
+            .await?;
+    } else {
+        let source_context = sqlx::query(
+            "SELECT 1 FROM issue_source_context WHERE workspace_id = $1::uuid AND issue_id = $2::uuid",
+        )
+        .bind(workspace_id)
+        .bind(issue_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if source_context.is_some() {
+            return Err(IssueDeleteWriteError::DeleteSensitive);
+        }
     }
     let queued = sqlx::query("SELECT 1 FROM agent_task_queue WHERE issue_id = $1::uuid LIMIT 1")
         .bind(issue_id)
@@ -221,6 +264,10 @@ async fn pilot_shape_sensitive(
         .bind(issue_id)
         .execute(&mut *tx)
         .await?;
+    let attachment_plan = match plan {
+        IssueDeletePlan::DirectUploads(items) => Some(items),
+        _ => None,
+    };
     verify_attachment_delete_plan(tx, workspace_id, issue_id, attachment_plan).await
 }
 
@@ -330,7 +377,7 @@ async fn validate_locked_issue_for_delete(
     project_private: &HashMap<String, bool>,
     privileged: bool,
     user_id: &str,
-    attachment_plan: Option<&[IssueDeleteAttachmentPlanItem]>,
+    plan: IssueDeletePlan<'_>,
 ) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
     let issue_id = &preview.issue_id;
     let locked = sqlx::query(
@@ -376,16 +423,15 @@ async fn validate_locked_issue_for_delete(
 
     let assignee_type: Option<String> = locked.try_get(3)?;
     let origin_present: bool = locked.try_get(4)?;
-    pilot_shape_sensitive(
-        tx,
-        workspace_id,
-        issue_id,
-        &creator_type,
-        assignee_type.as_deref(),
-        origin_present,
-        attachment_plan,
-    )
-    .await
+    if creator_type != "member"
+        || assignee_type
+            .as_deref()
+            .is_some_and(|kind| kind != "member")
+        || origin_present
+    {
+        return Err(IssueDeleteWriteError::DeleteSensitive);
+    }
+    validate_delete_side_effects(tx, workspace_id, issue_id, actual_project.as_deref(), plan).await
 }
 
 /// Locks every selected project before any issue row, then locks and validates
@@ -395,7 +441,7 @@ pub(super) async fn lock_issues_for_delete(
     workspace_id: &str,
     actor: &CallerActor,
     issue_ids: &[String],
-    attachment_plan: Option<&[IssueDeleteAttachmentPlanItem]>,
+    plan: IssueDeletePlan<'_>,
 ) -> Result<Vec<IssueDeleteAttachmentPlanItem>, IssueDeleteWriteError> {
     let CallerActor::Member { user_id } = actor else {
         return Err(IssueDeleteWriteError::Access(IssueReadError::Forbidden(
@@ -407,7 +453,9 @@ pub(super) async fn lock_issues_for_delete(
             DELETE_FORBIDDEN,
         )));
     }
-    if attachment_plan.is_some_and(|plan| issue_ids.len() != 1 || plan.is_empty()) {
+    if (!matches!(plan, IssueDeletePlan::Ordinary) && issue_ids.len() != 1)
+        || matches!(plan, IssueDeletePlan::DirectUploads(items) if items.is_empty())
+    {
         return Err(IssueDeleteWriteError::DeleteSensitive);
     }
     if issue_ids.is_empty() {
@@ -444,7 +492,7 @@ pub(super) async fn lock_issues_for_delete(
                 &project_private,
                 privileged,
                 user_id,
-                attachment_plan,
+                plan,
             )
             .await?,
         );
@@ -457,7 +505,16 @@ pub(super) async fn execute_issue_delete_steps(
     workspace_id: &str,
     issue_id: &str,
     excluded_issue_ids: &[String],
-) -> Result<(Vec<String>, Vec<ClearedDuplicateSnapshot>, bool), IssueDeleteWriteError> {
+    source_context_id: Option<&str>,
+) -> Result<
+    (
+        Vec<String>,
+        Vec<ClearedDuplicateSnapshot>,
+        bool,
+        Option<String>,
+    ),
+    IssueDeleteWriteError,
+> {
     let detach_sql = format!(
         "UPDATE issue AS i
             SET parent_issue_id = NULL,
@@ -508,6 +565,37 @@ pub(super) async fn execute_issue_delete_steps(
         })
         .collect::<Result<_, sqlx::Error>>()?;
 
+    let mut deleted_source_context_id = None;
+    if let Some(context_id) = source_context_id {
+        let removed = sqlx::query(
+            "DELETE FROM issue_source_context AS isc
+             WHERE workspace_id = $1::uuid
+               AND id = $2::uuid
+               AND issue_id = $3::uuid
+               AND state = 'attached'
+               AND origin_task_id IS NULL
+               AND NOT EXISTS (
+                     SELECT 1 FROM attachment a
+                      WHERE a.workspace_id = $1::uuid
+                        AND a.source_context_id = isc.id
+                   )
+               AND NOT EXISTS (
+                     SELECT 1 FROM issue_source_context_object_intent i
+                      WHERE i.workspace_id = $1::uuid
+                        AND i.source_context_id = isc.id
+                   )",
+        )
+        .bind(workspace_id)
+        .bind(context_id)
+        .bind(issue_id)
+        .execute(&mut *tx)
+        .await?;
+        if removed.rows_affected() != 1 {
+            return Err(IssueDeleteWriteError::DeleteSensitive);
+        }
+        deleted_source_context_id = Some(context_id.to_owned());
+    }
+
     let goal_links_changed: i64 = sqlx::query_scalar(
         "WITH removed AS (
             DELETE FROM goal_issue WHERE workspace_id = $1::uuid AND issue_id = $2::uuid RETURNING 1
@@ -538,6 +626,7 @@ pub(super) async fn execute_issue_delete_steps(
         detached_children,
         cleared_duplicates,
         goal_links_changed > 0,
+        deleted_source_context_id,
     ))
 }
 
@@ -553,15 +642,16 @@ pub async fn delete_issue(
             "issue not found",
         )));
     }
+    let source_context_id = request.source_context_id.as_deref();
+    let plan = match (request.attachment_cleanup.as_deref(), source_context_id) {
+        (None, None) => IssueDeletePlan::Ordinary,
+        (Some(items), None) => IssueDeletePlan::DirectUploads(items),
+        (None, Some(id)) => IssueDeletePlan::ManualSource(id),
+        (Some(_), Some(_)) => return Err(IssueDeleteWriteError::DeleteSensitive),
+    };
     let mut tx = pool.begin().await?;
-    let direct_uploads = lock_issues_for_delete(
-        &mut tx,
-        workspace_id,
-        actor,
-        &[issue_id.to_owned()],
-        request.attachment_cleanup.as_deref(),
-    )
-    .await?;
+    let direct_uploads =
+        lock_issues_for_delete(&mut tx, workspace_id, actor, &[issue_id.to_owned()], plan).await?;
 
     ordinary::set_write_actor(&mut tx, actor, request.source_task_id.as_deref()).await?;
 
@@ -572,8 +662,9 @@ pub async fn delete_issue(
         .collect();
 
     let empty: &[String] = &[];
-    let (detached_children, cleared_duplicates, goal_links_changed) =
-        execute_issue_delete_steps(&mut tx, workspace_id, issue_id, empty).await?;
+    let (detached_children, cleared_duplicates, goal_links_changed, deleted_context) =
+        execute_issue_delete_steps(&mut tx, workspace_id, issue_id, empty, source_context_id)
+            .await?;
 
     tx.commit().await?;
     Ok(IssueDeleteWriteResult {
@@ -583,6 +674,7 @@ pub async fn delete_issue(
         cleared_duplicates,
         goal_links_changed,
         object_cleanup_attachment_ids,
+        deleted_source_context_id: deleted_context.unwrap_or_default(),
     })
 }
 
@@ -626,5 +718,16 @@ mod tests {
         );
         let empty: IssueDeleteWrite = serde_json::from_str("{}").unwrap();
         assert!(empty.source_task_id.is_none());
+    }
+
+    #[test]
+    fn delete_wire_accepts_optional_source_context_id() {
+        let request: IssueDeleteWrite =
+            serde_json::from_str(r#"{"source_context_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}"#)
+                .unwrap();
+        assert_eq!(
+            request.source_context_id.as_deref(),
+            Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        );
     }
 }

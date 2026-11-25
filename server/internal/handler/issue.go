@@ -4995,7 +4995,7 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	} else if selection.UseRust {
-		h.deleteIssueViaRust(w, r, issue, userID, selection.AttachmentPlan)
+		h.deleteIssueViaRust(w, r, issue, userID, selection)
 		return
 	}
 

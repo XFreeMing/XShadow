@@ -26,6 +26,16 @@ func TestIssueReadBridgeDeletePilotEnv(t *testing.T) {
 	}
 }
 
+func TestIssueReadBridgeDeleteSourceContextPilotEnv(t *testing.T) {
+	t.Setenv("XSHADOW_ISSUES_RUST_DELETE_SOURCE_CONTEXT_PILOT", "del-src-pilot")
+	t.Setenv("XSHADOW_TABLES_UPSTREAM", "http://127.0.0.1:18080")
+	t.Setenv("XSHADOW_TABLES_INTERNAL_TOKEN", "shared-secret")
+	bridge := NewIssueReadBridgeFromEnv(nil)
+	if !reflect.DeepEqual(bridge.DeleteSourceContextPilotScopes, []string{"del-src-pilot"}) {
+		t.Fatalf("DeleteSourceContextPilotScopes = %v, want [del-src-pilot]", bridge.DeleteSourceContextPilotScopes)
+	}
+}
+
 func TestIssueReadBridgeDeleteAttachmentsPilotEnv(t *testing.T) {
 	t.Setenv("XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT", "del-att-pilot")
 	t.Setenv("XSHADOW_TABLES_UPSTREAM", "http://127.0.0.1:18080")
