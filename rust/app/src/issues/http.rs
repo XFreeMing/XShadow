@@ -457,6 +457,10 @@ async fn create_issue(
             StatusCode::FORBIDDEN,
             "you do not have permission to assign work to this agent",
         ),
+        Err(IssueCreateError::SquadInvokeForbidden) => error_response(
+            StatusCode::FORBIDDEN,
+            "you do not have permission to assign work to this squad",
+        ),
         Err(IssueCreateError::ParentNotFound) => {
             error_response(StatusCode::BAD_REQUEST, "parent issue not found in this workspace")
         }

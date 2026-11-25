@@ -180,7 +180,7 @@ pub(super) async fn guard_parent_projects_and_assignee(
                 }
             }
             // Direct dispatch validates its target and binding together in the writer.
-            "agent" => {}
+            "agent" | "squad" => {}
             _ => return Err(IssueCreateError::InvalidAssignee),
         }
     }

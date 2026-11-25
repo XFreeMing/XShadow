@@ -30,30 +30,36 @@ type rustIssueCreateLimit struct {
 }
 
 type rustIssueCreate struct {
-	ID                     string               `json:"id"`
-	Title                  string               `json:"title"`
-	Description            *string              `json:"description,omitempty"`
-	Status                 string               `json:"status"`
-	NormalizedTitle        string               `json:"normalized_title"`
-	Priority               string               `json:"priority"`
-	AssigneeType           *string              `json:"assignee_type,omitempty"`
-	AssigneeID             *string              `json:"assignee_id,omitempty"`
-	CreatorType            string               `json:"creator_type"`
-	CreatorID              string               `json:"creator_id"`
-	ParentIssueID          *string              `json:"parent_issue_id,omitempty"`
-	ProjectID              *string              `json:"project_id,omitempty"`
-	StartDate              *string              `json:"start_date,omitempty"`
-	DueDate                *string              `json:"due_date,omitempty"`
-	LabelIDs               []string             `json:"label_ids,omitempty"`
-	Properties             json.RawMessage      `json:"properties"`
-	PropertyVersions       map[string]string    `json:"property_versions"`
-	IssueTypeID            *string              `json:"issue_type_id,omitempty"`
-	IssueTypeVersion       string               `json:"issue_type_version,omitempty"`
-	AllowDuplicate         bool                 `json:"allow_duplicate"`
-	WorkMethodRun          json.RawMessage      `json:"work_method_run,omitempty"`
-	IssueLimit             rustIssueCreateLimit `json:"issue_limit"`
-	PRAutoCompleteDisabled bool                 `json:"pr_auto_complete_disabled,omitempty"`
-	PreparedEnqueue        *json.RawMessage     `json:"prepared_enqueue,omitempty"`
+	ID                     string                `json:"id"`
+	Title                  string                `json:"title"`
+	Description            *string               `json:"description,omitempty"`
+	Status                 string                `json:"status"`
+	NormalizedTitle        string                `json:"normalized_title"`
+	Priority               string                `json:"priority"`
+	AssigneeType           *string               `json:"assignee_type,omitempty"`
+	AssigneeID             *string               `json:"assignee_id,omitempty"`
+	CreatorType            string                `json:"creator_type"`
+	CreatorID              string                `json:"creator_id"`
+	ParentIssueID          *string               `json:"parent_issue_id,omitempty"`
+	ProjectID              *string               `json:"project_id,omitempty"`
+	StartDate              *string               `json:"start_date,omitempty"`
+	DueDate                *string               `json:"due_date,omitempty"`
+	LabelIDs               []string              `json:"label_ids,omitempty"`
+	Properties             json.RawMessage       `json:"properties"`
+	PropertyVersions       map[string]string     `json:"property_versions"`
+	IssueTypeID            *string               `json:"issue_type_id,omitempty"`
+	IssueTypeVersion       string                `json:"issue_type_version,omitempty"`
+	AllowDuplicate         bool                  `json:"allow_duplicate"`
+	WorkMethodRun          json.RawMessage       `json:"work_method_run,omitempty"`
+	IssueLimit             rustIssueCreateLimit  `json:"issue_limit"`
+	PRAutoCompleteDisabled bool                  `json:"pr_auto_complete_disabled,omitempty"`
+	PreparedEnqueue        *json.RawMessage      `json:"prepared_enqueue,omitempty"`
+	SquadCreateTrust       *rustSquadCreateTrust `json:"squad_create_trust,omitempty"`
+}
+
+type rustSquadCreateTrust struct {
+	SquadID          string `json:"squad_id"`
+	ExpectedLeaderID string `json:"expected_leader_id"`
 }
 
 type rustIssueCreatePayload struct {
@@ -67,6 +73,48 @@ type issueCreateRustPlan struct {
 	useRust      bool
 	issueID      pgtype.UUID
 	dispatchPrep *service.IssuePreparedAgentEnqueue
+	squadTrust   *rustSquadCreateTrust
+}
+
+func (h *Handler) loadOwnedSquadForIssueCreate(
+	ctx context.Context,
+	wsUUID, squadID pgtype.UUID,
+	memberUserID string,
+	requireReady bool,
+) (db.Squad, bool) {
+	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		ID: squadID, WorkspaceID: wsUUID,
+	})
+	if err != nil || squad.ArchivedAt.Valid {
+		return db.Squad{}, false
+	}
+	leader, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID: squad.LeaderID, WorkspaceID: wsUUID,
+	})
+	if err != nil || leader.ArchivedAt.Valid || uuidToString(leader.OwnerID) != memberUserID {
+		return db.Squad{}, false
+	}
+	if requireReady {
+		verdict, err := service.AgentReadiness(ctx, h.runtimeLookup(uuidToString(wsUUID)), leader)
+		if err != nil || !verdict.Ready() {
+			return db.Squad{}, false
+		}
+	}
+	return squad, true
+}
+
+func projectedIssueForCreate(
+	issueID, wsUUID pgtype.UUID,
+	req CreateIssueRequest,
+	status, priority string,
+	assigneeType pgtype.Text,
+	assigneeID, projectID pgtype.UUID,
+) db.Issue {
+	return db.Issue{
+		ID: issueID, WorkspaceID: wsUUID,
+		Title: req.Title, Status: status, Priority: priority,
+		AssigneeType: assigneeType, AssigneeID: assigneeID, ProjectID: projectID,
+	}
 }
 
 func (h *Handler) plainIssueCreateRustEligible(
@@ -118,9 +166,10 @@ func (h *Handler) nativeCreateDirectAgentOwnerOnly(
 	return uuidToString(agent.OwnerID) == memberUserID
 }
 
-// planIssueCreateRust chooses at most one native create plan per request. Any
-// direct-agent shape needs both CREATE and CREATE_DISPATCH pilots plus an
-// owner-only assignee the member still owns at selection time.
+// planIssueCreateRust chooses at most one native create plan per request.
+// Direct-agent shapes need CREATE and CREATE_DISPATCH pilots; owned-squad
+// shapes need CREATE and CREATE_SQUAD pilots, with leader ownership re-checked
+// at selection time.
 func (h *Handler) planIssueCreateRust(
 	r *http.Request,
 	wsUUID pgtype.UUID,
@@ -164,16 +213,9 @@ func (h *Handler) planIssueCreateRust(
 		if !active {
 			return plan, nil
 		}
-		projected := db.Issue{
-			ID:           plan.issueID,
-			WorkspaceID:  wsUUID,
-			Title:        req.Title,
-			Status:       status,
-			Priority:     priority,
-			AssigneeType: assigneeType,
-			AssigneeID:   assigneeID,
-			ProjectID:    projectID,
-		}
+		projected := projectedIssueForCreate(
+			plan.issueID, wsUUID, req, status, priority, assigneeType, assigneeID, projectID,
+		)
 		_, admitted := service.AgentAssigneeVerdict(r.Context(), h.runtimeLookup(uuidToString(wsUUID)), projected)
 		if !admitted {
 			plan.useRust = false
@@ -181,6 +223,49 @@ func (h *Handler) planIssueCreateRust(
 		}
 		prep, err := h.TaskService.PrepareIssueAgentEnqueue(
 			r.Context(), projected, "", memberActorUserID(creatorType, actualCreatorID),
+		)
+		if err != nil {
+			plan.useRust = false
+			return plan, nil
+		}
+		plan.dispatchPrep = &prep
+		return plan, nil
+	}
+
+	if assigneeType.Valid && assigneeType.String == "squad" {
+		if len(h.IssueReadBridge.CreateSquadPilotScopes) == 0 {
+			return plan, nil
+		}
+		inSquadPilot, err := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.CreateSquadPilotScopes, uuidToString(wsUUID), wsUUID)
+		if err != nil || !inSquadPilot {
+			return plan, err
+		}
+		if !h.plainIssueCreateRustEligible(req, creatorType, pgtype.Text{}, status, originType, attachmentIDs, workflowNeedsGo) {
+			return plan, nil
+		}
+		if !wsUUID.Valid || actualCreatorID == "" || !assigneeID.Valid {
+			return plan, nil
+		}
+		active := status != issuestatus.Backlog &&
+			issuestatus.Effective(r.Context(), h.Queries, wsUUID, status) != issuestatus.Backlog
+		squad, ok := h.loadOwnedSquadForIssueCreate(r.Context(), wsUUID, assigneeID, actualCreatorID, active)
+		if !ok {
+			return plan, nil
+		}
+		plan.issueID = dbid.NewV7()
+		plan.useRust = true
+		plan.squadTrust = &rustSquadCreateTrust{
+			SquadID:          uuidToString(assigneeID),
+			ExpectedLeaderID: uuidToString(squad.LeaderID),
+		}
+		if !active {
+			return plan, nil
+		}
+		projected := projectedIssueForCreate(
+			plan.issueID, wsUUID, req, status, priority, assigneeType, assigneeID, projectID,
+		)
+		prep, err := h.TaskService.PrepareIssueSquadLeaderEnqueue(
+			r.Context(), projected, squad, "", memberActorUserID(creatorType, actualCreatorID),
 		)
 		if err != nil {
 			plan.useRust = false
@@ -300,6 +385,9 @@ func (h *Handler) createIssueViaRust(
 		}
 		rawMsg := json.RawMessage(raw)
 		payload.PreparedEnqueue = &rawMsg
+	}
+	if plan.squadTrust != nil {
+		payload.SquadCreateTrust = plan.squadTrust
 	}
 
 	body, err := json.Marshal(payload)

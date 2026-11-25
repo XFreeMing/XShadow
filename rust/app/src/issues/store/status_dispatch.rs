@@ -215,6 +215,41 @@ pub async fn lock_active_squad_leader(
     })
 }
 
+/// Re-reads the leader's bound runtime under the transaction for active squad
+/// creates. Mirrors AgentReadiness::Ready — online machine with consent for the
+/// agent owner on private runtimes.
+pub async fn validate_squad_leader_runtime_for_active_enqueue(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    agent_owner_id: &str,
+    runtime_id: &str,
+) -> Result<(), StatusPromotionError> {
+    if !is_uuid(runtime_id) || !is_uuid(agent_owner_id) {
+        return Err(StatusPromotionError::RouteChanged);
+    }
+    let ready = sqlx::query_scalar::<_, bool>(
+        "SELECT status = 'online' AND (
+             visibility IS DISTINCT FROM 'private'
+             OR owner_id IS NULL
+             OR owner_id = $3::uuid
+             OR COALESCE($3::uuid = ANY(shared_with), false)
+         )
+         FROM agent_runtime
+         WHERE id = $1::uuid AND workspace_id = $2::uuid
+         FOR SHARE",
+    )
+    .bind(runtime_id)
+    .bind(workspace_id)
+    .bind(agent_owner_id)
+    .fetch_optional(conn)
+    .await
+    .map_err(StatusPromotionError::Database)?;
+    if ready != Some(true) {
+        return Err(StatusPromotionError::RouteChanged);
+    }
+    Ok(())
+}
+
 pub async fn lock_target_agent_for_assignment(
     conn: &mut PgConnection,
     workspace_id: &str,

@@ -81,11 +81,33 @@ func TestCreateIssueUsesRustRejectsOutOfScopeShapes(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("workflow handoff uses rust = %v err=%v, want false", ok, err)
 	}
+
+	squadID := util.MustParseUUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+	ok, err = planUsesRust(h, CreateIssueRequest{
+		Title:  "squad without squad pilot",
+		Status: issuestatus.Todo,
+	}, "member", pgtype.Text{String: "squad", Valid: true}, squadID, issuestatus.Todo, pgtype.Text{}, nil, false)
+	if err != nil || ok {
+		t.Fatalf("squad assignee without squad pilot uses rust = %v err=%v, want false", ok, err)
+	}
+
+	hSquad := &Handler{IssueReadBridge: &IssueReadBridge{
+		CreatePilotScopes:      []string{"*"},
+		CreateSquadPilotScopes: []string{"*"},
+	}}
+	ok, err = planUsesRust(hSquad, CreateIssueRequest{
+		Title:  "squad backlog",
+		Status: issuestatus.Backlog,
+	}, "member", pgtype.Text{String: "squad", Valid: true}, squadID, issuestatus.Backlog, pgtype.Text{}, nil, false)
+	if err != nil || ok {
+		t.Fatalf("squad assignee without workspace DB uses rust = %v err=%v, want false", ok, err)
+	}
 }
 
 func TestIssueReadBridgeCreatePilotEnv(t *testing.T) {
 	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_PILOT", "create-pilot")
 	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_DISPATCH_PILOT", "create-dispatch")
+	t.Setenv("XSHADOW_ISSUES_RUST_CREATE_SQUAD_PILOT", "create-squad")
 	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
 	t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
 	bridge := NewIssueReadBridgeFromEnv(nil)
@@ -94,6 +116,9 @@ func TestIssueReadBridgeCreatePilotEnv(t *testing.T) {
 	}
 	if !reflect.DeepEqual(bridge.CreateDispatchPilotScopes, []string{"create-dispatch"}) {
 		t.Fatalf("CreateDispatchPilotScopes = %v, want [create-dispatch]", bridge.CreateDispatchPilotScopes)
+	}
+	if !reflect.DeepEqual(bridge.CreateSquadPilotScopes, []string{"create-squad"}) {
+		t.Fatalf("CreateSquadPilotScopes = %v, want [create-squad]", bridge.CreateSquadPilotScopes)
 	}
 }
 

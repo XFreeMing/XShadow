@@ -31,6 +31,13 @@ pub struct IssueCreateLimit {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SquadCreateTrust {
+    pub squad_id: String,
+    pub expected_leader_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueCreateRequest {
     pub id: String,
     pub title: String,
@@ -60,6 +67,7 @@ pub struct IssueCreateRequest {
     #[serde(default)]
     pub pr_auto_complete_disabled: bool,
     pub prepared_enqueue: Option<PreparedStatusEnqueue>,
+    pub squad_create_trust: Option<SquadCreateTrust>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +112,7 @@ pub enum IssueCreateError {
     },
     DispatchSensitive,
     AgentInvokeForbidden,
+    SquadInvokeForbidden,
     Database(sqlx::Error),
 }
 
@@ -334,23 +343,16 @@ async fn attach_labels(
 }
 
 fn create_requires_enqueue(status: &str, assignee_type: Option<&str>) -> bool {
-    assignee_type == Some("agent") && status != "backlog"
+    if status == "backlog" {
+        return false;
+    }
+    matches!(assignee_type, Some("agent") | Some("squad"))
 }
 
 fn map_dispatch_error(error: StatusPromotionError) -> IssueCreateError {
     match error {
         StatusPromotionError::RouteChanged => IssueCreateError::DispatchSensitive,
         StatusPromotionError::Database(error) => IssueCreateError::Database(error),
-    }
-}
-
-fn require_direct_agent_creator_owner(
-    creator_id: &str,
-    owner: &Option<String>,
-) -> Result<(), IssueCreateError> {
-    match owner.as_deref() {
-        Some(o) if o == creator_id => Ok(()),
-        _ => Err(IssueCreateError::AgentInvokeForbidden),
     }
 }
 
@@ -377,7 +379,7 @@ async fn create_issue_attempt(
         return Err(IssueCreateError::InvalidInput);
     }
     if let Some(assignee_type) = request.assignee_type.as_deref() {
-        if assignee_type != "member" && assignee_type != "agent" {
+        if assignee_type != "member" && assignee_type != "agent" && assignee_type != "squad" {
             return Err(IssueCreateError::InvalidInput);
         }
         let Some(assignee_id) = request.assignee_id.as_deref() else {
@@ -436,7 +438,9 @@ async fn create_issue_attempt(
             .await
             .map_err(map_dispatch_error)?,
         };
-        require_direct_agent_creator_owner(user_id, &agent_owner)?;
+        if agent_owner.as_deref() != Some(user_id) {
+            return Err(IssueCreateError::AgentInvokeForbidden);
+        }
         if let Some(plan) = prepared {
             status_dispatch::validate_prepared_status_enqueue(
                 &mut tx,
@@ -454,6 +458,65 @@ async fn create_issue_attempt(
                 workspace_id,
                 effective_project.as_deref(),
                 vec![user_id.to_string()],
+            )
+            .await
+            .map_err(map_dispatch_error)?;
+        }
+    } else if request.assignee_type.as_deref() == Some("squad") {
+        let Some(assignee_id) = request.assignee_id.as_deref() else {
+            return Err(IssueCreateError::InvalidAssignee);
+        };
+        let trust = request
+            .squad_create_trust
+            .as_ref()
+            .ok_or(IssueCreateError::DispatchSensitive)?;
+        if trust.squad_id != assignee_id || !is_uuid(&trust.expected_leader_id) {
+            return Err(IssueCreateError::DispatchSensitive);
+        }
+        if let Some(plan) = prepared
+            && (!plan.is_leader_task
+                || plan.squad_id != assignee_id
+                || plan.agent_id != trust.expected_leader_id
+                || plan.issue_id != request.id
+                || plan.workflow_step != request.status)
+        {
+            return Err(IssueCreateError::DispatchSensitive);
+        }
+        let leader =
+            status_dispatch::lock_active_squad_leader(&mut tx, workspace_id, assignee_id, prepared)
+                .await
+                .map_err(map_dispatch_error)?;
+        if leader.leader_id != trust.expected_leader_id {
+            return Err(IssueCreateError::DispatchSensitive);
+        }
+        if leader.owner_id.as_deref() != Some(user_id) {
+            return Err(IssueCreateError::SquadInvokeForbidden);
+        }
+        if let Some(plan) = prepared {
+            status_dispatch::validate_squad_leader_runtime_for_active_enqueue(
+                &mut tx,
+                workspace_id,
+                user_id,
+                &plan.runtime_id,
+            )
+            .await
+            .map_err(map_dispatch_error)?;
+            status_dispatch::validate_prepared_status_enqueue(
+                &mut tx,
+                workspace_id,
+                &request.id,
+                effective_project.as_deref(),
+                leader.owner_id,
+                plan,
+            )
+            .await
+            .map_err(map_dispatch_error)?;
+        } else {
+            status_dispatch::validate_agent_issue_project_access(
+                &mut tx,
+                workspace_id,
+                effective_project.as_deref(),
+                vec![user_id.to_owned()],
             )
             .await
             .map_err(map_dispatch_error)?;
