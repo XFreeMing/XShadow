@@ -22,40 +22,54 @@ import (
 )
 
 type rustAgentSourceRetryWrite struct {
-	SourceTaskID          string                        `json:"source_task_id"`
-	NewTaskID             string                        `json:"new_task_id"`
-	ActorUserID           string                        `json:"actor_user_id"`
-	ExpectedContextID     string                        `json:"expected_context_id"`
-	ExpectedSourceIssueID string                        `json:"expected_source_issue_id"`
-	ExpectedAgentID       string                        `json:"expected_agent_id"`
-	ExpectedRuntimeID     string                        `json:"expected_runtime_id"`
-	ExpectedTaskContext   json.RawMessage               `json:"expected_task_context"`
-	ExpectedCaptureDigest string                        `json:"expected_capture_digest"`
-	ExpectedClones        []rustSourceContextCloneTrust `json:"expected_clones,omitempty"`
-	RuntimeMcpOverlay     json.RawMessage               `json:"runtime_mcp_overlay,omitempty"`
-	RuntimeConnectedApps  json.RawMessage               `json:"runtime_connected_apps,omitempty"`
-	RuntimeCLIVersion     string                        `json:"runtime_cli_version"`
+	SourceTaskID            string                        `json:"source_task_id"`
+	NewTaskID               string                        `json:"new_task_id"`
+	ActorUserID             string                        `json:"actor_user_id"`
+	ExpectedContextID       string                        `json:"expected_context_id"`
+	ExpectedSourceIssueID   string                        `json:"expected_source_issue_id"`
+	ExpectedAgentID         string                        `json:"expected_agent_id"`
+	ExpectedRuntimeID       string                        `json:"expected_runtime_id"`
+	ExpectedTaskContext     json.RawMessage               `json:"expected_task_context"`
+	ExpectedCaptureDigest   string                        `json:"expected_capture_digest"`
+	ExpectedClones          []rustSourceContextCloneTrust `json:"expected_clones,omitempty"`
+	ExpectedSourceProjectID *string                       `json:"expected_source_project_id,omitempty"`
+	RuntimeMcpOverlay       json.RawMessage               `json:"runtime_mcp_overlay,omitempty"`
+	RuntimeConnectedApps    json.RawMessage               `json:"runtime_connected_apps,omitempty"`
+	RuntimeCLIVersion       string                        `json:"runtime_cli_version"`
 }
 
 type rustAgentSourceRetryResult struct {
-	TaskID          string `json:"task_id"`
-	SourceContextID string `json:"source_context_id"`
+	TaskID          string  `json:"task_id"`
+	SourceContextID string  `json:"source_context_id"`
+	SourceProjectID *string `json:"source_project_id,omitempty"`
+}
+
+func agentSourceRetryReceiptProjectOK(
+	plan preparedRustAgentSourceRetry,
+	reply rustAgentSourceRetryResult,
+) bool {
+	if plan.ExpectedSourceProjectID.Valid {
+		return reply.SourceProjectID != nil &&
+			*reply.SourceProjectID == uuidToString(plan.ExpectedSourceProjectID)
+	}
+	return reply.SourceProjectID == nil
 }
 
 type preparedRustAgentSourceRetry struct {
-	WorkspaceID       pgtype.UUID
-	RequesterID       pgtype.UUID
-	SourceTaskID      pgtype.UUID
-	NewTaskID         pgtype.UUID
-	ContextID         pgtype.UUID
-	SourceIssueID     pgtype.UUID
-	AgentID           pgtype.UUID
-	RuntimeID         pgtype.UUID
-	RuntimeCLIVersion string
-	ParentContext     json.RawMessage
-	CaptureDigest     string
-	FilePlan          rustAgentSourceContextFilePlan
-	Agent             db.Agent
+	WorkspaceID             pgtype.UUID
+	RequesterID             pgtype.UUID
+	SourceTaskID            pgtype.UUID
+	NewTaskID               pgtype.UUID
+	ContextID               pgtype.UUID
+	SourceIssueID           pgtype.UUID
+	AgentID                 pgtype.UUID
+	RuntimeID               pgtype.UUID
+	RuntimeCLIVersion       string
+	ParentContext           json.RawMessage
+	CaptureDigest           string
+	FilePlan                rustAgentSourceContextFilePlan
+	ExpectedSourceProjectID pgtype.UUID
+	Agent                   db.Agent
 }
 
 func quickCreateContextFromTask(task db.AgentTaskQueue) (service.QuickCreateContext, bool) {
@@ -70,9 +84,10 @@ func quickCreateContextFromTask(task db.AgentTaskQueue) (service.QuickCreateCont
 }
 
 func (h *Handler) prepareRustRetryAgentSourceQuickCreate(
-	ctx context.Context,
+	r *http.Request,
 	wsUUID, userUUID, sourceTaskID pgtype.UUID,
 ) (bool, preparedRustAgentSourceRetry, error) {
+	ctx := r.Context()
 	var none preparedRustAgentSourceRetry
 	if h.IssueReadBridge == nil || len(h.IssueReadBridge.RetryAgentSourcePilotScopes) == 0 {
 		return false, none, nil
@@ -136,8 +151,28 @@ func (h *Handler) prepareRustRetryAgentSourceQuickCreate(
 	sourceIssue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: pending.SourceIssueID, WorkspaceID: wsUUID,
 	})
-	if err != nil || sourceIssue.ProjectID.Valid {
+	if err != nil {
 		return false, none, nil
+	}
+	var expectedSourceProject pgtype.UUID
+	if sourceIssue.ProjectID.Valid {
+		if len(h.IssueReadBridge.AgentSourceProjectLifecycleScopes) == 0 {
+			return false, none, nil
+		}
+		inProjectLife, pilotErr := matchesIssuePilot(
+			ctx, h.Queries, h.IssueReadBridge.AgentSourceProjectLifecycleScopes, uuidToString(wsUUID), wsUUID,
+		)
+		if pilotErr != nil || !inProjectLife {
+			return false, none, pilotErr
+		}
+		hidden, hiddenErr := h.hiddenProjects(r, uuidToString(wsUUID))
+		if hiddenErr != nil {
+			return false, none, hiddenErr
+		}
+		if !hidden.CanSeeProject(sourceIssue.ProjectID) {
+			return false, none, nil
+		}
+		expectedSourceProject = sourceIssue.ProjectID
 	}
 	ag, err := h.Queries.GetAgent(ctx, parent.AgentID)
 	if err != nil || ag.ArchivedAt.Valid || ag.OwnerID != userUUID || ag.RuntimeMode != "local" ||
@@ -160,19 +195,20 @@ func (h *Handler) prepareRustRetryAgentSourceQuickCreate(
 	}
 	parentContext := append(json.RawMessage(nil), parent.Context...)
 	return true, preparedRustAgentSourceRetry{
-		WorkspaceID:       wsUUID,
-		RequesterID:       userUUID,
-		SourceTaskID:      sourceTaskID,
-		NewTaskID:         dbid.NewV7(),
-		ContextID:         contextID,
-		SourceIssueID:     pending.SourceIssueID,
-		AgentID:           parent.AgentID,
-		RuntimeID:         parent.RuntimeID,
-		RuntimeCLIVersion: readRuntimeCLIVersion(rt.Metadata),
-		ParentContext:     parentContext,
-		CaptureDigest:     pending.CaptureDigest,
-		FilePlan:          filePlan,
-		Agent:             ag,
+		WorkspaceID:             wsUUID,
+		RequesterID:             userUUID,
+		SourceTaskID:            sourceTaskID,
+		NewTaskID:               dbid.NewV7(),
+		ContextID:               contextID,
+		SourceIssueID:           pending.SourceIssueID,
+		AgentID:                 parent.AgentID,
+		RuntimeID:               parent.RuntimeID,
+		RuntimeCLIVersion:       readRuntimeCLIVersion(rt.Metadata),
+		ParentContext:           parentContext,
+		CaptureDigest:           pending.CaptureDigest,
+		FilePlan:                filePlan,
+		ExpectedSourceProjectID: expectedSourceProject,
+		Agent:                   ag,
 	}, nil
 }
 
@@ -236,6 +272,10 @@ func (h *Handler) retrySourceContextQuickCreateViaRust(
 		RuntimeConnectedApps:  overlay.ConnectedApps,
 		RuntimeCLIVersion:     plan.RuntimeCLIVersion,
 	}
+	if plan.ExpectedSourceProjectID.Valid {
+		projectID := uuidToString(plan.ExpectedSourceProjectID)
+		payload.ExpectedSourceProjectID = &projectID
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode agent source retry")
@@ -259,7 +299,8 @@ func (h *Handler) retrySourceContextQuickCreateViaRust(
 	var reply rustAgentSourceRetryResult
 	if json.Unmarshal(raw, &reply) != nil ||
 		reply.TaskID != uuidToString(plan.NewTaskID) ||
-		reply.SourceContextID != uuidToString(plan.ContextID) {
+		reply.SourceContextID != uuidToString(plan.ContextID) ||
+		!agentSourceRetryReceiptProjectOK(plan, reply) {
 		writeError(w, http.StatusBadGateway, "invalid agent source retry response")
 		return nil, errSourceContextResponseWritten
 	}

@@ -297,7 +297,7 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	var task *db.AgentTaskQueue
 	var err error
-	if useRust, plan, selectErr := h.prepareRustRetryAgentSourceQuickCreate(ctx, workspaceID, requesterID, taskID); selectErr != nil {
+	if useRust, plan, selectErr := h.prepareRustRetryAgentSourceQuickCreate(r, workspaceID, requesterID, taskID); selectErr != nil {
 		err = selectErr
 	} else if useRust {
 		if canInvoke != nil && !canInvoke(plan.Agent) {

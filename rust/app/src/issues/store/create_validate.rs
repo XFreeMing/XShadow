@@ -98,9 +98,10 @@ pub(super) async fn lock_source_inherited_project(
     workspace_id: &str,
     member_id: &str,
     project_id: &str,
+    missing: IssueCreateError,
 ) -> Result<(), IssueCreateError> {
     if !is_uuid(project_id) {
-        return Err(IssueCreateError::AnchorCommentDeleted);
+        return Err(missing);
     }
     let role = sqlx::query_scalar::<_, String>(
         "SELECT role FROM member WHERE user_id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
@@ -110,7 +111,7 @@ pub(super) async fn lock_source_inherited_project(
     .fetch_optional(&mut *conn)
     .await?;
     let Some(role) = role else {
-        return Err(IssueCreateError::AnchorCommentDeleted);
+        return Err(missing);
     };
     let privileged = matches!(role.as_str(), "owner" | "admin");
     lock_project_row_member_grant(
@@ -119,7 +120,7 @@ pub(super) async fn lock_source_inherited_project(
         member_id,
         privileged,
         project_id,
-        IssueCreateError::AnchorCommentDeleted,
+        missing,
     )
     .await?;
     Ok(())

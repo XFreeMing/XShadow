@@ -11,6 +11,7 @@ use super::agent_source_queue_lock::{
 use super::create_source_context::{
     SourceContextCloneTrust, validate_locked_pending_source_clones,
 };
+use super::create_validate::lock_source_inherited_project;
 use super::create_write::IssueCreateError;
 use super::is_uuid;
 
@@ -33,12 +34,16 @@ pub struct AgentSourceRetryWrite {
     #[serde(default)]
     pub runtime_connected_apps: Option<Value>,
     pub runtime_cli_version: String,
+    #[serde(default)]
+    pub expected_source_project_id: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct AgentSourceRetryResult {
     pub task_id: String,
     pub source_context_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_project_id: Option<String>,
 }
 
 const CREATE_MANUAL_RETRY_TASK: &str = r#"
@@ -166,24 +171,40 @@ async fn lock_failed_parent_task(
     Ok(())
 }
 
-async fn lock_projectless_source_issue_share(
+async fn lock_retry_source_issue(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: &str,
-    expected_source_issue_id: &str,
-) -> Result<(), IssueCreateError> {
-    let live = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM issue
-          WHERE workspace_id = $1::uuid AND id = $2::uuid AND project_id IS NULL
+    member_id: &str,
+    request: &AgentSourceRetryWrite,
+) -> Result<Option<String>, IssueCreateError> {
+    let expected_project = request.expected_source_project_id.as_deref();
+    if let Some(project_id) = expected_project {
+        lock_source_inherited_project(
+            tx,
+            workspace_id,
+            member_id,
+            project_id,
+            IssueCreateError::SourceContextRetryUnavailable,
+        )
+        .await?;
+    }
+    let unavailable = IssueCreateError::SourceContextRetryUnavailable;
+    let locked_project = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT project_id::text FROM issue
+          WHERE workspace_id = $1::uuid AND id = $2::uuid
           FOR SHARE",
     )
     .bind(workspace_id)
-    .bind(expected_source_issue_id)
+    .bind(&request.expected_source_issue_id)
     .fetch_optional(&mut **tx)
     .await?;
-    if live.is_none() {
-        return Err(IssueCreateError::SourceContextRetryUnavailable);
+    let Some(locked_project) = locked_project else {
+        return Err(unavailable);
+    };
+    if locked_project.as_deref() != expected_project {
+        return Err(unavailable);
     }
-    Ok(())
+    Ok(locked_project)
 }
 
 async fn lock_pending_source_context(
@@ -307,8 +328,8 @@ pub async fn retry_agent_source_quick_create(
         other => other,
     })?;
     lock_failed_parent_task(&mut tx, workspace_id, &request, member_id).await?;
-    lock_projectless_source_issue_share(&mut tx, workspace_id, &request.expected_source_issue_id)
-        .await?;
+    let locked_source_project =
+        lock_retry_source_issue(&mut tx, workspace_id, member_id, &request).await?;
     lock_pending_source_context(&mut tx, workspace_id, &request, member_id).await?;
 
     let new_task_id = insert_manual_retry_task(&mut tx, &request).await?;
@@ -322,5 +343,6 @@ pub async fn retry_agent_source_quick_create(
     Ok(AgentSourceRetryResult {
         task_id: new_task_id,
         source_context_id: request.expected_context_id,
+        source_project_id: locked_source_project,
     })
 }

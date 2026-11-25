@@ -750,7 +750,14 @@ pub async fn validate_agent_pending_source(
     validate_frozen_shape(workspace_id, trust, &parsed)?;
     let effective_project = trust.expected_source_project_id.as_deref();
     if let Some(project_id) = effective_project {
-        lock_source_inherited_project(tx, workspace_id, user_id, project_id).await?;
+        lock_source_inherited_project(
+            tx,
+            workspace_id,
+            user_id,
+            project_id,
+            IssueCreateError::AnchorCommentDeleted,
+        )
+        .await?;
     }
     let source = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM issue WHERE workspace_id = $1::uuid AND id = $2::uuid FOR UPDATE",

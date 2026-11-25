@@ -10,6 +10,32 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+func TestIssueReadBridgeAgentSourceProjectLifecyclePilotEnv(t *testing.T) {
+	t.Setenv("XSHADOW_ISSUES_RUST_AGENT_SOURCE_PROJECT_LIFECYCLE_PILOT", "agent-retry-project")
+	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
+	t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
+	bridge := NewIssueReadBridgeFromEnv(nil)
+	if !reflect.DeepEqual(bridge.AgentSourceProjectLifecycleScopes, []string{"agent-retry-project"}) {
+		t.Fatalf("AgentSourceProjectLifecycleScopes = %v, want [agent-retry-project]", bridge.AgentSourceProjectLifecycleScopes)
+	}
+}
+
+func TestAgentSourceRetryReceiptProjectOK(t *testing.T) {
+	t.Parallel()
+	project := util.MustParseUUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+	projectStr := util.UUIDToString(project)
+	plan := preparedRustAgentSourceRetry{ExpectedSourceProjectID: project}
+	if !agentSourceRetryReceiptProjectOK(plan, rustAgentSourceRetryResult{SourceProjectID: &projectStr}) {
+		t.Fatal("matching project receipt should qualify")
+	}
+	if agentSourceRetryReceiptProjectOK(plan, rustAgentSourceRetryResult{}) {
+		t.Fatal("missing receipt project should fail")
+	}
+	if !agentSourceRetryReceiptProjectOK(preparedRustAgentSourceRetry{}, rustAgentSourceRetryResult{}) {
+		t.Fatal("projectless receipt should omit source_project_id")
+	}
+}
+
 func TestIssueReadBridgeRetryAgentSourcePilotEnv(t *testing.T) {
 	t.Setenv("XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT", "agent-retry")
 	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
@@ -27,7 +53,7 @@ func TestPrepareRustRetryAgentSourceQuickCreateSkipsDisabledPilot(t *testing.T) 
 	ws := util.MustParseUUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 	user := util.MustParseUUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
 	taskID := util.MustParseUUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
-	useRust, _, err := h.prepareRustRetryAgentSourceQuickCreate(ctx, ws, user, taskID)
+	useRust, _, err := h.prepareRustRetryAgentSourceQuickCreate(httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx), ws, user, taskID)
 	if err != nil || useRust {
 		t.Fatalf("missing pilot uses rust = %v err=%v, want false", useRust, err)
 	}

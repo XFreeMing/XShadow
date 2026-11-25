@@ -60,6 +60,7 @@ type IssueReadBridge struct {
 	RetryAgentSourcePilotScopes          []string
 	AttachAgentSourcePilotScopes         []string
 	AgentSourceFilesLifecyclePilotScopes []string
+	AgentSourceProjectLifecycleScopes    []string
 	DeletePilotScopes                    []string
 	DeleteAttachPilotScopes              []string
 	DeleteSourceContextPilotScopes       []string
@@ -154,6 +155,11 @@ type IssueReadBridge struct {
 //     RETRY_AGENT_SOURCE) and quick_create attach (requires CREATE plus
 //     ATTACH_AGENT_SOURCE on the same workspace). Independent of enqueue file
 //     and file-free lifecycle pilots.
+//   - XSHADOW_ISSUES_RUST_AGENT_SOURCE_PROJECT_LIFECYCLE_PILOT: comma-separated
+//     workspace slugs or UUIDs for manual retry on failed agent source captures
+//     whose source issue inherits an authorized project (requires RETRY_AGENT_SOURCE
+//     on the same workspace). Managed clone attachments also require
+//     AGENT_SOURCE_FILES_LIFECYCLE. Attach reuse is a follow-on slice.
 //   - XSHADOW_ISSUES_RUST_DELETE_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member issue deletes on DELETE /api/issues/{id}.
 //   - XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT: comma-separated workspace
@@ -217,6 +223,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 	retryAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT"))
 	attachAgentSourceScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT"))
 	agentSourceFilesLifecycleScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_AGENT_SOURCE_FILES_LIFECYCLE_PILOT"))
+	agentSourceProjectLifecycleScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_AGENT_SOURCE_PROJECT_LIFECYCLE_PILOT"))
 	deleteScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_PILOT"))
 	deleteAttachScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_ATTACHMENTS_PILOT"))
 	deleteSourceContextScopes := parsePilotScopes(os.Getenv("XSHADOW_ISSUES_RUST_DELETE_SOURCE_CONTEXT_PILOT"))
@@ -263,6 +270,7 @@ func NewIssueReadBridgeFromEnv(log *slog.Logger) *IssueReadBridge {
 		RetryAgentSourcePilotScopes:          retryAgentSourceScopes,
 		AttachAgentSourcePilotScopes:         attachAgentSourceScopes,
 		AgentSourceFilesLifecyclePilotScopes: agentSourceFilesLifecycleScopes,
+		AgentSourceProjectLifecycleScopes:    agentSourceProjectLifecycleScopes,
 		DeletePilotScopes:                    deleteScopes,
 		DeleteAttachPilotScopes:              deleteAttachScopes,
 		DeleteSourceContextPilotScopes:       deleteSourceContextScopes,
