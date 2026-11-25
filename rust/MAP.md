@@ -22,6 +22,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT` 为 `POST /api/issues/{id}/acceptance` 的普通验收记录写入指定试点工作区。Go 继续校验公开请求、计算验收记录、处理工作方法重开和派工，并发布 WebSocket 事件。Rust 在任务行锁内复核项目可见范围和任务修订，写入验收记录，返回提交后的任务快照。Go 验证回执的任务修订和验收记录再发事件。试点上游不可用返回 `503`，回执格式错误返回 `502`。
 
+`XSHADOW_ISSUES_RUST_STATUS_PILOT` 为 `PUT /api/issues/{id}` 中带任务修订的内置活动状态和列内排序写入指定试点工作区。Rust 持锁复核任务可见范围和修订。状态真的变化时，Rust 同事务写入一条时间线记录，Go 收到回执后发布已有记录的实时事件。可能触发派工的积压任务晋升、工作流步骤推进、重复任务重开、自定义状态、终态及组合编辑仍走 Go。试点返回的 `409` 说明需要刷新后重试。上游不可用和无效回执分别返回 `503` 和 `502`。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

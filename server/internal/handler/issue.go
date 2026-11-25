@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	"github.com/multica-ai/multica/server/internal/dispatch"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
@@ -4382,7 +4383,16 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// not also through its event wakeups.
 	writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 	var issue db.Issue
+	var statusActivityReceipt string
 	attachmentsChanged := false
+	rustStatus, err := h.statusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust issue status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
+		}
+		return
+	}
 	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params, attachmentIDs)
 	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
@@ -4391,7 +4401,12 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if rustEdit {
+	if rustStatus {
+		issue, prevIssue, statusActivityReceipt, ok = h.updateIssueStatusViaRust(w, r, userID, prevIssue, params, req)
+		if !ok {
+			return
+		}
+	} else if rustEdit {
 		issue, prevIssue, attachmentsChanged, ok = h.updateOrdinaryIssueViaRust(w, r, userID, prevIssue, params, req, rawFields, attachmentIDs)
 		if !ok {
 			return
@@ -4505,7 +4520,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil {
 		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 	}
-	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
+	if statusActivityReceipt != "" {
+		h.Bus.Publish(events.Event{
+			Type:                  protocol.EventIssueUpdated,
+			WorkspaceID:           workspaceID,
+			ActorType:             actorType,
+			ActorID:               actorID,
+			Payload:               updatedPayload,
+			PreRecordedActivityID: statusActivityReceipt,
+		})
+	} else {
+		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, updatedPayload)
+	}
 	if attachmentsChanged {
 		// The full owner snapshot must be admitted before an auxiliary event at
 		// the same revision. Otherwise clients advance only the revision here and

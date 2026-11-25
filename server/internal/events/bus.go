@@ -40,6 +40,10 @@ type Event struct {
 	// realtime layer delivers it only to that user's connections bound to
 	// WorkspaceID.
 	MemberPrivateUserID string
+
+	// PreRecordedActivityID points at an activity_log row already committed
+	// alongside the write. Listeners publish it instead of inserting again.
+	PreRecordedActivityID string `json:"-"`
 }
 
 // Handler is a function that processes an event.

@@ -84,8 +84,10 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 			assigneeChanged = false
 		}
 
-		if statusChanged {
-			prevStatus, _ := payload["prev_status"].(string)
+		prevStatus, _ := payload["prev_status"].(string)
+		if statusChanged && e.PreRecordedActivityID != "" {
+			publishPreRecordedStatusActivity(ctx, bus, queries, e, issue, prevStatus)
+		} else if statusChanged {
 			detailsMap := map[string]string{
 				"from": prevStatus,
 				"to":   issue.Status,
@@ -326,6 +328,30 @@ func handleTaskActivity(ctx context.Context, bus *events.Bus, queries *db.Querie
 		return
 	}
 
+	publishActivityEvent(bus, e, activity)
+}
+
+func publishPreRecordedStatusActivity(ctx context.Context, bus *events.Bus, queries *db.Queries, e events.Event, issue handler.IssueResponse, prevStatus string) {
+	activity, err := queries.GetActivity(ctx, parseUUID(e.PreRecordedActivityID))
+	if err != nil {
+		slog.Error("activity: failed to load pre-recorded status change",
+			"issue_id", issue.ID, "activity_id", e.PreRecordedActivityID, "error", err)
+		return
+	}
+	issueUUID := parseUUID(issue.ID)
+	wsUUID := parseUUID(issue.WorkspaceID)
+	if activity.IssueID != issueUUID || activity.WorkspaceID != wsUUID || activity.Action != "status_changed" ||
+		activity.ActorType != util.StrToText(e.ActorType) || activity.ActorID != optionalUUID(e.ActorID) {
+		slog.Error("activity: pre-recorded status change identity mismatch",
+			"issue_id", issue.ID, "activity_id", e.PreRecordedActivityID)
+		return
+	}
+	var details map[string]string
+	if err := json.Unmarshal(activity.Details, &details); err != nil || details["from"] != prevStatus || details["to"] != issue.Status {
+		slog.Error("activity: pre-recorded status change details mismatch",
+			"issue_id", issue.ID, "activity_id", e.PreRecordedActivityID)
+		return
+	}
 	publishActivityEvent(bus, e, activity)
 }
 

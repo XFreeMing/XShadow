@@ -16,7 +16,8 @@ use super::store::{
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
 use super::store::{
-    IssueAcceptanceWrite, IssueAcceptanceWriteError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueAcceptanceWrite, IssueAcceptanceWriteError, IssueStatusEdit, IssueStatusEditError,
+    OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -171,6 +172,7 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/issues/{id}/acceptance",
             put(write_issue_acceptance).layer(DefaultBodyLimit::disable()),
         )
+        .route("/internal/issues/{id}/status", put(update_issue_status))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
 }
@@ -354,6 +356,44 @@ async fn write_issue_property(
         Err(IssuePropertyWriteError::Json(error)) => {
             eprintln!("rust issue property write returned invalid JSON: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+    }
+}
+
+async fn update_issue_status(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(edit): Json<IssueStatusEdit>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::update_issue_status(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
+        Ok(write) => Json(write).into_response(),
+        Err(IssueStatusEditError::Access(error)) => {
+            issue_request_error(error, "failed to update issue")
+        }
+        Err(IssueStatusEditError::InvalidStatus) => {
+            error_response(StatusCode::BAD_REQUEST, "invalid status for status pilot")
+        }
+        Err(IssueStatusEditError::DispatchSensitive) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "dispatch_sensitive": true })),
+        )
+            .into_response(),
+        Err(IssueStatusEditError::RevisionConflict(actual_revision)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(IssueStatusEditError::Database(error)) => {
+            eprintln!("rust issue status write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+        Err(IssueStatusEditError::Snapshot(error)) => {
+            eprintln!("rust issue status write snapshot failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
         }
     }
 }
