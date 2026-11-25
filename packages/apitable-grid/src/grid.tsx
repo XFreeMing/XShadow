@@ -81,6 +81,7 @@ export function ApitableGrid({
   onActiveCell,
   onEditEnd,
   onToggleGroup,
+  stickyHeader,
 }: {
   datasheetId: string;
   fields: readonly GridFieldView[];
@@ -105,6 +106,7 @@ export function ApitableGrid({
   onActiveCell?: (recordId: string, fieldId: string, revision: number) => void;
   onEditEnd?: () => void;
   onToggleGroup?: (key: string) => void;
+  stickyHeader?: boolean;
 }) {
   const [store] = useState(createGridStore);
   const shownRecords = remote?.records ?? records;
@@ -188,7 +190,7 @@ export function ApitableGrid({
           ))}
         </div>
       ) : null}
-      <table className="apitable-grid" data-apitable-grid="">
+      <table className={stickyHeader ? "apitable-grid apitable-grid--sticky-head" : "apitable-grid"} data-apitable-grid="">
         <thead>
         <tr className="apitable-grid__row">
           <th className="apitable-grid__rowHead" />

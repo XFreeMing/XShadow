@@ -41,6 +41,16 @@ export const gridCss = `
 .apitable-grid tbody {
   display: block;
 }
+/* Block thead is only as tall as the header, so pin that box to the table
+   scrollport. max-content keeps its flex columns the same width as the body. */
+.apitable-grid--sticky-head thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: max-content;
+  min-width: 100%;
+  background: var(--defaultBg);
+}
 .apitable-grid__row {
   display: flex;
   min-width: max-content;

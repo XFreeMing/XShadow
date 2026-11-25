@@ -381,6 +381,7 @@ export function MultidimensionalGridView({
             renderCell={renderCell}
             onCellCommit={handleCellCommit}
             onOpenRecord={handleOpenRecord}
+            stickyHeader
           />
 
           <div className="flex items-center justify-center px-4 py-3">

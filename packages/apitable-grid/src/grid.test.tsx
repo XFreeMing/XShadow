@@ -284,4 +284,21 @@ describe("ApitableGrid", () => {
     expect(screen.getByTestId("actor-slot-issue-uuid-1")).toHaveTextContent("Alice");
     expect(screen.getByDisplayValue("Native issue")).toBeInTheDocument();
   });
+
+  it("pins the header row only when stickyHeader is set", () => {
+    const props = {
+      datasheetId: "dst",
+      fields: fields.slice(0, 1),
+      records,
+      labels,
+      onCellCommit: vi.fn(),
+    };
+    const { container, rerender } = render(<ApitableGrid {...props} />);
+    const table = container.querySelector("table");
+    expect(table).toHaveClass("apitable-grid");
+    expect(table).not.toHaveClass("apitable-grid--sticky-head");
+
+    rerender(<ApitableGrid {...props} stickyHeader />);
+    expect(container.querySelector("table")).toHaveClass("apitable-grid", "apitable-grid--sticky-head");
+  });
 });
