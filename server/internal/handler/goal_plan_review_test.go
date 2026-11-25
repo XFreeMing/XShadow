@@ -176,7 +176,7 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 	if _, plan := getPlan(t, goal.ID); plan.Review.Phase != "preflight" {
 		t.Fatalf("reauthorization reviewed delivered results instead of plan coverage: %+v", plan.Review)
 	}
-	submit(resumePreflight.ID, *resumePreflight.TaskID, "covered", "sufficient", nil, 200)
+	submit(resumePreflight.ID, *resumePreflight.TaskID, "execution_issue", "sufficient", nil, 200)
 	testutil.Call(t, testHandler.PutGoalExecution, goalRequest("PUT", path+"/plan/execution", testUserID,
 		map[string]any{"enabled": true, "expected_revision": 1, "stage": 3}, params)).Want(400)
 	var authorized GoalPlanResponse
