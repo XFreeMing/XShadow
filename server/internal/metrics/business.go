@@ -21,6 +21,7 @@ const (
 	RuntimeSweepStageStaleTasks               = "stale_tasks"
 	RuntimeSweepStageQueuedExpiry             = "queued_task_expiry"
 	RuntimeSweepStageDelegatedFailureRecovery = "delegated_failure_recovery"
+	RuntimeSweepStageQueueNotification        = "queue_notification"
 	RuntimeSweepStageDeferredChatFinalization = "deferred_chat_finalize"
 	RuntimeSweepStageGC                       = "runtime_gc"
 
@@ -525,6 +526,7 @@ func normalizeRuntimeSweepStage(stage string) string {
 		RuntimeSweepStageStaleTasks,
 		RuntimeSweepStageQueuedExpiry,
 		RuntimeSweepStageDelegatedFailureRecovery,
+		RuntimeSweepStageQueueNotification,
 		RuntimeSweepStageDeferredChatFinalization,
 		RuntimeSweepStageGC:
 		return stage

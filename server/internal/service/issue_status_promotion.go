@@ -56,8 +56,13 @@ func (s *TaskService) CompleteIssueStatusPromotionAfterNativeWrite(ctx context.C
 			"task_id", util.UUIDToString(taskID), "error", err)
 		return
 	}
-	if task.Status == "queued" {
-		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
-		s.NotifyTaskEnqueued(ctx, task)
+	if task.Status != "queued" {
+		return
+	}
+	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.captureTaskQueued(ctx, task)
+	if _, err := s.deliverNativeQueueNotification(ctx, taskID); err != nil {
+		slog.Warn("native agent enqueue: queue notification delivery failed",
+			"task_id", util.UUIDToString(taskID), "error", err)
 	}
 }

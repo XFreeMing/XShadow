@@ -182,6 +182,19 @@ func (c *EmptyClaimCache) MarkEmpty(ctx context.Context, runtimeID string, obser
 	}
 }
 
+func (c *EmptyClaimCache) bump(ctx context.Context, runtimeID string) error {
+	if c == nil || runtimeID == "" {
+		return nil
+	}
+	bctx, cancel := c.bounded(ctx)
+	defer cancel()
+	pipe := c.rdb.Pipeline()
+	pipe.Incr(bctx, emptyClaimVersion(runtimeID))
+	pipe.Expire(bctx, emptyClaimVersion(runtimeID), emptyClaimVersionTTL)
+	_, err := pipe.Exec(bctx)
+	return err
+}
+
 // Bump increments the runtime's invalidation version. Called from
 // every enqueue path BEFORE the daemon WS wakeup so any verdict
 // written under the previous version is rejected on the next read,
@@ -191,15 +204,7 @@ func (c *EmptyClaimCache) MarkEmpty(ctx context.Context, runtimeID string, obser
 // legitimate enqueue. The empty key still expires on its own TTL so
 // the worst-case stall is bounded.
 func (c *EmptyClaimCache) Bump(ctx context.Context, runtimeID string) {
-	if c == nil || runtimeID == "" {
-		return
-	}
-	bctx, cancel := c.bounded(ctx)
-	defer cancel()
-	pipe := c.rdb.Pipeline()
-	pipe.Incr(bctx, emptyClaimVersion(runtimeID))
-	pipe.Expire(bctx, emptyClaimVersion(runtimeID), emptyClaimVersionTTL)
-	if _, err := pipe.Exec(bctx); err != nil {
+	if err := c.bump(ctx, runtimeID); err != nil {
 		slog.Warn("empty_claim_cache: bump failed; entry will expire on TTL", "error", err)
 	}
 }

@@ -195,6 +195,14 @@ type AgentTaskQueue struct {
 	WorkflowStep              pgtype.Text `json:"workflow_step"`
 }
 
+type AgentTaskQueueNotifyOutbox struct {
+	TaskID        pgtype.UUID        `json:"task_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	AttemptCount  int32              `json:"attempt_count"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LastError     pgtype.Text        `json:"last_error"`
+}
+
 type AgentToLabel struct {
 	AgentID   pgtype.UUID        `json:"agent_id"`
 	LabelID   pgtype.UUID        `json:"label_id"`

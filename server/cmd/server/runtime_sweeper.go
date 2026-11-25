@@ -31,6 +31,7 @@ const (
 	// delegatedFailureRecoverySweepInterval keeps the low-probability durable
 	// recovery scan off the latency-sensitive runtime liveness path.
 	delegatedFailureRecoverySweepInterval = 5 * time.Minute
+	queueNotificationSweepInterval        = service.QueueNotificationSweepInterval
 	// staleThresholdSeconds marks runtimes offline if no heartbeat for this
 	// long. The heartbeat timing derivation lives with the shared service
 	// constant so every task release path uses the same eligibility window.
@@ -177,6 +178,38 @@ func runDelegatedFailureRecoverySweeper(ctx context.Context, taskSvc *service.Ta
 	runPeriodicSweep(ctx, delegatedFailureRecoverySweepInterval, func() {
 		sweepPendingDelegatedFailureRecoveries(ctx, taskSvc)
 	})
+}
+
+func runQueueNotificationSweeper(ctx context.Context, taskSvc *service.TaskService) {
+	runPeriodicSweep(ctx, queueNotificationSweepInterval, func() {
+		sweepPendingQueueNotifications(ctx, taskSvc)
+	})
+}
+
+func sweepPendingQueueNotifications(ctx context.Context, taskSvc *service.TaskService) (stats runtimeSweepStageStats) {
+	startedAt := time.Now()
+	defer func() {
+		observeRuntimeSweepStage(taskServiceMetrics(taskSvc), obsmetrics.RuntimeSweepStageQueueNotification, startedAt, stats)
+	}()
+	if ctx.Err() != nil {
+		return
+	}
+	result, err := taskSvc.RecoverPendingQueueNotifications(ctx, service.QueueNotificationSweepBatchSize)
+	stats.candidates = result.Scanned
+	stats.changed = result.Delivered + result.Settled
+	if err != nil {
+		slog.Warn("queue notification sweeper: replay failed",
+			"delivered", result.Delivered,
+			"settled", result.Settled,
+			"retried", result.Retried,
+			"error", err,
+		)
+		return
+	}
+	if result.Delivered > 0 {
+		slog.Debug("queue notification sweeper: delivered pending wakeups", "count", result.Delivered)
+	}
+	return
 }
 
 func runRuntimeGCSweeper(ctx context.Context, txStarter runtimeGCTxStarter, queries *db.Queries, metrics *obsmetrics.BusinessMetrics, publisher runtimeGCEventPublisher) {

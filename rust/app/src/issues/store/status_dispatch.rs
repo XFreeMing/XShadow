@@ -77,6 +77,12 @@ ORDER BY created_at DESC, id DESC
 LIMIT 1
 "#;
 
+const ENQUEUE_NATIVE_QUEUE_NOTIFY: &str = r#"
+INSERT INTO agent_task_queue_notify_outbox (task_id)
+VALUES ($1::uuid)
+ON CONFLICT (task_id) DO NOTHING
+"#;
+
 const FIND_OCCUPIED_QUEUE_SLOT: &str = r#"
 SELECT id::text FROM agent_task_queue
 WHERE issue_id = $1::uuid AND agent_id = $2::uuid
@@ -301,6 +307,11 @@ pub async fn apply_prepared_status_enqueue(
         .map_err(StatusPromotionError::Database)?;
 
     if let Some(id) = inserted {
+        sqlx::query(ENQUEUE_NATIVE_QUEUE_NOTIFY)
+            .bind(&id)
+            .execute(&mut *conn)
+            .await
+            .map_err(StatusPromotionError::Database)?;
         return Ok(PromotionEnqueueOutcome::Inserted(id));
     }
 
