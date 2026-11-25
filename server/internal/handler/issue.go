@@ -4962,6 +4962,18 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := requestUserID(r)
+	if useRust, err := h.deleteIssueUsesRust(r, issue); err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust issue delete route failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue delete route")
+		}
+		return
+	} else if useRust {
+		h.deleteIssueViaRust(w, r, issue, userID)
+		return
+	}
+
 	h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	// Fail any linked autopilot runs before delete (ON DELETE SET NULL clears issue_id).
 	_ = h.AutopilotService.FailAutopilotRunsByIssue(r.Context(), issue.ID)
@@ -4973,7 +4985,6 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.deleteS3Objects(r.Context(), deleteResult.AttachmentURLs)
-	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 	// Always emit the resolved UUID — frontend caches key by UUID, so an
 	// identifier-style payload ("MUL-123") would leave stale entries on

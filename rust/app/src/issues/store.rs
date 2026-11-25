@@ -26,12 +26,14 @@ mod assign_write;
 mod comment_write;
 mod create_validate;
 mod create_write;
+mod delete_write;
 mod status_dispatch;
 mod status_write;
 mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
 pub use comment_write::{IssueCommentCreate, IssueCommentCreateError, create_issue_comment};
 pub use create_write::{IssueCreateError, IssueCreateRequest, create_issue};
+pub use delete_write::{IssueDeleteWrite, IssueDeleteWriteError, delete_issue};
 pub use status_write::{IssueStatusEdit, IssueStatusEditError, update_issue_status};
 pub use workflow_squad_write::{
     IssueWorkflowSquadEdit, IssueWorkflowSquadEditError, update_issue_workflow_squad_handoff,

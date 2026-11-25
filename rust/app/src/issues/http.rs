@@ -21,9 +21,11 @@ use super::store::{
     IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
     OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
+use super::store::{
+    IssueDeleteWrite, IssueDeleteWriteError, IssuePropertyWrite, IssuePropertyWriteError,
+};
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
-use super::store::{IssuePropertyWrite, IssuePropertyWriteError};
 
 struct Issues {
     pool: PgPool,
@@ -160,6 +162,7 @@ pub fn router(pool: PgPool, token: String) -> Router {
             // baseline and catalog seed in this authenticated request.
             get(get_issue)
                 .put(update_ordinary_issue)
+                .delete(delete_issue_handler)
                 .layer(DefaultBodyLimit::disable()),
         )
         .route(
@@ -750,6 +753,41 @@ async fn authorize(
             next.run(request).await
         }
         Err(failure) => error_response(failure.status, failure.message),
+    }
+}
+
+async fn delete_issue_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueDeleteWrite>,
+) -> Response {
+    if !matches!(ctx.actor, CallerActor::Member { .. }) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "issue deletion requires a human or a bound agent identity",
+        );
+    }
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::delete_issue(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request).await {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueDeleteWriteError::Access(error)) => {
+            issue_request_error(error, "failed to delete issue")
+        }
+        Err(IssueDeleteWriteError::AlreadyDeleted) => {
+            error_response(StatusCode::NOT_FOUND, "issue not found")
+        }
+        Err(IssueDeleteWriteError::DeleteSensitive) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "delete_sensitive": true })),
+        )
+            .into_response(),
+        Err(IssueDeleteWriteError::Database(error)) => {
+            eprintln!("rust issue delete failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete issue")
+        }
     }
 }
 
