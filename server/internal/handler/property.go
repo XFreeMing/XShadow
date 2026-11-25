@@ -721,7 +721,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		}
 		return def, value, nil
 	}
-	pilot, ok := h.rustIssuePropertyPilot(w, r, issue.WorkspaceID)
+	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
 	if !ok {
 		return
 	}
@@ -797,7 +797,7 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	pilot, ok := h.rustIssuePropertyPilot(w, r, issue.WorkspaceID)
+	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
 	if !ok {
 		return
 	}

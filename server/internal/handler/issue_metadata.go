@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -190,6 +191,14 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("metadata cannot exceed %d keys", maxIssueMetadataKeys))
 		return
 	}
+	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
+	if !ok {
+		return
+	}
+	if pilot {
+		h.writeIssueMetadataViaRust(w, r, issue, issueID, userID, key, req.Value)
+		return
+	}
 
 	queryStarted := time.Now()
 	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.SetIssueMetadataKeyRow, error) {
@@ -238,15 +247,7 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordIssueMetadataMutation(r, "set", "changed", issueID, key, queryDuration)
 
-	workspaceID := uuidToString(updated.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	metadata := parseIssueMetadata(updated.Metadata)
-	h.publish(protocol.EventIssueMetadataChanged, workspaceID, actorType, actorID, map[string]any{
-		"issue_id":       uuidToString(updated.ID),
-		"metadata":       metadata,
-		"issue_revision": updated.Revision,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": metadata, "issue_revision": updated.Revision})
+	h.writeIssueMetadataChange(w, r, userID, updated.ID, updated.WorkspaceID, updated.Metadata, updated.Revision)
 }
 
 func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
@@ -264,6 +265,14 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
+	if !ok {
+		return
+	}
+	if pilot {
+		h.writeIssueMetadataViaRust(w, r, issue, issueID, userID, key, nil)
 		return
 	}
 
@@ -309,13 +318,17 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	h.recordIssueMetadataMutation(r, "delete", "changed", issueID, key, queryDuration)
 
-	workspaceID := uuidToString(updated.WorkspaceID)
+	h.writeIssueMetadataChange(w, r, userID, updated.ID, updated.WorkspaceID, updated.Metadata, updated.Revision)
+}
+
+func (h *Handler) writeIssueMetadataChange(w http.ResponseWriter, r *http.Request, userID string, issueID, workspaceUUID pgtype.UUID, raw []byte, revision int64) {
+	workspaceID := uuidToString(workspaceUUID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	metadata := parseIssueMetadata(updated.Metadata)
+	metadata := parseIssueMetadata(raw)
 	h.publish(protocol.EventIssueMetadataChanged, workspaceID, actorType, actorID, map[string]any{
-		"issue_id":       uuidToString(updated.ID),
+		"issue_id":       uuidToString(issueID),
 		"metadata":       metadata,
-		"issue_revision": updated.Revision,
+		"issue_revision": revision,
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": metadata, "issue_revision": updated.Revision})
+	writeJSON(w, http.StatusOK, map[string]any{"metadata": metadata, "issue_revision": revision})
 }

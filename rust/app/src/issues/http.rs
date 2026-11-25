@@ -15,6 +15,7 @@ use super::store::{
     self, CallerActor, IssueListQuery, IssueReadError, IssueTableFacetsQuery,
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
+use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
 use super::store::{IssuePropertyWrite, IssuePropertyWriteError};
 use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
 
@@ -155,8 +156,49 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/issues/{id}/properties/{property_id}",
             put(write_issue_property),
         )
+        .route(
+            "/internal/issues/{id}/metadata/{key}",
+            put(write_issue_metadata).layer(DefaultBodyLimit::disable()),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn write_issue_metadata(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path((id, key)): Path<(String, String)>,
+    Json(request): Json<IssueMetadataWrite>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    let failure = if request.is_delete() {
+        "failed to delete metadata key"
+    } else {
+        "failed to set metadata key"
+    };
+    match store::write_issue_metadata(&app.pool, &ctx.workspace_id, &ctx.actor, &id, &key, request)
+        .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueMetadataWriteError::Access(error)) => issue_request_error(error, failure),
+        Err(IssueMetadataWriteError::KeyLimit) => {
+            error_response(StatusCode::BAD_REQUEST, "metadata cannot exceed 50 keys")
+        }
+        Err(IssueMetadataWriteError::SizeLimit) => error_response(
+            StatusCode::BAD_REQUEST,
+            "metadata exceeds the 8KB size limit",
+        ),
+        Err(IssueMetadataWriteError::Database(error)) => {
+            eprintln!("rust issue metadata write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+        Err(IssueMetadataWriteError::Json(error)) => {
+            eprintln!("rust issue metadata write returned invalid JSON: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+    }
 }
 
 async fn write_issue_property(

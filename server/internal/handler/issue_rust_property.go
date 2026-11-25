@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -25,21 +23,6 @@ type rustIssuePropertySet struct {
 		Config json.RawMessage `json:"config"`
 		Value  json.RawMessage `json:"value"`
 	} `json:"set"`
-}
-
-func (h *Handler) rustIssuePropertyPilot(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) (bool, bool) {
-	if h.IssueReadBridge == nil || len(h.IssueReadBridge.WritePilotScopes) == 0 {
-		return false, true
-	}
-	selected, err := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.WritePilotScopes, uuidToString(workspaceID), workspaceID)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust issue property pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
-		}
-		return false, false
-	}
-	return selected, true
 }
 
 // retry means Rust explicitly reported that the validated config changed

@@ -16,6 +16,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 同一试点设置也覆盖 `PUT`、`DELETE /api/issues/{id}/properties/{propertyId}`。Go 规范化字段值并检查引用，Rust 通过任务行锁和属性定义的共享事务锁执行单字段更新。定义发生变化时，网关只在收到明确未写入的回执后重新读取定义并校验。清除必填字段的检查依据锁定后的任务类型。
 
+任务元数据的 `PUT`、`DELETE /api/issues/{id}/metadata/{key}` 复用该试点。Rust 在任务锁内执行 50 键上限检查，沿用 8KB 存储上限和数字原值。真正发生变化时才增加修订并发出原任务事件。Go 继续校验公开请求、记录指标并发布实时事件。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

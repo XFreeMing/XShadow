@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -196,4 +198,19 @@ func (h *Handler) updateOrdinaryIssueViaRust(w http.ResponseWriter, r *http.Requ
 		return after, before, false, false
 	}
 	return snapshots.After.issue(), snapshots.Before.issue(), snapshots.AttachmentsChanged, true
+}
+
+func (h *Handler) rustIssueWritePilot(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) (bool, bool) {
+	if h.IssueReadBridge == nil || len(h.IssueReadBridge.WritePilotScopes) == 0 {
+		return false, true
+	}
+	selected, err := matchesIssuePilot(r.Context(), h.Queries, h.IssueReadBridge.WritePilotScopes, uuidToString(workspaceID), workspaceID)
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust issue write pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
+		}
+		return false, false
+	}
+	return selected, true
 }
