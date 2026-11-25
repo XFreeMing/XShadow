@@ -746,9 +746,6 @@ pub async fn validate_agent_pending_source(
     use super::create_validate::lock_source_inherited_project;
 
     validate_capture_ids(user_id, trust)?;
-    if trust.expected_source_project_id.is_some() && !trust.clones.is_empty() {
-        return Err(IssueCreateError::InvalidInput);
-    }
     let parsed = parse_trust_inputs(trust)?;
     validate_frozen_shape(workspace_id, trust, &parsed)?;
     let effective_project = trust.expected_source_project_id.as_deref();

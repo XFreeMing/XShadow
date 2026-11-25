@@ -120,24 +120,24 @@ type IssueReadBridge struct {
 //     CREATE_SOURCE_CONTEXT pilots on the same workspace). Source issues that
 //     inherit a project also require CREATE_SOURCE_PROJECT on the same workspace.
 //   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT: comma-separated workspace
-//     slugs or UUIDs for native agent-mode comment sub-issue quick-creates on
-//     projectless sources and destinations, no extra quick-create uploads, and a
-//     requester-owned local direct agent whose machine runtime
-//     is online and advertises source-context quick-create support. Disabled
-//     by default; explicit/inherited project, squad, file, and non-local shapes
-//     continue on Go.
+//     slugs or UUIDs for native agent-mode comment sub-issue quick-creates with
+//     no extra quick-create uploads and a requester-owned local direct agent whose
+//     machine runtime is online and advertises source-context quick-create support.
+//     Disabled by default. Inherited projects and frozen source attachments compose
+//     via CREATE_AGENT_SOURCE_PROJECT and CREATE_AGENT_SOURCE_FILES; explicit
+//     destination projects, squads, and non-local shapes continue on Go.
 //   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PROJECT_PILOT: comma-separated
 //     workspace slugs or UUIDs for native agent-mode source-context enqueue that
-//     inherit the source issue's ordinary project with no extra uploads
-//     (requires CREATE_AGENT_SOURCE on the same workspace). Source issues with
-//     frozen attachments also require CREATE_AGENT_SOURCE_FILES on the same
-//     workspace. Explicit destination projects, squads, and other shapes stay on
-//     Go.
+//     inherit the source issue's ordinary project (requires CREATE_AGENT_SOURCE on
+//     the same workspace). Frozen source attachments with an inherited project
+//     also require CREATE_AGENT_SOURCE_FILES on the same workspace. Explicit
+//     destination projects, squads, and other shapes stay on Go.
 //   - XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT: comma-separated
 //     workspace slugs or UUIDs for native agent-mode source-context enqueue with
-//     frozen ordinary source attachments on projectless sources. Requires
-//     CREATE_AGENT_SOURCE on the same workspace. Extra quick-create uploads,
-//     explicit destination projects, and squads stay on Go.
+//     frozen ordinary source attachments. Requires CREATE_AGENT_SOURCE on the
+//     same workspace; inherited project sources also require
+//     CREATE_AGENT_SOURCE_PROJECT. Extra quick-create uploads, explicit
+//     destination projects, and squads stay on Go.
 //   - XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT: comma-separated workspace
 //     slugs or UUIDs for native manual POST /api/tasks/{taskId}/retry-source-context
 //     on failed projectless source-context quick-creates with no clone uploads,

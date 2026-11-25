@@ -112,9 +112,6 @@ func (h *Handler) selectRustAgentSourceCommentSubIssue(
 		return out, err
 	}
 	if sourceIssue.ProjectID.Valid {
-		if hasSourceFiles {
-			return out, nil
-		}
 		if len(h.IssueReadBridge.CreateAgentSourceProjectPilotScopes) == 0 {
 			return out, nil
 		}

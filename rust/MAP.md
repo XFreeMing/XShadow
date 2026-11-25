@@ -52,11 +52,11 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 及 `XSHADOW_ISSUES_RUST_CREATE_SOURCE_CONTEXT_PILOT` 同时启用。Go 流式复制文件并登记持久清理意图。Rust 核对原附件、写入克隆行并验证实际消费的意图集合。
 
-`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 为 `POST /api/comments/{commentId}/sub-issues` 中 `mode=agent` 指定试点工作区（默认关闭）。首批覆盖无额外 quick-create 上传、请求者拥有的本地直连智能体及已上线并声明来源快速创建能力的本机运行时。无文件时覆盖无项目来源（`CREATE_AGENT_SOURCE` 单独启用）或继承来源普通项目（另需 `CREATE_AGENT_SOURCE_PROJECT`）。Go 校验预览令牌、容量与来源项目可见性，流式复制并登记对象意图，准备队列归因及上下文，并返回 202。Rust 锁定工作区、成员、智能体、运行时与来源项目（有项目时先于来源任务），复核运行时版本及冻结内容，在同一事务写入队列任务、待附着快照、克隆附件行（有文件时消费意图集合）和持久唤醒记录。Go 核验回执、来源项目绑定及持久状态后投递唤醒。丢回执由同一持久队列恢复。旧 daemon 继续领取、创建并附着快照。显式目标项目、文件加项目、额外上传、军团、非本地或离线运行时和非本人智能体继续由 Go 处理。
+`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 为 `POST /api/comments/{commentId}/sub-issues` 中 `mode=agent` 指定试点工作区（默认关闭）。首批覆盖无额外 quick-create 上传、请求者拥有的本地直连智能体及已上线并声明来源快速创建能力的本机运行时。无文件时覆盖无项目来源（`CREATE_AGENT_SOURCE` 单独启用）或继承来源普通项目（另需 `CREATE_AGENT_SOURCE_PROJECT`）。有冻结来源附件时另需 `CREATE_AGENT_SOURCE_FILES`；继承项目且冻结附件须三者同启。Go 校验预览令牌、容量与来源项目可见性，流式复制并登记对象意图，准备队列归因及上下文，并返回 202。Rust 锁定工作区、成员、智能体、运行时与来源项目（有项目时先于来源任务），复核运行时版本及冻结内容，在同一事务写入队列任务、待附着快照、克隆附件行（有文件时消费意图集合）和持久唤醒记录。Go 核验回执、来源项目绑定及持久状态后投递唤醒。丢回执由同一持久队列恢复。旧 daemon 继续领取、创建并附着快照。显式目标项目、额外上传、军团、非本地或离线运行时和非本人智能体继续由 Go 处理。
 
-`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PROJECT_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 同时启用，默认关闭。覆盖继承可见来源项目且无来源附件的智能体入队。`expected_source_project_id` 携带实际来源项目；队列 QuickCreate JSON 仍不含显式 `project_id`。
+`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PROJECT_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 同时启用，默认关闭。覆盖继承可见来源项目的智能体入队；有冻结附件时另需 `CREATE_AGENT_SOURCE_FILES`。`expected_source_project_id` 与回执 `source_project_id` 绑定锁内项目；队列 QuickCreate JSON 仍不含显式 `project_id`。
 
-`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 同时启用，默认关闭。直接智能体入队与手动创建共享来源文件克隆及清理意图契约。Rust 在同一事务写入队列、待附着快照、克隆元数据和持久唤醒。无文件入队使用基本试点。
+`XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_FILES_PILOT` 须在同一工作区与 `XSHADOW_ISSUES_RUST_CREATE_AGENT_SOURCE_PILOT` 同时启用，默认关闭。直接智能体入队与手动创建共享来源文件克隆及清理意图契约。继承项目来源另需 `CREATE_AGENT_SOURCE_PROJECT`。Rust 在同一事务写入队列、待附着快照、克隆元数据和持久唤醒。无文件且无项目入队使用基本试点。
 
 `XSHADOW_ISSUES_RUST_AGENT_SOURCE_FILES_LIFECYCLE_PILOT` 默认关闭。文件重试须在同一工作区启用 `XSHADOW_ISSUES_RUST_RETRY_AGENT_SOURCE_PILOT`。文件附着须同时启用 `XSHADOW_ISSUES_RUST_CREATE_PILOT` 和 `XSHADOW_ISSUES_RUST_ATTACH_AGENT_SOURCE_PILOT`。Rust 锁内确认原快照的精确文件集合、归属与对象键，再重试或附着同一个快照。原文件 ID 与物理对象继续使用。
 
