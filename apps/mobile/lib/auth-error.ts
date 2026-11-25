@@ -19,7 +19,7 @@ export function mapAuthError(err: unknown, fallback: string, t?: Translate): str
     return t ? t("verify.rate_limited") : "Too many attempts. Wait a moment and try again.";
   }
   if (/network|fetch|timeout|unreachable/.test(msg)) {
-    return t ? t("verify.network") : "Can't reach Multica. Check your connection and retry.";
+    return t ? t("verify.network") : "Can't reach BaiShadow. Check your connection and retry.";
   }
   return fallback;
 }

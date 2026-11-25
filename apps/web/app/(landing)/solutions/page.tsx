@@ -13,7 +13,7 @@ export default function Page() {
   return (
     <DirectoryPage
       title="Solutions"
-      lead="Placeholder: how teams put Multica to work."
+      lead="Placeholder: how teams put BaiShadow to work."
       groups={SOLUTION_GROUPS}
       href={solutionHref}
     />

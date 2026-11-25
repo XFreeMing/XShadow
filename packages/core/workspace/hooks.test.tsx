@@ -133,6 +133,7 @@ describe("useActorName", () => {
     expect(third).toBe(first);
     // A stable resolver over an empty directory still resolves gracefully.
     expect(first("member", "user-1")).toBe("Unknown");
+    expect(first("system", "00000000-0000-0000-0000-000000000000")).toBe("BaiShadow");
     expect(result.current.hasActor("member", "user-1")).toBeUndefined();
   });
 
