@@ -108,6 +108,16 @@ SELECT sqlc.arg('issue_id')::uuid, sqlc.arg('label_id')::uuid
 WHERE EXISTS (SELECT 1 FROM touched_issue)
 ON CONFLICT DO NOTHING;
 
+-- name: LockIssueLabelForIssueLink :one
+-- Pair with LockIssueForLabelWrite before AttachLabelToIssue / DetachLabelFromIssue.
+-- FOR KEY SHARE serializes with DeleteLabel's catalog row deletion.
+SELECT id FROM issue_label
+WHERE id = $1 AND workspace_id = $2 AND resource_type = 'issue'
+FOR KEY SHARE;
+
+-- name: LockIssueForLabelWrite :one
+SELECT id FROM issue WHERE id = $1 AND workspace_id = $2 FOR UPDATE;
+
 -- name: AttachLabelToIssue :one
 WITH inserted AS (
     INSERT INTO issue_to_label (issue_id, label_id)

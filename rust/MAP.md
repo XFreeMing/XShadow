@@ -18,6 +18,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 任务元数据的 `PUT`、`DELETE /api/issues/{id}/metadata/{key}` 复用该试点。Rust 在任务锁内执行 50 键上限检查，沿用 8KB 存储上限和数字原值。真正发生变化时才增加修订并发出原任务事件。Go 继续校验公开请求、记录指标并发布实时事件。
 
+`POST /api/issues/{id}/labels` 与 `DELETE /api/issues/{id}/labels/{labelId}` 纳入 `XSHADOW_ISSUES_RUST_WRITE_PILOT`。Go 校验公开请求。Go 和 Rust 都按标签目录行、任务行、关联表的顺序写入。标签目录删除在同一事务里先删除目录行，再清理关联。Rust 持锁复核任务可见范围并记录唤醒事件的来源。实际增删才推进 `revision` 和 `last_activity_at`，重复操作仍返回 200 且省略修订。
+
 在 XShadow 工作台根目录执行 `./workbench rust verify`。验证使用一次性 PostgreSQL 容器，并通过 [已录制的 HTTP 响应](app-cases/http/) 检查两种实现。检查覆盖完整迁移、遗漏早期迁移、迁移表查询失败、数据库不可用，以及候选进程和版本标识。
 
 ## 迁移顺序

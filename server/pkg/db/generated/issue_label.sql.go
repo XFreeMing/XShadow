@@ -771,6 +771,42 @@ func (q *Queries) ListLabelsForSkills(ctx context.Context, arg ListLabelsForSkil
 	return items, nil
 }
 
+const lockIssueForLabelWrite = `-- name: LockIssueForLabelWrite :one
+SELECT id FROM issue WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+`
+
+type LockIssueForLabelWriteParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) LockIssueForLabelWrite(ctx context.Context, arg LockIssueForLabelWriteParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockIssueForLabelWrite, arg.ID, arg.WorkspaceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lockIssueLabelForIssueLink = `-- name: LockIssueLabelForIssueLink :one
+SELECT id FROM issue_label
+WHERE id = $1 AND workspace_id = $2 AND resource_type = 'issue'
+FOR KEY SHARE
+`
+
+type LockIssueLabelForIssueLinkParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Pair with LockIssueForLabelWrite before AttachLabelToIssue / DetachLabelFromIssue.
+// FOR KEY SHARE serializes with DeleteLabel's catalog row deletion.
+func (q *Queries) LockIssueLabelForIssueLink(ctx context.Context, arg LockIssueLabelForIssueLinkParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockIssueLabelForIssueLink, arg.ID, arg.WorkspaceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const updateLabel = `-- name: UpdateLabel :one
 UPDATE issue_label SET
     name = COALESCE($3, name),

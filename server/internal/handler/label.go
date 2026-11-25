@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -330,6 +331,20 @@ func (h *Handler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
+	// Delete the catalog row first to serialize with link writers through commit.
+	// The three junctions have no foreign keys and are cleaned in this transaction.
+	if _, err := qtx.DeleteLabel(r.Context(), db.DeleteLabelParams{
+		ID: idUUID, WorkspaceID: wsUUID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "label not found")
+			return
+		}
+		slog.Warn("DeleteLabel failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete label")
+		return
+	}
+
 	// Keep every relationship cleanup and the catalog deletion atomic. The
 	// resource-label junctions intentionally use application-level cleanup
 	// rather than database cascades.
@@ -344,19 +359,6 @@ func (h *Handler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// DeleteLabel is :one RETURNING id — ErrNoRows means the label wasn't in
-	// this workspace (404). Any other error is a real 500.
-	if _, err := qtx.DeleteLabel(r.Context(), db.DeleteLabelParams{
-		ID: idUUID, WorkspaceID: wsUUID,
-	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "label not found")
-			return
-		}
-		slog.Warn("DeleteLabel failed", append(logger.RequestAttrs(r), "error", err)...)
-		writeError(w, http.StatusInternalServerError, "failed to delete label")
-		return
-	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit label deletion")
 		return
@@ -369,6 +371,34 @@ func (h *Handler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 
 type AttachLabelRequest struct {
 	LabelID string `json:"label_id"`
+}
+
+func attachLabelToIssueOrdered(ctx context.Context, q *db.Queries, arg db.AttachLabelToIssueParams) (db.AttachLabelToIssueRow, error) {
+	if _, err := q.LockIssueLabelForIssueLink(ctx, db.LockIssueLabelForIssueLinkParams{
+		ID: arg.LabelID, WorkspaceID: arg.WorkspaceID,
+	}); err != nil {
+		return db.AttachLabelToIssueRow{}, err
+	}
+	if _, err := q.LockIssueForLabelWrite(ctx, db.LockIssueForLabelWriteParams{
+		ID: arg.IssueID, WorkspaceID: arg.WorkspaceID,
+	}); err != nil {
+		return db.AttachLabelToIssueRow{}, err
+	}
+	return q.AttachLabelToIssue(ctx, arg)
+}
+
+func detachLabelFromIssueOrdered(ctx context.Context, q *db.Queries, arg db.DetachLabelFromIssueParams) (db.DetachLabelFromIssueRow, error) {
+	if _, err := q.LockIssueLabelForIssueLink(ctx, db.LockIssueLabelForIssueLinkParams{
+		ID: arg.LabelID, WorkspaceID: arg.WorkspaceID,
+	}); err != nil {
+		return db.DetachLabelFromIssueRow{}, err
+	}
+	if _, err := q.LockIssueForLabelWrite(ctx, db.LockIssueForLabelWriteParams{
+		ID: arg.IssueID, WorkspaceID: arg.WorkspaceID,
+	}); err != nil {
+		return db.DetachLabelFromIssueRow{}, err
+	}
+	return q.DetachLabelFromIssue(ctx, arg)
 }
 
 // listLabelsForIssueSafe reads the attached-label list and handles the error
@@ -458,17 +488,35 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	attached, err := wakeupWrite(h, r, func(q *db.Queries) (db.AttachLabelToIssueRow, error) {
-		return q.AttachLabelToIssue(r.Context(), db.AttachLabelToIssueParams{
-			IssueID:     issue.ID,
-			LabelID:     labelID,
-			WorkspaceID: issue.WorkspaceID,
-		})
-	})
-	if err != nil {
-		slog.Warn("AttachLabelToIssue failed", append(logger.RequestAttrs(r), "error", err)...)
-		writeError(w, http.StatusInternalServerError, "failed to attach label")
+	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
+	if !ok {
 		return
+	}
+	var attached db.AttachLabelToIssueRow
+	if pilot {
+		var routed bool
+		attached, routed = h.attachIssueLabelViaRust(w, r, issue, labelID, userID)
+		if !routed {
+			return
+		}
+	} else {
+		var err error
+		attached, err = wakeupWrite(h, r, func(q *db.Queries) (db.AttachLabelToIssueRow, error) {
+			return attachLabelToIssueOrdered(r.Context(), q, db.AttachLabelToIssueParams{
+				IssueID:     issue.ID,
+				LabelID:     labelID,
+				WorkspaceID: issue.WorkspaceID,
+			})
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "label not found")
+				return
+			}
+			slog.Warn("AttachLabelToIssue failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to attach label")
+			return
+		}
 	}
 
 	// Read the updated label list; on read failure, the attach is already
@@ -534,17 +582,39 @@ func (h *Handler) DetachLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detached, err := wakeupWrite(h, r, func(q *db.Queries) (db.DetachLabelFromIssueRow, error) {
-		return q.DetachLabelFromIssue(r.Context(), db.DetachLabelFromIssueParams{
-			IssueID:     issue.ID,
-			LabelID:     labelUUID,
-			WorkspaceID: issue.WorkspaceID,
-		})
-	})
-	if err != nil {
-		slog.Warn("DetachLabelFromIssue failed", append(logger.RequestAttrs(r), "error", err)...)
-		writeError(w, http.StatusInternalServerError, "failed to detach label")
+	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
+	if !ok {
 		return
+	}
+	var detached db.DetachLabelFromIssueRow
+	if pilot {
+		var routed bool
+		row, routed := h.detachIssueLabelViaRust(w, r, issue, labelUUID, userID)
+		if !routed {
+			return
+		}
+		detached = db.DetachLabelFromIssueRow{
+			Changed:       row.Changed,
+			IssueRevision: row.IssueRevision,
+		}
+	} else {
+		var err error
+		detached, err = wakeupWrite(h, r, func(q *db.Queries) (db.DetachLabelFromIssueRow, error) {
+			return detachLabelFromIssueOrdered(r.Context(), q, db.DetachLabelFromIssueParams{
+				IssueID:     issue.ID,
+				LabelID:     labelUUID,
+				WorkspaceID: issue.WorkspaceID,
+			})
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "label not found")
+				return
+			}
+			slog.Warn("DetachLabelFromIssue failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to detach label")
+			return
+		}
 	}
 
 	labels, ok2 := h.listLabelsForIssueSafe(r, issue.ID, issue.WorkspaceID)

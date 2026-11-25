@@ -15,6 +15,7 @@ use super::store::{
     self, CallerActor, IssueListQuery, IssueReadError, IssueTableFacetsQuery,
     IssueTableGroupsQuery, IssueTableQuery, is_uuid,
 };
+use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
 use super::store::{IssuePropertyWrite, IssuePropertyWriteError};
 use super::store::{OrdinaryIssueEdit, OrdinaryIssueEditError};
@@ -160,8 +161,48 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/issues/{id}/metadata/{key}",
             put(write_issue_metadata).layer(DefaultBodyLimit::disable()),
         )
+        .route(
+            "/internal/issues/{id}/labels/{label_id}",
+            put(write_issue_label),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+async fn write_issue_label(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path((id, label_id)): Path<(String, String)>,
+    Json(request): Json<IssueLabelWrite>,
+) -> Response {
+    if !is_uuid(&id) || !is_uuid(&label_id) {
+        return error_response(StatusCode::NOT_FOUND, "issue or label not found");
+    }
+    let failure = if request.detach {
+        "failed to detach label"
+    } else {
+        "failed to attach label"
+    };
+    match store::write_issue_label(
+        &app.pool,
+        &ctx.workspace_id,
+        &ctx.actor,
+        &id,
+        &label_id.to_ascii_lowercase(),
+        request,
+    )
+    .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(IssueLabelWriteError::LabelNotFound) => {
+            error_response(StatusCode::NOT_FOUND, "label not found")
+        }
+        Err(IssueLabelWriteError::Access(error)) => issue_request_error(error, failure),
+        Err(IssueLabelWriteError::Database(error)) => {
+            eprintln!("rust issue label write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+    }
 }
 
 async fn write_issue_metadata(
