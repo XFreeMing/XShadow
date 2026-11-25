@@ -47,7 +47,9 @@ mod terminal_wakeup;
 mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
 pub use batch_delete_write::{IssueBatchDeleteWrite, batch_delete_issues};
-pub use comment_delete_write::{IssueCommentDeleteError, delete_issue_comment};
+pub use comment_delete_write::{
+    IssueCommentDeleteError, IssueCommentDeleteRequest, delete_issue_comment,
+};
 pub use comment_edit_write::{IssueCommentEdit, IssueCommentEditError, update_issue_comment};
 pub use comment_resolution_write::{CommentResolutionError, resolve_comment, unresolve_comment};
 pub use comment_write::{IssueCommentCreate, IssueCommentCreateError, create_issue_comment};

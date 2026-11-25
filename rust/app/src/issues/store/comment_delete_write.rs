@@ -1,25 +1,35 @@
-//! Member delete for plain top-level leaf comments on projectless issues.
-//! Reactions are removed in a separate statement before the comment row so
-//! PostgreSQL triggers keep the correct actor ordering.
+//! Member delete for plain top-level projectless comments. Reactions are removed
+//! before tombstone or hard delete so PostgreSQL triggers keep actor ordering.
 
+use serde::Deserialize;
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
     CallerActor, IssueReadError,
+    comment_resolution_write::{COMMENT_VERSION_COLUMNS, map_comment_version},
     comment_write::{
-        comment_has_active_trigger_task, lock_comment_write_member, lock_issue_for_comment,
-        touch_issue_activity,
+        IssueCommentRow, comment_has_active_trigger_task, lock_comment_write_member,
+        lock_issue_for_comment, touch_issue_activity,
     },
     is_uuid,
     ordinary::set_write_session,
     resolve_caller_access_on,
 };
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssueCommentDeleteRequest {
+    #[serde(default)]
+    go_mode: CommentDeleteGoMode,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct IssueCommentDeleteResult {
     pub comment_id: String,
     pub issue_id: String,
     pub issue_revision: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tombstone: Option<IssueCommentRow>,
 }
 
 #[derive(Debug)]
@@ -34,6 +44,14 @@ impl From<sqlx::Error> for IssueCommentDeleteError {
     fn from(error: sqlx::Error) -> Self {
         Self::Database(error)
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CommentDeleteGoMode {
+    #[default]
+    Leaf,
+    Tombstone,
 }
 
 #[derive(Debug)]
@@ -130,6 +148,7 @@ fn validate_delete_shape(
     shape: &LockedDeleteShape,
     actor: &CallerActor,
     hidden_can_see: bool,
+    mode: CommentDeleteGoMode,
 ) -> Result<(), IssueCommentDeleteError> {
     let CallerActor::Member { user_id } = actor else {
         return Err(IssueCommentDeleteError::InvalidInput);
@@ -154,11 +173,19 @@ fn validate_delete_shape(
         || shape.has_plugin
         || shape.project_id.is_some()
         || shape.has_supplement
-        || shape.has_replies
         || shape.has_attachments
         || !comment_route_allowed(shape.assignee_type.as_deref())
     {
         return Err(IssueCommentDeleteError::RouteChanged);
+    }
+    match mode {
+        CommentDeleteGoMode::Leaf if shape.has_replies => {
+            return Err(IssueCommentDeleteError::RouteChanged);
+        }
+        CommentDeleteGoMode::Tombstone if !shape.has_replies => {
+            return Err(IssueCommentDeleteError::RouteChanged);
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -168,6 +195,7 @@ pub async fn delete_issue_comment(
     workspace_id: &str,
     actor: &CallerActor,
     comment_id: &str,
+    request: IssueCommentDeleteRequest,
 ) -> Result<IssueCommentDeleteResult, IssueCommentDeleteError> {
     let CallerActor::Member { user_id } = actor else {
         return Err(IssueCommentDeleteError::InvalidInput);
@@ -175,6 +203,7 @@ pub async fn delete_issue_comment(
     if !is_uuid(comment_id) {
         return Err(IssueCommentDeleteError::InvalidInput);
     }
+    let mode = request.go_mode;
 
     let mut tx = pool.begin().await?;
     if !lock_comment_write_member(&mut tx, workspace_id, user_id).await? {
@@ -198,7 +227,12 @@ pub async fn delete_issue_comment(
     let hidden = resolve_caller_access_on(&mut tx, workspace_id, actor)
         .await
         .map_err(IssueCommentDeleteError::Access)?;
-    validate_delete_shape(&shape, actor, hidden.can_see(shape.project_id.as_deref()))?;
+    validate_delete_shape(
+        &shape,
+        actor,
+        hidden.can_see(shape.project_id.as_deref()),
+        mode,
+    )?;
 
     if comment_has_active_trigger_task(&mut tx, comment_id, &issue_id).await? {
         return Err(IssueCommentDeleteError::RouteChanged);
@@ -215,32 +249,63 @@ pub async fn delete_issue_comment(
     .execute(&mut *tx)
     .await?;
 
-    let deleted = sqlx::query(
-        "DELETE FROM comment
-         WHERE id = $1::uuid AND workspace_id = $2::uuid AND deleted_at IS NULL
-           AND NOT EXISTS (
-               SELECT 1 FROM comment child
-               WHERE child.parent_id = comment.id AND child.workspace_id = comment.workspace_id
-           )
-         RETURNING id::text",
-    )
-    .bind(comment_id)
-    .bind(workspace_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(row) = deleted else {
-        return Err(IssueCommentDeleteError::Access(IssueReadError::NotFound(
-            "comment not found",
-        )));
+    let (comment_id_out, tombstone_row) = match mode {
+        CommentDeleteGoMode::Leaf => {
+            let deleted = sqlx::query(
+                "DELETE FROM comment
+                 WHERE id = $1::uuid AND workspace_id = $2::uuid AND deleted_at IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM comment child
+                       WHERE child.parent_id = comment.id AND child.workspace_id = comment.workspace_id
+                   )
+                 RETURNING id::text",
+            )
+            .bind(comment_id)
+            .bind(workspace_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some(row) = deleted else {
+                return Err(IssueCommentDeleteError::Access(IssueReadError::NotFound(
+                    "comment not found",
+                )));
+            };
+            let removed_id: String = row.try_get(0)?;
+            (removed_id, None)
+        }
+        CommentDeleteGoMode::Tombstone => {
+            let tombstone_sql = format!(
+                "UPDATE comment SET
+                    content = '',
+                    deleted_at = now(),
+                    resolved_at = NULL,
+                    resolved_by_type = NULL,
+                    resolved_by_id = NULL,
+                    revision = revision + 1,
+                    updated_at = now()
+                 WHERE id = $1::uuid AND workspace_id = $2::uuid AND deleted_at IS NULL
+                 RETURNING {COMMENT_VERSION_COLUMNS}"
+            );
+            let row = sqlx::query(&tombstone_sql)
+                .bind(comment_id)
+                .bind(workspace_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            let Some(row) = row else {
+                return Err(IssueCommentDeleteError::Access(IssueReadError::NotFound(
+                    "comment not found",
+                )));
+            };
+            let tombstone = map_comment_version(&row).map_err(IssueCommentDeleteError::from)?;
+            (tombstone.id.clone(), Some(tombstone))
+        }
     };
-    let removed_id: String = row.try_get(0)?;
 
     let issue_revision = touch_issue_activity(&mut tx, &issue_id, workspace_id).await?;
     tx.commit().await?;
-
     Ok(IssueCommentDeleteResult {
-        comment_id: removed_id,
+        comment_id: comment_id_out,
         issue_id,
         issue_revision,
+        tombstone: tombstone_row,
     })
 }

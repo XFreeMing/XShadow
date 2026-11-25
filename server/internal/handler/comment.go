@@ -3773,20 +3773,43 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var useRustDelete bool
+	var useRustTombstone bool
+	var hasReplies bool
 	if pilotOn, pilotErr := h.commentDeletePilotEnabled(r.Context(), comment.WorkspaceID); pilotErr != nil {
 		slog.Warn("comment delete rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete comment")
 		return
 	} else if pilotOn && hasIssue && isAuthor && actorType == "member" {
-		useRustDelete, pilotErr = h.commentDeleteUsesRust(r, issue, comment, actorType, actorID)
+		hasReplies, pilotErr = h.Queries.CommentHasReplies(r.Context(), db.CommentHasRepliesParams{
+			ID: comment.ID, WorkspaceID: comment.WorkspaceID,
+		})
+		if pilotErr != nil {
+			slog.Warn("comment delete rust reply lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
+			writeError(w, http.StatusInternalServerError, "failed to delete comment")
+			return
+		}
+		if hasReplies {
+			tombstoneOn, tombErr := h.commentDeleteTombstonePilotEnabled(r.Context(), comment.WorkspaceID)
+			if tombErr != nil {
+				slog.Warn("comment delete rust tombstone pilot lookup failed", append(logger.RequestAttrs(r), "error", tombErr, "comment_id", commentId)...)
+				writeError(w, http.StatusInternalServerError, "failed to delete comment")
+				return
+			}
+			if tombstoneOn {
+				useRustDelete, pilotErr = h.commentDeleteUsesRustTombstone(r, issue, comment, actorType, actorID, hasReplies)
+			}
+		} else {
+			useRustDelete, pilotErr = h.commentDeleteUsesRust(r, issue, comment, actorType, actorID, hasReplies)
+		}
 		if pilotErr != nil {
 			slog.Warn("comment delete rust plan failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
 			writeError(w, http.StatusInternalServerError, "failed to delete comment")
 			return
 		}
+		useRustTombstone = useRustDelete && hasReplies
 	}
 	if useRustDelete {
-		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID)
+		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID, useRustTombstone)
 		return
 	}
 

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Extension, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
@@ -840,11 +841,23 @@ async fn delete_comment_handler(
     State(app): State<Arc<Issues>>,
     Extension(ctx): Extension<TrustedContext>,
     Path(id): Path<String>,
+    body: Bytes,
 ) -> Response {
     if !is_uuid(&id) {
         return error_response(StatusCode::NOT_FOUND, "comment not found");
     }
-    match store::delete_issue_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id).await {
+    let request = if body.is_empty() {
+        store::IssueCommentDeleteRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(request) => request,
+            Err(_) => {
+                return error_response(StatusCode::BAD_REQUEST, "invalid comment delete request");
+            }
+        }
+    };
+    match store::delete_issue_comment(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request).await
+    {
         Ok(result) => Json(result).into_response(),
         Err(IssueCommentDeleteError::Access(error)) => {
             issue_request_error(error, "failed to delete comment")
