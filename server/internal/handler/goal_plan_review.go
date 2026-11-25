@@ -629,5 +629,23 @@ func (h *Handler) goalReviewAllows(ctx context.Context, q *db.Queries, goal db.G
 	if err := json.Unmarshal(last.Candidate, &candidate); err != nil {
 		return false, err
 	}
-	return candidate.Review != nil && candidate.Review.Decision == "covered", nil
+	review := candidate.Review
+	if review == nil {
+		return false, nil
+	}
+	if review.Decision == "covered" {
+		return true, nil
+	}
+	if closeout || input.Phase != "preflight" || review.Decision != "execution_issue" || len(review.Checks) == 0 {
+		return false, nil
+	}
+	for _, check := range review.Checks {
+		if check.Result != "sufficient" || len(check.ItemIDs) == 0 {
+			return false, nil
+		}
+	}
+	// Work already in delivery can address the recorded execution problem.
+	// The separate backlog gate still holds new work under this review.
+	progress, err := service.ReadGoalWorkProgress(ctx, q, goal, plan)
+	return progress.Phase == "delivering", err
 }
