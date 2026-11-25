@@ -107,6 +107,7 @@ export interface IssueSurfaceController {
   createDefaults: IssueCreateDefaults;
   viewMode: IssueSurfaceMode;
   allowGantt: boolean;
+  allowGrid: boolean;
   surfaceIssues: Issue[];
   projectIssues: Issue[];
   issues: Issue[];
@@ -450,6 +451,8 @@ export function useIssueSurfaceController({
       : grouping;
   const usesGantt = effectiveViewMode === "gantt" && showGanttCalendar;
   const usesTable = effectiveViewMode === "table";
+  const usesGrid = effectiveViewMode === "grid";
+  const usesTableRows = usesTable || usesGrid;
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
   const usesServerStatusSurface =
@@ -459,7 +462,7 @@ export function useIssueSurfaceController({
     (effectiveViewMode === "board" && effectiveGrouping !== "status") ||
     effectiveViewMode === "swimlane";
   const usesServerFacets =
-    usesTable || usesServerStatusSurface || usesServerGroupSurface;
+    usesTableRows || usesServerStatusSurface || usesServerGroupSurface;
   const statusColumnsForFilters = useMemo(
     // Exclusion needs no category: it only removes the listed keys.
     () =>
@@ -754,7 +757,7 @@ export function useIssueSurfaceController({
     enabled:
       !membershipUnresolved && (
         usesServerStatusSurface ||
-        ((usesTable || usesServerGroupSurface) && activeTableFacet !== null)
+        ((usesTableRows || usesServerGroupSurface) && activeTableFacet !== null)
       ),
   });
   // The header chip's count, kept on its own query rather than folded into the
@@ -931,7 +934,7 @@ export function useIssueSurfaceController({
     queryPlan,
     projectId,
     usesGantt,
-    usesTable,
+    usesTable: usesTableRows,
     serverStatusBranches,
     serverGroupBranches,
     ganttShowCompleted,
@@ -1072,6 +1075,7 @@ export function useIssueSurfaceController({
     createDefaults: resolvedCreateDefaults,
     viewMode: effectiveViewMode,
     allowGantt: allowedModes.has("gantt"),
+    allowGrid: allowedModes.has("grid"),
     ...surfaceData,
     isLoading: data.isLoading || workingDependency.pending || unreadDependency.pending,
     workingAgents,
@@ -1101,11 +1105,11 @@ export function useIssueSurfaceController({
     tableQuerySpec,
     tableFacetCounts:
       usesServerStatusSurface ||
-      ((usesTable || usesServerGroupSurface) && activeTableFacet !== null)
+      ((usesTableRows || usesServerGroupSurface) && activeTableFacet !== null)
         ? tableFacetsQuery.data
         : undefined,
     facetCountsExact:
-      !usesTable && !usesServerStatusSurface && !usesServerGroupSurface,
+      !usesTableRows && !usesServerStatusSurface && !usesServerGroupSurface,
     setActiveTableFacet: requestActiveTableFacet,
     setTableSearch,
     openCreateIssue,

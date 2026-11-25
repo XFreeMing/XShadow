@@ -5,7 +5,7 @@ import { Provider, useDispatch } from "react-redux";
 import { GRID_STYLE_ID, gridCss } from "./grid-css";
 import { GridCell } from "./cell";
 import { createGridStore, hostSnapshot, setPageDatasheet } from "./store";
-import type { GridActor, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch } from "./types";
+import type { GridActor, GridCellRenderer, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch } from "./types";
 import type { GridSnapshot } from "../third-party/state";
 
 const NO_CONFLICTS: readonly GridConflictMark[] = [];
@@ -72,6 +72,7 @@ export function ApitableGrid({
   recordOptionsByTable,
   remote,
   labels,
+  renderCell,
   onCellCommit,
   onRenameField,
   onEditField,
@@ -90,8 +91,9 @@ export function ApitableGrid({
   recordOptionsByTable?: Readonly<Record<string, readonly GridRecordOption[]>>;
   remote?: GridRemotePatch;
   labels: GridLabels;
+  renderCell?: GridCellRenderer;
   onCellCommit: (recordId: string, fieldId: string, value: GridCellValue, baseRevision: number) => void;
-  onRenameField: (fieldId: string, name: string) => void;
+  onRenameField?: (fieldId: string, name: string) => void;
   onEditField?: (field: GridFieldView) => void;
   onOpenRelationCell?: (
     recordId: string,
@@ -146,12 +148,14 @@ export function ApitableGrid({
             key={field.id}
             datasheetId={datasheetId}
             field={field}
+            record={record}
             recordId={record.id}
             rowIndex={rowIndex}
             recordIds={recordIds}
             labels={labels}
             collaborator={collaboratorAt(record.id, field.id)}
             recordOptions={optionTableId ? recordOptionsByTable?.[optionTableId] : undefined}
+            renderCell={renderCell}
             onOpenRelationCell={onOpenRelationCell}
             onActive={onActiveCell}
             onEditEnd={onEditEnd}
@@ -191,19 +195,23 @@ export function ApitableGrid({
           {fields.map((field) => (
             <th className="apitable-grid__fieldHeader" key={field.id}>
               <span className="apitable-grid__type" aria-hidden="true">{typeMark(field.kind)}</span>
-              <input
-                className="apitable-grid__fieldName"
-                aria-label={labels.rename}
-                defaultValue={field.name}
-                key={field.name}
-                onBlur={(event) => {
-                  const name = event.target.value.trim();
-                  if (name && name !== field.name) onRenameField(field.id, name);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
+              {onRenameField ? (
+                <input
+                  className="apitable-grid__fieldName"
+                  aria-label={labels.rename}
+                  defaultValue={field.name}
+                  key={field.name}
+                  onBlur={(event) => {
+                    const name = event.target.value.trim();
+                    if (name && name !== field.name) onRenameField(field.id, name);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+              ) : (
+                <span className="apitable-grid__fieldName">{field.name}</span>
+              )}
               {(field.kind === "lookup" || field.kind === "formula") && onEditField ? (
                 <button
                   type="button"

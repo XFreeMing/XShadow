@@ -7,7 +7,7 @@ import { setActiveCell, setEditStatus } from "../third-party/actions";
 import { optionColor } from "../third-party/option-colors";
 import { getActiveCell, getEditingCell, getGridSnapshot } from "../third-party/selectors";
 import type { GridRootState } from "../third-party/state";
-import type { GridCellValue, GridCollaborator, GridFieldView, GridLabels, GridRecordOption } from "./types";
+import type { GridCellRenderer, GridCellValue, GridCollaborator, GridFieldView, GridLabels, GridRecordOption, GridRecordView } from "./types";
 
 function shown(value: GridCellValue | undefined): string {
   if (value == null || typeof value === "boolean" || Array.isArray(value)) return "";
@@ -58,12 +58,14 @@ function formatLookupScalar(
 export function GridCell({
   datasheetId,
   field,
+  record,
   recordId,
   rowIndex,
   recordIds,
   labels,
   collaborator,
   recordOptions,
+  renderCell,
   onCommit,
   onOpenRelationCell,
   onActive,
@@ -71,12 +73,14 @@ export function GridCell({
 }: {
   datasheetId: string;
   field: GridFieldView;
+  record: GridRecordView;
   recordId: string;
   rowIndex: number;
   recordIds: readonly string[];
   labels: GridLabels;
   collaborator?: GridCollaborator | null;
   recordOptions?: readonly GridRecordOption[];
+  renderCell?: GridCellRenderer;
   onCommit: (value: GridCellValue, baseRevision: number) => void;
   onOpenRelationCell?: (
     recordId: string,
@@ -178,6 +182,25 @@ export function GridCell({
     title: conflict ?? cellError ?? undefined,
     style: collaborator ? { boxShadow: `inset 0 0 0 2px ${collaborator.color}` } : undefined,
   };
+
+  const customContent = renderCell?.({
+    record,
+    field,
+    value,
+    revision,
+    rowIndex,
+    active,
+    onActivate: focusCell,
+    onDeactivate: blurCell,
+  });
+  if (customContent !== undefined) {
+    return (
+      <td {...cellProps}>
+        {mark}
+        {customContent}
+      </td>
+    );
+  }
 
   if (field.kind === "relation") {
     const linkedIds = Array.isArray(value)

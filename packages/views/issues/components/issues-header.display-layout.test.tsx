@@ -19,7 +19,7 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 function renderDisplay(
-  props: { allowGantt?: boolean } = {},
+  props: { allowGantt?: boolean; allowGrid?: boolean } = {},
   setup: (store: StoreApi<IssueViewState>) => void = () => {},
 ) {
   setApiInstance(
@@ -71,6 +71,17 @@ describe("Display layout", () => {
 
     const layouts = await screen.findByRole("group", { name: "View" });
     expect(within(layouts).getByRole("button", { name: "Gantt" })).toBeInTheDocument();
+  });
+
+  it("switches to Multidimensional view and back when allowGrid is enabled", async () => {
+    const store = renderDisplay({ allowGrid: true }, (s) => s.getState().setViewMode("board"));
+
+    const layouts = await screen.findByRole("group", { name: "View" });
+    fireEvent.click(within(layouts).getByRole("button", { name: "Multidimensional view" }));
+    expect(store.getState().viewMode).toBe("grid");
+
+    fireEvent.click(within(layouts).getByRole("button", { name: "List" }));
+    expect(store.getState().viewMode).toBe("list");
   });
 
   it("keeps the table's grouping and columns in the panel", async () => {

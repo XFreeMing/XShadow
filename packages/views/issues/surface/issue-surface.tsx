@@ -42,6 +42,7 @@ import { BatchActionToolbar } from "../components/batch-action-toolbar";
 import { GanttView } from "../components/gantt-view";
 import { IssueGanttPanel, type GanttMode } from "../components/issue-gantt-panel";
 import { ListView } from "../components/list-view";
+import { MultidimensionalGridView } from "../components/multidimensional-grid-view";
 import { SwimLaneView } from "../components/swimlane-view";
 import { TableView } from "../components/table-view";
 import { useT } from "../../i18n";
@@ -389,6 +390,12 @@ function IssueSurfaceContent({
                 onCreateIssue={openCreateIssue}
                 exportIssues={controller.exportTableIssues}
                 resolveExportLookups={controller.resolveTableExportLookups}
+              />
+            )}
+            {controller.viewMode === "grid" && (
+              <MultidimensionalGridView
+                serverQuery={controller.tableQuerySpec}
+                onCreateIssue={openCreateIssue}
               />
             )}
             {controller.viewMode === "swimlane" && (

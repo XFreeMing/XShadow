@@ -252,4 +252,36 @@ describe("ApitableGrid", () => {
     expect(screen.getByRole("textbox", { name: "关联负责人" })).toHaveTextContent("张三");
     expect(screen.getByRole("textbox", { name: "字面公式" })).toHaveTextContent("opt1");
   });
+
+  it("renders fixed read-only column headers when onRenameField is omitted and supports custom renderCell slots", () => {
+    const customFields: GridFieldView[] = [
+      { id: "title", name: "Title", kind: "text" },
+      { id: "assignee", name: "Assignee", kind: "text" },
+    ];
+    const customRecords: GridRecordView[] = [
+      { id: "issue-uuid-1", revision: 3, values: { title: "Native issue", assignee: "member:u1" } },
+    ];
+    render(
+      <ApitableGrid
+        datasheetId="issues-grid"
+        fields={customFields}
+        records={customRecords}
+        labels={labels}
+        onCellCommit={vi.fn()}
+        renderCell={({ field, record }) =>
+          field.id === "assignee" ? (
+            <button type="button" data-testid={`actor-slot-${record.id}`}>
+              Alice
+            </button>
+          ) : undefined
+        }
+      />,
+    );
+
+    expect(screen.queryByRole("textbox", { name: labels.rename })).not.toBeInTheDocument();
+    expect(screen.getByText("Title")).toBeInTheDocument();
+    expect(screen.getByText("Assignee")).toBeInTheDocument();
+    expect(screen.getByTestId("actor-slot-issue-uuid-1")).toHaveTextContent("Alice");
+    expect(screen.getByDisplayValue("Native issue")).toBeInTheDocument();
+  });
 });

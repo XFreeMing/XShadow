@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 // Host-owned read-only view. Server records stay in the host query.
 // `remote` is the insertion point for a later turn: pass received records
 // and conflict marks here. This package does not open a collaboration session.
@@ -87,3 +89,16 @@ export interface GridGroup {
   collapsed: boolean;
   records: readonly GridRecordView[];
 }
+
+export interface GridCellRenderContext {
+  record: GridRecordView;
+  field: GridFieldView;
+  value: GridCellValue;
+  revision: number;
+  rowIndex: number;
+  active: boolean;
+  onActivate: () => void;
+  onDeactivate: () => void;
+}
+
+export type GridCellRenderer = (context: GridCellRenderContext) => ReactNode | undefined;
