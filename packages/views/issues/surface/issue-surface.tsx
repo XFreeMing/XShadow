@@ -46,6 +46,7 @@ import { MultidimensionalGridView } from "../components/multidimensional-grid-vi
 import { IssueGalleryView } from "../components/issue-gallery-view";
 import { IssueCalendarView } from "../components/issue-calendar-view";
 import { IssueFormView } from "../components/issue-form-view";
+import { IssueOrgChartView } from "../components/issue-org-chart-view";
 import { SwimLaneView } from "../components/swimlane-view";
 import { TableView } from "../components/table-view";
 import { useT } from "../../i18n";
@@ -421,6 +422,9 @@ function IssueSurfaceContent({
             )}
             {controller.viewMode === "calendar" && (
               <IssueCalendarView serverQuery={controller.tableQuerySpec} />
+            )}
+            {controller.viewMode === "org_chart" && (
+              <IssueOrgChartView serverQuery={controller.tableQuerySpec} />
             )}
             {controller.viewMode === "swimlane" && (
               <SwimLaneView

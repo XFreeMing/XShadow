@@ -11,9 +11,10 @@ export function useIssueTableFlatRowPages(
   wsId: string,
   serverQuery: IssueTableQuerySpec,
   pageLimit: number,
-  options?: { autoLoadAll?: boolean },
+  options?: { autoLoadAll?: boolean; maxAutoLoadPages?: number },
 ) {
   const autoLoadAll = options?.autoLoadAll ?? false;
+  const maxAutoLoadPages = options?.maxAutoLoadPages ?? Infinity;
   const queryIdentity = useMemo(
     () => hashKey([wsId, serverQuery]),
     [serverQuery, wsId],
@@ -131,9 +132,25 @@ export function useIssueTableFlatRowPages(
   }, [flatPageState.nextCursor, flatPageState.validPrefixLength, queryIdentity]);
 
   useEffect(() => {
-    if (!autoLoadAll || !canLoadMore || isTailLoading || isTailError) return;
+    if (
+      !autoLoadAll ||
+      !canLoadMore ||
+      isTailLoading ||
+      isTailError ||
+      flatPageState.validPrefixLength >= maxAutoLoadPages
+    ) {
+      return;
+    }
     handleLoadMore();
-  }, [autoLoadAll, canLoadMore, handleLoadMore, isTailError, isTailLoading]);
+  }, [
+    autoLoadAll,
+    canLoadMore,
+    flatPageState.validPrefixLength,
+    handleLoadMore,
+    isTailError,
+    isTailLoading,
+    maxAutoLoadPages,
+  ]);
 
   return {
     issues: flatPageState.issues,

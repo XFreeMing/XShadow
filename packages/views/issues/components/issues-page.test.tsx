@@ -345,7 +345,8 @@ const mockViewState = {
   toggleListCollapsed: vi.fn(),
 };
 
-vi.mock("@multica/core/issues/stores/view-store", () => ({
+vi.mock("@multica/core/issues/stores/view-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multica/core/issues/stores/view-store")>(),
   useClearFiltersOnWorkspaceChange: () => {},
   PROPERTY_VIEW_PREFIX: "property:",
   propertyIdFromViewKey: (key: string) =>

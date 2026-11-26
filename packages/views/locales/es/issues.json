@@ -463,8 +463,10 @@
     "swimlane": "Carriles",
     "tooltip_calendar": "Vista calendario",
     "tooltip_form": "Vista formulario",
+    "tooltip_org_chart": "Vista de organigrama",
     "calendar": "Calendario",
-    "form": "Formulario"
+    "form": "Formulario",
+    "org_chart": "Organigrama"
   },
   "table": {
     "select_all": "Seleccionar todas las tareas visibles",
@@ -547,12 +549,34 @@
     "stage_basis": "Faltan duraciones. Cada tarea del plan completo cuenta como una etapa. Las dependencias obligatorias determinan el orden. Selecciona una tarea para ver sus relaciones.",
     "exclusive": "Recursos exclusivos",
     "header_issue": "Tarea",
+    "header_start_date": "Fecha de inicio",
+    "header_due_date": "Fecha de entrega",
     "zoom_day": "Día",
     "zoom_week": "Semana",
     "zoom_month": "Mes",
     "show_completed": "Mostrar completadas",
     "empty": "Aún no hay tareas planificadas. Establece una fecha de inicio o de entrega en cualquier tarea para verla en la línea temporal.",
     "inverted_dates_warning": "La fecha de inicio es posterior a la de entrega; la barra se muestra de mínimo a máximo."
+  },
+  "org_chart": {
+    "empty": "Ninguna tarea coincide con esta vista.",
+    "root_badge": "Raíz",
+    "hidden_parent_badge": "Principal oculta",
+    "cycle_badge": "Ciclo principal",
+    "cycle_warning": "Se detectó un ciclo padre-hijo y se interrumpió para mostrarlo.",
+    "expand_all": "Expandir todo",
+    "collapse_all": "Contraer todo",
+    "orientation_vertical": "Vertical",
+    "orientation_horizontal": "Horizontal",
+    "expand_node": "Expandir subtareas",
+    "collapse_node": "Contraer subtareas",
+    "change_parent": "Cambiar principal",
+    "remove_parent": "Separar del principal",
+    "loading_more": "Cargando más…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "Acercar",
+    "zoom_out": "Alejar",
+    "zoom_reset": "Restablecer zoom"
   },
   "actor_issues": {
     "scope": {

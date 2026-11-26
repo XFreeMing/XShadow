@@ -22,6 +22,7 @@ import {
   List,
   SquarePen,
   ListTree,
+  Network,
   Search,
   SignalHigh,
   SlidersHorizontal,
@@ -1828,12 +1829,14 @@ const LAYOUTS: { mode: ViewMode; Icon: typeof List }[] = [
   { mode: "form", Icon: SquarePen },
   { mode: "swimlane", Icon: Waves },
   { mode: "gantt", Icon: ChartGantt },
+  { mode: "org_chart", Icon: Network },
 ];
 
 export function IssueDisplayControls({
   scopedIssues,
   hideViewToggle = false,
   allowGantt = false,
+  allowOrgChart = false,
   allowGrid = false,
   allowGallery = false,
   allowCalendar = false,
@@ -1862,6 +1865,7 @@ export function IssueDisplayControls({
   // /my-issues, actor panel) ignore viewMode === "gantt" and would silently
   // fall back to List if the option were exposed there. Keep Gantt opt-in.
   allowGantt?: boolean;
+  allowOrgChart?: boolean;
   allowGrid?: boolean;
   allowGallery?: boolean;
   allowCalendar?: boolean;
@@ -2046,9 +2050,10 @@ export function IssueDisplayControls({
         : effectiveTableGrouping === "project"
           ? t(($) => $.table.columns.project)
           : t(($) => $.table.group_none);
-  // A Gantt, Grid, Gallery, or Calendar layout persisted on a surface without it renders as List.
+  // A Gantt, Org Chart, Grid, Gallery, or Calendar layout persisted on a surface without it renders as List.
   const layout: ViewMode =
     (viewMode === "gantt" && !allowGantt) ||
+    (viewMode === "org_chart" && !allowOrgChart) ||
     (viewMode === "grid" && !allowGrid) ||
     (viewMode === "gallery" && !allowGallery) ||
     (viewMode === "calendar" && !allowCalendar) ||
@@ -2058,6 +2063,7 @@ export function IssueDisplayControls({
   const layouts = LAYOUTS.filter(
     ({ mode }) =>
       (mode !== "gantt" || allowGantt) &&
+      (mode !== "org_chart" || allowOrgChart) &&
       (mode !== "grid" || allowGrid) &&
       (mode !== "gallery" || allowGallery) &&
       (mode !== "calendar" || allowCalendar) &&

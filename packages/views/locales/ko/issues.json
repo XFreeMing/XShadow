@@ -467,8 +467,10 @@
     "swimlane": "스윔레인",
     "tooltip_calendar": "캘린더 보기",
     "tooltip_form": "양식 보기",
+    "tooltip_org_chart": "구조도 보기",
     "calendar": "캘린더",
-    "form": "양식"
+    "form": "양식",
+    "org_chart": "구조도"
   },
   "table": {
     "select_all": "표시된 모든 태스크 선택",
@@ -551,12 +553,34 @@
     "stage_basis": "기간이 정해지지 않은 작업이 있어 전체 계획의 각 작업을 한 단계로 계산합니다. 필수 의존 관계에 따라 순서를 정합니다. 작업을 선택하면 관계를 볼 수 있습니다.",
     "exclusive": "독점 리소스",
     "header_issue": "태스크",
+    "header_start_date": "시작일",
+    "header_due_date": "마감일",
     "zoom_day": "일",
     "zoom_week": "주",
     "zoom_month": "월",
     "show_completed": "완료 항목 표시",
     "empty": "일정이 잡힌 태스크가 없습니다. 태스크에 시작일이나 마감일을 설정하면 타임라인에 표시됩니다.",
     "inverted_dates_warning": "시작일이 마감일보다 늦습니다. 막대는 더 이른 날짜부터 더 늦은 날짜까지 표시됩니다."
+  },
+  "org_chart": {
+    "empty": "이 보기에 일치하는 태스크가 없습니다.",
+    "root_badge": "루트",
+    "hidden_parent_badge": "상위 숨김",
+    "cycle_badge": "상위 순환",
+    "cycle_warning": "상위-하위 순환이 감지되어 표시를 위해 순환 연결을 끊었습니다.",
+    "expand_all": "모두 펼치기",
+    "collapse_all": "모두 접기",
+    "orientation_vertical": "세로",
+    "orientation_horizontal": "가로",
+    "expand_node": "하위 태스크 펼치기",
+    "collapse_node": "하위 태스크 접기",
+    "change_parent": "상위 태스크 변경",
+    "remove_parent": "상위 태스크에서 분리",
+    "loading_more": "더 불러오는 중…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "확대",
+    "zoom_out": "축소",
+    "zoom_reset": "확대/축소 재설정"
   },
   "actor_issues": {
     "scope": {

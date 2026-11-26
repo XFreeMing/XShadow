@@ -473,8 +473,10 @@
     "swimlane": "Couloirs",
     "tooltip_calendar": "Vue calendrier",
     "tooltip_form": "Vue formulaire",
+    "tooltip_org_chart": "Vue organigramme",
     "calendar": "Calendrier",
-    "form": "Formulaire"
+    "form": "Formulaire",
+    "org_chart": "Organigramme"
   },
   "table": {
     "select_all": "Sélectionner toutes les tâches visibles",
@@ -557,12 +559,34 @@
     "stage_basis": "Certaines durées manquent. Chaque tâche du plan compte pour une étape. Les dépendances obligatoires déterminent l’ordre. Sélectionnez une tâche pour voir ses liens.",
     "exclusive": "Ressources exclusives",
     "header_issue": "Tâche",
+    "header_start_date": "Date de début",
+    "header_due_date": "Date d'échéance",
     "zoom_day": "Jour",
     "zoom_week": "Semaine",
     "zoom_month": "Mois",
     "show_completed": "Afficher les tâches terminées",
     "empty": "Aucune tâche planifiée pour l'instant — définissez une date de début ou d'échéance sur une tâche pour la voir sur la frise.",
     "inverted_dates_warning": "La date de début est postérieure à la date d'échéance — la barre s'affiche du minimum au maximum."
+  },
+  "org_chart": {
+    "empty": "Aucune tâche ne correspond à cette vue.",
+    "root_badge": "Racine",
+    "hidden_parent_badge": "Parent masqué",
+    "cycle_badge": "Cycle parent",
+    "cycle_warning": "Un cycle parent-enfant a été détecté et interrompu pour l'affichage.",
+    "expand_all": "Tout déplier",
+    "collapse_all": "Tout replier",
+    "orientation_vertical": "Vertical",
+    "orientation_horizontal": "Horizontal",
+    "expand_node": "Déplier les sous-tâches",
+    "collapse_node": "Replier les sous-tâches",
+    "change_parent": "Changer le parent",
+    "remove_parent": "Détacher du parent",
+    "loading_more": "Chargement…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "Zoom avant",
+    "zoom_out": "Zoom arrière",
+    "zoom_reset": "Réinitialiser le zoom"
   },
   "actor_issues": {
     "scope": {

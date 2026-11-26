@@ -467,8 +467,10 @@
     "swimlane": "泳道",
     "tooltip_calendar": "日曆檢視",
     "tooltip_form": "表單檢視",
+    "tooltip_org_chart": "架構圖檢視",
     "calendar": "日曆",
-    "form": "表單"
+    "form": "表單",
+    "org_chart": "架構圖"
   },
   "table": {
     "select_all": "選擇所有可見任務",
@@ -551,12 +553,34 @@
     "stage_basis": "部分任務缺少完整排程，整份目標計畫以每項一個階段推算。僅計入必要相依關係，點選任務可查看原因。",
     "exclusive": "獨佔資源",
     "header_issue": "任務",
+    "header_start_date": "開始日期",
+    "header_due_date": "截止日期",
     "zoom_day": "日",
     "zoom_week": "周",
     "zoom_month": "月",
     "show_completed": "顯示已完成",
     "empty": "暫無已排期的任務 — 給任意任務設定開始或截止日期，即可顯示在時間軸上。",
     "inverted_dates_warning": "開始日期晚於截止日期——已按區間最小/最大端繪製。"
+  },
+  "org_chart": {
+    "empty": "目前檢視沒有匹配的任務。",
+    "root_badge": "根任務",
+    "hidden_parent_badge": "父任務未顯示",
+    "cycle_badge": "父子循環",
+    "cycle_warning": "偵測到父子關係循環，已斷開循環邊以正常顯示。",
+    "expand_all": "全部展開",
+    "collapse_all": "全部摺疊",
+    "orientation_vertical": "縱向",
+    "orientation_horizontal": "橫向",
+    "expand_node": "展開子任務",
+    "collapse_node": "摺疊子任務",
+    "change_parent": "調整父任務",
+    "remove_parent": "移出父任務",
+    "loading_more": "載入更多…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "放大",
+    "zoom_out": "縮小",
+    "zoom_reset": "重設縮放"
   },
   "actor_issues": {
     "scope": {

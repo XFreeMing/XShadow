@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { errorCode } from "@multica/core/api";
+import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -31,6 +34,14 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { StatusIcon } from "./status-icon";
 import { PriorityIcon } from "./priority-icon";
 import { IssueActionsContextMenu } from "../actions";
+import { DueDatePicker } from "./pickers/due-date-picker";
+import { StartDatePicker } from "./pickers/start-date-picker";
+import {
+  buildGanttDateUpdateRequest,
+  computeDueDateEditPatch,
+  computeStartDateEditPatch,
+  type GanttDatePatch,
+} from "../utils/gantt-schedule";
 import { sortIssues } from "../utils/sort";
 import { useLocale, useT } from "../../i18n";
 import { IssuePrototypePreview } from "./issue-prototype-preview";
@@ -79,7 +90,9 @@ function isWeekStartUTC(d: Date): boolean {
 
 const ROW_HEIGHT = 36;
 const HEADER_HEIGHT = 56;
-const LEFT_COL_WIDTH = 320;
+const ISSUE_COLUMN_WIDTH = 260;
+const DATE_COLUMN_WIDTH = 108;
+const LEFT_COL_WIDTH = ISSUE_COLUMN_WIDTH + 2 * DATE_COLUMN_WIDTH;
 
 const DAY_PX_BY_ZOOM: Record<GanttZoom, number> = {
   day: 36,
@@ -338,6 +351,20 @@ function ScheduledRow({
     workspaceProperties,
     issue,
   );
+  const updateIssue = useUpdateIssue();
+  const commitDates = (patch: GanttDatePatch | null) => {
+    if (!patch || updateIssue.isPending) return;
+    updateIssue.mutate(
+      { id: issue.id, ...buildGanttDateUpdateRequest(issue, patch) },
+      {
+        onError: (error) => toast.error(
+          errorCode(error) === "revision_conflict"
+            ? t(($) => $.revision.conflict)
+            : t(($) => $.detail.update_failed),
+        ),
+      },
+    );
+  };
   const peeked = useIsIssuePeeked(issue.id);
   const peekLinkProps = useIssuePeekLinkProps(issue.id);
   const linkProps = {
@@ -391,44 +418,64 @@ function ScheduledRow({
     <IssueActionsContextMenu issue={issue}>
       <div
         {...{ [PEEK_TARGET_ATTR]: issue.id }}
+        data-gantt-issue-id={issue.id}
         className="flex border-b border-foreground/5 hover:bg-accent/30 transition-colors"
         style={{ height: ROW_HEIGHT }}
       >
-        {/* Sticky label cell — it also carries the peeked mark, since its
-            opaque background covers the row's own. */}
-        <AppLink
-          href={p.issueDetail(issue.id)}
-          newTabTitle={issue.identifier}
-          className={cn(
-            "sticky left-0 z-[1] flex shrink-0 items-center gap-2 border-r bg-background px-3 text-body min-w-0",
-            peeked &&
-              "bg-[color-mix(in_oklab,var(--brand)_6%,var(--background))] shadow-[inset_2px_0_0_var(--brand)]",
-          )}
-          style={{ width: LEFT_COL_WIDTH }}
-          {...linkProps}
-        >
-          <StatusIcon
-            status={issue.status}
-            color={colorOf(issue.status)}
-            icon={iconOf(issue.status)}
-            category={issueStatusCategory(issue) ?? undefined}
-            className="h-3.5 w-3.5"
-          />
-          <PriorityIcon priority={issue.priority} />
-          <span className="w-14 shrink-0 text-caption text-muted-foreground tabular-nums truncate">
-            {issue.identifier}
-          </span>
-          <span className="truncate flex-1">{issue.title}</span>
-          {project && <ProjectIcon project={project} size="sm" />}
-          {issue.assignee_type && issue.assignee_id && (
-            <ActorAvatar
-              actorType={issue.assignee_type}
-              actorId={issue.assignee_id}
-              size="sm"
-              enableHoverCard
+        {/* The task and date cells stay in view while the timeline scrolls. */}
+        <div className="sticky left-0 z-[1] flex shrink-0 bg-background" style={{ width: LEFT_COL_WIDTH }}>
+          <AppLink
+            href={p.issueDetail(issue.id)}
+            newTabTitle={issue.identifier}
+            className={cn(
+              "flex shrink-0 items-center gap-2 border-r px-3 text-body min-w-0",
+              peeked &&
+                "bg-[color-mix(in_oklab,var(--brand)_6%,var(--background))] shadow-[inset_2px_0_0_var(--brand)]",
+            )}
+            style={{ width: ISSUE_COLUMN_WIDTH }}
+            {...linkProps}
+          >
+            <StatusIcon
+              status={issue.status}
+              color={colorOf(issue.status)}
+              icon={iconOf(issue.status)}
+              category={issueStatusCategory(issue) ?? undefined}
+              className="h-3.5 w-3.5"
             />
-          )}
-        </AppLink>
+            <PriorityIcon priority={issue.priority} />
+            <span className="w-14 shrink-0 text-caption text-muted-foreground tabular-nums truncate">
+              {issue.identifier}
+            </span>
+            <span className="truncate flex-1">{issue.title}</span>
+            {project && <ProjectIcon project={project} size="sm" />}
+            {issue.assignee_type && issue.assignee_id && (
+              <ActorAvatar
+                actorType={issue.assignee_type}
+                actorId={issue.assignee_id}
+                size="sm"
+                enableHoverCard
+              />
+            )}
+          </AppLink>
+          <div className="flex shrink-0 items-center border-r px-2" style={{ width: DATE_COLUMN_WIDTH }}>
+            <StartDatePicker
+              startDate={issue.start_date}
+              triggerRender={<button aria-label={t(($) => $.gantt.header_start_date)} disabled={updateIssue.isPending} />}
+              onUpdate={({ start_date }) => commitDates(computeStartDateEditPatch(
+                issue.start_date, issue.due_date, start_date ?? null,
+              ))}
+            />
+          </div>
+          <div className="flex shrink-0 items-center border-r px-2" style={{ width: DATE_COLUMN_WIDTH }}>
+            <DueDatePicker
+              dueDate={issue.due_date}
+              triggerRender={<button aria-label={t(($) => $.gantt.header_due_date)} disabled={updateIssue.isPending} />}
+              onUpdate={({ due_date }) => commitDates(computeDueDateEditPatch(
+                issue.start_date, issue.due_date, due_date ?? null,
+              ))}
+            />
+          </div>
+        </div>
         {/* Timeline track */}
         <div
           className="relative shrink-0"
@@ -605,12 +652,18 @@ export function GanttView({ issues }: { issues: Issue[] }) {
           {/* Sticky header row */}
           <div className="sticky top-0 z-20 flex">
             <div
-              className="sticky left-0 z-30 shrink-0 border-b border-r bg-background"
+              className="sticky left-0 z-30 flex shrink-0 border-b bg-background"
               style={{ width: LEFT_COL_WIDTH, height: HEADER_HEIGHT }}
             >
-              <div className="flex h-full items-end px-3 pb-1.5 text-micro font-medium text-muted-foreground">
-                {t(($) => $.gantt.header_issue)}
-              </div>
+              {[
+                { title: t(($) => $.gantt.header_issue), width: ISSUE_COLUMN_WIDTH },
+                { title: t(($) => $.gantt.header_start_date), width: DATE_COLUMN_WIDTH },
+                { title: t(($) => $.gantt.header_due_date), width: DATE_COLUMN_WIDTH },
+              ].map(({ title, width }) => (
+                <div key={title} className="flex shrink-0 items-end border-r px-2 pb-1.5 text-micro font-medium text-muted-foreground" style={{ width }}>
+                  {title}
+                </div>
+              ))}
             </div>
             <GanttAxis
               range={range}

@@ -587,6 +587,7 @@ export function IssueViewHeader({
             hideFilter
             scopedIssues={controller.surfaceIssues}
             allowGantt={controller.allowGantt}
+            allowOrgChart={controller.allowOrgChart}
             allowGrid={controller.allowGrid}
             allowGallery={controller.allowGallery}
             allowCalendar={controller.allowCalendar}

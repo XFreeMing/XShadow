@@ -18,7 +18,7 @@ export type IssueCreateDefaults = Partial<
 
 export type IssueSurfaceMode = Extract<
   ViewMode,
-  "board" | "list" | "table" | "grid" | "gallery" | "calendar" | "form" | "swimlane" | "gantt"
+  "board" | "list" | "table" | "grid" | "gallery" | "calendar" | "form" | "swimlane" | "gantt" | "org_chart"
 >;
 
 export interface IssueSurfaceProps {

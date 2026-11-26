@@ -49,6 +49,7 @@ export type ViewMode =
   | "calendar"
   | "form"
   | "gantt"
+  | "org_chart"
   | "swimlane";
 export type GanttZoom = "day" | "week" | "month";
 /**
@@ -293,7 +294,7 @@ export function cardPropertyOptionsForView(viewMode: ViewMode) {
   ) {
     return [];
   }
-  if (viewMode === "gallery" || viewMode === "list") {
+  if (viewMode === "gallery" || viewMode === "list" || viewMode === "org_chart") {
     return CARD_PROPERTY_OPTIONS.filter((option) => option.key !== "description");
   }
   return CARD_PROPERTY_OPTIONS;
@@ -306,7 +307,8 @@ export function showsCardCustomPropertyIds(viewMode: ViewMode): boolean {
     viewMode === "list" ||
     viewMode === "gallery" ||
     viewMode === "swimlane" ||
-    viewMode === "gantt"
+    viewMode === "gantt" ||
+    viewMode === "org_chart"
   );
 }
 

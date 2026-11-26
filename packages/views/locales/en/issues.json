@@ -464,6 +464,7 @@
     "tooltip_calendar": "Calendar view",
     "tooltip_form": "Form view",
     "tooltip_gantt": "Gantt view",
+    "tooltip_org_chart": "Org chart view",
     "tooltip_swimlane": "Swimlane view",
     "section": "View",
     "board": "Board",
@@ -474,6 +475,7 @@
     "calendar": "Calendar",
     "form": "Form",
     "gantt": "Gantt",
+    "org_chart": "Org chart",
     "swimlane": "Swimlane"
   },
   "table": {
@@ -581,12 +583,34 @@
     "stage_basis": "Some durations are missing. Each task in the full goal plan counts as one stage. Required dependencies determine the order. Select a task to inspect its links.",
     "exclusive": "Exclusive resources",
     "header_issue": "Issue",
+    "header_start_date": "Start date",
+    "header_due_date": "Due date",
     "zoom_day": "Day",
     "zoom_week": "Week",
     "zoom_month": "Month",
     "show_completed": "Show completed",
     "empty": "No scheduled issues yet — set a start or due date on any issue to see it on the timeline.",
     "inverted_dates_warning": "Start date is after due date — bar shown from min to max."
+  },
+  "org_chart": {
+    "empty": "No issues match this view.",
+    "root_badge": "Root",
+    "hidden_parent_badge": "Parent hidden",
+    "cycle_badge": "Parent cycle",
+    "cycle_warning": "A parent-child cycle was detected and broken for display.",
+    "expand_all": "Expand all",
+    "collapse_all": "Collapse all",
+    "orientation_vertical": "Top-down",
+    "orientation_horizontal": "Left-right",
+    "expand_node": "Expand sub-issues",
+    "collapse_node": "Collapse sub-issues",
+    "change_parent": "Change parent",
+    "remove_parent": "Detach from parent",
+    "loading_more": "Loading more…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "zoom_reset": "Reset zoom"
   },
   "actor_issues": {
     "scope": {

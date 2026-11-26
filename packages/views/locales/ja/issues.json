@@ -467,8 +467,10 @@
     "swimlane": "スイムレーン",
     "tooltip_calendar": "カレンダー表示",
     "tooltip_form": "フォーム表示",
+    "tooltip_org_chart": "組織図表示",
     "calendar": "カレンダー",
-    "form": "フォーム"
+    "form": "フォーム",
+    "org_chart": "組織図"
   },
   "table": {
     "select_all": "表示中のタスクをすべて選択",
@@ -551,12 +553,34 @@
     "stage_basis": "日程が未確定のタスクがあるため、計画全体で各タスクを 1 段階として扱います。必須の依存関係から順序を算出します。タスクを選ぶと関係を確認できます。",
     "exclusive": "専有リソース",
     "header_issue": "タスク",
+    "header_start_date": "開始日",
+    "header_due_date": "期限",
     "zoom_day": "日",
     "zoom_week": "週",
     "zoom_month": "月",
     "show_completed": "完了済みを表示",
     "empty": "スケジュールされたタスクがまだありません。いずれかのタスクに開始日または期限を設定すると、タイムラインに表示されます。",
     "inverted_dates_warning": "開始日が期限より後になっています。バーは早い日付から遅い日付まで表示されます。"
+  },
+  "org_chart": {
+    "empty": "この表示に一致するタスクはありません。",
+    "root_badge": "ルート",
+    "hidden_parent_badge": "親タスク非表示",
+    "cycle_badge": "親子ループ",
+    "cycle_warning": "親子関係のループを検出したため、表示用にループを切り離しました。",
+    "expand_all": "すべて展開",
+    "collapse_all": "すべて折りたたむ",
+    "orientation_vertical": "縦方向",
+    "orientation_horizontal": "横方向",
+    "expand_node": "サブタスクを展開",
+    "collapse_node": "サブタスクを折りたたむ",
+    "change_parent": "親タスクを変更",
+    "remove_parent": "親タスクから外す",
+    "loading_more": "さらに読み込み中…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "拡大",
+    "zoom_out": "縮小",
+    "zoom_reset": "ズームをリセット"
   },
   "actor_issues": {
     "scope": {

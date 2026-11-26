@@ -107,6 +107,7 @@ export interface IssueSurfaceController {
   createDefaults: IssueCreateDefaults;
   viewMode: IssueSurfaceMode;
   allowGantt: boolean;
+  allowOrgChart: boolean;
   allowGrid: boolean;
   allowGallery: boolean;
   allowCalendar: boolean;
@@ -453,12 +454,13 @@ export function useIssueSurfaceController({
       ? "status"
       : grouping;
   const usesGantt = effectiveViewMode === "gantt" && showGanttCalendar;
+  const usesOrgChart = effectiveViewMode === "org_chart";
   const usesTable = effectiveViewMode === "table";
   const usesGrid = effectiveViewMode === "grid";
   const usesGallery = effectiveViewMode === "gallery";
   const usesCalendar = effectiveViewMode === "calendar";
   const usesForm = effectiveViewMode === "form";
-  const usesTableRows = usesTable || usesGrid || usesGallery || usesCalendar;
+  const usesTableRows = usesTable || usesGrid || usesGallery || usesCalendar || usesOrgChart;
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
   const usesServerStatusSurface =
@@ -1082,6 +1084,7 @@ export function useIssueSurfaceController({
     createDefaults: resolvedCreateDefaults,
     viewMode: effectiveViewMode,
     allowGantt: allowedModes.has("gantt"),
+    allowOrgChart: allowedModes.has("org_chart"),
     allowGrid: allowedModes.has("grid"),
     allowGallery: allowedModes.has("gallery"),
     allowCalendar: allowedModes.has("calendar"),

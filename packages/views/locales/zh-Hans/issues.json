@@ -458,6 +458,7 @@
     "tooltip_calendar": "日历视图",
     "tooltip_form": "表单视图",
     "tooltip_gantt": "甘特图",
+    "tooltip_org_chart": "架构图视图",
     "tooltip_swimlane": "泳道视图",
     "section": "视图",
     "board": "看板",
@@ -468,6 +469,7 @@
     "calendar": "日历",
     "form": "表单",
     "gantt": "甘特图",
+    "org_chart": "架构图",
     "swimlane": "泳道"
   },
   "table": {
@@ -575,12 +577,34 @@
     "stage_basis": "部分任务缺少完整排期，整份目标计划按每项一个阶段推算先后。仅必需依赖参与计算，点击任务可查看依赖原因。",
     "exclusive": "独占资源",
     "header_issue": "任务",
+    "header_start_date": "开始日期",
+    "header_due_date": "截止日期",
     "zoom_day": "日",
     "zoom_week": "周",
     "zoom_month": "月",
     "show_completed": "显示已完成",
     "empty": "暂无已排期的任务 — 给任意任务设置开始或截止日期，即可显示在时间轴上。",
     "inverted_dates_warning": "开始日期晚于截止日期——已按区间最小/最大端绘制。"
+  },
+  "org_chart": {
+    "empty": "当前视图没有匹配的任务。",
+    "root_badge": "根任务",
+    "hidden_parent_badge": "父任务未显示",
+    "cycle_badge": "父子循环",
+    "cycle_warning": "检测到父子关系循环，已断开循环边以正常展示。",
+    "expand_all": "全部展开",
+    "collapse_all": "全部折叠",
+    "orientation_vertical": "纵向",
+    "orientation_horizontal": "横向",
+    "expand_node": "展开子任务",
+    "collapse_node": "折叠子任务",
+    "change_parent": "调整父任务",
+    "remove_parent": "移出父任务",
+    "loading_more": "正在加载更多…",
+    "loaded_progress": "{{loaded}} / {{total}}",
+    "zoom_in": "放大",
+    "zoom_out": "缩小",
+    "zoom_reset": "重置缩放"
   },
   "actor_issues": {
     "scope": {
