@@ -129,6 +129,37 @@ describe("issue surface view store registry", () => {
     ).toBe(true);
   });
 
+  it("defaults fresh workspace surfaces to grid without overwriting board on rehydrate", async () => {
+    localStorage.setItem(
+      `${ISSUE_SURFACE_VIEW_STORAGE_KEY}:acme`,
+      JSON.stringify({
+        version: 1,
+        state: {
+          surfaces: {
+            "workspace:all": {
+              state: { viewMode: "board" },
+              updatedAt: "2026-01-01T00:00:00Z",
+            },
+          },
+        },
+      }),
+    );
+    setCurrentWorkspace("acme", "ws_a");
+    await flush();
+
+    const persisted = getIssueSurfaceViewStore("workspace:all");
+    expect(persisted.getState().viewMode).toBe("board");
+
+    const fresh = getIssueSurfaceViewStore("workspace:members");
+    expect(fresh.getState().viewMode).toBe("grid");
+    expect(getIssueSurfaceViewStore("project:p1").getState().viewMode).toBe(
+      "board",
+    );
+    expect(getIssueSurfaceViewStore("view:running").getState().viewMode).toBe(
+      "board",
+    );
+  });
+
   it("isolates view state by surface key inside one workspace registry", async () => {
     setCurrentWorkspace("acme", "ws_a");
     await flush();

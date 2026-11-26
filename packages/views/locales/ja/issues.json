@@ -1941,6 +1941,8 @@
     "workspace_members": "ワークスペースのメンバー",
     "add_to_sidebar": "サイドバーに追加",
     "remove_from_sidebar": "サイドバーから削除",
+    "set_startup_view": "Open on visit",
+    "clear_startup_view": "Stop opening on visit",
     "back_to": "{{name}} に戻る",
     "delete": "ビューを削除",
     "delete_title": "ビューを削除しますか？",

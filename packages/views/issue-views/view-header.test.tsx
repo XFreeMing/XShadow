@@ -8,6 +8,7 @@ import { getIssueSurfaceViewStore } from "@multica/core/issues/stores/surface-vi
 import { issueViewSeedDefinition } from "@multica/core/issue-views/definition";
 import { useIssueViewRenameStore } from "@multica/core/issue-views/rename-store";
 import { useIssueViewEditStore } from "@multica/core/issue-views/edit-store";
+import { useIssueStartupViewPrefsStore } from "@multica/core/issue-views/startup-view-prefs";
 import { NavigationProvider, type NavigationAdapter } from "../navigation";
 import { renderWithI18n } from "../test/i18n";
 import type { IssueSurfaceController } from "../issues/surface/use-issue-surface-controller";
@@ -18,12 +19,21 @@ const rename = vi.hoisted(() => vi.fn());
 const active = vi.hoisted(() => ({ view: null as IssueView | null }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
+    selector({ user: { id: "user-1" } }),
+}));
 vi.mock("@multica/core/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/paths")>();
   return { ...actual, useWorkspacePaths: () => actual.paths.workspace("acme") };
 });
 vi.mock("@multica/core/issue-views/use-active-view", () => ({
-  useActiveIssueView: () => ({ activeView: active.view, setActive: vi.fn(), missing: false }),
+  useActiveIssueView: () => ({
+    containerKey: "ws-1:workspace",
+    activeView: active.view,
+    setActive: vi.fn(),
+    missing: false,
+  }),
 }));
 vi.mock("./use-view-actions", () => ({
   useIssueViewActions: () => ({
@@ -103,7 +113,23 @@ beforeEach(() => {
   active.view = null;
   useIssueViewRenameStore.setState({ target: null });
   useIssueViewEditStore.setState({ viewId: null });
+  useIssueStartupViewPrefsStore.setState({ byUser: {} });
   myIssuesViewStore.setState({ scope: "assigned" });
+});
+
+it("sets and clears the personal startup view from the saved view menu", async () => {
+  const user = userEvent.setup();
+  active.view = savedView({ query: { statusFilters: ["todo"] } });
+  renderHeader("workspace", "view:startup-menu-test");
+  const heading = screen.getByRole("button", { name: "Untitled view" });
+
+  await user.click(heading);
+  await user.click(await screen.findByRole("menuitem", { name: "Open on visit" }));
+  expect(useIssueStartupViewPrefsStore.getState().byUser["user-1"]?.["ws-1:workspace"]).toBe("view-1");
+
+  await user.click(heading);
+  await user.click(await screen.findByRole("menuitem", { name: "Stop opening on visit" }));
+  expect(useIssueStartupViewPrefsStore.getState().byUser["user-1"]?.["ws-1:workspace"]).toBeUndefined();
 });
 
 describe("IssueViewHeader copy link", () => {

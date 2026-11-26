@@ -1941,6 +1941,8 @@
     "workspace_members": "工作區成員",
     "add_to_sidebar": "新增到側欄",
     "remove_from_sidebar": "從側欄移除",
+    "set_startup_view": "造訪時開啟",
+    "clear_startup_view": "取消預設開啟",
     "back_to": "返回{{name}}",
     "delete": "刪除檢視",
     "delete_title": "刪除檢視？",

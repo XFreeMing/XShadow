@@ -2156,6 +2156,8 @@
     "workspace_members": "Участникам рабочего пространства",
     "add_to_sidebar": "Добавить на боковую панель",
     "remove_from_sidebar": "Убрать с боковой панели",
+    "set_startup_view": "Open on visit",
+    "clear_startup_view": "Stop opening on visit",
     "back_to": "Назад к «{{name}}»",
     "delete": "Удалить представление",
     "delete_title": "Удалить представление?",

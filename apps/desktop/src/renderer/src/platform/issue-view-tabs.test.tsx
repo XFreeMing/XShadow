@@ -1,15 +1,33 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { useActiveIssueViewStore } from "@multica/core/issue-views/active-view-store";
 import { getActiveTab, useTabStore } from "@/stores/tab-store";
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multica/core/api", () => ({
+  api: { listIssueViews: vi.fn(async () => []) },
+}));
 vi.mock("@/stores/window-overlay-store", () => ({
   useWindowOverlayStore: Object.assign(() => null, { getState: () => ({ overlay: null, open: vi.fn(), close: vi.fn() }) }),
 }));
 vi.mock("@multica/core/auth", () => ({
-  useAuthStore: Object.assign(() => null, { getState: () => ({ logout: vi.fn() }) }),
+  useAuthStore: Object.assign(
+    (selector: (state: { user: { id: string } | null; logout: () => void }) => unknown) =>
+      selector({ user: { id: "user-1" }, logout: vi.fn() }),
+    { getState: () => ({ logout: vi.fn() }) },
+  ),
 }));
+
+function TestProviders({ children }: { children: ReactNode }) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  return render(ui, { wrapper: TestProviders });
+}
 
 import { DesktopNavigationProvider } from "./navigation";
 import { IssueViewUrlSync, __resetIssueViewTabsForTests, initIssueViewTabs } from "./issue-view-tabs";
@@ -58,7 +76,7 @@ afterEach(() => __resetIssueViewTabsForTests());
 describe("desktop issue views per tab", () => {
   it("opens a cmd+clicked view in its own tab, and each tab keeps its view", () => {
     useTabStore.getState().navigateActiveSession("/acme/issues?view=a");
-    render(<ActiveIssuesPage />);
+    renderWithProviders(<ActiveIssuesPage />);
     expect(shown()).toBe("a");
     const tabA = getActiveTab(useTabStore.getState())!.id;
 
@@ -82,7 +100,7 @@ describe("desktop issue views per tab", () => {
 
   it("shows All issues in a tab opened without a view, whatever another tab has open", () => {
     useTabStore.getState().navigateActiveSession("/acme/issues?view=a");
-    render(<ActiveIssuesPage />);
+    renderWithProviders(<ActiveIssuesPage />);
 
     act(() => {
       useTabStore.getState().openTab("/acme/issues", "Issues", { activate: true });
@@ -93,7 +111,7 @@ describe("desktop issue views per tab", () => {
   });
 
   it("writes view changes back to the tab's URL without adding history", () => {
-    render(<ActiveIssuesPage />);
+    renderWithProviders(<ActiveIssuesPage />);
     const history = () => getActiveTab(useTabStore.getState())!.history.stack;
 
     act(() => useActiveIssueViewStore.getState().setActive(KEY, "c"));
@@ -108,14 +126,14 @@ describe("desktop issue views per tab", () => {
     useActiveIssueViewStore.getState().setActive(KEY, "a");
     useTabStore.getState().navigateActiveSession("/acme/issues");
 
-    render(<ActiveIssuesPage />);
+    renderWithProviders(<ActiveIssuesPage />);
 
     expect(shown()).toBe("a");
     expect(activeUrl()).toBe("/acme/issues?view=a");
   });
 
   it("follows the URL back to the entry before a view was opened", () => {
-    render(<ActiveIssuesPage />);
+    renderWithProviders(<ActiveIssuesPage />);
     act(() => {
       useActiveIssueViewStore.getState().setActive(KEY, "a");
       useTabStore.getState().navigateActiveSession("/acme/issues?view=a");
@@ -132,7 +150,7 @@ describe("desktop issue views per tab", () => {
     // The tab's URL changes before the router swaps pages, so My issues is
     // still mounted when the URL already names the Issues page's view.
     useTabStore.getState().navigateActiveSession("/acme/my-issues?view=m");
-    render(
+    renderWithProviders(
       <DesktopNavigationProvider>
         <IssueViewUrlSync scope={{ scope_type: "my" }}>
           <span />
@@ -157,7 +175,7 @@ describe("desktop issue views per tab", () => {
     );
     const active = () => useActiveIssueViewStore.getState().active;
     useTabStore.getState().navigateActiveSession("/acme/projects/p1?view=a");
-    const { rerender } = render(sync("p1"));
+    const { rerender } = renderWithProviders(sync("p1"));
 
     act(() => useTabStore.getState().navigateActiveSession("/acme/projects/p2?view=b"));
     expect(active()["ws-1:project:p1"]).toBe("a");

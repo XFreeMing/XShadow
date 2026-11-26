@@ -42,11 +42,16 @@ function defaultsForSurface(
   set: StoreApi<IssueViewState>["setState"],
 ): IssueViewState {
   const defaults = viewStoreSlice(set);
-  if (!surfaceKey.startsWith("project:")) return defaults;
-  return {
-    ...defaults,
-    cardProperties: { ...defaults.cardProperties, project: false },
-  };
+  if (surfaceKey.startsWith("workspace:")) {
+    return { ...defaults, viewMode: "grid" };
+  }
+  if (surfaceKey.startsWith("project:")) {
+    return {
+      ...defaults,
+      cardProperties: { ...defaults.cardProperties, project: false },
+    };
+  }
+  return defaults;
 }
 
 function isLegacyCardDefault(cardProperties: unknown): boolean {

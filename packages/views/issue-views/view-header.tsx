@@ -43,9 +43,12 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
 import type { CreateIssueViewRequest, IssueView } from "@multica/core/api/schemas";
+import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useActiveIssueView } from "@multica/core/issue-views/use-active-view";
+import { leaveSavedIssueViewForVisit } from "@multica/core/issue-views/use-issue-view-entry";
+import { useIssueStartupViewPrefsStore } from "@multica/core/issue-views/startup-view-prefs";
 import type { IssueViewScope } from "@multica/core/issue-views/queries";
 import {
   builtinViewItemId,
@@ -140,7 +143,13 @@ export function IssueViewHeader({
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const viewScope = viewScopeOf(base);
-  const { activeView, setActive, missing } = useActiveIssueView(wsId, viewScope);
+  const { containerKey, activeView, setActive, missing } = useActiveIssueView(wsId, viewScope);
+  const userId = useAuthStore((s) => s.user?.id);
+  const setStartupView = useIssueStartupViewPrefsStore((s) => s.setStartupView);
+  const clearStartupView = useIssueStartupViewPrefsStore((s) => s.clearStartupView);
+  const startupViewId = useIssueStartupViewPrefsStore((s) =>
+    userId ? (s.byUser[userId]?.[containerKey] ?? null) : null,
+  );
   const actions = useIssueViewActions();
   const [deleteTarget, setDeleteTarget] = useState<IssueView | null>(null);
   const renameTarget = useIssueViewRenameStore((s) => s.target);
@@ -450,7 +459,26 @@ export function IssueViewHeader({
                       {starId && (
                         <StarItem starred={starred} onToggle={() => (starred ? actions.sidebar.unstar(starId) : actions.sidebar.star(starId))} />
                       )}
-                      <DropdownMenuItem onClick={() => setActive(null)}>
+                      {!unreadView && (
+                        startupViewId === activeView.id ? (
+                          <DropdownMenuItem
+                            onClick={() => userId && clearStartupView(userId, containerKey)}
+                          >
+                            <EyeOff className="size-3.5" />
+                            {t(($) => $.views.clear_startup_view)}
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onClick={() => userId && setStartupView(userId, containerKey, activeView.id)}
+                          >
+                            <Star className="size-3.5" />
+                            {t(($) => $.views.set_startup_view)}
+                          </DropdownMenuItem>
+                        )
+                      )}
+                      <DropdownMenuItem
+                        onClick={() => leaveSavedIssueViewForVisit(containerKey, setActive)}
+                      >
                         <ArrowLeft className="size-3.5" />
                         {t(($) => $.views.back_to, { name: baseName })}
                       </DropdownMenuItem>

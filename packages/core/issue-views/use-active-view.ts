@@ -62,6 +62,7 @@ export function useActiveIssueView(
     // a prune until it has actually loaded (an empty in-flight list would
     // read as "every view was deleted").
     viewsReady: listQuery.isSuccess,
+    viewsSettled: listQuery.isSuccess && !listQuery.isFetching,
     setActive,
     missing,
   };

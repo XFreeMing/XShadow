@@ -1941,6 +1941,8 @@
     "workspace_members": "工作区成员",
     "add_to_sidebar": "添加到侧栏",
     "remove_from_sidebar": "从侧栏移除",
+    "set_startup_view": "访问时打开",
+    "clear_startup_view": "取消默认打开",
     "back_to": "返回{{name}}",
     "delete": "删除视图",
     "delete_title": "删除视图？",

@@ -1941,6 +1941,8 @@
     "workspace_members": "워크스페이스 멤버",
     "add_to_sidebar": "사이드바에 추가",
     "remove_from_sidebar": "사이드바에서 제거",
+    "set_startup_view": "Open on visit",
+    "clear_startup_view": "Stop opening on visit",
     "back_to": "{{name}}(으)로 돌아가기",
     "delete": "뷰 삭제",
     "delete_title": "뷰를 삭제할까요?",

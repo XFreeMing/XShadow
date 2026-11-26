@@ -5,6 +5,7 @@ import {
   useActiveIssueViewStore,
 } from "@multica/core/issue-views/active-view-store";
 import type { IssueViewScope } from "@multica/core/issue-views/queries";
+import { useIssueViewEntry } from "@multica/core/issue-views/use-issue-view-entry";
 import { useNavigation } from "@multica/views/navigation";
 import { getActiveTab, useTabStore } from "@/stores/tab-store";
 
@@ -52,6 +53,7 @@ export function IssueViewUrlSync({ scope, children }: { scope: IssueViewScope; c
   const navigation = useNavigation();
   const containerKey = issueViewContainerKey(wsId, scope);
   const urlView = navigation.searchParams.get("view");
+  useIssueViewEntry(scope, urlView);
   const activeViewId = useActiveIssueViewStore((s) => s.active[containerKey] ?? null);
   const setActive = useActiveIssueViewStore((s) => s.setActive);
   const seenUrlView = useRef<string | null | undefined>(undefined);

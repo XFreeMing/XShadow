@@ -9,3 +9,6 @@ export * from "./view-target";
 export * from "./definition";
 export * from "./rename-store";
 export * from "./edit-store";
+export * from "./startup-view-prefs";
+export * from "./use-issue-view-entry";
+export * from "./visit-dismiss";

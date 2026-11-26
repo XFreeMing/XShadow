@@ -2013,6 +2013,8 @@
     "workspace_members": "Miembros del espacio de trabajo",
     "add_to_sidebar": "Añadir a la barra lateral",
     "remove_from_sidebar": "Quitar de la barra lateral",
+    "set_startup_view": "Open on visit",
+    "clear_startup_view": "Stop opening on visit",
     "back_to": "Volver a {{name}}",
     "delete": "Eliminar vista",
     "delete_title": "¿Eliminar vista?",

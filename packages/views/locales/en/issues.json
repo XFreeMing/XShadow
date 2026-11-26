@@ -2013,6 +2013,8 @@
     "workspace_members": "Workspace members",
     "add_to_sidebar": "Add to sidebar",
     "remove_from_sidebar": "Remove from sidebar",
+    "set_startup_view": "Open on visit",
+    "clear_startup_view": "Stop opening on visit",
     "back_to": "Back to {{name}}",
     "delete": "Delete view",
     "delete_title": "Delete view?",
