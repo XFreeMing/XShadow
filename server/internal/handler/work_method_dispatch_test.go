@@ -228,6 +228,20 @@ func TestApprovedSquadDeliveryCreatesOneBoundHandoffToTheNextSquad(t *testing.T)
 	if continued.Revision != 4 || continued.State != "review" || continued.Step != 1 {
 		t.Fatalf("receiving squad did not continue the same issue: %+v", continued)
 	}
+	returned := change("", "", map[string]any{
+		"action": "rework", "base_revision": 4, "target_step": 0, "evidence": "Review a revised fixture before implementation",
+	}, 200)
+	rework := methodStageTask(t, issue, 5)
+	if returned.CurrentActor == nil || returned.CurrentActor.Kind != "squad" || returned.CurrentActor.ID != design ||
+		!rework.IsLeaderTask || uuidToString(rework.SquadID) != design {
+		t.Fatalf("rework should return to the design squad: actor=%+v task=%+v", returned.CurrentActor, rework)
+	}
+	reworkEvent := returned.History[len(returned.History)-1]
+	handoff := reworkEvent.SquadHandoff
+	if handoff == nil || handoff.FromSquadID != build || handoff.ToSquadID != design || handoff.ContextBrief == nil ||
+		handoff.ContextBrief.OpenQuestions != "Review a revised fixture before implementation" {
+		t.Fatalf("rework should tell the design squad what changed: %+v", reworkEvent)
+	}
 }
 
 func TestConcurrentMethodStartAndAgentHandoffShareOneTaskPerRevision(t *testing.T) {

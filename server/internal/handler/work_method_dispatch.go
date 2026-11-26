@@ -40,7 +40,7 @@ func (h *Handler) methodRecipient(ctx context.Context, issue db.Issue, run workm
 	switch {
 	case run.State == "review":
 		recipient = step.Reviewer
-	case step.Owner != nil && !(run.GoalExecution && step.Gate == "candidate" && step.Owner.Kind == "squad") &&
+	case step.Owner != nil && step.Owner.Kind != "squad" &&
 		len(run.History) > 0 && run.History[len(run.History)-1].Action == "rework":
 		for i := len(run.History) - 2; i >= 0; i-- {
 			e := run.History[i]

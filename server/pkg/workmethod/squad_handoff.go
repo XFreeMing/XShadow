@@ -27,10 +27,10 @@ func (r *Run) RecordSquadHandoff(before Run, taskID string) *SquadHandoff {
 		return nil
 	}
 	from := before.CurrentActor
-	if (from == nil || from.Kind != "squad") && event.Action == "approve" &&
+	if (from == nil || from.Kind != "squad") && (event.Action == "approve" || event.Action == "rework") &&
 		before.State == "review" && before.Method != nil && before.Step >= 0 && before.Step < len(before.Method.Steps) {
-		// An individual reviewer releases the delivering squad's approved
-		// output. The reviewer's identity stays in Event.Actor.
+		// The reviewer decides what happens to the delivering squad's output.
+		// The individual reviewer's identity stays in Event.Actor.
 		from = before.Method.Steps[before.Step].Owner
 	}
 	if from == nil || from.Kind != "squad" || from.ID == r.CurrentActor.ID {
