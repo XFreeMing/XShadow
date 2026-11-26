@@ -86,7 +86,7 @@ afterEach(() => {
 });
 
 describe("WorkflowsTab list (MUL-8377)", () => {
-  it("places workspace task templates between work methods and the status library", () => {
+  it("places template-backed work methods above the status library", () => {
     renderTab([], [{
       id: "story-template",
       workspace_id: "ws-1",
@@ -98,11 +98,11 @@ describe("WorkflowsTab list (MUL-8377)", () => {
       updated_at: "",
     }]);
 
-    const templates = screen.getByRole("region", { name: "Task templates" });
+    const templates = screen.getByRole("region", { name: "Work methods" });
     expect(within(templates).getByText("Story delivery")).toBeVisible();
-    expect(within(templates).getByRole("button", { name: "New task template" })).toBeEnabled();
+    expect(within(templates).getByRole("button", { name: "New work method" })).toBeEnabled();
     expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent))
-      .toEqual(expect.arrayContaining(["Work methods", "Task templates", "Status library"]));
+      .toEqual(["Workflows", "Work methods", "Status library"]);
     expect(templates.compareDocumentPosition(screen.getByRole("heading", { name: "Status library" })))
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });

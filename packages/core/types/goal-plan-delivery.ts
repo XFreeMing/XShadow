@@ -9,7 +9,8 @@ export const GoalPlanDeliveryTypeSchema = z.enum([
 
 export const GoalPlanDeliverySchema = z.object({
   type: GoalPlanDeliveryTypeSchema,
-  method_id: z.string(),
+  method_id: z.string().optional(),
+  task_template_id: z.string().optional(),
   criteria: z.array(z.object({
     id: z.string(),
     expected: z.string(),

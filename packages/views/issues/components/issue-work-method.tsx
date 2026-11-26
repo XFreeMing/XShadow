@@ -244,10 +244,11 @@ function MethodCard({
     review: t(($) => $.method.in_review),
     closed: t(($) => $.method.closed),
   }[run.state];
-  const canChoose =
+  const templateBound = run.source === "issue_type" || !!run.planned_delivery?.task_template_id;
+  const canChoose = !templateBound && (
     run.state === "ready" ||
     (run.state === "working" &&
-      run.history.every((entry) => entry.action === "select"));
+      run.history.every((entry) => entry.action === "select")));
   return (
     <details
       className="mt-5 rounded-lg border border-surface-border bg-card px-4 py-3"

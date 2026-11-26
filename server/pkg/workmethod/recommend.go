@@ -117,6 +117,21 @@ func (m Template) UsesIssueType(id string) bool {
 	})
 }
 
+// ResolvePlanMethod maps a plan's template to its execution definition.
+// Method IDs remain readable for plans saved before task templates.
+func ResolvePlanMethod(methods []Template, templateID, legacyID string) (Template, bool) {
+	for _, method := range methods {
+		if templateID != "" {
+			if method.PlanTask != nil && method.PlanTask.IssueTypeID == templateID {
+				return method, true
+			}
+		} else if method.ID == legacyID {
+			return method, true
+		}
+	}
+	return Template{}, false
+}
+
 func Recommend(methods []Template, taskTitle, taskBody, goalText string) Run {
 	ready := Run{State: "ready", History: []Event{}, Reason: "尚无明确的目标或交付物匹配，可手动选择工作方法。"}
 	// Avoid converting background examples, test logs and implementation notes

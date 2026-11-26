@@ -767,20 +767,20 @@
       "failed": "プロパティをアーカイブできませんでした"
     },
     "issue_types": {
-      "title": "タスクテンプレート",
-      "new_type": "新しいタスクテンプレート",
-      "empty": "タスクテンプレートはまだありません",
+      "title": "作業方法",
+      "new_type": "作業方法を作成",
+      "empty": "作業方法はまだありません",
       "edit": "編集",
       "archive": "アーカイブ",
       "restore": "復元",
       "actions_aria": "{{name}} の操作",
-      "create_title": "新しいタスクテンプレート",
-      "edit_title": "タスクテンプレートを編集",
+      "create_title": "作業方法を作成",
+      "edit_title": "作業方法を編集",
       "name": "名前",
       "name_placeholder": "例: 調査、納品",
       "fields": "フィールド",
       "add_field": "フィールドを追加",
-      "no_fields": "既存のカスタムプロパティを追加して、このタスクテンプレートを定義します。",
+      "no_fields": "既存のカスタムプロパティを追加して作業方法を定義します。",
       "required": "必須",
       "default_label": "デフォルト",
       "no_default": "なし",
@@ -793,7 +793,8 @@
       "step_gate": "{{step}} には {{formula}} が必要です",
       "empty_fields": "フィールドはまだありません",
       "load_failed": "タスクテンプレートを読み込めませんでした",
-      "retry": "再試行"
+      "retry": "再試行",
+      "grid_preview": "テーブルのプレビュー"
     }
   },
   "labels": {

@@ -1330,7 +1330,7 @@ func (h *Handler) validateGoalPlanContent(
 	}
 	out := GoalPlanContent{Items: make([]GoalPlanItem, 0, len(items)), Edges: make([]GoalPlanEdge, 0, len(edges))}
 	seen := make(map[string]bool, len(items))
-	var knownMethods map[string]bool
+	var methods []workmethod.Template
 	seenDeliveries := make(map[string]bool)
 	for i, item := range items {
 		id := strings.TrimSpace(item.ID)
@@ -1388,12 +1388,15 @@ func (h *Handler) validateGoalPlanContent(
 			})
 		}
 
-		binding, err := h.validateGoalPlanBinding(ctx, q, workspaceID, projectID, item.Binding, i)
+		delivery, err := validateGoalPlanDelivery(item.Delivery, i)
 		if err != nil {
 			return GoalPlanContent{}, err
 		}
-
-		delivery, err := validateGoalPlanDelivery(item.Delivery, i)
+		templateID := ""
+		if delivery != nil {
+			templateID = delivery.TaskTemplateID
+		}
+		binding, err := h.validateGoalPlanBinding(ctx, q, workspaceID, projectID, item.Binding, templateID, i)
 		if err != nil {
 			return GoalPlanContent{}, err
 		}
@@ -1405,17 +1408,24 @@ func (h *Handler) validateGoalPlanContent(
 				}
 				seenDeliveries[*binding.IssueID] = true
 			}
-			if knownMethods == nil {
-				methods, err := service.WorkMethodCatalog(ctx, q, workspaceID)
+			if methods == nil {
+				methods, err = service.WorkMethodCatalog(ctx, q, workspaceID)
 				if err != nil {
 					return GoalPlanContent{}, err
 				}
-				knownMethods = make(map[string]bool, len(methods))
-				for _, method := range methods {
-					knownMethods[method.ID] = true
-				}
 			}
-			if !knownMethods[delivery.MethodID] {
+			method, ok := workmethod.ResolvePlanMethod(methods, templateID, delivery.MethodID)
+			if templateID != "" {
+				template, err := q.GetIssueType(ctx, db.GetIssueTypeParams{WorkspaceID: workspaceID, ID: parseUUIDOrInvalid(templateID)})
+				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return GoalPlanContent{}, err
+				}
+				if !ok || err != nil || template.ArchivedAt.Valid || (delivery.MethodID != "" && delivery.MethodID != method.ID) {
+					return GoalPlanContent{}, fmt.Errorf("items[%d].delivery.task_template_id must resolve to an active workspace work method", i)
+				}
+				// Keep the derived method ID for older clients that display it.
+				delivery.MethodID = method.ID
+			} else if !ok {
 				return GoalPlanContent{}, fmt.Errorf("items[%d].delivery.method_id is not in the workspace catalog", i)
 			}
 		}
@@ -1503,6 +1513,7 @@ func (h *Handler) validateGoalPlanBinding(
 	q *db.Queries,
 	workspaceID, projectID pgtype.UUID,
 	binding GoalPlanItemBinding,
+	templateID string,
 	index int,
 ) (GoalPlanItemBinding, error) {
 	bindingType := strings.TrimSpace(binding.Type)
@@ -1528,6 +1539,9 @@ func (h *Handler) validateGoalPlanBinding(
 	})
 	if err != nil || uuidToString(issue.ProjectID) != uuidToString(projectID) {
 		return GoalPlanItemBinding{}, fmt.Errorf("items[%d].binding.issue_id is not an issue of this goal's project", index)
+	}
+	if templateID != "" && templateID != uuidToString(issue.IssueTypeID) {
+		return GoalPlanItemBinding{}, fmt.Errorf("items[%d].delivery.task_template_id must match the existing issue's work method", index)
 	}
 	return GoalPlanItemBinding{Type: "existing", IssueID: uuidToPtr(issue.ID)}, nil
 }
@@ -1632,13 +1646,14 @@ func detectGoalPlanCycle(edges []GoalPlanEdge) error {
 // revision, the chat session's project and the prompt all describe the same
 // project and the same draft revision. Nothing re-reads the draft afterwards.
 type goalPlanGenerationInput struct {
-	Review       *goalReviewInput
-	Project      db.Project
-	Resources    []db.ProjectResource
-	PlanRevision int32
-	PlanContent  json.RawMessage
-	Snapshot     json.RawMessage
-	Methods      []workmethod.Template
+	Review        *goalReviewInput
+	Project       db.Project
+	Resources     []db.ProjectResource
+	PlanRevision  int32
+	PlanContent   json.RawMessage
+	Snapshot      json.RawMessage
+	Methods       []workmethod.Template
+	TemplateNames map[string]string
 }
 
 // loadGoalPlanDraft reads the saved draft inside the caller's transaction. The
@@ -1688,7 +1703,15 @@ func (h *Handler) buildGoalPlanGenerationInput(
 	if err != nil {
 		return goalPlanGenerationInput{}, err
 	}
-	input := goalPlanGenerationInput{Project: project, Resources: resources, Methods: methods}
+	types, err := q.ListIssueTypes(ctx, db.ListIssueTypesParams{WorkspaceID: goal.WorkspaceID})
+	if err != nil {
+		return goalPlanGenerationInput{}, err
+	}
+	names := make(map[string]string, len(types))
+	for _, item := range types {
+		names[uuidToString(item.ID)] = item.Name
+	}
+	input := goalPlanGenerationInput{Project: project, Resources: resources, Methods: methods, TemplateNames: names}
 	if hasPlan {
 		input.PlanRevision = plan.Revision
 		if len(plan.Content) > 0 {
@@ -1798,13 +1821,22 @@ func buildGoalPlanPrompt(goal db.Goal, generation db.GoalPlanGeneration, input g
 	}
 	fmt.Fprintf(&b, "\n## 当前计划\n%s\n\n", currentPlan)
 	b.WriteString("## 本工作区工作方法目录\n")
+	selectionKey := "method_id"
 	for _, method := range input.Methods {
-		fmt.Fprintf(&b, "- method_id=%s, name=%s, kind=%s\n", method.ID, method.Name, method.Kind)
+		if method.PlanTask != nil && input.TemplateNames[method.PlanTask.IssueTypeID] != "" {
+			selectionKey = "task_template_id"
+			fmt.Fprintf(&b, "- task_template_id=%s, name=%s, kind=%s\n", method.PlanTask.IssueTypeID, input.TemplateNames[method.PlanTask.IssueTypeID], method.Kind)
+		}
+	}
+	if selectionKey == "method_id" {
+		for _, method := range input.Methods {
+			fmt.Fprintf(&b, "- method_id=%s, name=%s, kind=%s\n", method.ID, method.Name, method.Kind)
+		}
 	}
 	b.WriteString("## 输出要求\n")
 	b.WriteString("1. 先实际阅读本项目资源的代码、AGENTS.md、README、相关文档和已有任务，再提出可独立验收的交付节点。保留现有计划中仍适用的节点，本次最多新增 8 个。\n")
 	b.WriteString("2. 每个节点包含 title、outcome、acceptance_criteria；evidence_refs 至少一条，记录实际读到的依据：kind=resource|file|task|comment|contract，ref 写资源 ID/文件路径与行段/任务 UUID/评论 ID，version 写实际版本（仓库 SHA、任务 revision、评论 revision 等），note 写摘要。只有真正读到内容才算依据。\n")
-	b.WriteString("3. 每个节点必须有 delivery：type 是 feature（功能交付）、defect（缺陷修复）、research（调研验证）或 outcome（目标管理）；method_id 从工作方法目录选择；criteria 含稳定 id、expected（可观察结果）和 verification（真实核验步骤及证据）。功能侧重用户操作，缺陷侧重复现及回归，调研侧重问题与证据，目标管理侧重指标和数据来源。已有验收编号和前序计划中已配置的字段应复用。\n")
+	fmt.Fprintf(&b, "3. 每个节点必须有 delivery：type 是 feature（功能交付）、defect（缺陷修复）、research（调研验证）或 outcome（目标管理）。新节点从工作方法目录选择 %s，复用现有任务时其工作方法必须与任务上的工作方法一致，已有且适用的节点沿用原引用。criteria 含稳定 id、expected（可观察结果）和 verification（真实核验步骤及证据）。功能侧重用户操作，缺陷侧重复现及回归，调研侧重问题与证据，目标管理侧重指标和数据来源。已有验收编号和前序计划中已配置的字段应复用。\n", selectionKey)
 	b.WriteString("4. 依赖写在 edges：dependent_item_id 依赖 prerequisite_item_id，reason 写清当前卡需消费的具体接口、产物或验收能力。即使上游已完成也记录真实依赖。直接使用原事项正文记载的前置和已满足状态，识别真正可独立推进的任务。kind 必需时写 required，只在特定部署、验收或未有等价能力时需要则写 conditional 并在原因写明条件。不能自依赖、不能成环、不能重复。\n")
 	b.WriteString("5. 已有节点必须沿用原 id；新增节点请自行生成新的 UUID；删除节点直接从 items 去掉。标题不能作为去重键，不要复制已有事项。\n")
 	b.WriteString("6. 复用已有任务时 binding 写 {\"type\":\"existing\",\"issue_id\":\"<uuid>\"}，且该 issue 必须属于本项目；新节点写 {\"type\":\"new\"}。proposed_owner 只是建议责任人，不会指派，格式 {\"type\":\"member|agent|squad\",\"id\":\"<uuid>\"}。\n")

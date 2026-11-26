@@ -55,6 +55,8 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 		}
 	}
 	first, next, memory := item("Recover the job"), item("Open an excerpt"), item("Browse personal memory")
+	next.Delivery.TaskTemplateID, next.Delivery.MethodID = taskType.ID, ""
+	memory.Delivery.TaskTemplateID, memory.Delivery.MethodID = taskType.ID, ""
 	held := item("Compare a saved memory with the original")
 	stageOne, stageTwo := 1, 2
 	first.Stage, next.Stage, memory.Stage, held.Stage = &stageOne, &stageOne, &stageTwo, &stageTwo
@@ -172,7 +174,8 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 			t.Fatalf("prepared card did not inherit type and user outcome: %s %v", card.Properties, err)
 		}
 		contract, err := testHandler.issuePlanDelivery(ctx, card, goal.ID)
-		if err != nil || contract == nil || contract.Delivery.MethodID != "agile" || len(contract.Delivery.Criteria) != 1 {
+		if err != nil || contract == nil || contract.Delivery.TaskTemplateID != taskType.ID ||
+			contract.Delivery.MethodID != "agile" || len(contract.Delivery.Criteria) != 1 {
 			t.Fatalf("the card lost its planned delivery contract: %+v %v", contract, err)
 		}
 	}

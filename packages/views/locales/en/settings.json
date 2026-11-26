@@ -776,20 +776,20 @@
       "failed": "Couldn't archive property"
     },
     "issue_types": {
-      "title": "Task templates",
-      "new_type": "New task template",
-      "empty": "No task templates yet",
+      "title": "Work methods",
+      "new_type": "New work method",
+      "empty": "No work methods yet",
       "edit": "Edit",
       "archive": "Archive",
       "restore": "Restore",
       "actions_aria": "Actions for {{name}}",
-      "create_title": "New task template",
-      "edit_title": "Edit task template",
+      "create_title": "New work method",
+      "edit_title": "Edit work method",
       "name": "Name",
       "name_placeholder": "e.g. Research, Delivery",
       "fields": "Fields",
       "add_field": "Add field",
-      "no_fields": "Add existing custom properties to define this task template.",
+      "no_fields": "Add existing custom properties to define this work method.",
       "required": "Required",
       "default_label": "Default",
       "no_default": "None",
@@ -802,7 +802,8 @@
       "step_gate": "{{step}} requires {{formula}}",
       "empty_fields": "No fields yet",
       "load_failed": "Couldn't load task templates",
-      "retry": "Retry"
+      "retry": "Retry",
+      "grid_preview": "Table preview"
     }
   },
   "labels": {

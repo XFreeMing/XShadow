@@ -15,9 +15,10 @@ import (
 )
 
 type GoalPlanDelivery struct {
-	Type     string              `json:"type"`
-	MethodID string              `json:"method_id"`
-	Criteria []GoalPlanCriterion `json:"criteria"`
+	Type           string              `json:"type"`
+	TaskTemplateID string              `json:"task_template_id,omitempty"`
+	MethodID       string              `json:"method_id,omitempty"`
+	Criteria       []GoalPlanCriterion `json:"criteria"`
 }
 
 type GoalPlanCriterion struct {
@@ -74,7 +75,11 @@ func (c *issuePlanContract) claimBrief(issueRef string) string {
 		ids = append(ids, criterion.ID)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Goal plan delivery: type %q, planned method %q, acceptance IDs %s. Read expected results, verification and prerequisite details with \"$MULTICA_CLI_PATH\" issue method %s. Follow the selected method's current owner and reviewer.\n", c.Delivery.Type, c.Delivery.MethodID, strings.Join(ids, ", "), issueRef)
+	selection := "planned method " + fmt.Sprintf("%q", c.Delivery.MethodID)
+	if c.Delivery.TaskTemplateID != "" {
+		selection = "task template " + fmt.Sprintf("%q", c.Delivery.TaskTemplateID)
+	}
+	fmt.Fprintf(&b, "Goal plan delivery: type %q, %s, acceptance IDs %s. Read expected results, verification and prerequisite details with \"$MULTICA_CLI_PATH\" issue method %s. Follow the current owner and reviewer.\n", c.Delivery.Type, selection, strings.Join(ids, ", "), issueRef)
 	for _, p := range c.Prerequisites {
 		fmt.Fprintf(&b, "Prerequisite (%s): %q — %q.\n", p.Kind, p.Title, p.Reason)
 	}
@@ -119,13 +124,19 @@ func validateGoalPlanDelivery(in *GoalPlanDelivery, index int) (*GoalPlanDeliver
 	if in == nil {
 		return nil, nil
 	}
-	out := &GoalPlanDelivery{Type: strings.TrimSpace(in.Type), MethodID: strings.TrimSpace(in.MethodID)}
+	out := &GoalPlanDelivery{Type: strings.TrimSpace(in.Type), TaskTemplateID: strings.TrimSpace(in.TaskTemplateID), MethodID: strings.TrimSpace(in.MethodID)}
 	switch out.Type {
 	case "feature", "defect", "research", "outcome":
 	default:
 		return nil, fmt.Errorf("items[%d].delivery.type is invalid", index)
 	}
-	if !goalPlanDeliveryKey.MatchString(out.MethodID) {
+	if out.TaskTemplateID != "" {
+		id, err := parseUUIDString(out.TaskTemplateID)
+		if err != nil {
+			return nil, fmt.Errorf("items[%d].delivery.task_template_id must be a UUID", index)
+		}
+		out.TaskTemplateID = uuidToString(id)
+	} else if !goalPlanDeliveryKey.MatchString(out.MethodID) {
 		return nil, fmt.Errorf("items[%d].delivery.method_id is invalid", index)
 	}
 	if len(in.Criteria) == 0 || len(in.Criteria) > 30 {

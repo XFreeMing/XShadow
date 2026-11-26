@@ -122,6 +122,12 @@ describe("TaskTemplatesSection", () => {
       createIssueType: mockCreateIssueType,
       updateIssueType: mockUpdateIssueType,
       listProperties: vi.fn(async () => ({ properties: PROPERTIES, total: PROPERTIES.length })),
+      listIssueStatuses: vi.fn(async () => ({ statuses: [{
+        key: "custom_review",
+        name: "Peer review",
+        category: "started",
+        is_system: false,
+      }] })),
       listWorkMethods: vi.fn(async () => [{
         id: "research-method",
         name: "Research method",
@@ -148,13 +154,16 @@ describe("TaskTemplatesSection", () => {
     const user = userEvent.setup();
     renderSection(false);
     await user.click(await screen.findByText("Research"));
+    expect(screen.getByRole("table", { name: "Table preview" })).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: /Status/ })).toBeVisible();
+    expect(await screen.findByText(/Peer review/)).toBeVisible();
     expect(screen.getByText("Source URL")).toBeVisible();
     expect(screen.getByText("Read Count")).toBeVisible();
     expect(screen.getByText("0")).toBeVisible();
     expect(screen.getByText("IF({Source URL}, TRUE, FALSE)")).toBeVisible();
     expect(screen.getByText("Research method")).toBeVisible();
     expect(screen.getByText(/Submit evidence.*Evidence ready/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /New task template/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /New work method/i })).toBeNull();
   });
 
   it("allows admin to create a new task type with ordered fields and required toggle", async () => {
@@ -162,7 +171,7 @@ describe("TaskTemplatesSection", () => {
     renderSection(true);
     await screen.findByText("Research");
 
-    await user.click(screen.getByRole("button", { name: /New task template/i }));
+    await user.click(screen.getByRole("button", { name: /New work method/i }));
     const nameInput = await screen.findByLabelText("Name");
     await user.type(nameInput, "Delivery");
 

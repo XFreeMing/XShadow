@@ -50,7 +50,8 @@ func GoalPreparationIssueID(goalID pgtype.UUID, itemID string) pgtype.UUID {
 type goalWorkItem struct {
 	Title    string `json:"title"`
 	Delivery struct {
-		MethodID string `json:"method_id"`
+		MethodID       string `json:"method_id"`
+		TaskTemplateID string `json:"task_template_id"`
 	} `json:"delivery"`
 	ID           string `json:"id"`
 	Stage        *int   `json:"stage"`
@@ -192,7 +193,20 @@ func readGoalWorkProgress(ctx context.Context, q *db.Queries, goal db.Goal, plan
 		return progress, nil
 	}
 	progress.IssueStatus = current.Status
-	progress.MethodID = byID[progress.ItemID].Delivery.MethodID
+	delivery := byID[progress.ItemID].Delivery
+	progress.MethodID = delivery.MethodID
+	if delivery.TaskTemplateID != "" {
+		progress.MethodID = ""
+		if delivery.TaskTemplateID == util.UUIDToString(current.IssueTypeID) {
+			methods, err := WorkMethodCatalog(ctx, q, goal.WorkspaceID)
+			if err != nil {
+				return GoalWorkProgress{}, err
+			}
+			if method, ok := workmethod.ResolvePlanMethod(methods, delivery.TaskTemplateID, ""); ok {
+				progress.MethodID = method.ID
+			}
+		}
+	}
 	for _, edge := range content.Edges {
 		if edge.Dependent == progress.ItemID && (edge.Kind == "" || edge.Kind == "required") &&
 			states[byID[edge.Prerequisite].Binding.IssueID] != issuestatus.Done {
@@ -376,7 +390,7 @@ func hasBacklogPlanning(issue db.Issue, content []byte) bool {
 	}
 	issueID := util.UUIDToString(issue.ID)
 	for _, item := range plan.Items {
-		if item.Binding.IssueID == issueID && item.Delivery.MethodID != "" {
+		if item.Binding.IssueID == issueID && (item.Delivery.TaskTemplateID != "" || item.Delivery.MethodID != "") {
 			return true
 		}
 	}

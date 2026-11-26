@@ -7,6 +7,7 @@ import {
   ArchiveRestore,
   ArrowDown,
   ArrowUp,
+  CircleDot,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -15,6 +16,7 @@ import {
 } from "@multica/ui/icons";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { propertyListOptions } from "@multica/core/properties";
 import { workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
 import {
@@ -54,10 +56,21 @@ import {
   CustomPropertyValueInput,
 } from "../../issues/components/pickers/custom-property-picker";
 import { useT } from "../../i18n";
+import { useStatusLabel } from "../../issues/utils/status-label";
+import { WorkMethodEditor } from "../../workflows/work-method-editor";
+import { WorkMethodSteps } from "../../workflows/work-method-step";
+import { PropertyTypeLabel } from "./properties-tab";
+import { TaskTemplateGrid, type TemplateGridColumn } from "./task-template-grid";
 
 const MAX_ACTIVE_ISSUE_TYPES = 50;
 
-export function TaskTemplatesSection({ canManage }: { canManage: boolean }) {
+export function TaskTemplatesSection({
+  canManage,
+  canEditMethods = false,
+}: {
+  canManage: boolean;
+  canEditMethods?: boolean;
+}) {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
   const [createOpen, setCreateOpen] = useState(false);
@@ -155,7 +168,7 @@ export function TaskTemplatesSection({ canManage }: { canManage: boolean }) {
                       </Badge>
                     )}
                   </summary>
-                  <TaskTemplateDetails issueType={issueType} propertyById={propertyById} methods={methods} />
+                  <TaskTemplateDetails issueType={issueType} propertyById={propertyById} methods={methods} canEditMethods={canEditMethods} />
                 </details>
 
                 {canManage && (
@@ -235,12 +248,52 @@ function TaskTemplateDetails({
   issueType,
   propertyById,
   methods,
+  canEditMethods,
 }: {
   issueType: IssueType;
   propertyById: ReadonlyMap<string, IssueProperty>;
   methods: WorkMethod[];
+  canEditMethods: boolean;
 }) {
   const { t } = useT("settings");
+  const { t: issueText } = useT("issues");
+  const wsId = useWorkspaceId();
+  const { activeStatuses } = useIssueStatuses(wsId);
+  const statusLabel = useStatusLabel(wsId);
+  const [editing, setEditing] = useState<WorkMethod | null>(null);
+  const columns: TemplateGridColumn[] = [
+    {
+      id: "status",
+      name: issueText(($) => $.table.columns.status),
+      typeLabel: (
+        <button
+          type="button"
+          className="max-w-full truncate rounded-sm underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          onClick={() => document.getElementById("status-library")?.scrollIntoView({ block: "start" })}
+        >
+          {issueText(($) => $.workflows.settings.statuses_title)}
+        </button>
+      ),
+      icon: <CircleDot className="size-3.5" />,
+      required: false,
+      description: activeStatuses.map(({ key }) => statusLabel(key)).join(" · "),
+    },
+    ...issueType.fields.map((field) => {
+      const property = propertyById.get(field.property_id);
+      return {
+        id: field.property_id,
+        name: property?.name ?? field.property_id,
+        typeLabel: property ? <PropertyTypeLabel type={property.type} /> : undefined,
+        icon: property ? <PropertyIcon property={property} className="size-3.5" /> : undefined,
+        required: field.required,
+        defaultValue: property && field.default_value !== undefined
+          ? <CustomPropertyValueDisplay property={property} value={field.default_value} />
+          : undefined,
+        formula: property?.type === "formula" ? property.config.expression : undefined,
+        description: property?.description,
+      };
+    }),
+  ];
   const bindings = methods.flatMap((method) => {
     const fromPlan = method.plan_task?.issue_type_id === issueType.id;
     const fromRework = method.rework_task?.issue_type_id === issueType.id;
@@ -254,6 +307,14 @@ function TaskTemplateDetails({
 
   return (
     <div className="space-y-4 py-3 ps-4 text-label">
+      <TaskTemplateGrid columns={columns} labels={{
+        title: t(($) => $.properties.issue_types.grid_preview),
+        required: t(($) => $.properties.issue_types.required),
+        defaults: t(($) => $.properties.issue_types.default_label),
+        formulas: t(($) => $.properties.types.formula),
+        description: t(($) => $.properties.editor.description),
+        empty: t(($) => $.properties.issue_types.empty_fields),
+      }} />
       {bindings.length > 0 && (
         <div className="space-y-2">
           <h3 className="font-medium">{t(($) => $.properties.issue_types.method_bindings)}</h3>
@@ -274,43 +335,23 @@ function TaskTemplateDetails({
                   ))}
                 </ul>
               )}
+              {(fromPlan || gates.length > 0) && (
+                <>
+                  <WorkMethodSteps steps={method.steps} />
+                  {canEditMethods && !editing && (
+                    <Button size="xs" variant="outline" className="mt-2" onClick={() => setEditing(method)}>
+                      {issueText(($) => $.method.edit)}
+                    </Button>
+                  )}
+                  {editing?.id === method.id && (
+                    <WorkMethodEditor wsId={wsId} original={editing} onClose={() => setEditing(null)} />
+                  )}
+                </>
+              )}
             </div>
           ))}
         </div>
       )}
-      <div className="space-y-2">
-        <h3 className="font-medium">{t(($) => $.properties.issue_types.fields)}</h3>
-        {issueType.fields.length === 0 ? (
-          <p className="text-muted-foreground">{t(($) => $.properties.issue_types.empty_fields)}</p>
-        ) : (
-          <ul className="space-y-2">
-            {issueType.fields.map((field) => {
-              const property = propertyById.get(field.property_id);
-              return (
-                <li key={field.property_id} className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                    {property && <PropertyIcon property={property} className="size-3.5 text-muted-foreground" />}
-                    <span className="font-medium">{property?.name ?? field.property_id}</span>
-                    {field.required && <span className="text-caption text-muted-foreground">{t(($) => $.properties.issue_types.required)}</span>}
-                    {property && field.default_value !== undefined && (
-                      <span className="inline-flex items-center gap-1 text-caption text-muted-foreground">
-                        {t(($) => $.properties.issue_types.default_label)}
-                        <CustomPropertyValueDisplay property={property} value={field.default_value} />
-                      </span>
-                    )}
-                  </div>
-                  {property?.description && <p className="text-muted-foreground">{property.description}</p>}
-                  {property?.type === "formula" && property.config.expression && (
-                    <code className="block whitespace-pre-wrap break-words rounded-md bg-muted px-2 py-1 text-caption">
-                      {property.config.expression}
-                    </code>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
     </div>
   );
 }

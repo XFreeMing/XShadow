@@ -50,7 +50,6 @@ import { SettingsTab } from "../settings/components/settings-layout";
 import { useT } from "../i18n";
 import { useStepHandlerLabel } from "./step-handler";
 import { WORKFLOW_TEMPLATES, type WorkflowTemplateId } from "./templates";
-import { WorkMethodCatalog } from "./work-method-catalog";
 import { WorkflowEditorPage } from "./workflow-editor-page";
 
 const WORKFLOW_PARAM = "workflow";
@@ -59,7 +58,7 @@ const TEMPLATE_PARAM = "template";
 const NEW_WORKFLOW = "new";
 
 /**
- * Settings → Workflows lists workflows, work methods, task templates and
+ * Settings → Workflows lists workflows, template-backed work methods and
  * the status library. `?workflow=<id>` (or `new`) opens the workflow editor.
  */
 export function WorkflowsTab() {
@@ -190,9 +189,7 @@ export function WorkflowsTab() {
           ))}
       </div>
 
-      <WorkMethodCatalog wsId={wsId} canCreate={canCreate} />
-
-      <TaskTemplatesSection canManage={isAdmin} />
+      <TaskTemplatesSection canManage={isAdmin} canEditMethods={canCreate} />
 
       <IssueStatusesTab
         embedded={{ title: t(($) => $.workflows.settings.statuses_title) }}

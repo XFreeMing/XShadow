@@ -4,7 +4,6 @@ import {
   GoalPlanDeliveryTypeSchema,
   type GoalPlanDelivery,
 } from "@multica/core/types/goal-plan-delivery";
-import type { WorkMethod } from "@multica/core/types/work-method";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -17,6 +16,12 @@ import {
 } from "@multica/ui/components/ui/select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useT } from "../../i18n";
+
+export interface PlanMethodOption {
+  id: string;
+  name: string;
+  reference: Pick<GoalPlanDelivery, "task_template_id" | "method_id">;
+}
 
 function useDeliveryCopy() {
   const { t } = useT("goals");
@@ -67,7 +72,7 @@ export function PlanDeliveryEditor({
   onChange,
 }: {
   delivery?: GoalPlanDelivery | null;
-  methods: WorkMethod[];
+  methods: PlanMethodOption[];
   disabled: boolean;
   onChange: (value: GoalPlanDelivery) => void;
 }) {
@@ -77,7 +82,7 @@ export function PlanDeliveryEditor({
   if (!delivery) {
     return (
       <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() =>
-        onChange({ type: "feature", method_id: "", criteria: [{ id: "C1", expected: "", verification: "" }] })
+        onChange({ type: "feature", criteria: [{ id: "C1", expected: "", verification: "" }] })
       }>
         {t(($) => $.plan.configure_delivery)}
       </Button>
@@ -120,10 +125,13 @@ export function PlanDeliveryEditor({
         <div className="space-y-1">
           <Label>{methodLabel}</Label>
           <Select
-            value={delivery.method_id || null}
+            value={delivery.task_template_id || delivery.method_id || null}
             disabled={disabled || methods.length === 0}
             items={methods.map(({ id, name }) => ({ value: id, label: name }))}
-            onValueChange={(id) => { if (id) onChange({ ...delivery, method_id: id }); }}
+            onValueChange={(id) => {
+              const choice = methods.find((method) => method.id === id);
+              if (choice) onChange({ type: delivery.type, criteria, ...choice.reference });
+            }}
           >
             <SelectTrigger size="sm" aria-label={methodLabel}>
               <SelectValue placeholder={t(($) => $.plan.delivery_method_choose)} />

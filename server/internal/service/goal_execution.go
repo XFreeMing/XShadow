@@ -46,16 +46,36 @@ func GoalExecutionScope(ctx context.Context, q *db.Queries, goal db.Goal, plan d
 		return "", err
 	}
 	selected := make(map[string]workmethod.Template)
+	templates := make(map[string]db.IssueType)
 	for _, item := range content.Items {
-		id := item.Delivery.MethodID
-		for _, method := range methods {
-			if method.ID == id {
-				selected[id] = method
-				break
+		ref := item.Delivery
+		method, ok := workmethod.ResolvePlanMethod(methods, ref.TaskTemplateID, ref.MethodID)
+		if !ok {
+			continue
+		}
+		if ref.TaskTemplateID != "" {
+			id, err := util.ParseUUID(ref.TaskTemplateID)
+			if err != nil {
+				return "", err
+			}
+			if _, seen := templates[ref.TaskTemplateID]; !seen {
+				template, err := q.GetIssueType(ctx, db.GetIssueTypeParams{WorkspaceID: goal.WorkspaceID, ID: id})
+				if errors.Is(err, pgx.ErrNoRows) || (err == nil && template.ArchivedAt.Valid) {
+					continue
+				}
+				if err != nil {
+					return "", err
+				}
+				templates[ref.TaskTemplateID] = template
 			}
 		}
+		selected[method.ID] = method
 	}
-	raw, err := json.Marshal([]any{goal.ProjectID, goal.Title, goal.Intent, goal.Scope, goal.AcceptanceCriteria, selected})
+	facts := []any{goal.ProjectID, goal.Title, goal.Intent, goal.Scope, goal.AcceptanceCriteria, selected}
+	if len(templates) > 0 {
+		facts = append(facts, templates)
+	}
+	raw, err := json.Marshal(facts)
 	if err != nil {
 		return "", err
 	}

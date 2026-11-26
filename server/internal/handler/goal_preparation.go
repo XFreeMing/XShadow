@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 func bindGoalPreparationIssues(items []GoalPlanItem, bindings map[string]string) {
@@ -155,13 +156,14 @@ func (h *Handler) createGoalPreparationIssue(ctx context.Context, goal db.Goal, 
 	}
 	var issueTypeID pgtype.UUID
 	var properties []byte
-	for _, method := range methods {
-		if method.ID == item.Delivery.MethodID && method.PlanTask != nil {
-			issueTypeID, properties, err = tableTaskProperties(ctx, tx, q, goal.WorkspaceID, *method.PlanTask, item.Outcome)
-			if err != nil {
-				return empty, err
-			}
-			break
+	method, found := workmethod.ResolvePlanMethod(methods, item.Delivery.TaskTemplateID, item.Delivery.MethodID)
+	if !found && item.Delivery.TaskTemplateID != "" {
+		return empty, fmt.Errorf("task template %s has no active work method", item.Delivery.TaskTemplateID)
+	}
+	if found && method.PlanTask != nil {
+		issueTypeID, properties, err = tableTaskProperties(ctx, tx, q, goal.WorkspaceID, *method.PlanTask, item.Outcome)
+		if err != nil {
+			return empty, err
 		}
 	}
 	issue, err := q.CreateIssue(ctx, db.CreateIssueParams{

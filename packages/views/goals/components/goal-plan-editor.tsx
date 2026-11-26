@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { issueTypeListOptions } from "@multica/core/issue-types";
 import { issueWorkMethodOptions, workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
 import type { WorkMethod } from "@multica/core/types/work-method";
 import type { Goal, GoalPlanEdge, GoalPlanItem, Issue } from "@multica/core/types";
@@ -29,7 +30,7 @@ import { useT } from "../../i18n";
 import { IssuePickerModal } from "../../modals/issue-picker-modal";
 import { prerequisitesOf } from "../plan";
 import { AppLink } from "../../navigation";
-import { PlanDeliveryEditor } from "./goal-plan-delivery";
+import { PlanDeliveryEditor, type PlanMethodOption } from "./goal-plan-delivery";
 
 export interface PlanContent {
   items: GoalPlanItem[];
@@ -97,6 +98,7 @@ export function GoalPlanEditor({
     ...workMethodCatalogOptions(wsId),
     enabled: items.some((item) => !!item.delivery),
   });
+  const { data: issueTypes = [] } = useQuery(issueTypeListOptions(wsId));
   const issuesById = new Map(linkedIssues.map((issue) => [issue.id, issue]));
   const [pickingFor, setPickingFor] = useState<string | null>(null);
   const [issueLabels, setIssueLabels] = useState<Record<string, string>>({});
@@ -160,6 +162,23 @@ export function GoalPlanEditor({
   };
 
   const issue = item.binding.issue_id ? issuesById.get(item.binding.issue_id) : undefined;
+  const typedOptions = methods.flatMap((method) => {
+    const type = issueTypes.find((entry) => entry.id === method.plan_task?.issue_type_id);
+    if (!type) return [];
+    return [{ id: type.id, name: type.name, reference: { task_template_id: type.id } }];
+  });
+  const methodOptions: PlanMethodOption[] = typedOptions.filter((option) =>
+    item.binding.type !== "existing" || option.id === issue?.issue_type_id,
+  );
+  // Preserve an older plan's selection, including linked issues predating the table type.
+  for (const method of methods) {
+    if (typedOptions.length === 0 || (item.delivery?.method_id === method.id && !item.delivery.task_template_id)) {
+      methodOptions.push({ id: method.id, name: method.name, reference: { method_id: method.id } });
+    }
+  }
+  const plannedMethod = methods.find((method) => item.delivery?.task_template_id
+    ? method.plan_task?.issue_type_id === item.delivery.task_template_id
+    : method.id === item.delivery?.method_id);
   const boundLabel = item.binding.issue_id
     ? (issue?.identifier || issueLabels[item.binding.issue_id] || `#${item.binding.issue_id.slice(0, 8)}`)
     : null;
@@ -220,11 +239,11 @@ export function GoalPlanEditor({
       <PlanMethodStatus
         wsId={wsId}
         issue={issue}
-        planned={methods.find(({ id }) => id === item.delivery?.method_id)}
+        planned={plannedMethod}
       />
       <PlanDeliveryEditor
         delivery={item.delivery}
-        methods={methods}
+        methods={methodOptions}
         disabled={disabled}
         onChange={(delivery) => updateItem(item.id, { delivery })}
       />

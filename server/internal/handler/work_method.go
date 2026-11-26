@@ -91,13 +91,17 @@ func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods [
 		}
 	}
 	if delivery != nil {
-		for _, method := range methods {
-			if method.ID == delivery.Delivery.MethodID {
-				return workmethod.Run{
-					State: "ready", Source: "plan", Method: &method, History: []workmethod.Event{},
-					Reason: "目标计划建议采用「" + method.Name + "」。",
-				}, delivery, nil
-			}
+		if id := delivery.Delivery.TaskTemplateID; id != "" && id != uuidToString(issue.IssueTypeID) {
+			return workmethod.Run{State: "ready", Reason: "当前任务的工作方法与目标计划不一致。", History: []workmethod.Event{}}, delivery, nil
+		}
+		if method, ok := workmethod.ResolvePlanMethod(methods, delivery.Delivery.TaskTemplateID, delivery.Delivery.MethodID); ok {
+			return workmethod.Run{
+				State: "ready", Source: "plan", Method: &method, History: []workmethod.Event{},
+				Reason: "目标计划建议采用「" + method.Name + "」。",
+			}, delivery, nil
+		}
+		if delivery.Delivery.TaskTemplateID != "" {
+			return workmethod.Run{State: "ready", Reason: "目标计划绑定的工作方法不可用。", History: []workmethod.Event{}}, delivery, nil
 		}
 	}
 	return workmethod.RecommendForIssueType(methods, uuidToString(issue.IssueTypeID), issue.Title, issue.Description.String, goalText), delivery, nil
@@ -218,6 +222,10 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	}
 	if run.Revision == 0 && issuestatus.Effective(r.Context(), h.Queries, issue.WorkspaceID, issue.Status) == "done" {
 		writeError(w, 409, "reopen this issue before starting a work method")
+		return
+	}
+	if change.Action == "select" && (run.Source == "issue_type" || (delivery != nil && delivery.Delivery.TaskTemplateID != "")) {
+		writeError(w, http.StatusConflict, "工作方法由任务模板决定，请核对当前任务的模板。")
 		return
 	}
 	if change.Action == "advance" && run.State == "ready" && change.MethodID != "" && (run.Method == nil || change.MethodID != run.Method.ID) {

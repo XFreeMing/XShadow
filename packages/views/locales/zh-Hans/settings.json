@@ -767,20 +767,20 @@
       "failed": "归档属性失败"
     },
     "issue_types": {
-      "title": "任务模板",
-      "new_type": "新建任务模板",
-      "empty": "暂无任务模板",
+      "title": "工作方法",
+      "new_type": "新建工作方法",
+      "empty": "暂无工作方法",
       "edit": "编辑",
       "archive": "归档",
       "restore": "恢复",
       "actions_aria": "{{name}} 的操作",
-      "create_title": "新建任务模板",
-      "edit_title": "编辑任务模板",
+      "create_title": "新建工作方法",
+      "edit_title": "编辑工作方法",
       "name": "名称",
       "name_placeholder": "例如：研究、交付",
       "fields": "字段",
       "add_field": "添加字段",
-      "no_fields": "添加现有自定义属性以定义此任务模板。",
+      "no_fields": "添加已有自定义属性以定义此工作方法。",
       "required": "必填",
       "default_label": "默认值",
       "no_default": "无",
@@ -793,7 +793,8 @@
       "step_gate": "{{step}} 需要 {{formula}}",
       "empty_fields": "暂无字段",
       "load_failed": "无法加载任务模板",
-      "retry": "重试"
+      "retry": "重试",
+      "grid_preview": "表格预览"
     }
   },
   "labels": {

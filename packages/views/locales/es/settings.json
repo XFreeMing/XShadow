@@ -776,20 +776,20 @@
       "failed": "No se ha podido archivar la propiedad"
     },
     "issue_types": {
-      "title": "Plantillas de tareas",
-      "new_type": "Nueva plantilla de tarea",
-      "empty": "Aún no hay plantillas de tareas",
+      "title": "Métodos de trabajo",
+      "new_type": "Nuevo método de trabajo",
+      "empty": "Aún no hay métodos de trabajo",
       "edit": "Editar",
       "archive": "Archivar",
       "restore": "Restaurar",
       "actions_aria": "Acciones para {{name}}",
-      "create_title": "Nueva plantilla de tarea",
-      "edit_title": "Editar plantilla de tarea",
+      "create_title": "Nuevo método de trabajo",
+      "edit_title": "Editar método de trabajo",
       "name": "Nombre",
       "name_placeholder": "p. ej. Investigación, Entrega",
       "fields": "Campos",
       "add_field": "Añadir campo",
-      "no_fields": "Añade propiedades personalizadas existentes para definir esta plantilla de tarea.",
+      "no_fields": "Añade propiedades personalizadas existentes para definir este método.",
       "required": "Obligatorio",
       "default_label": "Predeterminado",
       "no_default": "Ninguno",
@@ -802,7 +802,8 @@
       "step_gate": "{{step}} requiere {{formula}}",
       "empty_fields": "Aún no hay campos",
       "load_failed": "No se pudieron cargar las plantillas de tareas",
-      "retry": "Reintentar"
+      "retry": "Reintentar",
+      "grid_preview": "Vista previa de la tabla"
     }
   },
   "labels": {

@@ -5,7 +5,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, setApiInstance } from "@multica/core/api";
 import type { WorkMethod } from "@multica/core/types/work-method";
 import { renderWithI18n } from "../test/i18n";
-import { WorkMethodCatalog } from "./work-method-catalog";
+import { TaskTemplatesSection } from "../settings/components/issue-types-section";
+
+vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws" }));
 
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_type: string, id: string) => id }),
@@ -25,10 +27,26 @@ it("edits a built-in method and preserves the open draft when its version change
     keywords: ["research"],
     review: "Review citations",
     rework_step: 0,
+    plan_task: { issue_type_id: "research-template", seed_property_id: "outcome" },
     steps: [{ name: "Interview", output: "Meeting notes" }],
   };
   const client = new ApiClient("https://example.test");
   setApiInstance(client);
+  vi.spyOn(client, "listIssueTypes").mockResolvedValue({
+    total: 1,
+    issue_types: [{
+      id: "research-template",
+      name: "Research template",
+      workspace_id: "ws",
+      fields: [],
+      position: 1,
+      archived: false,
+      created_at: "",
+      updated_at: "",
+    }],
+  });
+  vi.spyOn(client, "listProperties").mockResolvedValue({ properties: [], total: 0 });
+  vi.spyOn(client, "listIssueStatuses").mockResolvedValue({ statuses: [], categories: [], total: 0 });
   vi.spyOn(client, "listMembers").mockResolvedValue([]);
   vi.spyOn(client, "listAgents").mockResolvedValue([]);
   vi.spyOn(client, "listSquads").mockResolvedValue([]);
@@ -42,11 +60,11 @@ it("edits a built-in method and preserves the open draft when its version change
     .mockResolvedValue({ ...original, revision: 3 });
   renderWithI18n(
     <QueryClientProvider client={new QueryClient()}>
-      <WorkMethodCatalog wsId="ws" canCreate />
+      <TaskTemplatesSection canManage canEditMethods />
     </QueryClientProvider>,
   );
   fireEvent.click(
-    await screen.findByText("Research interviews", { exact: false }),
+    await screen.findByText("Research template"),
   );
   fireEvent.click(screen.getByRole("button", { name: "Edit method" }));
   const save = screen.getByRole("button", { name: "Save" });
@@ -69,6 +87,7 @@ it("edits a built-in method and preserves the open draft when its version change
     "seven-step",
     1,
     expect.objectContaining({
+      plan_task: original.plan_task,
       steps: [
         {
           name: "Interview",

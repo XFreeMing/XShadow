@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@multica/core/api";
 import { workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
 import {
@@ -15,113 +15,19 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { useT } from "../i18n";
-import { WorkMethodSteps, WorkMethodHandlerPicker } from "./work-method-step";
+import { WorkMethodHandlerPicker } from "./work-method-step";
 
 const selectClass =
   "w-full rounded-md border border-input bg-background px-2 py-1.5 text-label";
 const labelClass = "grid gap-1.5 text-label font-medium";
 
-export function WorkMethodCatalog({
-  wsId,
-  canCreate,
-}: {
-  wsId: string;
-  canCreate: boolean;
-}) {
-  const { t } = useT("issues");
-  const query = useQuery({
-    ...workMethodCatalogOptions(wsId),
-    enabled: !!wsId,
-  });
-  const [editing, setEditing] = useState<WorkMethod | "new" | null>(null);
-  if (query.error instanceof ApiError && query.error.status === 404)
-    return null;
-  return (
-    <section className="mt-6 space-y-3">
-      <header className="flex items-center justify-between gap-3">
-        <h2 className="text-heading font-semibold">
-          {t(($) => $.method.catalog)}
-        </h2>
-        {canCreate && !editing && (
-          <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
-            {t(($) => $.method.create)}
-          </Button>
-        )}
-      </header>
-      {editing === "new" && (
-        <MethodEditor wsId={wsId} onClose={() => setEditing(null)} />
-      )}
-      {query.isError && (
-        <p role="alert" className="text-label text-destructive">
-          {t(($) => $.method.load_error)}{" "}
-          <Button variant="link" size="xs" onClick={() => void query.refetch()}>
-            {t(($) => $.method.retry)}
-          </Button>
-        </p>
-      )}
-      <div className="divide-y divide-surface-border rounded-lg border border-surface-border bg-card">
-        {query.data?.map((method) => (
-          <details key={method.id} className="px-4 py-3 text-label">
-            <summary className="cursor-pointer font-medium">
-              {method.name}{" "}
-              <span className="font-normal text-muted-foreground">
-                · {t(($) => $.method[method.kind])}
-              </span>
-            </summary>
-            <WorkMethodSteps steps={method.steps} />
-            {canCreate && !editing && (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                className="mt-3"
-                onClick={() => setEditing(method)}
-              >
-                {t(($) => $.method.edit)}
-              </Button>
-            )}
-            {editing && editing !== "new" && editing.id === method.id && (
-              <div className="my-3">
-                <MethodEditor
-                  key={method.id}
-                  wsId={wsId}
-                  original={editing}
-                  onClose={() => setEditing(null)}
-                />
-              </div>
-            )}
-            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-              {method.keywords.length > 0 && (
-                <>
-                  <dt className="text-muted-foreground">
-                    {t(($) => $.method.keywords)}
-                  </dt>
-                  <dd>{method.keywords.join(", ")}</dd>
-                </>
-              )}
-              <dt className="text-muted-foreground">
-                {t(($) => $.method.review)}
-              </dt>
-              <dd>{method.review}</dd>
-              <dt className="text-muted-foreground">
-                {t(($) => $.method.rework_step)}
-              </dt>
-              <dd>{method.steps[method.rework_step]?.name}</dd>
-            </dl>
-          </details>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function MethodEditor({
+export function WorkMethodEditor({
   wsId,
   original,
   onClose,
 }: {
   wsId: string;
-  original?: WorkMethod;
+  original: WorkMethod;
   onClose: () => void;
 }) {
   const { t } = useT("issues");
@@ -146,8 +52,7 @@ function MethodEditor({
     reviewer: null,
   };
   const [steps, setSteps] = useState<DraftStep[]>(() =>
-    original
-      ? original.steps.map((step, i) => ({
+    original.steps.map((step, i) => ({
           id: i,
           acceptance_gate: step.acceptance_gate,
           self_claim: step.self_claim,
@@ -160,25 +65,22 @@ function MethodEditor({
           checks: step.checks?.join("\n") ?? "",
           owner: step.owner ?? null,
           reviewer: step.reviewer ?? null,
-        }))
-      : [{ id: 0, ...emptyStep }],
+        })),
   );
-  const [rework, setRework] = useState(original?.rework_step ?? 0);
+  const [rework, setRework] = useState(original.rework_step);
   const [kind, setKind] = useState<WorkMethodKind>(
-    original?.kind ?? "development",
+    original.kind,
   );
-  const [name, setName] = useState(original?.name ?? "");
-  const [keywords, setKeywords] = useState(original?.keywords.join(", ") ?? "");
-  const [review, setReview] = useState(original?.review ?? "");
+  const [name, setName] = useState(original.name);
+  const [keywords, setKeywords] = useState(original.keywords.join(", "));
+  const [review, setReview] = useState(original.review);
   const changeStep = (id: number, patch: Partial<Omit<DraftStep, "id">>) =>
     setSteps((current) =>
       current.map((s) => (s.id === id ? { ...s, ...patch } : s)),
     );
   const mutation = useMutation({
     mutationFn: (draft: NewWorkMethod) =>
-      original
-        ? api.updateWorkMethod(original.id, original.revision, draft)
-        : api.createWorkMethod(draft),
+      api.updateWorkMethod(original.id, original.revision, draft),
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409)
         void qc.invalidateQueries({
@@ -200,8 +102,9 @@ function MethodEditor({
     mutation.mutate({
       name: name.trim(),
       kind,
-      ...(original?.plan_task ? { plan_task: original.plan_task } : {}),
-      ...(original?.rework_task ? { rework_task: original.rework_task } : {}),
+      ...(original.plan_task ? { plan_task: original.plan_task } : {}),
+      ...(original.rework_task ? { rework_task: original.rework_task } : {}),
+      ...(kind === "development" && original.github_delivery ? { github_delivery: original.github_delivery } : {}),
       keywords: [
         ...new Set(
           keywords
