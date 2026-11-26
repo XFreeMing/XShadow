@@ -15,6 +15,8 @@ import {
 } from "@multica/ui/icons";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { propertyListOptions } from "@multica/core/properties";
+import { workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
 import {
   issueTypeListOptions,
   useCreateIssueType,
@@ -26,6 +28,7 @@ import type {
   IssueType,
   IssueTypeField,
 } from "@multica/core/types";
+import type { WorkMethod } from "@multica/core/types/work-method";
 import { Button } from "@multica/ui/components/ui/button";
 import { IconButton } from "@multica/ui/components/common/icon-button";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -54,23 +57,21 @@ import { useT } from "../../i18n";
 
 const MAX_ACTIVE_ISSUE_TYPES = 50;
 
-export function IssueTypesSection({
-  canManage,
-  showArchived,
-  properties,
-}: {
-  canManage: boolean;
-  showArchived: boolean;
-  properties: IssueProperty[];
-}) {
+export function TaskTemplatesSection({ canManage }: { canManage: boolean }) {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<IssueType | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
-  const { data: issueTypes = [], isLoading } = useQuery(
+  const { data: issueTypes = [], isLoading, isError, refetch } = useQuery(
     issueTypeListOptions(wsId, true),
   );
+  const { data: properties = [] } = useQuery(propertyListOptions(wsId, true));
+  const { data: methods = [] } = useQuery({
+    ...workMethodCatalogOptions(wsId),
+    enabled: !!wsId,
+  });
   const update = useUpdateIssueType();
 
   const propertyById = useMemo(
@@ -85,40 +86,51 @@ export function IssueTypesSection({
     () => issueTypes.filter((it) => !it.archived).length,
     [issueTypes],
   );
-  const visible = useMemo(
-    () => issueTypes.filter((it) => (showArchived ? true : !it.archived)),
-    [issueTypes, showArchived],
-  );
+  const visible = showArchived ? issueTypes : issueTypes.filter((it) => !it.archived);
 
   return (
-    <section id="task-types" className="mt-8 space-y-4">
+    <section id="task-templates" aria-labelledby="task-templates-heading" className="space-y-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
-          <h3 className="text-subheading font-medium">
+          <h2 id="task-templates-heading" className="text-heading font-semibold">
             {t(($) => $.properties.issue_types.title)}
-          </h3>
+          </h2>
           <span className="text-caption tabular-nums text-muted-foreground">
             {activeCount}/{MAX_ACTIVE_ISSUE_TYPES}
           </span>
         </div>
-        {canManage && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-1.5"
-            onClick={() => setCreateOpen(true)}
-            disabled={activeCount >= MAX_ACTIVE_ISSUE_TYPES}
-          >
-            <Plus className="size-3.5" />
-            {t(($) => $.properties.issue_types.new_type)}
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {issueTypes.length > activeCount && (
+            <Button size="sm" variant="ghost" aria-pressed={showArchived} onClick={() => setShowArchived(!showArchived)}>
+              {t(($) => $.properties.show_archived)}
+            </Button>
+          )}
+          {canManage && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => setCreateOpen(true)}
+              disabled={isLoading || isError || activeCount >= MAX_ACTIVE_ISSUE_TYPES}
+            >
+              <Plus className="size-3.5" />
+              {t(($) => $.properties.issue_types.new_type)}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-surface-border bg-card">
         {isLoading ? (
           <div className="px-4 py-8 text-center text-body text-muted-foreground">
             {t(($) => $.properties.loading)}
+          </div>
+        ) : isError ? (
+          <div role="alert" className="px-4 py-3 text-body text-muted-foreground">
+            {t(($) => $.properties.issue_types.load_failed)}{" "}
+            <Button variant="link" size="xs" onClick={() => void refetch()}>
+              {t(($) => $.properties.issue_types.retry)}
+            </Button>
           </div>
         ) : visible.length === 0 ? (
           <div className="px-4 py-8 text-center">
@@ -132,55 +144,19 @@ export function IssueTypesSection({
             {visible.map((issueType) => (
               <div
                 key={issueType.id}
-                className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                className="flex items-start justify-between gap-2 px-4 py-2"
               >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-body font-medium">
-                      {issueType.name}
-                    </span>
+                <details className="min-w-0 flex-1">
+                  <summary className="cursor-pointer rounded-sm py-1 text-body font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                    {issueType.name}
                     {issueType.archived && (
-                      <Badge variant="outline" className="shrink-0 text-micro">
+                      <Badge variant="outline" className="ms-2 text-micro">
                         {t(($) => $.properties.archived_badge)}
                       </Badge>
                     )}
-                  </div>
-                  {issueType.fields.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {issueType.fields.map((field) => {
-                        const prop = propertyById.get(field.property_id);
-                        return (
-                          <span
-                            key={field.property_id}
-                            className="inline-flex items-center gap-1 rounded-full border border-surface-border px-2 py-0.5 text-caption"
-                          >
-                            {prop && (
-                              <PropertyIcon property={prop} className="size-3" />
-                            )}
-                            <span>{prop?.name ?? field.property_id}</span>
-                            {field.required && (
-                              <span
-                                className="text-destructive"
-                                aria-label={t(($) => $.properties.issue_types.required)}
-                              >
-                                *
-                              </span>
-                            )}
-                            {prop && field.default_value !== undefined && (
-                              <span className="text-muted-foreground">
-                                =
-                                <CustomPropertyValueDisplay
-                                  property={prop}
-                                  value={field.default_value}
-                                />
-                              </span>
-                            )}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                  </summary>
+                  <TaskTemplateDetails issueType={issueType} propertyById={propertyById} methods={methods} />
+                </details>
 
                 {canManage && (
                   <DropdownMenu>
@@ -252,6 +228,90 @@ export function IssueTypesSection({
         propertyById={propertyById}
       />
     </section>
+  );
+}
+
+function TaskTemplateDetails({
+  issueType,
+  propertyById,
+  methods,
+}: {
+  issueType: IssueType;
+  propertyById: ReadonlyMap<string, IssueProperty>;
+  methods: WorkMethod[];
+}) {
+  const { t } = useT("settings");
+  const bindings = methods.flatMap((method) => {
+    const fromPlan = method.plan_task?.issue_type_id === issueType.id;
+    const fromRework = method.rework_task?.issue_type_id === issueType.id;
+    const gates = method.steps.flatMap((step) =>
+      step.table_gate?.issue_type_id === issueType.id
+        ? [{ name: step.name, propertyId: step.table_gate.property_id }]
+        : [],
+    );
+    return fromPlan || fromRework || gates.length > 0 ? [{ method, fromPlan, fromRework, gates }] : [];
+  });
+
+  return (
+    <div className="space-y-4 py-3 ps-4 text-label">
+      {bindings.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="font-medium">{t(($) => $.properties.issue_types.method_bindings)}</h3>
+          {bindings.map(({ method, fromPlan, fromRework, gates }) => (
+            <div key={method.id} className="space-y-1">
+              <p className="font-medium">{method.name}</p>
+              {fromPlan && <p className="text-muted-foreground">{t(($) => $.properties.issue_types.from_plan)}</p>}
+              {fromRework && <p className="text-muted-foreground">{t(($) => $.properties.issue_types.from_rework)}</p>}
+              {gates.length > 0 && (
+                <ul className="list-disc space-y-1 ps-5 text-muted-foreground">
+                  {gates.map(({ name, propertyId }, index) => (
+                    <li key={index}>
+                      {t(($) => $.properties.issue_types.step_gate, {
+                        step: name,
+                        formula: propertyById.get(propertyId)?.name ?? propertyId,
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="space-y-2">
+        <h3 className="font-medium">{t(($) => $.properties.issue_types.fields)}</h3>
+        {issueType.fields.length === 0 ? (
+          <p className="text-muted-foreground">{t(($) => $.properties.issue_types.empty_fields)}</p>
+        ) : (
+          <ul className="space-y-2">
+            {issueType.fields.map((field) => {
+              const property = propertyById.get(field.property_id);
+              return (
+                <li key={field.property_id} className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    {property && <PropertyIcon property={property} className="size-3.5 text-muted-foreground" />}
+                    <span className="font-medium">{property?.name ?? field.property_id}</span>
+                    {field.required && <span className="text-caption text-muted-foreground">{t(($) => $.properties.issue_types.required)}</span>}
+                    {property && field.default_value !== undefined && (
+                      <span className="inline-flex items-center gap-1 text-caption text-muted-foreground">
+                        {t(($) => $.properties.issue_types.default_label)}
+                        <CustomPropertyValueDisplay property={property} value={field.default_value} />
+                      </span>
+                    )}
+                  </div>
+                  {property?.description && <p className="text-muted-foreground">{property.description}</p>}
+                  {property?.type === "formula" && property.config.expression && (
+                    <code className="block whitespace-pre-wrap break-words rounded-md bg-muted px-2 py-1 text-caption">
+                      {property.config.expression}
+                    </code>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 

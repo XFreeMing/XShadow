@@ -79,7 +79,6 @@ import {
 } from "../../common/property-icon";
 import { useLocale, useT } from "../../i18n";
 import { SettingsReadOnlyNotice, SettingsTab } from "./settings-layout";
-import { IssueTypesSection } from "./issue-types-section";
 import { RecordRelationTargetTableSelect } from "../../issues/components/pickers/record-relation-property-picker";
 import {
   IssueFormulaPropertyEditor,
@@ -343,12 +342,6 @@ export function PropertiesTab() {
           )}
         </div>
       </div>
-
-      <IssueTypesSection
-        canManage={canManage}
-        showArchived={showArchived}
-        properties={properties}
-      />
 
       <PropertyEditorDialog open={createOpen} onOpenChange={setCreateOpen} />
       <PropertyEditorDialog

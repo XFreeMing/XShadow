@@ -4,9 +4,12 @@ import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildIssueStatusCatalog } from "@multica/core/issue-statuses";
+import { issueTypeListOptions } from "@multica/core/issue-types";
+import { workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
+import { propertyListOptions } from "@multica/core/properties";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { memberListOptions } from "@multica/core/workspace/queries";
-import type { IssueWorkflow, Project } from "@multica/core/types";
+import type { IssueType, IssueWorkflow, Project } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { WorkflowsTab } from "./workflows-tab";
 
@@ -33,7 +36,9 @@ vi.mock("../navigation", () => ({
 vi.mock("../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid={`avatar-${actorId}`} />,
 }));
-vi.mock("../settings/components/issue-statuses-tab", () => ({ IssueStatusesTab: () => null }));
+vi.mock("../settings/components/issue-statuses-tab", () => ({
+  IssueStatusesTab: () => <h2>Status library</h2>,
+}));
 vi.mock("./workflow-editor-page", () => ({ WorkflowEditorPage: () => null }));
 
 function project(id: string, title: string, workflowId: string | null = null): Project {
@@ -61,10 +66,13 @@ function workflow(partial: Partial<IssueWorkflow>): IssueWorkflow {
   } as IssueWorkflow;
 }
 
-function renderTab(projects: Project[]) {
+function renderTab(projects: Project[], types: IssueType[] = []) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(projectListOptions("ws-1").queryKey, { projects } as never);
   qc.setQueryData(memberListOptions("ws-1").queryKey, [{ user_id: "user-1", role: "owner" }] as never);
+  qc.setQueryData(issueTypeListOptions("ws-1", true).queryKey, { issue_types: types, total: types.length });
+  qc.setQueryData(propertyListOptions("ws-1", true).queryKey, { properties: [], total: 0 });
+  qc.setQueryData(workMethodCatalogOptions("ws-1").queryKey, []);
   renderWithI18n(
     <QueryClientProvider client={qc}>
       <WorkflowsTab />
@@ -78,6 +86,27 @@ afterEach(() => {
 });
 
 describe("WorkflowsTab list (MUL-8377)", () => {
+  it("places workspace task templates between work methods and the status library", () => {
+    renderTab([], [{
+      id: "story-template",
+      workspace_id: "ws-1",
+      name: "Story delivery",
+      fields: [],
+      position: 1,
+      archived: false,
+      created_at: "",
+      updated_at: "",
+    }]);
+
+    const templates = screen.getByRole("region", { name: "Task templates" });
+    expect(within(templates).getByText("Story delivery")).toBeVisible();
+    expect(within(templates).getByRole("button", { name: "New task template" })).toBeEnabled();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent))
+      .toEqual(expect.arrayContaining(["Work methods", "Task templates", "Status library"]));
+    expect(templates.compareDocumentPosition(screen.getByRole("heading", { name: "Status library" })))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it("summarises a long project list in one line and lists it on demand", async () => {
     const projects = Array.from({ length: 25 }, (_, i) => project(`p${i}`, i === 7 ? "数据透明化" : `Sprint ${i}`));
     workflows.push(workflow({ id: "wf-default", name: "Default", is_default: true }));

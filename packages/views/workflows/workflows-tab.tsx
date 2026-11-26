@@ -45,6 +45,7 @@ import { useStatusLabel } from "../issues/utils/status-label";
 import { AppLink, useNavigation } from "../navigation";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { IssueStatusesTab } from "../settings/components/issue-statuses-tab";
+import { TaskTemplatesSection } from "../settings/components/issue-types-section";
 import { SettingsTab } from "../settings/components/settings-layout";
 import { useT } from "../i18n";
 import { useStepHandlerLabel } from "./step-handler";
@@ -58,9 +59,8 @@ const TEMPLATE_PARAM = "template";
 const NEW_WORKFLOW = "new";
 
 /**
- * Settings → Workflows (MUL-7420): the workflows, then the status library
- * they all draw from. `?workflow=<id>` (or `new`) opens the editor in place,
- * so a workflow is a linkable page rather than a dialog.
+ * Settings → Workflows lists workflows, work methods, task templates and
+ * the status library. `?workflow=<id>` (or `new`) opens the workflow editor.
  */
 export function WorkflowsTab() {
   const { t } = useT("issues");
@@ -191,6 +191,8 @@ export function WorkflowsTab() {
       </div>
 
       <WorkMethodCatalog wsId={wsId} canCreate={canCreate} />
+
+      <TaskTemplatesSection canManage={isAdmin} />
 
       <IssueStatusesTab
         embedded={{ title: t(($) => $.workflows.settings.statuses_title) }}

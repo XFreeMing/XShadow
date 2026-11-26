@@ -11,7 +11,7 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 import enSettings from "../../locales/en/settings.json";
-import { IssueTypesSection } from "./issue-types-section";
+import { TaskTemplatesSection } from "./issue-types-section";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -53,6 +53,19 @@ const PROPERTIES: IssueProperty[] = [
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   },
+  {
+    id: "prop-ready",
+    workspace_id: "ws-1",
+    name: "Evidence ready",
+    type: "formula",
+    description: "Checks that the source was added.",
+    config: { expression: "IF({Source URL}, TRUE, FALSE)" },
+    position: 3,
+    archived: false,
+    usage_count: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
 ];
 
 const EXISTING_TYPES: IssueType[] = [
@@ -63,6 +76,7 @@ const EXISTING_TYPES: IssueType[] = [
     fields: [
       { property_id: "prop-url", required: true },
       { property_id: "prop-reads", required: false, default_value: 0 },
+      { property_id: "prop-ready", required: false },
     ],
     position: 1,
     archived: false,
@@ -83,17 +97,13 @@ function renderSection(canManage: boolean) {
         locale="en"
         resources={{ en: { common: enCommon, issues: enIssues, settings: enSettings } }}
       >
-        <IssueTypesSection
-          canManage={canManage}
-          showArchived={false}
-          properties={PROPERTIES}
-        />
+        <TaskTemplatesSection canManage={canManage} />
       </I18nProvider>
     </QueryClientProvider>,
   );
 }
 
-describe("IssueTypesSection", () => {
+describe("TaskTemplatesSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListIssueTypes.mockResolvedValue({ issue_types: EXISTING_TYPES, total: 1 });
@@ -111,6 +121,22 @@ describe("IssueTypesSection", () => {
       listIssueTypes: mockListIssueTypes,
       createIssueType: mockCreateIssueType,
       updateIssueType: mockUpdateIssueType,
+      listProperties: vi.fn(async () => ({ properties: PROPERTIES, total: PROPERTIES.length })),
+      listWorkMethods: vi.fn(async () => [{
+        id: "research-method",
+        name: "Research method",
+        revision: 1,
+        kind: "research",
+        keywords: [],
+        review: "Assess the evidence",
+        rework_step: 0,
+        plan_task: { issue_type_id: "type-research", seed_property_id: "prop-url" },
+        steps: [{
+          name: "Submit evidence",
+          output: "Research findings",
+          table_gate: { issue_type_id: "type-research", property_id: "prop-ready" },
+        }],
+      }]),
     } as unknown as ApiClient);
   });
 
@@ -118,13 +144,17 @@ describe("IssueTypesSection", () => {
     cleanup();
   });
 
-  it("renders configured types with required markers and 0 default, and hides create button for non-admins", async () => {
+  it("shows template fields, formulas and method bindings to non-admins", async () => {
+    const user = userEvent.setup();
     renderSection(false);
-    expect(await screen.findByText("Research")).toBeTruthy();
-    expect(screen.getByText("Source URL")).toBeTruthy();
-    expect(screen.getByText("Read Count")).toBeTruthy();
-    expect(screen.getByText("0")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /New task type/i })).toBeNull();
+    await user.click(await screen.findByText("Research"));
+    expect(screen.getByText("Source URL")).toBeVisible();
+    expect(screen.getByText("Read Count")).toBeVisible();
+    expect(screen.getByText("0")).toBeVisible();
+    expect(screen.getByText("IF({Source URL}, TRUE, FALSE)")).toBeVisible();
+    expect(screen.getByText("Research method")).toBeVisible();
+    expect(screen.getByText(/Submit evidence.*Evidence ready/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /New task template/i })).toBeNull();
   });
 
   it("allows admin to create a new task type with ordered fields and required toggle", async () => {
@@ -132,7 +162,7 @@ describe("IssueTypesSection", () => {
     renderSection(true);
     await screen.findByText("Research");
 
-    await user.click(screen.getByRole("button", { name: /New task type/i }));
+    await user.click(screen.getByRole("button", { name: /New task template/i }));
     const nameInput = await screen.findByLabelText("Name");
     await user.type(nameInput, "Delivery");
 
