@@ -16,6 +16,8 @@ import {
   Search,
   Server,
   Settings,
+  Shapes,
+  ListChecks,
   SlidersHorizontal,
   Tags,
   User,
@@ -47,6 +49,8 @@ import { ConnectedAppsTab, useComposioAvailable } from "./connected-apps-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { LabelsTab } from "./labels-tab";
 import { WorkflowsTab } from "../../workflows/workflows-tab";
+import { WorkMethodsTab } from "../../workflows/work-methods-tab";
+import { TaskTypesSection } from "./issue-types-section";
 import { PropertiesTab } from "./properties-tab";
 import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
@@ -123,6 +127,7 @@ const ANCHOR_WAIT_MS = 1500;
 
 export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
   const { t } = useT("settings");
+  const { t: issueText } = useT("issues");
   const workspace = useCurrentWorkspace();
   const workspaceName = workspace?.name ?? t(($) => $.page.workspace_fallback);
   const { role } = useCurrentMember(workspace?.id ?? "");
@@ -215,6 +220,28 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
             entry("workflows", t(($) => $.page.tabs.workflows), Workflow, <WorkflowsTab />, {
               wide: true,
             }),
+            entry(
+              "work-methods",
+              issueText(($) => $.method.catalog),
+              ListChecks,
+              <WorkMethodsTab
+                canEdit={!!role}
+                settingsPath={paths.settings()}
+                selectedMethodId={navigation.searchParams.get("method")}
+              />,
+              { wide: true },
+            ),
+            entry(
+              "task-types",
+              t(($) => $.properties.issue_types.title),
+              Shapes,
+              <TaskTypesSection
+                canManage={role === "owner" || role === "admin"}
+                settingsPath={paths.settings()}
+                selectedTypeId={navigation.searchParams.get("type")}
+              />,
+              { wide: true },
+            ),
             entry("labels", t(($) => $.page.tabs.labels), Tags, <LabelsTab />, {
               wide: true,
             }),

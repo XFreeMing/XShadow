@@ -54,6 +54,8 @@ vi.mock("./code-tab", stub("CodeTab"));
 vi.mock("./notifications-tab", stub("NotificationsTab"));
 vi.mock("./labels-tab", stub("LabelsTab"));
 vi.mock("../../workflows/workflows-tab", stub("WorkflowsTab"));
+vi.mock("../../workflows/work-methods-tab", stub("WorkMethodsTab"));
+vi.mock("./issue-types-section", stub("TaskTypesSection"));
 vi.mock("./properties-tab", stub("PropertiesTab"));
 vi.mock("./quick-actions-tab", stub("QuickActionsTab"));
 vi.mock("./keyboard-shortcuts-tab", stub("KeyboardShortcutsTab"));
@@ -72,7 +74,7 @@ vi.mock("./connected-apps-tab", () => ({
 
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "ws-1", name: "Acme" }),
-  useWorkspacePaths: () => ({ autopilots: () => "/acme/autopilots" }),
+  useWorkspacePaths: () => ({ autopilots: () => "/acme/autopilots", settings: () => "/acme/settings" }),
 }));
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
@@ -324,6 +326,8 @@ describe("SettingsPage information architecture", () => {
     expect(within(workspace).getByRole("link", { name: "Members" })).toBeInTheDocument();
     const issues = within(nav()).getByRole("region", { name: "Issues & workflow" });
     expect(within(issues).getByRole("link", { name: "Workflows" })).toBeInTheDocument();
+    expect(within(issues).getByRole("link", { name: "Work methods" })).toBeInTheDocument();
+    expect(within(issues).getByRole("link", { name: "Task types" })).toBeInTheDocument();
     const connections = within(nav()).getByRole("region", { name: "Connections & extensions" });
     for (const name of ["Code", "Messaging", "MCP servers"]) {
       expect(within(connections).getByRole("link", { name })).toBeInTheDocument();

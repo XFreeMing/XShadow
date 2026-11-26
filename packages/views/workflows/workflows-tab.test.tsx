@@ -4,12 +4,9 @@ import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildIssueStatusCatalog } from "@multica/core/issue-statuses";
-import { issueTypeListOptions } from "@multica/core/issue-types";
-import { workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
-import { propertyListOptions } from "@multica/core/properties";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { memberListOptions } from "@multica/core/workspace/queries";
-import type { IssueType, IssueWorkflow, Project } from "@multica/core/types";
+import type { IssueWorkflow, Project } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { WorkflowsTab } from "./workflows-tab";
 
@@ -66,13 +63,10 @@ function workflow(partial: Partial<IssueWorkflow>): IssueWorkflow {
   } as IssueWorkflow;
 }
 
-function renderTab(projects: Project[], types: IssueType[] = []) {
+function renderTab(projects: Project[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(projectListOptions("ws-1").queryKey, { projects } as never);
   qc.setQueryData(memberListOptions("ws-1").queryKey, [{ user_id: "user-1", role: "owner" }] as never);
-  qc.setQueryData(issueTypeListOptions("ws-1", true).queryKey, { issue_types: types, total: types.length });
-  qc.setQueryData(propertyListOptions("ws-1", true).queryKey, { properties: [], total: 0 });
-  qc.setQueryData(workMethodCatalogOptions("ws-1").queryKey, []);
   renderWithI18n(
     <QueryClientProvider client={qc}>
       <WorkflowsTab />
@@ -86,25 +80,11 @@ afterEach(() => {
 });
 
 describe("WorkflowsTab list (MUL-8377)", () => {
-  it("places template-backed work methods above the status library", () => {
-    renderTab([], [{
-      id: "story-template",
-      workspace_id: "ws-1",
-      name: "Story delivery",
-      fields: [],
-      position: 1,
-      archived: false,
-      created_at: "",
-      updated_at: "",
-    }]);
-
-    const templates = screen.getByRole("region", { name: "Task types and work methods" });
-    expect(within(templates).getByText("Story delivery")).toBeVisible();
-    expect(within(templates).getByRole("button", { name: "New task type" })).toBeEnabled();
+  it("keeps task types and work methods out of the workflow settings", () => {
+    renderTab([]);
     expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent))
-      .toEqual(["Workflows", "Task types and work methods", "Status library"]);
-    expect(templates.compareDocumentPosition(screen.getByRole("heading", { name: "Status library" })))
-      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      .toEqual(["Workflows", "Status library"]);
+    expect(screen.queryByRole("button", { name: "New task type" })).not.toBeInTheDocument();
   });
 
   it("summarises a long project list in one line and lists it on demand", async () => {

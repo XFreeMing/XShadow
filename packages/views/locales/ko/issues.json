@@ -67,7 +67,7 @@
     "review": "최종 검토 기준",
     "rework_step": "돌아갈 단계",
     "name": "방법 이름",
-    "kind": "작업 유형",
+    "kind": "방법 분류",
     "keyword_hint": "쉼표로 키워드 구분",
     "step_label": "단계",
     "step_name": "단계 이름",

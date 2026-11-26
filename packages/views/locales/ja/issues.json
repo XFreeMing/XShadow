@@ -67,7 +67,7 @@
     "review": "最終審査基準",
     "rework_step": "差し戻し先",
     "name": "手法名",
-    "kind": "タスクの種類",
+    "kind": "方法の分類",
     "keyword_hint": "キーワードをカンマで区切ってください",
     "step_label": "ステップ",
     "step_name": "ステップ名",

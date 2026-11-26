@@ -67,7 +67,7 @@
     "review": "最終審查依據",
     "rework_step": "退回步驟",
     "name": "方法名稱",
-    "kind": "任務類型",
+    "kind": "方法類別",
     "keyword_hint": "多個詞以逗號分隔",
     "step_label": "步驟",
     "step_name": "步驟名稱",

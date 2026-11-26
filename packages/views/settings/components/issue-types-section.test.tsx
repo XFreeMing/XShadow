@@ -11,10 +11,14 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 import enSettings from "../../locales/en/settings.json";
-import { TaskTemplatesSection } from "./issue-types-section";
+import { TaskTypesSection } from "./issue-types-section";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("../../navigation", () => ({
+  AppLink: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
 }));
 
 vi.mock("sonner", () => ({
@@ -97,13 +101,13 @@ function renderSection(canManage: boolean) {
         locale="en"
         resources={{ en: { common: enCommon, issues: enIssues, settings: enSettings } }}
       >
-        <TaskTemplatesSection canManage={canManage} />
+        <TaskTypesSection canManage={canManage} settingsPath="/demo/settings" />
       </I18nProvider>
     </QueryClientProvider>,
   );
 }
 
-describe("TaskTemplatesSection", () => {
+describe("TaskTypesSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListIssueTypes.mockResolvedValue({ issue_types: EXISTING_TYPES, total: 1 });
@@ -165,7 +169,9 @@ describe("TaskTemplatesSection", () => {
     expect(screen.getByText("Read Count")).toBeVisible();
     expect(screen.getByText("0")).toBeVisible();
     expect(screen.getByText("IF({Source URL}, TRUE, FALSE)")).toBeVisible();
-    expect(screen.getByText("Research method")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Research method" }))
+      .toHaveAttribute("href", "/demo/settings?tab=work-methods&method=research-method");
+    expect(screen.queryByRole("button", { name: "Edit method" })).not.toBeInTheDocument();
     expect(screen.getByText(/Submit evidence.*Evidence ready/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "New task type" })).toBeNull();
   });

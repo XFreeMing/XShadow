@@ -67,7 +67,7 @@
     "review": "最终评审依据",
     "rework_step": "返工步骤",
     "name": "方法名称",
-    "kind": "任务类型",
+    "kind": "方法类别",
     "keyword_hint": "多个词用逗号分隔",
     "step_label": "步骤",
     "step_name": "步骤名称",

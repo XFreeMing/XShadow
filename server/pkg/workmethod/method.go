@@ -152,7 +152,7 @@ func Validate(m Template) error {
 	switch m.Kind {
 	case "development", "research", "outcome":
 	default:
-		return errors.New("未知任务类型")
+		return errors.New("未知工作方法类别")
 	}
 	if target := m.GitHubDelivery; target != nil && (m.Kind != "development" || !target.Valid()) {
 		return errors.New("GitHub 交付须配置研发仓库和目标分支")

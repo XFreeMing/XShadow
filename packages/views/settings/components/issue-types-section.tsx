@@ -56,21 +56,23 @@ import {
   CustomPropertyValueInput,
 } from "../../issues/components/pickers/custom-property-picker";
 import { useT } from "../../i18n";
+import { AppLink } from "../../navigation";
 import { specializedIssuePropertyIds } from "../../issues/issue-type-create-fields";
 import { useStatusLabel } from "../../issues/utils/status-label";
-import { WorkMethodEditor } from "../../workflows/work-method-editor";
-import { WorkMethodSteps } from "../../workflows/work-method-step";
 import { PropertyTypeLabel } from "./properties-tab";
+import { SettingsTab } from "./settings-layout";
 import { TaskTemplateGrid, type TemplateGridColumn } from "./task-template-grid";
 
 const MAX_ACTIVE_ISSUE_TYPES = 50;
 
-export function TaskTemplatesSection({
+export function TaskTypesSection({
   canManage,
-  canEditMethods = false,
+  settingsPath,
+  selectedTypeId,
 }: {
   canManage: boolean;
-  canEditMethods?: boolean;
+  settingsPath: string;
+  selectedTypeId?: string | null;
 }) {
   const { t } = useT("settings");
   const { t: issueText } = useT("issues");
@@ -106,13 +108,9 @@ export function TaskTemplatesSection({
   const commonFields = activeProperties.filter((property) => !specializedPropertyIds.has(property.id));
 
   return (
-    <section id="task-templates" aria-labelledby="task-templates-heading" className="space-y-3">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <h2 id="task-templates-heading" className="text-heading font-semibold">
-            {t(($) => $.properties.issue_types.title)}
-          </h2>
-        </div>
+    <SettingsTab
+      title={t(($) => $.properties.issue_types.title)}
+      actions={(canManage || issueTypes.length > activeCount) && (
         <div className="flex flex-wrap items-center gap-2">
           {issueTypes.length > activeCount && (
             <Button size="sm" variant="ghost" aria-pressed={showArchived} onClick={() => setShowArchived(!showArchived)}>
@@ -123,7 +121,6 @@ export function TaskTemplatesSection({
             <Button
               size="sm"
               variant="outline"
-              className="gap-1.5"
               onClick={() => setCreateOpen(true)}
               disabled={isLoading || isError || activeCount >= MAX_ACTIVE_ISSUE_TYPES}
             >
@@ -132,8 +129,8 @@ export function TaskTemplatesSection({
             </Button>
           )}
         </div>
-      </div>
-
+      )}
+    >
       <div className="overflow-hidden rounded-lg border border-surface-border bg-card">
         {isLoading ? (
           <div className="px-4 py-8 text-center text-body text-muted-foreground">
@@ -173,7 +170,7 @@ export function TaskTemplatesSection({
                   key={issueType.id}
                   className="flex items-start justify-between gap-2 px-4 py-2"
                 >
-                  <details className="min-w-0 flex-1">
+                  <details className="min-w-0 flex-1" open={selectedTypeId === issueType.id || undefined}>
                     <summary className="cursor-pointer rounded-sm py-1 text-body font-medium focus-visible:outline-2 focus-visible:outline-ring">
                       {issueType.name}
                       {issueType.archived && (
@@ -182,7 +179,7 @@ export function TaskTemplatesSection({
                         </Badge>
                       )}
                     </summary>
-                    <TaskTemplateDetails issueType={issueType} propertyById={propertyById} methods={methods} canEditMethods={canEditMethods} />
+                    <TaskTypeDetails issueType={issueType} propertyById={propertyById} methods={methods} settingsPath={settingsPath} />
                   </details>
 
                   {canManage && (
@@ -255,39 +252,37 @@ export function TaskTemplatesSection({
         activeProperties={activeProperties}
         propertyById={propertyById}
       />
-    </section>
+    </SettingsTab>
   );
 }
 
-function TaskTemplateDetails({
+function TaskTypeDetails({
   issueType,
   propertyById,
   methods,
-  canEditMethods,
+  settingsPath,
 }: {
   issueType: IssueType;
   propertyById: ReadonlyMap<string, IssueProperty>;
   methods: WorkMethod[];
-  canEditMethods: boolean;
+  settingsPath: string;
 }) {
   const { t } = useT("settings");
   const { t: issueText } = useT("issues");
   const wsId = useWorkspaceId();
   const { activeStatuses } = useIssueStatuses(wsId);
   const statusLabel = useStatusLabel(wsId);
-  const [editing, setEditing] = useState<WorkMethod | null>(null);
   const columns: TemplateGridColumn[] = [
     {
       id: "status",
       name: issueText(($) => $.table.columns.status),
       typeLabel: (
-        <button
-          type="button"
+        <AppLink
+          href={`${settingsPath}?tab=workflows&section=status-library`}
           className="max-w-full truncate rounded-sm underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-          onClick={() => document.getElementById("status-library")?.scrollIntoView({ block: "start" })}
         >
           {issueText(($) => $.workflows.settings.statuses_title)}
-        </button>
+        </AppLink>
       ),
       icon: <CircleDot className="size-3.5" />,
       required: false,
@@ -335,7 +330,12 @@ function TaskTemplateDetails({
           <h3 className="font-medium">{t(($) => $.properties.issue_types.method_bindings)}</h3>
           {bindings.map(({ method, fromPlan, fromRework, gates }) => (
             <div key={method.id} className="space-y-1">
-              <p className="font-medium">{method.name}</p>
+              <AppLink
+                className="font-medium underline-offset-2 hover:underline"
+                href={`${settingsPath}?tab=work-methods&method=${encodeURIComponent(method.id)}`}
+              >
+                {method.name}
+              </AppLink>
               {fromPlan && <p className="text-muted-foreground">{t(($) => $.properties.issue_types.from_plan)}</p>}
               {fromRework && <p className="text-muted-foreground">{t(($) => $.properties.issue_types.from_rework)}</p>}
               {gates.length > 0 && (
@@ -349,19 +349,6 @@ function TaskTemplateDetails({
                     </li>
                   ))}
                 </ul>
-              )}
-              {(fromPlan || gates.length > 0) && (
-                <>
-                  <WorkMethodSteps steps={method.steps} />
-                  {canEditMethods && !editing && (
-                    <Button size="xs" variant="outline" className="mt-2" onClick={() => setEditing(method)}>
-                      {issueText(($) => $.method.edit)}
-                    </Button>
-                  )}
-                  {editing?.id === method.id && (
-                    <WorkMethodEditor wsId={wsId} original={editing} onClose={() => setEditing(null)} />
-                  )}
-                </>
               )}
             </div>
           ))}

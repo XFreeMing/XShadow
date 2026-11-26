@@ -280,7 +280,7 @@ export function IssueStatusesTab({
   );
 
   return embedded ? (
-    <section id="status-library" className="space-y-4">
+    <section id="status-library" data-settings-anchor="status-library" className="space-y-4">
       <h3 className="text-title-sm font-semibold">{embedded.title}</h3>
       {body}
     </section>

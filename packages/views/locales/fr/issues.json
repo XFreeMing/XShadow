@@ -67,7 +67,7 @@
     "review": "Critères de revue finale",
     "rework_step": "Étape de retour",
     "name": "Nom de la méthode",
-    "kind": "Type de tâche",
+    "kind": "Catégorie de méthode",
     "keyword_hint": "Séparez les mots par des virgules",
     "step_label": "Étape",
     "step_name": "Nom de l’étape",

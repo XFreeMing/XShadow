@@ -67,7 +67,7 @@
     "review": "Criterios de revisión final",
     "rework_step": "Volver al paso",
     "name": "Nombre del método",
-    "kind": "Tipo de tarea",
+    "kind": "Categoría del método",
     "keyword_hint": "Separa las palabras con comas",
     "step_label": "Paso",
     "step_name": "Nombre del paso",

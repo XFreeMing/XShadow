@@ -67,7 +67,7 @@
     "review": "Final review criteria",
     "rework_step": "Return to step",
     "name": "Method name",
-    "kind": "Task type",
+    "kind": "Method category",
     "keyword_hint": "Separate keywords with commas",
     "step_label": "Step",
     "step_name": "Step name",
