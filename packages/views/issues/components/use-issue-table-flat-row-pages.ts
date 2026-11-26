@@ -11,7 +11,9 @@ export function useIssueTableFlatRowPages(
   wsId: string,
   serverQuery: IssueTableQuerySpec,
   pageLimit: number,
+  options?: { autoLoadAll?: boolean },
 ) {
+  const autoLoadAll = options?.autoLoadAll ?? false;
   const queryIdentity = useMemo(
     () => hashKey([wsId, serverQuery]),
     [serverQuery, wsId],
@@ -127,6 +129,11 @@ export function useIssueTableFlatRowPages(
       return { identity: queryIdentity, cursors: [...current, nextCursor] };
     });
   }, [flatPageState.nextCursor, flatPageState.validPrefixLength, queryIdentity]);
+
+  useEffect(() => {
+    if (!autoLoadAll || !canLoadMore || isTailLoading || isTailError) return;
+    handleLoadMore();
+  }, [autoLoadAll, canLoadMore, handleLoadMore, isTailError, isTailLoading]);
 
   return {
     issues: flatPageState.issues,

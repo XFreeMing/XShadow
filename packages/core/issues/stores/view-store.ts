@@ -46,6 +46,7 @@ export type ViewMode =
   | "table"
   | "grid"
   | "gallery"
+  | "calendar"
   | "gantt"
   | "swimlane";
 export type GanttZoom = "day" | "week" | "month";
@@ -282,7 +283,9 @@ export function defaultSortDirection(field: SortField): SortDirection {
 
 /** Only expose card controls that the active renderer can honor. */
 export function cardPropertyOptionsForView(viewMode: ViewMode) {
-  if (viewMode === "table" || viewMode === "grid" || viewMode === "gantt") return [];
+  if (viewMode === "table" || viewMode === "grid" || viewMode === "gantt" || viewMode === "calendar") {
+    return [];
+  }
   if (viewMode === "gallery" || viewMode === "list") {
     return CARD_PROPERTY_OPTIONS.filter((option) => option.key !== "description");
   }

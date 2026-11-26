@@ -44,6 +44,7 @@ import { IssueGanttPanel, type GanttMode } from "../components/issue-gantt-panel
 import { ListView } from "../components/list-view";
 import { MultidimensionalGridView } from "../components/multidimensional-grid-view";
 import { IssueGalleryView } from "../components/issue-gallery-view";
+import { IssueCalendarView } from "../components/issue-calendar-view";
 import { SwimLaneView } from "../components/swimlane-view";
 import { TableView } from "../components/table-view";
 import { useT } from "../../i18n";
@@ -404,6 +405,9 @@ function IssueSurfaceContent({
             )}
             {controller.viewMode === "gallery" && (
               <IssueGalleryView serverQuery={controller.tableQuerySpec} />
+            )}
+            {controller.viewMode === "calendar" && (
+              <IssueCalendarView serverQuery={controller.tableQuerySpec} />
             )}
             {controller.viewMode === "swimlane" && (
               <SwimLaneView

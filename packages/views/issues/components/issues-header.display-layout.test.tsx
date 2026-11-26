@@ -19,7 +19,12 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 function renderDisplay(
-  props: { allowGantt?: boolean; allowGrid?: boolean; allowGallery?: boolean } = {},
+  props: {
+    allowGantt?: boolean;
+    allowGrid?: boolean;
+    allowGallery?: boolean;
+    allowCalendar?: boolean;
+  } = {},
   setup: (store: StoreApi<IssueViewState>) => void = () => {},
 ) {
   setApiInstance(
@@ -93,6 +98,17 @@ describe("Display layout", () => {
     const layouts = await screen.findByRole("group", { name: "View" });
     fireEvent.click(within(layouts).getByRole("button", { name: "Gallery" }));
     expect(store.getState().viewMode).toBe("gallery");
+  });
+
+  it("switches to Calendar when allowCalendar is enabled", async () => {
+    const store = renderDisplay(
+      { allowCalendar: true },
+      (s) => s.getState().setViewMode("board"),
+    );
+
+    const layouts = await screen.findByRole("group", { name: "View" });
+    fireEvent.click(within(layouts).getByRole("button", { name: "Calendar" }));
+    expect(store.getState().viewMode).toBe("calendar");
   });
 
   it("keeps the table's grouping and columns in the panel", async () => {

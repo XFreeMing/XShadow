@@ -464,7 +464,9 @@
     "grid": "多維檢視",
     "gallery": "畫冊",
     "gantt": "甘特圖",
-    "swimlane": "泳道"
+    "swimlane": "泳道",
+    "tooltip_calendar": "日曆檢視",
+    "calendar": "日曆"
   },
   "table": {
     "select_all": "選擇所有可見任務",
@@ -2161,5 +2163,22 @@
     "status_failed": "幕僚長未能處理這條答覆",
     "status_no_record": "幕僚長執行已結束，但沒有留下處理記錄",
     "description_toggle": "任務說明"
+  },
+  "calendar": {
+    "prev": "上個月",
+    "today": "今天",
+    "next": "下個月",
+    "empty_month": "本月沒有任務",
+    "loading_more": "載入更多…",
+    "issue_count": "共 {{count}} 項",
+    "weekdays": {
+      "sun": "日",
+      "mon": "一",
+      "tue": "二",
+      "wed": "三",
+      "thu": "四",
+      "fri": "五",
+      "sat": "六"
+    }
   }
 }

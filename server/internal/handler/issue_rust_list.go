@@ -47,6 +47,7 @@ type rustIssueListQuery struct {
 	Metadata           json.RawMessage        `json:"metadata,omitempty"`
 	Properties         [][]json.RawMessage    `json:"properties,omitempty"`
 	Date               *rustIssueDate         `json:"date,omitempty"`
+	IssueDateBound     *rustIssueDateBound    `json:"issue_date_bound,omitempty"`
 	InvolvesUserID     *string                `json:"involves_user_id,omitempty"`
 	MyRelations        *rustIssueRelations    `json:"my_relations,omitempty"`
 	Relations          *rustIssueRelations    `json:"relations,omitempty"`
@@ -134,6 +135,12 @@ type rustIssueDate struct {
 	Column string    `json:"column"`
 	Start  time.Time `json:"start"`
 	End    time.Time `json:"end"`
+}
+
+type rustIssueDateBound struct {
+	Field string `json:"field"`
+	Start string `json:"start"`
+	End   string `json:"end"`
 }
 
 func rustIssueActors(filters []issueActorFilter) []rustIssueActor {

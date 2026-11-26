@@ -52,6 +52,7 @@ pub struct IssueListQuery {
     metadata: Option<Value>,
     properties: Vec<Vec<Value>>,
     date: Option<DateFilter>,
+    issue_date_bound: Option<IssueDateBound>,
     involves_user_id: Option<String>,
     my_relations: Option<Relations>,
     relations: Option<Relations>,
@@ -134,6 +135,20 @@ struct DateFilter {
 enum DateColumn {
     CreatedAt,
     UpdatedAt,
+}
+
+#[derive(Clone, Deserialize)]
+struct IssueDateBound {
+    field: IssueDateColumn,
+    start: String,
+    end: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IssueDateColumn {
+    DueDate,
+    StartDate,
 }
 
 #[derive(Serialize)]
@@ -368,6 +383,21 @@ fn add_query_conditions<'a>(sql: &mut QueryBuilder<'a, Postgres>, query: &'a Iss
             .push(" < ")
             .push_bind(&date.end)
             .push("::timestamptz");
+    }
+    if let Some(bound) = &query.issue_date_bound {
+        let column = match bound.field {
+            IssueDateColumn::DueDate => "i.due_date",
+            IssueDateColumn::StartDate => "i.start_date",
+        };
+        sql.push(" AND ")
+            .push(column)
+            .push(" >= ")
+            .push_bind(&bound.start)
+            .push("::date AND ")
+            .push(column)
+            .push(" < ")
+            .push_bind(&bound.end)
+            .push("::date");
     }
     if let Some(user) = &query.involves_user_id {
         sql.push(" AND ");
@@ -742,5 +772,26 @@ impl<'a> IssueSort<'a> {
             sql.push(", i.created_at DESC");
         }
         sql.push(", i.id DESC");
+    }
+}
+
+#[cfg(test)]
+mod issue_date_bound_tests {
+    use super::{IssueDateColumn, IssueListQuery};
+
+    #[test]
+    fn deserializes_issue_date_bound_for_table_query() {
+        let query: IssueListQuery = serde_json::from_value(serde_json::json!({
+            "issue_date_bound": {
+                "field": "due_date",
+                "start": "2026-11-01",
+                "end": "2026-12-01",
+            }
+        }))
+        .expect("issue_date_bound should deserialize");
+        let bound = query.issue_date_bound.expect("bound");
+        assert!(matches!(bound.field, IssueDateColumn::DueDate));
+        assert_eq!(bound.start, "2026-11-01");
+        assert_eq!(bound.end, "2026-12-01");
     }
 }

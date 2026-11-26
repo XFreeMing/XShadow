@@ -81,6 +81,12 @@ type issueTableDateFilterRequest struct {
 	End   string `json:"end"`
 }
 
+type issueTableIssueDateBoundRequest struct {
+	Field string `json:"field"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
 type issueTableFiltersRequest struct {
 	Statuses          []string             `json:"statuses,omitempty"`
 	Priorities        []string             `json:"priorities,omitempty"`
@@ -110,10 +116,11 @@ type issueTableFiltersRequest struct {
 	Advanced *issueTableFilterNode `json:"advanced,omitempty"`
 	// Members are raw JSON so operator objects ({op, value}) and plain
 	// strings both survive the round-trip into parsePropertiesFilterParam.
-	Properties      map[string][]json.RawMessage `json:"properties,omitempty"`
-	Date            *issueTableDateFilterRequest `json:"date,omitempty"`
-	WorkingOnly     bool                         `json:"working_only,omitempty"`
-	WorkingIssueIDs []string                     `json:"working_issue_ids,omitempty"`
+	Properties      map[string][]json.RawMessage     `json:"properties,omitempty"`
+	Date            *issueTableDateFilterRequest     `json:"date,omitempty"`
+	IssueDateBound  *issueTableIssueDateBoundRequest `json:"issue_date_bound,omitempty"`
+	WorkingOnly     bool                             `json:"working_only,omitempty"`
+	WorkingIssueIDs []string                         `json:"working_issue_ids,omitempty"`
 	// UnreadIssueIDs is the viewer's unread issues as the client holds them
 	// (`/api/issues/unread`, plus any it keeps on screen after reading). An
 	// explicit empty list matches nothing.
@@ -889,6 +896,29 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		}
 		where = append(where, fmt.Sprintf("i.%s >= %s AND i.%s < %s", column, addArg(start), column, addArg(end)))
 		native.Date = &rustIssueDate{Column: column, Start: start, End: end}
+	}
+
+	if spec.Filters.IssueDateBound != nil {
+		column := ""
+		switch spec.Filters.IssueDateBound.Field {
+		case "due_date", "start_date":
+			column = spec.Filters.IssueDateBound.Field
+		default:
+			writeError(w, http.StatusBadRequest, "invalid filters.issue_date_bound.field")
+			return issueTableSQL{}, false
+		}
+		start, startErr := time.Parse(time.DateOnly, strings.TrimSpace(spec.Filters.IssueDateBound.Start))
+		end, endErr := time.Parse(time.DateOnly, strings.TrimSpace(spec.Filters.IssueDateBound.End))
+		if startErr != nil || endErr != nil || !start.Before(end) {
+			writeError(w, http.StatusBadRequest, "invalid filters.issue_date_bound range")
+			return issueTableSQL{}, false
+		}
+		where = append(where, fmt.Sprintf("i.%s >= %s::date AND i.%s < %s::date", column, addArg(start.Format(time.DateOnly)), column, addArg(end.Format(time.DateOnly))))
+		native.IssueDateBound = &rustIssueDateBound{
+			Field: column,
+			Start: start.Format(time.DateOnly),
+			End:   end.Format(time.DateOnly),
+		}
 	}
 
 	if spec.Filters.WorkingOnly {

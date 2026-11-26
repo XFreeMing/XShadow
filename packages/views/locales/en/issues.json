@@ -461,6 +461,7 @@
     "tooltip_table": "Table view",
     "tooltip_grid": "Multidimensional view",
     "tooltip_gallery": "Gallery view",
+    "tooltip_calendar": "Calendar view",
     "tooltip_gantt": "Gantt view",
     "tooltip_swimlane": "Swimlane view",
     "section": "View",
@@ -469,6 +470,7 @@
     "table": "Table",
     "grid": "Multidimensional view",
     "gallery": "Gallery",
+    "calendar": "Calendar",
     "gantt": "Gantt",
     "swimlane": "Swimlane"
   },
@@ -538,6 +540,23 @@
       "sum": "Sum",
       "average": "Average",
       "count": "Count"
+    }
+  },
+  "calendar": {
+    "prev": "Previous month",
+    "today": "Today",
+    "next": "Next month",
+    "empty_month": "No issues in this month",
+    "loading_more": "Loading more…",
+    "issue_count": "{{count}} scheduled",
+    "weekdays": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
     }
   },
   "gantt": {

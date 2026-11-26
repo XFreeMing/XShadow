@@ -385,6 +385,13 @@ export interface IssueTableFilters {
     start: string;
     end: string;
   };
+  /** Calendar window on a native issue date column (start inclusive, end
+   *  exclusive, YYYY-MM-DD). ANDed with every other filter. */
+  issue_date_bound?: {
+    field: "due_date" | "start_date";
+    start: string;
+    end: string;
+  };
   working_only?: boolean;
   /** Match the running-task issue projection returned by
    *  `/api/working-agents`. An explicit empty list matches nothing. */

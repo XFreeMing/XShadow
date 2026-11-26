@@ -455,6 +455,7 @@
     "tooltip_table": "表格视图",
     "tooltip_grid": "多维视图",
     "tooltip_gallery": "画册视图",
+    "tooltip_calendar": "日历视图",
     "tooltip_gantt": "甘特图",
     "tooltip_swimlane": "泳道视图",
     "section": "视图",
@@ -463,6 +464,7 @@
     "table": "表格",
     "grid": "多维视图",
     "gallery": "画册",
+    "calendar": "日历",
     "gantt": "甘特图",
     "swimlane": "泳道"
   },
@@ -532,6 +534,23 @@
       "sum": "总和",
       "average": "平均值",
       "count": "计数"
+    }
+  },
+  "calendar": {
+    "prev": "上个月",
+    "today": "今天",
+    "next": "下个月",
+    "empty_month": "本月没有任务",
+    "loading_more": "加载更多…",
+    "issue_count": "共 {{count}} 项",
+    "weekdays": {
+      "sun": "日",
+      "mon": "一",
+      "tue": "二",
+      "wed": "三",
+      "thu": "四",
+      "fri": "五",
+      "sat": "六"
     }
   },
   "gantt": {

@@ -464,7 +464,9 @@
     "grid": "다차원 보기",
     "gallery": "갤러리",
     "gantt": "간트",
-    "swimlane": "스윔레인"
+    "swimlane": "스윔레인",
+    "tooltip_calendar": "캘린더 보기",
+    "calendar": "캘린더"
   },
   "table": {
     "select_all": "표시된 모든 태스크 선택",
@@ -2161,5 +2163,22 @@
     "status_failed": "비서실장이 이 답변을 처리하지 못했습니다",
     "status_no_record": "비서실장 실행이 끝났지만 처리 기록이 없습니다",
     "description_toggle": "작업 설명"
+  },
+  "calendar": {
+    "prev": "Previous month",
+    "today": "Today",
+    "next": "Next month",
+    "empty_month": "No issues in this month",
+    "loading_more": "Loading more…",
+    "issue_count": "{{count}} scheduled",
+    "weekdays": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
+    }
   }
 }

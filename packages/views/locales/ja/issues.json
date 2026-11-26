@@ -464,7 +464,9 @@
     "grid": "多次元ビュー",
     "gallery": "ギャラリー",
     "gantt": "ガント",
-    "swimlane": "スイムレーン"
+    "swimlane": "スイムレーン",
+    "tooltip_calendar": "カレンダー表示",
+    "calendar": "カレンダー"
   },
   "table": {
     "select_all": "表示中のタスクをすべて選択",
@@ -2161,5 +2163,22 @@
     "status_failed": "幕僚長がこの回答を処理できませんでした",
     "status_no_record": "幕僚長の実行は終了しましたが、対応記録がありません",
     "description_toggle": "タスクの説明"
+  },
+  "calendar": {
+    "prev": "Previous month",
+    "today": "Today",
+    "next": "Next month",
+    "empty_month": "No issues in this month",
+    "loading_more": "Loading more…",
+    "issue_count": "{{count}} scheduled",
+    "weekdays": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
+    }
   }
 }

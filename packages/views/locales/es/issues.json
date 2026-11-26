@@ -460,7 +460,9 @@
     "grid": "Vista multidimensional",
     "gallery": "Galería",
     "gantt": "Gantt",
-    "swimlane": "Carriles"
+    "swimlane": "Carriles",
+    "tooltip_calendar": "Vista calendario",
+    "calendar": "Calendario"
   },
   "table": {
     "select_all": "Seleccionar todas las tareas visibles",
@@ -2242,5 +2244,22 @@
     "status_failed": "El jefe de gabinete no pudo procesar esta respuesta",
     "status_no_record": "La ejecución del jefe de gabinete terminó sin un registro de gestión",
     "description_toggle": "Descripción de la tarea"
+  },
+  "calendar": {
+    "prev": "Previous month",
+    "today": "Today",
+    "next": "Next month",
+    "empty_month": "No issues in this month",
+    "loading_more": "Loading more…",
+    "issue_count": "{{count}} scheduled",
+    "weekdays": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
+    }
   }
 }

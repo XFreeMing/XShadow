@@ -1822,6 +1822,7 @@ const LAYOUTS: { mode: ViewMode; Icon: typeof List }[] = [
   { mode: "table", Icon: Table2 },
   { mode: "grid", Icon: LayoutGrid },
   { mode: "gallery", Icon: Image },
+  { mode: "calendar", Icon: CalendarDays },
   { mode: "swimlane", Icon: Waves },
   { mode: "gantt", Icon: ChartGantt },
 ];
@@ -1832,6 +1833,7 @@ export function IssueDisplayControls({
   allowGantt = false,
   allowGrid = false,
   allowGallery = false,
+  allowCalendar = false,
   dateFilter = null,
   onDateFilterChange,
   facetCountsExact = true,
@@ -1858,6 +1860,7 @@ export function IssueDisplayControls({
   allowGantt?: boolean;
   allowGrid?: boolean;
   allowGallery?: boolean;
+  allowCalendar?: boolean;
   /**
    * Whether `scopedIssues` covers the surface's full window. Table does not
    * use loaded rows for counts; server-paged List, Board, and Swimlane follow
@@ -2035,18 +2038,20 @@ export function IssueDisplayControls({
         : effectiveTableGrouping === "project"
           ? t(($) => $.table.columns.project)
           : t(($) => $.table.group_none);
-  // A Gantt, Grid, or Gallery layout persisted on a surface without it renders as List.
+  // A Gantt, Grid, Gallery, or Calendar layout persisted on a surface without it renders as List.
   const layout: ViewMode =
     (viewMode === "gantt" && !allowGantt) ||
     (viewMode === "grid" && !allowGrid) ||
-    (viewMode === "gallery" && !allowGallery)
+    (viewMode === "gallery" && !allowGallery) ||
+    (viewMode === "calendar" && !allowCalendar)
       ? "list"
       : viewMode;
   const layouts = LAYOUTS.filter(
     ({ mode }) =>
       (mode !== "gantt" || allowGantt) &&
       (mode !== "grid" || allowGrid) &&
-      (mode !== "gallery" || allowGallery),
+      (mode !== "gallery" || allowGallery) &&
+      (mode !== "calendar" || allowCalendar),
   );
   const LayoutIcon = hideViewToggle
     ? SlidersHorizontal

@@ -470,7 +470,9 @@
     "grid": "Vue multidimensionnelle",
     "gallery": "Galerie",
     "gantt": "Gantt",
-    "swimlane": "Couloirs"
+    "swimlane": "Couloirs",
+    "tooltip_calendar": "Vue calendrier",
+    "calendar": "Calendrier"
   },
   "table": {
     "select_all": "Sélectionner toutes les tâches visibles",
@@ -2242,5 +2244,22 @@
     "status_failed": "Le chef de cabinet n'a pas pu traiter cette réponse",
     "status_no_record": "L'exécution du chef de cabinet s'est terminée sans trace de traitement",
     "description_toggle": "Description de la tâche"
+  },
+  "calendar": {
+    "prev": "Previous month",
+    "today": "Today",
+    "next": "Next month",
+    "empty_month": "No issues in this month",
+    "loading_more": "Loading more…",
+    "issue_count": "{{count}} scheduled",
+    "weekdays": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
+    }
   }
 }

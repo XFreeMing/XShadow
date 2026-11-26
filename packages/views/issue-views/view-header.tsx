@@ -589,6 +589,7 @@ export function IssueViewHeader({
             allowGantt={controller.allowGantt}
             allowGrid={controller.allowGrid}
             allowGallery={controller.allowGallery}
+            allowCalendar={controller.allowCalendar}
             facetCountsExact={controller.facetCountsExact}
             tableFacetCounts={controller.tableFacetCounts}
             onTableFacetChange={controller.setActiveTableFacet}

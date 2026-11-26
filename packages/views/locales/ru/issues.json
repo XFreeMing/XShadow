@@ -481,7 +481,9 @@
     "grid": "Многомерный вид",
     "gallery": "Галерея",
     "gantt": "Диаграмма Ганта",
-    "swimlane": "Дорожки"
+    "swimlane": "Дорожки",
+    "tooltip_calendar": "Вид «Календарь»",
+    "calendar": "Календарь"
   },
   "table": {
     "select_all": "Выбрать все видимые задачи",
@@ -2410,5 +2412,22 @@
     "status_failed": "Руководитель аппарата не смог обработать этот ответ",
     "status_no_record": "Запуск руководителя аппарата завершился без записи об обработке",
     "description_toggle": "Описание задачи"
+  },
+  "calendar": {
+    "prev": "Previous month",
+    "today": "Today",
+    "next": "Next month",
+    "empty_month": "No issues in this month",
+    "loading_more": "Loading more…",
+    "issue_count": "{{count}} scheduled",
+    "weekdays": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
+    }
   }
 }
