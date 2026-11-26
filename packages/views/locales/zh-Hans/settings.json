@@ -719,7 +719,9 @@
       "multi_actor": "成员（多选）",
       "multi_text": "文本列表",
       "multi_url": "链接列表",
-      "record_relation": "记录关联"
+      "record_relation": "记录关联",
+      "lookup": "查找",
+      "formula": "公式"
     },
     "actions": {
       "open": "{{name}} 的操作",
@@ -739,6 +741,12 @@
       "type": "类型",
       "type_locked_hint": "创建后类型不可修改。",
       "record_relation_table_required": "请选择该属性要关联的工作区数据表。",
+      "lookup_relation": "记录关联字段",
+      "lookup_relation_placeholder": "选择一条记录关联属性",
+      "lookup_target_field": "目标字段",
+      "lookup_target_field_placeholder": "选择关联表中的字段",
+      "formula_expression": "表达式",
+      "formula_expression_placeholder": "例如 SUM({优先级分数})",
       "description": "描述",
       "description_placeholder": "这个属性的含义以及何时设置",
       "options": "选项",

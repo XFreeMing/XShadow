@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
+use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -171,6 +172,14 @@ pub fn router(pool: PgPool, token: String) -> Router {
         .route(
             "/internal/issues/table/facets",
             post(table_facets).layer(table_body_limit),
+        )
+        .route(
+            "/internal/issues/properties/project",
+            post(project_issue_properties_handler).layer(table_body_limit),
+        )
+        .route(
+            "/internal/issues/properties/compile-config",
+            post(compile_issue_property_config_handler),
         )
         .route(
             "/internal/issues/{id}",
@@ -1220,6 +1229,7 @@ fn issue_request_error(error: IssueReadError, database_message: &'static str) ->
     match error {
         IssueReadError::NotFound(message) => error_response(StatusCode::NOT_FOUND, message),
         IssueReadError::Forbidden(message) => error_response(StatusCode::FORBIDDEN, message),
+        IssueReadError::InvalidInput(message) => error_response(StatusCode::BAD_REQUEST, message),
         IssueReadError::ProjectAccessFailed => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to resolve project access",
@@ -1239,6 +1249,7 @@ async fn list_issues(
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(IssueReadError::NotFound(message)) => error_response(StatusCode::NOT_FOUND, message),
         Err(IssueReadError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
+        Err(IssueReadError::InvalidInput(message)) => error_response(StatusCode::BAD_REQUEST, message),
         Err(IssueReadError::ProjectAccessFailed) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to resolve project access",
@@ -1333,6 +1344,46 @@ async fn delete_issue_handler(
     }
 }
 
+async fn project_issue_properties_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(request): Json<store::IssuePropertyProjectRequest>,
+) -> Response {
+    match store::project_issue_properties(&app.pool, &ctx.workspace_id, &ctx.actor, request).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(IssueReadError::InvalidInput(message)) => {
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+        Err(error) => issue_request_error(error, "failed to project issue properties"),
+    }
+}
+
+#[derive(Deserialize)]
+struct CompilePropertyConfigBody {
+    property_id: Option<String>,
+    kind: String,
+    config: serde_json::Value,
+}
+
+async fn compile_issue_property_config_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Json(body): Json<CompilePropertyConfigBody>,
+) -> Response {
+    let request = store::CompileIssuePropertyConfigRequest {
+        property_id: body.property_id,
+        kind: body.kind,
+        config: body.config,
+    };
+    match store::compile_issue_property_config(&app.pool, &ctx.workspace_id, request).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(IssueReadError::InvalidInput(message)) => {
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+        Err(error) => issue_request_error(error, "failed to compile property config"),
+    }
+}
+
 async fn get_issue(
     State(app): State<Arc<Issues>>,
     Extension(ctx): Extension<TrustedContext>,
@@ -1359,6 +1410,9 @@ async fn get_issue(
         }
         Err(IssueReadError::NotFound(message)) => error_response(StatusCode::NOT_FOUND, message),
         Err(IssueReadError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
+        Err(IssueReadError::InvalidInput(message)) => {
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
         Err(IssueReadError::ProjectAccessFailed) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to resolve project access",

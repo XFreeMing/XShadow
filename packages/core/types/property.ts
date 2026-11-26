@@ -1,3 +1,5 @@
+import type { GenericCellValue } from "../tables/schema";
+
 /**
  * Custom issue properties — workspace-defined, typed fields on issues
  * (MUL-4463). Definitions live in a workspace catalog (managed by owner/admin
@@ -22,7 +24,9 @@ export type IssuePropertyType =
   | "multi_actor"
   | "multi_text"
   | "multi_url"
-  | "record_relation";
+  | "record_relation"
+  | "lookup"
+  | "formula";
 
 export const ISSUE_PROPERTY_TYPES: IssuePropertyType[] = [
   "text",
@@ -37,7 +41,13 @@ export const ISSUE_PROPERTY_TYPES: IssuePropertyType[] = [
   "multi_text",
   "multi_url",
   "record_relation",
+  "lookup",
+  "formula",
 ];
+
+export function isComputedPropertyType(type: string): boolean {
+  return type === "lookup" || type === "formula";
+}
 
 export function isKnownPropertyType(type: string): type is IssuePropertyType {
   return (ISSUE_PROPERTY_TYPES as string[]).includes(type);
@@ -185,6 +195,9 @@ export interface IssuePropertyConfig {
   options?: IssuePropertyOption[];
   /** Target generic table for record_relation properties. */
   target_table_id?: string;
+  relation_property_id?: string;
+  target_field_id?: string;
+  expression?: string;
 }
 
 export interface IssueProperty {
@@ -207,6 +220,14 @@ export interface IssueProperty {
 
 export type IssuePropertyValue = string | number | boolean | string[];
 export type IssuePropertyValues = Record<string, IssuePropertyValue>;
+
+/** Read-only projected lookup/formula values; typed separately from editable bags. */
+export type IssueComputedPropertyValue = GenericCellValue;
+export type IssueComputedPropertyBag = Record<string, IssueComputedPropertyValue>;
+
+export interface ProjectIssuePropertiesResponse {
+  properties: Record<string, IssueComputedPropertyBag>;
+}
 
 /**
  * Structured operators for scalar property filters (#7692). A plain string
@@ -299,6 +320,8 @@ export const PROPERTY_FILTER_OPS_BY_TYPE: Record<IssuePropertyType, readonly Pro
   multi_text: [],
   multi_url: [],
   record_relation: [],
+  lookup: [],
+  formula: [],
 };
 
 export interface CreatePropertyRequest {

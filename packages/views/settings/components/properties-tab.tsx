@@ -81,6 +81,10 @@ import { useLocale, useT } from "../../i18n";
 import { SettingsReadOnlyNotice, SettingsTab } from "./settings-layout";
 import { IssueTypesSection } from "./issue-types-section";
 import { RecordRelationTargetTableSelect } from "../../issues/components/pickers/record-relation-property-picker";
+import {
+  IssueFormulaPropertyEditor,
+  IssueLookupPropertyEditor,
+} from "./derived-issue-property-editor";
 
 const MAX_ACTIVE_PROPERTIES = 20;
 
@@ -97,6 +101,9 @@ interface PropertyDraft {
   icon: string;
   options: OptionDraft[];
   targetTableId: string;
+  relationPropertyId: string;
+  targetFieldId: string;
+  expression: string;
 }
 
 const EMPTY_DRAFT: PropertyDraft = {
@@ -106,6 +113,9 @@ const EMPTY_DRAFT: PropertyDraft = {
   icon: "",
   options: [{ name: "", color: COLOR_PICKER_PRESETS[6] }],
   targetTableId: "",
+  relationPropertyId: "",
+  targetFieldId: "",
+  expression: "",
 };
 
 function typeHasOptions(type: string): boolean {
@@ -114,6 +124,14 @@ function typeHasOptions(type: string): boolean {
 
 function typeIsRecordRelation(type: string): boolean {
   return type === "record_relation";
+}
+
+function typeIsLookup(type: string): boolean {
+  return type === "lookup";
+}
+
+function typeIsFormula(type: string): boolean {
+  return type === "formula";
 }
 
 export function PropertiesTab() {
@@ -373,6 +391,10 @@ export function PropertyTypeLabel({ type }: { type: string }) {
       return <>{t(($) => $.properties.types.multi_url)}</>;
     case "record_relation":
       return <>{t(($) => $.properties.types.record_relation)}</>;
+    case "lookup":
+      return <>{t(($) => $.properties.types.lookup)}</>;
+    case "formula":
+      return <>{t(($) => $.properties.types.formula)}</>;
     default:
       // Forward compat: newer servers may ship types this build doesn't know.
       return <>{type}</>;
@@ -389,6 +411,7 @@ function PropertyEditorDialog({
   property?: IssueProperty | null;
 }) {
   const { t } = useT("settings");
+  const wsId = useWorkspaceId();
   const create = useCreateProperty();
   const update = useUpdateProperty();
   const [draft, setDraft] = useState<PropertyDraft>(EMPTY_DRAFT);
@@ -410,6 +433,9 @@ function PropertyEditorDialog({
               color: option.color,
             })),
             targetTableId: property.config.target_table_id ?? "",
+            relationPropertyId: property.config.relation_property_id ?? "",
+            targetFieldId: property.config.target_field_id ?? "",
+            expression: property.config.expression ?? "",
           }
         : EMPTY_DRAFT,
     );
@@ -417,6 +443,8 @@ function PropertyEditorDialog({
 
   const showOptions = typeHasOptions(draft.type);
   const showTargetTable = typeIsRecordRelation(draft.type);
+  const showLookup = typeIsLookup(draft.type);
+  const showFormula = typeIsFormula(draft.type);
   const validOptions = draft.options.filter((option) => option.name.trim());
   const propertyTypeItems = ISSUE_PROPERTY_TYPES.map((type) => ({
     value: type,
@@ -425,7 +453,11 @@ function PropertyEditorDialog({
   const canSubmit =
     draft.name.trim().length > 0 &&
     (!showOptions || validOptions.length > 0) &&
-    (!showTargetTable || property != null || draft.targetTableId.trim().length > 0);
+    (!showTargetTable || property != null || draft.targetTableId.trim().length > 0) &&
+    (!showLookup ||
+      (draft.relationPropertyId.trim().length > 0 &&
+        draft.targetFieldId.trim().length > 0)) &&
+    (!showFormula || draft.expression.trim().length > 0);
 
   const submit = () => {
     if (!canSubmit) return;
@@ -439,19 +471,27 @@ function PropertyEditorDialog({
         }
       : showTargetTable
         ? { target_table_id: draft.targetTableId.trim() }
-        : undefined;
+        : showLookup
+          ? {
+              relation_property_id: draft.relationPropertyId.trim(),
+              target_field_id: draft.targetFieldId.trim(),
+            }
+          : showFormula
+            ? { expression: draft.expression.trim() }
+            : undefined;
     const onError = (error: unknown) =>
       toast.error(
         error instanceof Error ? error.message : t(($) => $.properties.save_failed),
       );
     if (property) {
+      const unchangedFormula = showFormula && draft.expression.trim() === property.config.expression;
       update.mutate(
         {
           id: property.id,
           name: draft.name.trim(),
           description: draft.description.trim(),
           icon: draft.icon,
-          ...(config ? { config } : {}),
+          ...(config && !unchangedFormula ? { config } : {}),
         },
         { onSuccess: () => onOpenChange(false), onError },
       );
@@ -609,6 +649,31 @@ function PropertyEditorDialog({
               disabled={Boolean(property)}
               onChange={(tableId) =>
                 setDraft((current) => ({ ...current, targetTableId: tableId }))
+              }
+            />
+          )}
+          {showLookup && (
+            <IssueLookupPropertyEditor
+              wsId={wsId}
+              relationPropertyId={draft.relationPropertyId}
+              targetFieldId={draft.targetFieldId}
+              onRelationChange={(relationPropertyId) =>
+                setDraft((current) => ({
+                  ...current,
+                  relationPropertyId,
+                  targetFieldId: "",
+                }))
+              }
+              onTargetFieldChange={(targetFieldId) =>
+                setDraft((current) => ({ ...current, targetFieldId }))
+              }
+            />
+          )}
+          {showFormula && (
+            <IssueFormulaPropertyEditor
+              expression={draft.expression}
+              onExpressionChange={(expression) =>
+                setDraft((current) => ({ ...current, expression }))
               }
             />
           )}

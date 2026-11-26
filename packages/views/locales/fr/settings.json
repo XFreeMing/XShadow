@@ -728,7 +728,9 @@
       "multi_actor": "Membres",
       "multi_text": "Liste de textes",
       "multi_url": "Liste d'URL",
-      "record_relation": "Lien d'enregistrement"
+      "record_relation": "Lien d'enregistrement",
+      "lookup": "Recherche",
+      "formula": "Formule"
     },
     "actions": {
       "open": "Actions pour {{name}}",
@@ -748,6 +750,12 @@
       "type": "Type",
       "type_locked_hint": "Le type ne peut pas être modifié après création.",
       "record_relation_table_required": "Choisissez la table de l'espace de travail à lier.",
+      "lookup_relation": "Champ de liaison",
+      "lookup_relation_placeholder": "Choisir un champ de liaison",
+      "lookup_target_field": "Champ cible",
+      "lookup_target_field_placeholder": "Choisir un champ de la table liée",
+      "formula_expression": "Expression",
+      "formula_expression_placeholder": "p. ex. SUM({Priorité})",
       "description": "Description",
       "description_placeholder": "Ce que signifie cette propriété et quand la renseigner",
       "options": "Options",

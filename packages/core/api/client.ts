@@ -148,6 +148,7 @@ import type {
   ListQuickActionsResponse,
   UpdatePropertyRequest,
   ListPropertiesResponse,
+  ProjectIssuePropertiesResponse,
   IssuePropertiesResponse,
   CreateLabelRequest,
   UpdateLabelRequest,
@@ -562,6 +563,8 @@ import {
   EMPTY_COMMENT,
   EMPTY_ISSUE_PROPERTY,
   EMPTY_LIST_PROPERTIES_RESPONSE,
+  ProjectIssuePropertiesResponseSchema,
+  EMPTY_PROJECT_ISSUE_PROPERTIES_RESPONSE,
   EMPTY_ISSUE_PROPERTIES_RESPONSE,
   EMPTY_ISSUE_PULL_REQUESTS_RESPONSE,
   IssuePullRequestsResponseSchema,
@@ -5128,6 +5131,19 @@ export class ApiClient {
     return parseWithFallback(raw, IssuePropertiesResponseSchema, EMPTY_ISSUE_PROPERTIES_RESPONSE, {
       endpoint: "PUT /api/issues/{id}/properties/{propertyId}",
     });
+  }
+
+  async projectIssueProperties(issueIds: string[]): Promise<ProjectIssuePropertiesResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/properties/project`, {
+      method: "POST",
+      body: JSON.stringify({ issue_ids: issueIds }),
+    });
+    return parseWithFallback(
+      raw,
+      ProjectIssuePropertiesResponseSchema,
+      EMPTY_PROJECT_ISSUE_PROPERTIES_RESPONSE,
+      { endpoint: "POST /api/issues/properties/project" },
+    );
   }
 
   async unsetIssueProperty(issueId: string, propertyId: string): Promise<IssuePropertiesResponse> {

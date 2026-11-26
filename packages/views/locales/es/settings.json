@@ -728,7 +728,9 @@
       "multi_actor": "Miembros",
       "multi_text": "Lista de texto",
       "multi_url": "Lista de URL",
-      "record_relation": "Enlace a registro"
+      "record_relation": "Enlace a registro",
+      "lookup": "Consulta",
+      "formula": "Fórmula"
     },
     "actions": {
       "open": "Acciones de {{name}}",
@@ -748,6 +750,12 @@
       "type": "Tipo",
       "type_locked_hint": "El tipo no se puede cambiar después de la creación.",
       "record_relation_table_required": "Elige la tabla del workspace que vinculará esta propiedad.",
+      "lookup_relation": "Campo de enlace",
+      "lookup_relation_placeholder": "Elige un campo de enlace",
+      "lookup_target_field": "Campo de destino",
+      "lookup_target_field_placeholder": "Elige un campo de la tabla vinculada",
+      "formula_expression": "Expresión",
+      "formula_expression_placeholder": "p. ej. SUM({Prioridad})",
       "description": "Descripción",
       "description_placeholder": "Qué significa esta propiedad y cuándo establecerla",
       "options": "Opciones",

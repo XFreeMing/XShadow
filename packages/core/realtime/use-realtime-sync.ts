@@ -21,6 +21,7 @@ import { autopilotKeys } from "../autopilots/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { labelKeys } from "../labels/queries";
 import { propertyKeys } from "../properties/queries";
+import { issueComputedPropertyKeys } from "../properties/computed-queries";
 import { issueTypeKeys } from "../issue-types/queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
 import { issueWorkflowKeys } from "../issue-workflows/queries";
@@ -1288,6 +1289,7 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) {
         onIssuePropertiesChanged(qc, wsId, issue_id, properties ?? {}, issue_revision);
+        qc.invalidateQueries({ queryKey: issueComputedPropertyKeys.all(wsId) });
         // The catalog embeds per-definition usage counts; every value
         // set/unset shifts them. The list is tiny, so a refetch beats
         // trying to patch counts client-side.
@@ -1302,6 +1304,7 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: propertyKeys.all(wsId) });
+          qc.invalidateQueries({ queryKey: issueComputedPropertyKeys.all(wsId) });
           // Group order, supported group types, and unavailable option values
           // are derived from the property definition, not just issue rows.
           qc.invalidateQueries({ queryKey: issueKeys.tableAll(wsId) });

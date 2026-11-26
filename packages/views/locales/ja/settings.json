@@ -719,7 +719,9 @@
       "multi_actor": "メンバー（複数選択）",
       "multi_text": "テキストリスト",
       "multi_url": "URLリスト",
-      "record_relation": "レコードリンク"
+      "record_relation": "レコードリンク",
+      "lookup": "参照",
+      "formula": "数式"
     },
     "actions": {
       "open": "{{name}} の操作",
@@ -739,6 +741,12 @@
       "type": "タイプ",
       "type_locked_hint": "作成後にタイプは変更できません。",
       "record_relation_table_required": "このプロパティがリンクするワークスペースのテーブルを選択してください。",
+      "lookup_relation": "レコードリンク項目",
+      "lookup_relation_placeholder": "レコードリンク項目を選択",
+      "lookup_target_field": "対象項目",
+      "lookup_target_field_placeholder": "リンク先テーブルの項目を選択",
+      "formula_expression": "式",
+      "formula_expression_placeholder": "例 SUM({優先度})",
       "description": "説明",
       "description_placeholder": "このプロパティの意味と設定するタイミング",
       "options": "オプション",

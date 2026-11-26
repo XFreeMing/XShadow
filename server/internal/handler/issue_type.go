@@ -129,6 +129,9 @@ func (h *Handler) validateIssueTypeFields(
 		if def.ArchivedAt.Valid {
 			return nil, http.StatusBadRequest, fmt.Sprintf("property %q is archived and cannot be used in an issue type", def.Name), nil
 		}
+		if issueproperty.IsComputed(def.Type) && (field.Required || field.HasDefault()) {
+			return nil, http.StatusBadRequest, fmt.Sprintf("computed property %q cannot be required or have a default", def.Name), nil
+		}
 
 		entry := issuetype.Field{
 			PropertyID: propID,

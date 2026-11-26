@@ -743,7 +743,9 @@
       "multi_actor": "Участники",
       "multi_text": "Список текстовых значений",
       "multi_url": "Список URL",
-      "record_relation": "Связь с записью"
+      "record_relation": "Связь с записью",
+      "lookup": "Подстановка",
+      "formula": "Формула"
     },
     "actions": {
       "open": "Действия для {{name}}",
@@ -763,6 +765,12 @@
       "type": "Тип",
       "type_locked_hint": "Тип нельзя изменить после создания.",
       "record_relation_table_required": "Выберите таблицу рабочей области для этой связи.",
+      "lookup_relation": "Поле связи",
+      "lookup_relation_placeholder": "Выберите поле связи записей",
+      "lookup_target_field": "Целевое поле",
+      "lookup_target_field_placeholder": "Выберите поле связанной таблицы",
+      "formula_expression": "Выражение",
+      "formula_expression_placeholder": "Например, SUM({Приоритет})",
       "description": "Описание",
       "description_placeholder": "Что означает это свойство и когда его устанавливать",
       "options": "Варианты",

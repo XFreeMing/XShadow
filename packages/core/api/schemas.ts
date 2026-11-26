@@ -2,6 +2,7 @@ import { GoalPlanDeliverySchema } from "../types/goal-plan-delivery";
 import { AcceptanceTraceSchema } from "../types/acceptance";
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
+import { genericCellValueSchema } from "../tables/schema";
 import type {
   AppCatalogResponse,
   AppsOverview,
@@ -888,6 +889,9 @@ export const IssuePropertySchema = z.object({
   icon: z.string().optional().default(""),
   config: z.object({
     target_table_id: z.string().optional().catch(undefined),
+    relation_property_id: z.string().optional().catch(undefined),
+    target_field_id: z.string().optional().catch(undefined),
+    expression: z.string().optional().catch(undefined),
     options: z.array(z.object({
       id: z.string(),
       name: z.string(),
@@ -982,6 +986,16 @@ export const ListPropertiesResponseSchema = z.object({
 export const EMPTY_LIST_PROPERTIES_RESPONSE: ListPropertiesResponse = {
   properties: [],
   total: 0,
+};
+
+export const ProjectIssuePropertiesResponseSchema = z.object({
+  properties: z
+    .record(z.string(), z.record(z.string(), genericCellValueSchema))
+    .default({}),
+}).loose();
+
+export const EMPTY_PROJECT_ISSUE_PROPERTIES_RESPONSE = {
+  properties: {},
 };
 
 const IssuePropertyValueSchema = z.union([

@@ -159,6 +159,9 @@ pub async fn write_issue_property(
                 return Err(IssuePropertyWriteError::DefinitionChanged);
             }
             let stored_type: String = definition.try_get(1)?;
+            if stored_type == "lookup" || stored_type == "formula" {
+                return Err(IssuePropertyWriteError::InvalidValue);
+            }
             if stored_type == "record_relation" {
                 property_validate::validate_record_relation_value(
                     &mut tx,

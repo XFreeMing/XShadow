@@ -357,6 +357,12 @@ pub(super) async fn revalidate_type_and_properties(
         if archived || version != *expected_version {
             return Err(IssueCreateError::ConfigurationChanged);
         }
+        if kind == "lookup" || kind == "formula" {
+            return Err(IssueCreateError::InvalidIssueProperty {
+                property_id: property_id.to_owned(),
+                message: "computed properties cannot be set on create".to_owned(),
+            });
+        }
         match kind.as_str() {
             "actor" => {
                 let actor: String = serde_json::from_str(value.get())

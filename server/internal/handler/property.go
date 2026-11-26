@@ -54,7 +54,7 @@ const (
 	maxPropertyActorValues = 20
 )
 
-var validPropertyTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", "multi_text", "multi_url", "record_relation"}
+var validPropertyTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", "multi_text", "multi_url", "record_relation", "lookup", "formula"}
 
 // Property icons use stable catalog keys that the Web client maps to its
 // icon glyphs. Keeping this allowlist at the API boundary prevents arbitrary text
@@ -97,6 +97,11 @@ type PropertyConfig struct {
 	Options []PropertyOption `json:"options,omitempty"`
 	// Target table for record_relation properties — mirrors generic-field relation config.
 	TargetTableID string `json:"target_table_id,omitempty"`
+	// Lookup: record_relation property id and generic field id.
+	RelationPropertyID string `json:"relation_property_id,omitempty"`
+	TargetFieldID      string `json:"target_field_id,omitempty"`
+	// Formula input (stored config also carries ast + refs).
+	Expression string `json:"expression,omitempty"`
 }
 
 type PropertyResponse struct {
@@ -241,12 +246,57 @@ func propertyTypeIsRecordRelation(t string) bool {
 	return issueproperty.IsRecordRelation(t)
 }
 
+func propertyTypeIsComputed(t string) bool {
+	return issueproperty.IsComputed(t)
+}
+
+func propertyTypeIsLookup(t string) bool {
+	return issueproperty.IsLookup(t)
+}
+
+func propertyTypeIsFormula(t string) bool {
+	return issueproperty.IsFormula(t)
+}
+
 // validatePropertyConfig canonicalizes the config for storage. Select-type
 // properties require 1..200 options; each option gets a stable server-assigned
 // UUID if the caller didn't provide one (values reference option IDs, so
 // option renames never touch issue rows). Non-select types must not carry
 // options and are stored as {}.
 func validatePropertyConfig(propType string, cfg *PropertyConfig) ([]byte, error) {
+	if propertyTypeIsLookup(propType) {
+		if cfg != nil && len(cfg.Options) > 0 {
+			return nil, fmt.Errorf("type %q does not accept options", propType)
+		}
+		raw, err := json.Marshal(cfg)
+		if cfg == nil {
+			raw = []byte(`{}`)
+		}
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := issueproperty.ParseLookupConfig(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(parsed)
+	}
+	if propertyTypeIsFormula(propType) {
+		if cfg != nil && len(cfg.Options) > 0 {
+			return nil, fmt.Errorf("type %q does not accept options", propType)
+		}
+		raw, err := json.Marshal(cfg)
+		if cfg == nil {
+			raw = []byte(`{}`)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if _, err := issueproperty.ParseFormulaInputConfig(raw); err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
 	if propertyTypeIsRecordRelation(propType) {
 		if cfg != nil && len(cfg.Options) > 0 {
 			return nil, fmt.Errorf("type %q does not accept options", propType)
@@ -562,14 +612,22 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
 		return
 	}
 	var property db.IssueProperty
 	var capErr error
+	var compileBlocked bool
 	err = h.withPropertyLock(r, []string{"props:" + workspaceID}, func(_ pgx.Tx, q *db.Queries) error {
+		if propertyTypeIsLookup(req.Type) || propertyTypeIsFormula(req.Type) {
+			compiled, ok := h.compileIssuePropertyConfigViaRust(w, r, workspaceID, userID, req.Type, nil, configJSON)
+			if !ok {
+				compileBlocked = true
+				return errClientRejected
+			}
+			configJSON = compiled
+		}
 		active, err := q.CountActiveIssueProperties(r.Context(), wsUUID)
 		if err != nil {
 			return err
@@ -588,6 +646,9 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 		})
 		return err
 	})
+	if compileBlocked {
+		return
+	}
 	if capErr != nil {
 		writeError(w, http.StatusBadRequest, capErr.Error())
 		return
@@ -634,6 +695,7 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 	var property db.IssueProperty
 	var httpStatus int
 	var httpMsg string
+	var compileBlocked bool
 	fail := func(status int, msg string) error {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
@@ -672,6 +734,15 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 			configJSON, err := validatePropertyConfig(existing.Type, req.Config)
 			if err != nil {
 				return fail(http.StatusBadRequest, err.Error())
+			}
+			if propertyTypeIsLookup(existing.Type) || propertyTypeIsFormula(existing.Type) {
+				idStr := uuidToString(existing.ID)
+				compiled, ok := h.compileIssuePropertyConfigViaRust(w, r, workspaceID, userID, existing.Type, &idStr, configJSON)
+				if !ok {
+					compileBlocked = true
+					return errClientRejected
+				}
+				configJSON = compiled
 			}
 			if propertyTypeIsRecordRelation(existing.Type) {
 				existingRel, err := issueproperty.ParseRecordRelationConfig(existing.Config)
@@ -728,6 +799,9 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	})
+	if compileBlocked {
+		return
+	}
 	if err != nil {
 		if errors.Is(err, errClientRejected) {
 			writeError(w, httpStatus, httpMsg)
@@ -787,6 +861,9 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		}
 		if def.ArchivedAt.Valid {
 			return def, nil, fail(http.StatusBadRequest, fmt.Sprintf("property %q is archived and cannot receive new values", def.Name))
+		}
+		if propertyTypeIsComputed(def.Type) {
+			return def, nil, fail(http.StatusBadRequest, fmt.Sprintf("property %q is read-only; computed values cannot be written", def.Name))
 		}
 		value, err := validatePropertyValue(def, req.Value)
 		if err != nil {

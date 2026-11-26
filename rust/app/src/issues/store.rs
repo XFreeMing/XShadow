@@ -17,6 +17,14 @@ pub use metadata_write::{IssueMetadataWrite, IssueMetadataWriteError, write_issu
 mod property_write;
 pub use property_write::{IssuePropertyWrite, IssuePropertyWriteError, write_issue_property};
 mod property_validate;
+mod property_projection;
+mod property_compile;
+pub use property_projection::{
+    project_issue_properties, IssuePropertyProjectRequest,
+};
+pub use property_compile::{
+    compile_issue_property_config, CompileIssuePropertyConfigRequest,
+};
 mod label_write;
 pub use label_write::{IssueLabelWrite, IssueLabelWriteError, write_issue_label};
 mod acceptance_write;
@@ -72,6 +80,7 @@ pub use workflow_squad_write::{
 pub enum IssueReadError {
     NotFound(&'static str),
     Forbidden(&'static str),
+    InvalidInput(&'static str),
     ProjectAccessFailed,
     DatabaseFailed,
 }

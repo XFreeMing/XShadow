@@ -197,7 +197,7 @@ func TestPropertyDefinitionValidation(t *testing.T) {
 		want string
 	}{
 		{"reserved name", map[string]any{"name": "Due Date", "type": "text"}, "reserved"},
-		{"invalid type", map[string]any{"name": "X" + uuid.NewString()[:8], "type": "formula"}, "invalid type"},
+		{"invalid type", map[string]any{"name": "X" + uuid.NewString()[:8], "type": "relation"}, "invalid type"},
 		{"icon too long", map[string]any{"name": "X" + uuid.NewString()[:8], "type": "text", "icon": strings.Repeat("x", maxPropertyIconLen+1)}, "icon must be"},
 		{"icon control character", map[string]any{"name": "X" + uuid.NewString()[:8], "type": "text", "icon": "\t"}, "icon cannot contain"},
 		{"emoji icon", map[string]any{"name": "X" + uuid.NewString()[:8], "type": "text", "icon": "🚨"}, "supported icon key"},

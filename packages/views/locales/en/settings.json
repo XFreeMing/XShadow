@@ -728,7 +728,9 @@
       "multi_actor": "Members",
       "multi_text": "Text list",
       "multi_url": "URL list",
-      "record_relation": "Record link"
+      "record_relation": "Record link",
+      "lookup": "Lookup",
+      "formula": "Formula"
     },
     "actions": {
       "open": "Actions for {{name}}",
@@ -748,6 +750,12 @@
       "type": "Type",
       "type_locked_hint": "Type can't be changed after creation.",
       "record_relation_table_required": "Choose the workspace table this property links to.",
+      "lookup_relation": "Record link field",
+      "lookup_relation_placeholder": "Choose a record link property",
+      "lookup_target_field": "Target field",
+      "lookup_target_field_placeholder": "Choose a field on the linked table",
+      "formula_expression": "Expression",
+      "formula_expression_placeholder": "e.g. SUM({Priority score})",
       "description": "Description",
       "description_placeholder": "What this property means and when to set it",
       "options": "Options",

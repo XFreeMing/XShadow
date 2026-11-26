@@ -149,6 +149,8 @@ import {
   StatusPicker,
 } from "./pickers";
 import { CustomPropertyValueEditor } from "./pickers/custom-property-picker";
+import { ComputedIssuePropertyProvider } from "./computed-property-context";
+import { isComputedPropertyType } from "@multica/core/types";
 import {
   buildIssueTableCsv,
   getIssueTableSelectionRange,
@@ -2057,6 +2059,10 @@ export function TableView({
         .map((row) => row.issue.id),
     [displayRows],
   );
+  const hasComputedDefinitions = useMemo(
+    () => properties.some((property) => isComputedPropertyType(property.type)),
+    [properties],
+  );
   useEffect(() => {
     onLoadedIssuesChange(loadedIssues);
   }, [loadedIssues, onLoadedIssuesChange]);
@@ -2386,7 +2392,7 @@ export function TableView({
     }
   };
 
-  return (
+  const tableShell = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
         <TableIssueSearch
@@ -2519,5 +2525,14 @@ export function TableView({
         </SortableContext>
       </DndContext>
     </div>
+  );
+
+  if (!hasComputedDefinitions || visibleIssueIds.length === 0) {
+    return tableShell;
+  }
+  return (
+    <ComputedIssuePropertyProvider wsId={wsId} issueIds={visibleIssueIds}>
+      {tableShell}
+    </ComputedIssuePropertyProvider>
   );
 }

@@ -9,7 +9,7 @@ const MAX_TEXT_BYTES: usize = 32_768;
 type FormulaResult<T> = Result<T, &'static str>;
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) enum Expr {
+pub(crate) enum Expr {
     Literal(Value),
     Field(String),
     Unary(char, Box<Expr>),
@@ -18,7 +18,7 @@ pub(super) enum Expr {
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
-pub(super) enum Op {
+pub(crate) enum Op {
     Add,
     Subtract,
     Multiply,
@@ -52,7 +52,7 @@ impl Op {
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub(super) enum Function {
+pub(crate) enum Function {
     If,
     Sum,
     Average,
@@ -204,7 +204,7 @@ fn lex(mut source: &str) -> FormulaResult<Vec<Token>> {
     Ok(tokens)
 }
 
-pub(super) fn compile(
+pub(crate) fn compile(
     source: &str,
     field_id: impl Fn(&str) -> Option<String>,
 ) -> FormulaResult<Expr> {
@@ -366,7 +366,7 @@ impl Expr {
         }
     }
 
-    pub(super) fn refs(&self, out: &mut Vec<String>) {
+    pub(crate) fn refs(&self, out: &mut Vec<String>) {
         match self {
             Self::Field(id) => out.push(id.clone()),
             Self::Unary(_, inner) => inner.refs(out),
@@ -379,7 +379,7 @@ impl Expr {
         }
     }
 
-    pub(super) fn source(&self, label: &impl Fn(&str) -> Option<String>) -> String {
+    pub(crate) fn source(&self, label: &impl Fn(&str) -> Option<String>) -> String {
         match self {
             Self::Literal(Value::Null) => "BLANK".to_owned(),
             Self::Literal(Value::Bool(value)) => value.to_string().to_ascii_uppercase(),
@@ -403,7 +403,7 @@ impl Expr {
         }
     }
 
-    pub(super) fn evaluate(
+    pub(crate) fn evaluate(
         &self,
         field: &mut impl FnMut(&str) -> FormulaResult<Value>,
     ) -> FormulaResult<Value> {

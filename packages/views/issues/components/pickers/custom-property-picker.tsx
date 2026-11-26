@@ -3,8 +3,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CalendarDays, Check, ExternalLink, X } from "@multica/ui/icons";
 import { toast } from "sonner";
-import type { Issue, IssueProperty, IssuePropertyValue } from "@multica/core/types";
-import { hasUnknownActorRef, isListPropertyType, MAX_ISSUE_PROPERTY_SELECT_VALUES } from "@multica/core/types";
+import type { Issue, IssueComputedPropertyValue, IssueProperty, IssuePropertyValue } from "@multica/core/types";
+import { hasUnknownActorRef, isComputedPropertyType, isListPropertyType, MAX_ISSUE_PROPERTY_SELECT_VALUES } from "@multica/core/types";
 import {
   useSetIssueProperty,
   useUnsetIssueProperty,
@@ -24,6 +24,7 @@ import { IconButton } from "@multica/ui/components/common/icon-button";
 import { Input } from "@multica/ui/components/ui/input";
 import { useLocale, useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
+import { useComputedIssuePropertyValue } from "../computed-property-context";
 import { PropertyPicker, PickerItem, PickerEmpty } from "./property-picker";
 import { ActorPropertyPicker, ActorPropertyDisplay } from "./actor-property-picker";
 import {
@@ -63,6 +64,7 @@ export function isCustomPropertyReadOnly(
   value: IssuePropertyValue | undefined,
 ): boolean {
   if (property.archived) return true;
+  if (isComputedPropertyType(property.type)) return true;
   if (!EDITABLE_PROPERTY_TYPES.includes(property.type)) return true;
   if (property.type === "actor" && hasUnknownActorRef(value)) return true;
   return false;
@@ -102,9 +104,14 @@ export function CustomPropertyValueEditor({
 }) {
   const setProperty = useSetIssueProperty();
   const unsetProperty = useUnsetIssueProperty();
+  const computedValue = useComputedIssuePropertyValue(issue.id, property.id);
   const value = issue.properties[property.id];
   const onError = (error: unknown) =>
     toast.error(error instanceof Error ? error.message : String(error));
+
+  if (isComputedPropertyType(property.type)) {
+    return <ComputedValue value={computedValue} />;
+  }
 
   return (
     <CustomPropertyValueInput
@@ -140,6 +147,19 @@ export function CustomPropertyValueEditor({
       }}
     />
   );
+}
+
+function formatComputedValue(value: IssueComputedPropertyValue): string {
+  if (Array.isArray(value)) return value.map(formatComputedValue).join(", ");
+  return value === null ? "" : String(value);
+}
+
+function ComputedValue({ value }: { value: IssueComputedPropertyValue | undefined }) {
+  const { t } = useT("issues");
+  const label = value === undefined ? "" : formatComputedValue(value);
+  return label
+    ? <span className="min-w-0 truncate" title={label}>{label}</span>
+    : <span className="text-muted-foreground">{t(($) => $.pickers.custom_property.empty)}</span>;
 }
 
 /**
@@ -758,6 +778,37 @@ export function CustomPropertyValueDisplay({
     }
     case "record_relation":
       return <RecordRelationPropertyDisplay property={property} value={value} />;
+    case "lookup": {
+      const items = Array.isArray(value) ? value : [];
+      if (items.length === 0) {
+        return (
+          <span className="text-muted-foreground">
+            {t(($) => $.pickers.custom_property.empty)}
+          </span>
+        );
+      }
+      return (
+        <span className="flex min-w-0 flex-wrap items-center gap-1">
+          {items.map((item, index) => (
+            <span
+              key={`${index}:${String(item)}`}
+              className="inline-flex max-w-48 items-center rounded-full border border-surface-border px-1.5 py-px text-micro"
+            >
+              <span className="truncate">{String(item)}</span>
+            </span>
+          ))}
+        </span>
+      );
+    }
+    case "formula":
+      if (value === null || value === undefined) {
+        return (
+          <span className="text-muted-foreground">
+            {t(($) => $.pickers.custom_property.empty)}
+          </span>
+        );
+      }
+      return <span className="truncate tabular-nums">{String(value)}</span>;
     case "actor":
     case "multi_actor":
       return (

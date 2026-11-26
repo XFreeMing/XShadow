@@ -55,7 +55,8 @@ import type {
   IssueTableQuerySpec,
   UpdateIssueRequest,
 } from "@multica/core/types";
-import { isActorPropertyType } from "@multica/core/types";
+import { isActorPropertyType, isComputedPropertyType } from "@multica/core/types";
+import { ComputedIssuePropertyProvider } from "./computed-property-context";
 import { useIssueSurfaceSelection } from "../surface/selection-context";
 import {
   buildIssueTableCsv,
@@ -1135,6 +1136,10 @@ export function MultidimensionalGridView({
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto">
+          <ComputedIssuePropertyProvider
+            wsId={wsId}
+            issueIds={workspaceProperties.some((property) => isComputedPropertyType(property.type)) ? recordIds : []}
+          >
           <ApitableGrid
             datasheetId={`issues:${wsId}:${queryIdentity}:${effectiveTableGrouping}:${effectiveHierarchy ? "hierarchy" : "flat"}`}
             fields={visibleFields}
@@ -1149,6 +1154,7 @@ export function MultidimensionalGridView({
             rowSelection={rowSelection}
             stickyHeader
           />
+          </ComputedIssuePropertyProvider>
 
           <div className="flex items-center justify-center px-4 py-3">
             {usesServerGrouping && groupBranches.hasMoreGroups ? (

@@ -97,6 +97,8 @@ import { DueDatePicker } from "./pickers/due-date-picker";
 import { AssigneePicker } from "./pickers/assignee-picker";
 import { LabelPicker } from "./pickers/label-picker";
 import { CustomPropertyValueEditor, CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
+import { ComputedIssuePropertyProvider } from "./computed-property-context";
+import { isComputedPropertyType } from "@multica/core/types";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { IssueActionsDropdown, useIssueActions, useArchivedInboxItemId, IssueActionsContextMenu, IssueContextMenuProvider } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
@@ -3046,7 +3048,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const canAddProperty = OPTIONAL_PROP_KEYS.some(
     (key) => !visibleOptionalProps.has(key) && (key !== "stage" || issue.parent_issue_id != null),
   ) || workspaceProperties.some(
-    (property) => !property.archived && !visibleCustomProps.has(property.id) && issue.properties?.[property.id] === undefined,
+    (property) => !property.archived && !isComputedPropertyType(property.type) && !visibleCustomProps.has(property.id) && issue.properties?.[property.id] === undefined,
   );
   // "+ Add property" — an inline row at the bottom of the Properties grid
   // that opens a Popover listing optional fields not yet displayed. Hidden
@@ -3106,6 +3108,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             const addable = workspaceProperties.filter(
               (p) =>
                 !p.archived &&
+                !isComputedPropertyType(p.type) &&
                 !visibleCustomProps.has(p.id) &&
                 issue.properties?.[p.id] === undefined,
             );
@@ -3250,7 +3253,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               if (seen.has(p.id)) continue;
               if (
                 issue.properties?.[p.id] !== undefined ||
-                (!p.archived && visibleCustomProps.has(p.id))
+                (!p.archived && (isComputedPropertyType(p.type) || visibleCustomProps.has(p.id)))
               ) {
                 ordered.push({ property: p, required: false });
               }
@@ -4346,7 +4349,19 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // description's files, the timeline's and the sidebar's deliverables all
   // open into one sequence. The versions provider lets each comment's file
   // cards mark a re-uploaded file `v2`.
-  const withPreview = (layout: ReactNode) => (
+  const hasComputedDefinitions = activeWorkspaceProperties.some((property) =>
+    isComputedPropertyType(property.type),
+  );
+  const withComputedProjection = (layout: ReactNode) =>
+    hasComputedDefinitions && issue ? (
+      <ComputedIssuePropertyProvider wsId={wsId} issueIds={[issue.id]}>
+        {layout}
+      </ComputedIssuePropertyProvider>
+    ) : (
+      layout
+    );
+
+  const withPreview = (layout: ReactNode) => withComputedProjection(
     <PreviewSequenceProvider
       items={previewSequence}
       describeItem={describeDeliverable}

@@ -358,6 +358,8 @@ func ValidateValue(def db.IssueProperty, raw json.RawMessage) ([]byte, error) {
 			return nil, err
 		}
 		return json.Marshal(ids)
+	case "lookup", "formula":
+		return nil, fmt.Errorf("property type %q is read-only; values are computed at read time", def.Type)
 	default:
 		return nil, fmt.Errorf("unsupported property type %q", def.Type)
 	}

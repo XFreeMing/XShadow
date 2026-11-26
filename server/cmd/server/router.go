@@ -2145,6 +2145,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// POST twin of GET /api/issues for oversized filter sets
 				// (agents-working ids facet) — see QueryIssues.
 				r.Post("/query", h.QueryIssues)
+				r.Post("/properties/project", h.ProjectIssueProperties)
 				r.Post("/", h.CreateIssue)
 				r.Post("/quick-create", h.QuickCreateIssue)
 				r.Post("/preview-trigger", h.PreviewIssueTrigger)
