@@ -2342,7 +2342,19 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				}
 				return agent.Name
 			}
+			structuralDeleteRole := middleware.RequireWorkspaceRole(queries, "owner", "admin")
+			structuralDeleteTaskOriginator := requireGenericTableStructuralDeleteAccess(queries)
 			r.Route("/api/tables", func(r chi.Router) {
+				r.Use(func(next http.Handler) http.Handler {
+					gated := structuralDeleteRole(structuralDeleteTaskOriginator(next))
+					return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+						if isGenericTableStructuralDelete(req.Method, req.URL.Path) {
+							gated.ServeHTTP(w, req)
+							return
+						}
+						next.ServeHTTP(w, req)
+					})
+				})
 				r.HandleFunc("/", tablesBridge.ServeHTTP)
 				r.HandleFunc("/*", tablesBridge.ServeHTTP)
 			})
@@ -3011,4 +3023,102 @@ func wecomMetricsOrNil(m *obsmetrics.WecomMetrics) wecom.Metrics {
 		return nil
 	}
 	return m
+}
+
+// isGenericTableStructuralDelete reports whether a request targets a structural
+// generic-table deletion (table, field, or view) that requires workspace
+// owner/admin privileges. Record deletions use normal member/task-token record
+// permissions with optimistic expected_revision and return false here.
+func isGenericTableStructuralDelete(method, path string) bool {
+	if method != http.MethodDelete {
+		return false
+	}
+	trimmed := strings.TrimPrefix(path, "/api/tables/")
+	if trimmed == path {
+		return false
+	}
+	trimmed = strings.TrimSuffix(trimmed, "/")
+	if trimmed == "" {
+		return false
+	}
+	parts := strings.Split(trimmed, "/")
+	switch len(parts) {
+	case 1:
+		return parts[0] != ""
+	case 3:
+		return parts[0] != "" && parts[2] != "" && (parts[1] == "fields" || parts[1] == "views")
+	default:
+		return false
+	}
+}
+
+type genericTableTaskAuthStore interface {
+	GetAgentTaskInWorkspace(ctx context.Context, arg db.GetAgentTaskInWorkspaceParams) (db.AgentTaskQueue, error)
+	GetMemberByUserAndWorkspace(ctx context.Context, arg db.GetMemberByUserAndWorkspaceParams) (db.Member, error)
+}
+
+func writeTableStructuralForbidden(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":"insufficient permissions"}`))
+}
+
+// requireGenericTableStructuralDeleteAccess closes privilege escalation when a
+// non-admin human triggers an agent task running on an owner/admin daemon: for
+// task_token requests, the run's human originator (falling back to
+// AccountableUserID for legacy rows) must also currently be an owner or admin
+// in the resolved workspace. Fails closed on any missing or mismatched state.
+func requireGenericTableStructuralDeleteAccess(store genericTableTaskAuthStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.Header.Get("X-Actor-Source") != "task_token" {
+				next.ServeHTTP(w, req)
+				return
+			}
+			if store == nil {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			wsUUID, err := util.ParseUUID(strings.TrimSpace(middleware.WorkspaceIDFromContext(req.Context())))
+			if err != nil {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			taskUUID, err := util.ParseUUID(strings.TrimSpace(req.Header.Get("X-Task-ID")))
+			if err != nil {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			agentUUID, err := util.ParseUUID(strings.TrimSpace(req.Header.Get("X-Agent-ID")))
+			if err != nil {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			task, err := store.GetAgentTaskInWorkspace(req.Context(), db.GetAgentTaskInWorkspaceParams{
+				ID:          taskUUID,
+				WorkspaceID: wsUUID,
+			})
+			if err != nil || !task.AgentID.Valid || task.AgentID != agentUUID {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			originatorID := task.OriginatorUserID
+			if !originatorID.Valid {
+				originatorID = task.AccountableUserID
+			}
+			if !originatorID.Valid {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			member, err := store.GetMemberByUserAndWorkspace(req.Context(), db.GetMemberByUserAndWorkspaceParams{
+				UserID:      originatorID,
+				WorkspaceID: wsUUID,
+			})
+			if err != nil || (member.Role != "owner" && member.Role != "admin") {
+				writeTableStructuralForbidden(w)
+				return
+			}
+			next.ServeHTTP(w, req)
+		})
+	}
 }

@@ -838,6 +838,9 @@ type GenericChange struct {
 	ActorLabel     string             `json:"actor_label"`
 	OpDigest       string             `json:"op_digest"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	EventType      string             `json:"event_type"`
+	Topic          string             `json:"topic"`
+	EntityID       pgtype.UUID        `json:"entity_id"`
 }
 
 type GenericField struct {

@@ -2,11 +2,12 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -68,29 +69,47 @@ pub fn router(pool: PgPool, token: String) -> Router {
     let state = Arc::new(Tables { pool, token });
     Router::new()
         .route("/internal/tables", get(list_tables).post(create_table))
-        .route("/internal/tables/{id}", get(get_sheet).patch(rename_table))
-        .route("/internal/tables/{id}/fields", post(create_field))
+        .route(
+            "/internal/tables/{id}",
+            get(get_sheet).patch(rename_table).delete(delete_table),
+        )
+        .route(
+            "/internal/tables/{id}/fields",
+            get(list_fields).post(create_field),
+        )
         .route(
             "/internal/tables/{id}/fields/{field_id}",
-            patch(update_field),
+            get(get_field).patch(update_field).delete(delete_field),
         )
         .route(
             "/internal/tables/{id}/record-options",
             get(list_record_options),
         )
-        .route("/internal/tables/{id}/records", post(create_record))
+        .route(
+            "/internal/tables/{id}/records",
+            get(list_records).post(create_record),
+        )
         .route(
             "/internal/tables/{id}/records/{record_id}",
-            patch(update_record),
+            get(get_record).patch(update_record).delete(delete_record),
         )
         .route(
             "/internal/tables/{id}/records/{record_id}/comments",
             get(list_record_comments).post(create_record_comment),
         )
         .route("/internal/tables/{id}/changes", get(list_changes))
-        .route("/internal/tables/{id}/presence", post(touch_presence))
-        .route("/internal/tables/{id}/views", post(create_view))
-        .route("/internal/tables/{id}/views/{view_id}", patch(save_view))
+        .route(
+            "/internal/tables/{id}/presence",
+            get(get_presence).post(touch_presence),
+        )
+        .route(
+            "/internal/tables/{id}/views",
+            get(list_views).post(create_view),
+        )
+        .route(
+            "/internal/tables/{id}/views/{view_id}",
+            get(get_view).patch(save_view).delete(delete_view),
+        )
         .route(
             "/internal/tables/{id}/views/{view_id}/submit",
             post(submit_form),
@@ -148,6 +167,7 @@ async fn create_table(
 async fn rename_table(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     body: Result<Json<NameBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -157,8 +177,25 @@ async fn rename_table(
     let Ok(Json(body)) = body else {
         return invalid("请求格式不正确");
     };
-    match store::rename_table(&app.pool, &ws, &id, &body.name).await {
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::rename_table(&app.pool, &ws, &id, &body.name, actor.as_ref()).await {
         Ok(table) => Json(json!({ "table": table })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn delete_table(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    match store::delete_table(&app.pool, &ws, &id).await {
+        Ok(deleted) => Json(deleted).into_response(),
         Err(err) => store_error(err),
     }
 }
@@ -201,9 +238,38 @@ struct FieldBody {
     config: Value,
 }
 
+async fn list_fields(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    match store::list_fields(&app.pool, &ws, &id).await {
+        Ok(fields) => Json(json!({ "fields": fields })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn get_field(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path((id, field_id)): Path<(String, String)>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&field_id)) {
+        return response;
+    }
+    match store::get_field(&app.pool, &ws, &id, &field_id).await {
+        Ok(field) => Json(json!({ "field": field })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
 async fn create_field(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     body: Result<Json<FieldBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -213,7 +279,20 @@ async fn create_field(
     let Ok(Json(body)) = body else {
         return invalid("请求格式不正确");
     };
-    match store::create_field(&app.pool, &ws, &id, &body.name, &body.kind, &body.config).await {
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::create_field(
+        &app.pool,
+        &ws,
+        &id,
+        &body.name,
+        &body.kind,
+        &body.config,
+        actor.as_ref(),
+    )
+    .await
+    {
         Ok(field) => (StatusCode::CREATED, Json(json!({ "field": field }))).into_response(),
         Err(err) => store_error(err),
     }
@@ -230,6 +309,7 @@ struct FieldPatchBody {
 async fn update_field(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path((id, field_id)): Path<(String, String)>,
     body: Result<Json<FieldPatchBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -239,6 +319,9 @@ async fn update_field(
     let Ok(Json(body)) = body else {
         return invalid("请求格式不正确");
     };
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
     match store::update_field(
         &app.pool,
         &ws,
@@ -246,10 +329,93 @@ async fn update_field(
         &field_id,
         body.name.as_deref(),
         body.config.as_ref(),
+        actor.as_ref(),
     )
     .await
     {
         Ok(field) => Json(json!({ "field": field })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn delete_field(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path((id, field_id)): Path<(String, String)>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&field_id)) {
+        return response;
+    }
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::delete_field(&app.pool, &ws, &id, &field_id, actor.as_ref()).await {
+        Ok(deleted) => Json(deleted).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct RecordListQuery {
+    #[serde(default)]
+    view: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct DeleteRecordQuery {
+    #[serde(default)]
+    expected_revision: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct DeleteRecordBody {
+    expected_revision: i64,
+}
+
+async fn list_records(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+    Query(query): Query<RecordListQuery>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    if let Some(view) = query.view.as_deref()
+        && let Some(response) = bad_id(view)
+    {
+        return response;
+    }
+    match store::list_records(
+        &app.pool,
+        &ws,
+        &id,
+        query.view.as_deref(),
+        query.limit,
+        query.offset,
+    )
+    .await
+    {
+        Ok(list) => Json(list).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn get_record(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path((id, record_id)): Path<(String, String)>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&record_id)) {
+        return response;
+    }
+    match store::get_record(&app.pool, &ws, &id, &record_id).await {
+        Ok(record) => Json(json!({ "record": record })).into_response(),
         Err(err) => store_error(err),
     }
 }
@@ -344,6 +510,43 @@ async fn update_record(
     }
 }
 
+async fn delete_record(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path((id, record_id)): Path<(String, String)>,
+    Query(query): Query<DeleteRecordQuery>,
+    body: Bytes,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&record_id)) {
+        return response;
+    }
+    let body_rev = if body.iter().all(u8::is_ascii_whitespace) {
+        None
+    } else {
+        let Ok(parsed) = serde_json::from_slice::<DeleteRecordBody>(&body) else {
+            return invalid("请求格式不正确");
+        };
+        Some(parsed.expected_revision)
+    };
+    let expected_revision = match (query.expected_revision, body_rev) {
+        (Some(a), Some(b)) if a != b => return invalid("记录版本号不一致"),
+        (Some(a), _) => a,
+        (None, Some(b)) => b,
+        (None, None) => return invalid("删除记录需要提供 expected_revision"),
+    };
+    if expected_revision <= 0 {
+        return invalid("记录版本号无效");
+    }
+    let Ok(actor) = require_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::delete_record(&app.pool, &ws, &id, &record_id, expected_revision, &actor).await {
+        Ok(deleted) => Json(deleted).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
 #[derive(Deserialize)]
 struct SinceQuery {
     #[serde(default)]
@@ -371,6 +574,20 @@ struct PresenceBody {
     record_id: Option<String>,
     #[serde(default)]
     field_id: Option<String>,
+}
+
+async fn get_presence(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    match collab::get_presence(&app.pool, &ws, &id).await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => store_error(err),
+    }
 }
 
 async fn touch_presence(
@@ -647,9 +864,38 @@ async fn submit_form(
     }
 }
 
+async fn list_views(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    match store::list_views(&app.pool, &ws, &id).await {
+        Ok(views) => Json(json!({ "views": views })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn get_view(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path((id, view_id)): Path<(String, String)>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&view_id)) {
+        return response;
+    }
+    match store::get_view(&app.pool, &ws, &id, &view_id).await {
+        Ok(view) => Json(json!({ "view": view })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
 async fn create_view(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     body: Result<Json<ViewBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -662,7 +908,10 @@ async fn create_view(
     if let Some(response) = bad_view_ids(&body) {
         return response;
     }
-    match store::create_view(&app.pool, &ws, &id, &view_write(&body)).await {
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::create_view(&app.pool, &ws, &id, &view_write(&body), actor.as_ref()).await {
         Ok(view) => (StatusCode::CREATED, Json(json!({ "view": view }))).into_response(),
         Err(err) => store_error(err),
     }
@@ -671,6 +920,7 @@ async fn create_view(
 async fn save_view(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
     Path((id, view_id)): Path<(String, String)>,
     body: Result<Json<ViewBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -683,8 +933,38 @@ async fn save_view(
     if let Some(response) = bad_view_ids(&body) {
         return response;
     }
-    match store::save_view(&app.pool, &ws, &id, &view_id, &view_write(&body)).await {
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::save_view(
+        &app.pool,
+        &ws,
+        &id,
+        &view_id,
+        &view_write(&body),
+        actor.as_ref(),
+    )
+    .await
+    {
         Ok(view) => Json(json!({ "view": view })).into_response(),
+        Err(err) => store_error(err),
+    }
+}
+
+async fn delete_view(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path((id, view_id)): Path<(String, String)>,
+) -> Response {
+    if let Some(response) = bad_id(&id).or_else(|| bad_id(&view_id)) {
+        return response;
+    }
+    let Ok(actor) = optional_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match store::delete_view(&app.pool, &ws, &id, &view_id, actor.as_ref()).await {
+        Ok(deleted) => Json(deleted).into_response(),
         Err(err) => store_error(err),
     }
 }
@@ -733,6 +1013,23 @@ fn store_error(err: StoreError) -> Response {
             message,
             Some(*record),
         ),
+        StoreError::ReferenceConflict {
+            code,
+            message,
+            hint,
+        } => {
+            let body = json!({
+                "error": message,
+                "code": code,
+                "hint": hint,
+            });
+            (
+                StatusCode::CONFLICT,
+                [(header::CONTENT_TYPE, "application/json")],
+                body.to_string(),
+            )
+                .into_response()
+        }
         StoreError::Failed => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "tables_failed",

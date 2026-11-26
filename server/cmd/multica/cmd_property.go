@@ -39,20 +39,45 @@ type propertyOptionDTO struct {
 	Color string `json:"color"`
 }
 
-type propertyDTO struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	Icon        string `json:"icon"`
-	Config      struct {
+type propertyConfigDTO struct {
+	Options []propertyOptionDTO `json:"options,omitempty"`
+	raw     json.RawMessage
+}
+
+func (c *propertyConfigDTO) UnmarshalJSON(data []byte) error {
+	c.raw = append(c.raw[:0], data...)
+	var aux struct {
 		Options []propertyOptionDTO `json:"options"`
-	} `json:"config"`
-	Position   float64 `json:"position"`
-	Archived   bool    `json:"archived"`
-	UsageCount int64   `json:"usage_count"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	c.Options = aux.Options
+	return nil
+}
+
+func (c propertyConfigDTO) MarshalJSON() ([]byte, error) {
+	if len(c.raw) > 0 {
+		return c.raw, nil
+	}
+	type plain struct {
+		Options []propertyOptionDTO `json:"options"`
+	}
+	return json.Marshal(plain{Options: c.Options})
+}
+
+type propertyDTO struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	Description string            `json:"description"`
+	Icon        string            `json:"icon"`
+	Config      propertyConfigDTO `json:"config"`
+	Position    float64           `json:"position"`
+	Archived    bool              `json:"archived"`
+	UsageCount  int64             `json:"usage_count"`
+	CreatedAt   string            `json:"created_at"`
+	UpdatedAt   string            `json:"updated_at"`
 }
 
 var propertyCmd = &cobra.Command{
@@ -627,6 +652,40 @@ func encodeIssuePropertyValue(ctx context.Context, client *cli.APIClient, direct
 			return nil, fmt.Errorf("--value must list at least one entry")
 		}
 		return json.Marshal(items)
+	case "record_relation":
+		var rawItems []string
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "[") {
+			if err := json.Unmarshal([]byte(trimmed), &rawItems); err != nil {
+				return nil, fmt.Errorf("--value must be a JSON array of record UUIDs or a comma-separated list of record UUIDs")
+			}
+		} else {
+			for _, part := range strings.Split(raw, ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					rawItems = append(rawItems, p)
+				}
+			}
+		}
+		if len(rawItems) == 0 {
+			return nil, fmt.Errorf("--value must list at least one record UUID")
+		}
+		seen := make(map[string]struct{}, len(rawItems))
+		ids := make([]string, 0, len(rawItems))
+		for _, item := range rawItems {
+			idStr := strings.TrimSpace(item)
+			parsed, err := uuid.Parse(idStr)
+			if err != nil {
+				return nil, fmt.Errorf("record_relation value %q is not a valid UUID", item)
+			}
+			canonical := parsed.String()
+			if _, dup := seen[canonical]; !dup {
+				seen[canonical] = struct{}{}
+				ids = append(ids, canonical)
+			}
+		}
+		return json.Marshal(ids)
+	case "lookup", "formula":
+		return nil, fmt.Errorf("property %q (%s) is computed and read-only", property.Name, property.Type)
 	case "number":
 		if _, err := strconv.ParseFloat(raw, 64); err != nil {
 			return nil, fmt.Errorf("value %q is not a valid number", raw)
@@ -721,7 +780,8 @@ func actorPropertyName(actorNames map[string]string, ref string) string {
 // non-array value.
 func issuePropertyDisplayValues(property propertyDTO, value any, actorNames map[string]string) []string {
 	if property.Type != "multi_select" && property.Type != "multi_actor" &&
-		property.Type != "multi_text" && property.Type != "multi_url" {
+		property.Type != "multi_text" && property.Type != "multi_url" &&
+		property.Type != "record_relation" {
 		return nil
 	}
 	items, ok := value.([]any)
@@ -1291,6 +1351,12 @@ func resolvePropertyFilterValue(ctx context.Context, client *cli.APIClient, dire
 		return trimmed, nil
 	case "actor", "multi_actor":
 		return resolveActorPropertyRef(ctx, client, directory, trimmed)
+	case "record_relation":
+		parsed, err := uuid.Parse(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("--property %s: value %q is not a valid UUID", property.Name, trimmed)
+		}
+		return parsed.String(), nil
 	case "number":
 		return numberFilterValue(property, raw)
 	case "date":

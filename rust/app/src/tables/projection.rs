@@ -287,7 +287,7 @@ fn build_dependency_graph(fields: &[WorkspaceField]) -> BTreeMap<String, Vec<Str
     graph
 }
 
-fn field_dependencies(kind: &str, config: &Value) -> Vec<String> {
+pub(super) fn field_dependencies(kind: &str, config: &Value) -> Vec<String> {
     match kind {
         "lookup" => match LookupConfig::from_stored(config) {
             Ok(lookup) => vec![lookup.relation_field_id, lookup.target_field_id],

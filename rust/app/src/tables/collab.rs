@@ -33,6 +33,9 @@ pub struct ActorDto {
 #[derive(Clone, Serialize)]
 pub struct ChangeDto {
     pub seq: i64,
+    pub event_type: String,
+    pub topic: String,
+    pub entity_id: String,
     pub record_id: String,
     pub base_revision: i64,
     pub client_revision: i64,
@@ -110,14 +113,18 @@ pub fn decide(
     Decision::Apply { base: current }
 }
 
-pub fn digest(values: &BTreeMap<String, Option<Value>>) -> Result<String, StoreError> {
-    let text = serde_json::to_string(values).map_err(|_| StoreError::Failed)?;
+pub fn digest_str(text: &str) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in text.as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    Ok(format!("{hash:016x}{:016x}", text.len() as u64))
+    format!("{hash:016x}{:016x}", text.len() as u64)
+}
+
+pub fn digest(values: &BTreeMap<String, Option<Value>>) -> Result<String, StoreError> {
+    let text = serde_json::to_string(values).map_err(|_| StoreError::Failed)?;
+    Ok(digest_str(&text))
 }
 
 pub fn actor_color(id: &str) -> String {
@@ -236,6 +243,7 @@ async fn same_write(
     let row = sqlx::query(
         "SELECT 1 FROM generic_change
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND record_id = $3::uuid
+           AND event_type = 'record.updated'
            AND client_revision = $4 AND actor_id = $5::uuid AND op_digest = $6
          LIMIT 1",
     )
@@ -261,6 +269,7 @@ async fn load_steps(
         "SELECT base_revision, record_revision, fields::text
          FROM generic_change
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND record_id = $3::uuid
+           AND event_type = 'record.updated'
          ORDER BY base_revision",
     )
     .bind(workspace)
@@ -331,9 +340,48 @@ pub(super) struct ChangeWrite<'a> {
     pub digest: &'a str,
 }
 
+pub(super) struct EventWrite<'a> {
+    pub workspace: &'a str,
+    pub table: &'a str,
+    pub event_type: &'a str,
+    pub topic: &'a str,
+    pub entity_id: &'a str,
+    pub record_id: Option<&'a str>,
+    pub base_revision: i64,
+    pub client_revision: i64,
+    pub record_revision: i64,
+    pub values: &'a BTreeMap<String, Option<Value>>,
+    pub actor: &'a Actor,
+    pub digest: &'a str,
+}
+
 pub(super) async fn insert_change(
     tx: &mut Transaction<'_, Postgres>,
     write: &ChangeWrite<'_>,
+) -> Result<(), StoreError> {
+    insert_event(
+        tx,
+        &EventWrite {
+            workspace: write.workspace,
+            table: write.table,
+            event_type: "record.updated",
+            topic: "record",
+            entity_id: write.record,
+            record_id: Some(write.record),
+            base_revision: write.base,
+            client_revision: write.client_revision,
+            record_revision: write.record_revision,
+            values: write.values,
+            actor: write.actor,
+            digest: write.digest,
+        },
+    )
+    .await
+}
+
+pub(super) async fn insert_event(
+    tx: &mut Transaction<'_, Postgres>,
+    write: &EventWrite<'_>,
 ) -> Result<(), StoreError> {
     let seq = next_seq(tx, write.workspace, write.table).await?;
     let mut fields = BTreeMap::new();
@@ -343,17 +391,22 @@ pub(super) async fn insert_change(
     let encoded = serde_json::to_string(&fields).map_err(|_| StoreError::Failed)?;
     sqlx::query(
         "INSERT INTO generic_change (
-            workspace_id, table_id, seq, record_id, base_revision, client_revision, record_revision,
+            workspace_id, table_id, seq, event_type, topic, entity_id, record_id,
+            base_revision, client_revision, record_revision,
             fields, actor_source, actor_id, task_id, actor_label, op_digest
          ) VALUES (
-            $1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7, $8::jsonb, $9, $10::uuid, $11::uuid, $12, $13
+            $1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7::uuid,
+            $8, $9, $10, $11::jsonb, $12, $13::uuid, $14::uuid, $15, $16
          )",
     )
     .bind(write.workspace)
     .bind(write.table)
     .bind(seq)
-    .bind(write.record)
-    .bind(write.base)
+    .bind(write.event_type)
+    .bind(write.topic)
+    .bind(write.entity_id)
+    .bind(write.record_id)
+    .bind(write.base_revision)
     .bind(write.client_revision)
     .bind(write.record_revision)
     .bind(encoded)
@@ -396,10 +449,15 @@ pub async fn list_since(
         return Err(StoreError::Invalid("变更序号无效"));
     }
     let mut tx = begin(pool).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
     ensure_table(&mut tx, workspace, table).await?;
     let latest = latest_seq(&mut tx, workspace, table).await?;
     let changes = load_changes(&mut tx, workspace, table, since).await?;
     let presence = load_presence(&mut tx, workspace, table).await?;
+    commit(tx).await?;
     let next_since = changes.last().map(|change| change.seq).unwrap_or(since);
     Ok(Snapshot {
         latest,
@@ -433,7 +491,8 @@ async fn load_changes(
 ) -> Result<Vec<ChangeDto>, StoreError> {
     let created = ts("created_at");
     let sql = format!(
-        "SELECT seq, record_id::text, base_revision, client_revision, record_revision, fields::text,
+        "SELECT seq, event_type, topic, COALESCE(entity_id, record_id)::text, record_id::text,
+                base_revision, client_revision, record_revision, fields::text,
                 actor_source, actor_id::text, task_id::text, actor_label, {created}
          FROM generic_change
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND seq > $3
@@ -449,24 +508,50 @@ async fn load_changes(
         .map_err(failed)?;
     let mut changes = Vec::new();
     for row in rows {
-        let raw: String = row.get(5);
+        let raw: String = row.get(8);
         let fields = serde_json::from_str(&raw).map_err(|_| StoreError::Failed)?;
-        let source: String = row.get(6);
-        let id: String = row.get(7);
-        let task_id: Option<String> = row.get(8);
-        let label: String = row.get(9);
+        let source: String = row.get(9);
+        let id: String = row.get(10);
+        let task_id: Option<String> = row.get(11);
+        let label: String = row.get(12);
+        let record_id: Option<String> = row.get(4);
         changes.push(ChangeDto {
             seq: row.get(0),
-            record_id: row.get(1),
-            base_revision: row.get(2),
-            client_revision: row.get(3),
-            record_revision: row.get(4),
+            event_type: row.get(1),
+            topic: row.get(2),
+            entity_id: row.get(3),
+            record_id: record_id.unwrap_or_default(),
+            base_revision: row.get(5),
+            client_revision: row.get(6),
+            record_revision: row.get(7),
             fields,
             actor: actor_dto(&source, &id, task_id, &label),
-            created_at: row.get(10),
+            created_at: row.get(13),
         });
     }
     Ok(changes)
+}
+
+pub async fn get_presence(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+) -> Result<Snapshot, StoreError> {
+    let mut tx = begin(pool).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+    ensure_table(&mut tx, workspace, table).await?;
+    let latest = latest_seq(&mut tx, workspace, table).await?;
+    let presence = load_presence(&mut tx, workspace, table).await?;
+    commit(tx).await?;
+    Ok(Snapshot {
+        latest,
+        next_since: latest,
+        changes: Vec::new(),
+        presence,
+    })
 }
 
 pub async fn touch_presence(
@@ -605,5 +690,12 @@ mod tests {
         assert_eq!(decide(2, 1, &overlap, &fields(&["a"])), Decision::Conflict);
         assert_eq!(decide(3, 1, &overlap, &fields(&["b"])), Decision::Conflict);
         assert_eq!(decide(2, 1, &[], &fields(&["b"])), Decision::Conflict);
+    }
+
+    #[test]
+    fn digest_str_matches_32_hex_char_constraint() {
+        let d = digest_str("record.deleted:11111111-1111-4111-8111-111111111111:2");
+        assert_eq!(d.len(), 32);
+        assert!(d.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

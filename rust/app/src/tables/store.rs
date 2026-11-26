@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+use super::collab::{self, Actor, EventWrite};
 use super::validate::{self, FieldDef, StoredFilter, StoredSort, StoredView};
 use super::{projection, relation};
 
@@ -13,6 +14,11 @@ pub enum StoreError {
     Conflict {
         message: &'static str,
         record: Box<RecordDto>,
+    },
+    ReferenceConflict {
+        code: &'static str,
+        message: String,
+        hint: &'static str,
     },
     Invalid(&'static str),
     NameTaken,
@@ -85,6 +91,25 @@ pub struct TableCreated {
     pub view: ViewDto,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct DeletedDto {
+    pub deleted: bool,
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct RecordListDto {
+    pub records: Vec<RecordDto>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub has_more: bool,
+    pub next_offset: Option<i64>,
+    pub active_view_id: Option<String>,
+}
+
 const TS: &str = "to_char(%s AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')";
 
 pub(super) fn ts(column: &str) -> String {
@@ -140,8 +165,11 @@ pub async fn rename_table(
     workspace: &str,
     table: &str,
     name: &str,
+    actor: Option<&Actor>,
 ) -> Result<TableDto, StoreError> {
     let name = validate::clean_name(name).map_err(StoreError::Invalid)?;
+    let mut tx = begin(pool).await?;
+    lock_table(&mut tx, workspace, table).await?;
     let updated = ts("updated_at");
     let created = ts("created_at");
     let sql = format!(
@@ -154,11 +182,306 @@ pub async fn rename_table(
         .bind(table)
         .bind(workspace)
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(failed)?
         .ok_or(StoreError::NotFound("找不到这张表"))?;
-    table_from_row(&row)
+    let renamed = table_from_row(&row)?;
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            &renamed.id,
+            "table.renamed",
+            "table",
+            &renamed.id,
+            actor,
+        )
+        .await?;
+    }
+    commit(tx).await?;
+    Ok(renamed)
+}
+
+pub async fn delete_table(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+) -> Result<DeletedDto, StoreError> {
+    let table_lower = table.to_ascii_lowercase();
+    let mut tx = begin(pool).await?;
+    lock_workspace_tables_sorted(&mut tx, workspace, &table_lower).await?;
+
+    if let Some(prop_name) = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM issue_property
+         WHERE workspace_id = $1::uuid
+           AND type = 'record_relation'
+           AND lower(COALESCE(config->>'target_table_id', '')) = $2
+         ORDER BY name
+         LIMIT 1",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(failed)?
+    {
+        return Err(StoreError::ReferenceConflict {
+            code: "table_in_use",
+            message: format!("无法删除表格：工作区任务属性「{prop_name}」正在关联这张表"),
+            hint: "当前存在指向该表的任务 record_relation 属性定义；在相关任务属性不再引用该表前无法删除表格",
+        });
+    }
+
+    if let Some((other_table_name, field_name)) = sqlx::query_as::<_, (String, String)>(
+        "SELECT t.name, f.name
+         FROM generic_field f
+         JOIN generic_table t ON t.id = f.table_id AND t.workspace_id = f.workspace_id
+         WHERE f.workspace_id = $1::uuid
+           AND f.table_id <> $2::uuid
+           AND f.kind = 'relation'
+           AND lower(COALESCE(f.config->>'target_table_id', '')) = $3
+         ORDER BY t.name, f.name
+         LIMIT 1",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&table_lower)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(failed)?
+    {
+        return Err(StoreError::ReferenceConflict {
+            code: "table_in_use",
+            message: format!(
+                "无法删除表格：表格「{other_table_name}」的关联字段「{field_name}」指向当前表"
+            ),
+            hint: "请先删除或解除其他表中指向当前表的关联字段后再删除表格",
+        });
+    }
+
+    if let Some((other_table_name, field_name)) = sqlx::query_as::<_, (String, String)>(
+        "SELECT t.name, f.name
+         FROM generic_field f
+         JOIN generic_table t ON t.id = f.table_id AND t.workspace_id = f.workspace_id
+         WHERE f.workspace_id = $1::uuid
+           AND f.table_id <> $2::uuid
+           AND f.kind = 'lookup'
+           AND lower(COALESCE(f.config->>'target_field_id', '')) IN (
+               SELECT lower(id::text)
+               FROM generic_field
+               WHERE workspace_id = $1::uuid AND table_id = $2::uuid
+           )
+         ORDER BY t.name, f.name
+         LIMIT 1",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(failed)?
+    {
+        return Err(StoreError::ReferenceConflict {
+            code: "table_in_use",
+            message: format!(
+                "无法删除表格：表格「{other_table_name}」的查找字段「{field_name}」依赖当前表的字段"
+            ),
+            hint: "请先删除其他表中引用当前表字段的查找字段后再删除表格",
+        });
+    }
+
+    sqlx::query(
+        "DELETE FROM generic_cell
+         WHERE workspace_id = $1::uuid
+           AND record_id IN (
+               SELECT id FROM generic_record WHERE workspace_id = $1::uuid AND table_id = $2::uuid
+           )",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "DELETE FROM generic_record_comment WHERE workspace_id = $1::uuid AND table_id = $2::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "DELETE FROM generic_presence WHERE workspace_id = $1::uuid AND table_id = $2::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query("DELETE FROM generic_change WHERE workspace_id = $1::uuid AND table_id = $2::uuid")
+        .bind(workspace)
+        .bind(&table_lower)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    sqlx::query("DELETE FROM generic_record WHERE workspace_id = $1::uuid AND table_id = $2::uuid")
+        .bind(workspace)
+        .bind(&table_lower)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    sqlx::query("DELETE FROM generic_view WHERE workspace_id = $1::uuid AND table_id = $2::uuid")
+        .bind(workspace)
+        .bind(&table_lower)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    sqlx::query("DELETE FROM generic_field WHERE workspace_id = $1::uuid AND table_id = $2::uuid")
+        .bind(workspace)
+        .bind(&table_lower)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    sqlx::query("DELETE FROM generic_table WHERE workspace_id = $1::uuid AND id = $2::uuid")
+        .bind(workspace)
+        .bind(&table_lower)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    commit(tx).await?;
+    Ok(DeletedDto {
+        deleted: true,
+        id: table_lower,
+        revision: None,
+    })
+}
+
+pub async fn list_fields(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+) -> Result<Vec<FieldDto>, StoreError> {
+    let mut tx = begin(pool).await?;
+    let table = load_table(&mut tx, workspace, table).await?;
+    let mut fields = load_fields(&mut tx, workspace, &table.id).await?;
+    projection::hydrate_formula_fields(&mut fields);
+    commit(tx).await?;
+    Ok(fields)
+}
+
+pub async fn get_field(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    field_id: &str,
+) -> Result<FieldDto, StoreError> {
+    let fields = list_fields(pool, workspace, table).await?;
+    fields
+        .into_iter()
+        .find(|item| item.id.eq_ignore_ascii_case(field_id))
+        .ok_or(StoreError::NotFound("找不到这个字段"))
+}
+
+pub async fn list_records(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    view: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<RecordListDto, StoreError> {
+    let limit = limit.unwrap_or(100);
+    if !(1..=200).contains(&limit) {
+        return Err(StoreError::Invalid("记录分页数量需要在 1 到 200 之间"));
+    }
+    let offset = offset.unwrap_or(0);
+    if offset < 0 {
+        return Err(StoreError::Invalid("记录偏移量不能为负数"));
+    }
+    let mut tx = begin(pool).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+    let sheet = load_sheet(&mut tx, workspace, table, view).await?;
+    commit(tx).await?;
+
+    let total = sheet.records.len() as i64;
+    let start = usize::try_from(offset)
+        .unwrap_or(usize::MAX)
+        .min(sheet.records.len());
+    let take = usize::try_from(limit).unwrap_or(0);
+    let end = start.saturating_add(take).min(sheet.records.len());
+    let page: Vec<RecordDto> = sheet.records[start..end].to_vec();
+    let has_more = (end as i64) < total;
+    let next_offset = if has_more { Some(end as i64) } else { None };
+    Ok(RecordListDto {
+        records: page,
+        total,
+        limit,
+        offset,
+        has_more,
+        next_offset,
+        active_view_id: sheet.active_view_id,
+    })
+}
+
+pub async fn get_record(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    record_id: &str,
+) -> Result<RecordDto, StoreError> {
+    let mut tx = begin(pool).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+    let table = load_table(&mut tx, workspace, table).await?;
+    let mut fields = load_fields(&mut tx, workspace, &table.id).await?;
+    let record = load_record_in_table(&mut tx, workspace, &table.id, &fields, record_id).await?;
+    let mut records = vec![record];
+    if fields
+        .iter()
+        .any(|field| field.kind == "lookup" || field.kind == "formula")
+    {
+        projection::project_sheet(&mut tx, workspace, &table.id, &mut fields, &mut records).await?;
+    }
+    commit(tx).await?;
+    Ok(records.pop().expect("one record"))
+}
+
+pub async fn list_views(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+) -> Result<Vec<ViewDto>, StoreError> {
+    let mut tx = begin(pool).await?;
+    let table = load_table(&mut tx, workspace, table).await?;
+    let views = load_views(&mut tx, workspace, &table.id).await?;
+    commit(tx).await?;
+    Ok(views)
+}
+
+pub async fn get_view(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    view_id: &str,
+) -> Result<ViewDto, StoreError> {
+    let mut tx = begin(pool).await?;
+    let table = load_table(&mut tx, workspace, table).await?;
+    let view = load_view(&mut tx, workspace, &table.id, view_id).await?;
+    commit(tx).await?;
+    Ok(view)
 }
 
 pub async fn get_sheet(
@@ -266,6 +589,7 @@ pub async fn create_field(
     name: &str,
     kind: &str,
     config: &Value,
+    actor: Option<&Actor>,
 ) -> Result<FieldDto, StoreError> {
     let name = validate::clean_name(name).map_err(StoreError::Invalid)?;
     let config = validate::normalize_config(kind, config).map_err(StoreError::Invalid)?;
@@ -273,6 +597,33 @@ pub async fn create_field(
     if kind == "relation" {
         let field =
             relation::create_relation_field(&mut tx, workspace, table, &name, &config).await?;
+        if let Some(actor) = actor {
+            publish_metadata_event(
+                &mut tx,
+                workspace,
+                table,
+                "field.created",
+                "field",
+                &field.id,
+                actor,
+            )
+            .await?;
+            if let Ok(rel) = relation::RelationConfig::from_stored(&field.config)
+                && rel.bidirectional
+                && let Some(reverse_id) = rel.reverse_field_id.as_deref()
+            {
+                publish_metadata_event(
+                    &mut tx,
+                    workspace,
+                    &rel.target_table_id,
+                    "field.created",
+                    "field",
+                    reverse_id,
+                    actor,
+                )
+                .await?;
+            }
+        }
         commit(tx).await?;
         return Ok(field);
     }
@@ -280,6 +631,18 @@ pub async fn create_field(
         let field =
             projection::create_derived_field(&mut tx, workspace, table, &name, kind, &config)
                 .await?;
+        if let Some(actor) = actor {
+            publish_metadata_event(
+                &mut tx,
+                workspace,
+                table,
+                "field.created",
+                "field",
+                &field.id,
+                actor,
+            )
+            .await?;
+        }
         commit(tx).await?;
         return Ok(field);
     }
@@ -303,6 +666,18 @@ pub async fn create_field(
         .await
         .map_err(|err| map_write(err, "请重试添加字段"))?;
     let field = field_from_row(&row)?;
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            table,
+            "field.created",
+            "field",
+            &field.id,
+            actor,
+        )
+        .await?;
+    }
     commit(tx).await?;
     Ok(field)
 }
@@ -314,6 +689,7 @@ pub async fn update_field(
     field: &str,
     name: Option<&str>,
     config: Option<&Value>,
+    actor: Option<&Actor>,
 ) -> Result<FieldDto, StoreError> {
     if name.is_none() && config.is_none() {
         return Err(StoreError::Invalid("没有要保存的字段变更"));
@@ -333,6 +709,18 @@ pub async fn update_field(
             raw_config,
         )
         .await?;
+        if let Some(actor) = actor {
+            publish_metadata_event(
+                &mut tx,
+                workspace,
+                table,
+                "field.updated",
+                "field",
+                &updated.id,
+                actor,
+            )
+            .await?;
+        }
         commit(tx).await?;
         return Ok(updated);
     }
@@ -363,8 +751,215 @@ pub async fn update_field(
             .collect();
         projection::hydrate_single_formula(&mut updated_field, &names);
     }
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            table,
+            "field.updated",
+            "field",
+            &updated_field.id,
+            actor,
+        )
+        .await?;
+    }
     commit(tx).await?;
     Ok(updated_field)
+}
+
+pub async fn delete_field(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    field_id: &str,
+    actor: Option<&Actor>,
+) -> Result<DeletedDto, StoreError> {
+    let table_lower = table.to_ascii_lowercase();
+    let field_lower = field_id.to_ascii_lowercase();
+    let mut tx = begin(pool).await?;
+    lock_workspace_tables_sorted(&mut tx, workspace, &table_lower).await?;
+
+    let ws_rows = sqlx::query(
+        "SELECT id::text, table_id::text, name, kind, config::text
+         FROM generic_field
+         WHERE workspace_id = $1::uuid
+         ORDER BY table_id, position, id",
+    )
+    .bind(workspace)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    struct WsField {
+        id: String,
+        table_id: String,
+        name: String,
+        kind: String,
+        config: Value,
+    }
+    let mut all_fields = Vec::with_capacity(ws_rows.len());
+    for row in ws_rows {
+        let raw: String = row.get(4);
+        let config = serde_json::from_str(&raw).map_err(|_| StoreError::Failed)?;
+        all_fields.push(WsField {
+            id: row.get::<String, _>(0).to_ascii_lowercase(),
+            table_id: row.get::<String, _>(1).to_ascii_lowercase(),
+            name: row.get(2),
+            kind: row.get(3),
+            config,
+        });
+    }
+
+    let target = all_fields
+        .iter()
+        .find(|item| item.table_id == table_lower && item.id == field_lower)
+        .ok_or(StoreError::NotFound("找不到这个字段"))?;
+
+    if target.kind == "relation"
+        && let Ok(rel) = relation::RelationConfig::from_stored(&target.config)
+        && (rel.bidirectional || rel.reverse_field_id.is_some())
+    {
+        return Err(StoreError::ReferenceConflict {
+            code: "field_in_use",
+            message: format!(
+                "无法删除双向关联字段「{}」：该字段与目标表反向字段成对绑定",
+                target.name
+            ),
+            hint: "当前模型阻断单独删除双向关联字段以防止反向关联悬空；请保留成对结构或改用单向关联字段",
+        });
+    }
+    for other in &all_fields {
+        if other.id == field_lower {
+            continue;
+        }
+        if other.kind == "relation"
+            && let Ok(rel) = relation::RelationConfig::from_stored(&other.config)
+            && rel.reverse_field_id.as_deref() == Some(field_lower.as_str())
+        {
+            return Err(StoreError::ReferenceConflict {
+                code: "field_in_use",
+                message: format!(
+                    "无法删除字段「{}」：它是关联字段「{}」的反向关联字段",
+                    target.name, other.name
+                ),
+                hint: "当前模型阻断单独删除双向关联字段以防止成对关联悬空",
+            });
+        }
+    }
+
+    let views = load_views(&mut tx, workspace, &table_lower).await?;
+    for view in &views {
+        if view_references_field(view, &field_lower) {
+            return Err(StoreError::ReferenceConflict {
+                code: "field_in_use",
+                message: format!(
+                    "无法删除字段：视图「{}」正在引用该字段（列、筛选、排序、分组或视图配置）",
+                    view.name
+                ),
+                hint: "请先在对应视图中移除该字段的列、筛选、排序、分组或视图配置后再删除字段",
+            });
+        }
+    }
+
+    for other in &all_fields {
+        if other.id == field_lower {
+            continue;
+        }
+        let deps = projection::field_dependencies(&other.kind, &other.config);
+        if deps
+            .iter()
+            .any(|dep| dep.eq_ignore_ascii_case(&field_lower))
+        {
+            let kind_label = if other.kind == "formula" {
+                "公式"
+            } else {
+                "查找"
+            };
+            return Err(StoreError::ReferenceConflict {
+                code: "field_in_use",
+                message: format!("无法删除字段：{kind_label}字段「{}」依赖该字段", other.name),
+                hint: "请先修改或删除依赖该字段的公式或查找字段后再删除",
+            });
+        }
+    }
+
+    if let Some(prop_name) = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM issue_property
+         WHERE workspace_id = $1::uuid
+           AND type = 'lookup'
+           AND lower(COALESCE(config->>'target_field_id', '')) = $2
+         ORDER BY name
+         LIMIT 1",
+    )
+    .bind(workspace)
+    .bind(&field_lower)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(failed)?
+    {
+        return Err(StoreError::ReferenceConflict {
+            code: "field_in_use",
+            message: format!("无法删除字段：工作区任务查找属性「{prop_name}」依赖该字段"),
+            hint: "当前存在引用该字段的任务 lookup 属性定义；在相关任务属性解除对该字段的引用前无法删除字段",
+        });
+    }
+
+    sqlx::query(
+        "DELETE FROM generic_cell
+         WHERE workspace_id = $1::uuid
+           AND field_id = $2::uuid
+           AND record_id IN (
+               SELECT id FROM generic_record WHERE workspace_id = $1::uuid AND table_id = $3::uuid
+           )",
+    )
+    .bind(workspace)
+    .bind(&field_lower)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "UPDATE generic_presence
+         SET field_id = NULL, updated_at = now()
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND field_id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&field_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "DELETE FROM generic_field
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&field_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            &table_lower,
+            "field.deleted",
+            "field",
+            &field_lower,
+            actor,
+        )
+        .await?;
+    }
+    commit(tx).await?;
+    Ok(DeletedDto {
+        deleted: true,
+        id: field_lower,
+        revision: None,
+    })
 }
 
 pub async fn create_record(
@@ -459,12 +1054,182 @@ async fn create_record_in_tx(
         .map_err(failed)?;
     let id: String = row.get(0);
     write_cells(tx, workspace, &id, normalized).await?;
-    if let Some(actor) = actor
-        && reverse_plan.has_writes()
-    {
-        relation::apply_reverse_plan(tx, workspace, &id, &reverse_plan, actor).await?;
+    if let Some(actor) = actor {
+        let digest = collab::digest(normalized)?;
+        collab::insert_event(
+            tx,
+            &EventWrite {
+                workspace,
+                table,
+                event_type: "record.created",
+                topic: "record",
+                entity_id: &id,
+                record_id: Some(&id),
+                base_revision: 0,
+                client_revision: 0,
+                record_revision: 1,
+                values: normalized,
+                actor,
+                digest: &digest,
+            },
+        )
+        .await?;
+        if reverse_plan.has_writes() {
+            relation::apply_reverse_plan(tx, workspace, &id, &reverse_plan, actor).await?;
+        }
     }
     load_record(tx, workspace, fields, &id).await
+}
+
+pub async fn delete_record(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    record_id: &str,
+    expected_revision: i64,
+    actor: &Actor,
+) -> Result<DeletedDto, StoreError> {
+    if expected_revision <= 0 {
+        return Err(StoreError::Invalid("记录版本号无效"));
+    }
+    let table_lower = table.to_ascii_lowercase();
+    let record_lower = record_id.to_ascii_lowercase();
+    let mut tx = begin(pool).await?;
+    lock_workspace_tables_sorted(&mut tx, workspace, &table_lower).await?;
+    let current = lock_record(&mut tx, workspace, &table_lower, &record_lower).await?;
+    if current.revision != expected_revision {
+        let fields = load_fields(&mut tx, workspace, &table_lower).await?;
+        let fresh = load_record(&mut tx, workspace, &fields, &record_lower).await?;
+        return Err(StoreError::Conflict {
+            message: "这条记录已在其他窗口更新，无法按过期版本删除",
+            record: Box::new(fresh),
+        });
+    }
+
+    let referenced_by_issue = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM issue_property p
+             JOIN issue i ON i.workspace_id = p.workspace_id
+             WHERE p.workspace_id = $1::uuid
+               AND p.type = 'record_relation'
+               AND lower(COALESCE(p.config->>'target_table_id', '')) = $2
+               AND i.properties ? p.id::text
+               AND i.properties -> p.id::text @> jsonb_build_array($3::text)
+         )",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&record_lower)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(failed)?;
+    if referenced_by_issue {
+        return Err(StoreError::ReferenceConflict {
+            code: "record_in_use",
+            message: "无法删除记录：仍有任务引用了这条记录".to_owned(),
+            hint: "请先在引用该记录的任务中解除对应的 record_relation 关联后再删除记录",
+        });
+    }
+
+    let referenced_by_record = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM generic_field f
+             JOIN generic_cell c ON c.workspace_id = f.workspace_id AND c.field_id = f.id
+             WHERE f.workspace_id = $1::uuid
+               AND f.kind = 'relation'
+               AND lower(COALESCE(f.config->>'target_table_id', '')) = $2
+               AND c.record_id <> $3::uuid
+               AND c.value @> jsonb_build_array($4::text)
+         )",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&record_lower)
+    .bind(&record_lower)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(failed)?;
+    if referenced_by_record {
+        return Err(StoreError::ReferenceConflict {
+            code: "record_in_use",
+            message: "无法删除记录：仍有其他记录通过关联字段引用了这条记录".to_owned(),
+            hint: "请先清除其他记录中指向该记录的关联字段值后再删除记录",
+        });
+    }
+
+    sqlx::query("DELETE FROM generic_cell WHERE workspace_id = $1::uuid AND record_id = $2::uuid")
+        .bind(workspace)
+        .bind(&record_lower)
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+
+    sqlx::query(
+        "DELETE FROM generic_record_comment
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND record_id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&record_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "UPDATE generic_presence
+         SET record_id = NULL, field_id = NULL, updated_at = now()
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND record_id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&record_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "DELETE FROM generic_record
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND id = $3::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .bind(&record_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    let empty = BTreeMap::new();
+    let digest = collab::digest_str(&format!(
+        "record.deleted:{record_lower}:{}",
+        current.revision
+    ));
+    collab::insert_event(
+        &mut tx,
+        &EventWrite {
+            workspace,
+            table: &table_lower,
+            event_type: "record.deleted",
+            topic: "record",
+            entity_id: &record_lower,
+            record_id: Some(&record_lower),
+            base_revision: current.revision,
+            client_revision: expected_revision,
+            record_revision: current.revision,
+            values: &empty,
+            actor,
+            digest: &digest,
+        },
+    )
+    .await?;
+
+    commit(tx).await?;
+    Ok(DeletedDto {
+        deleted: true,
+        id: record_lower,
+        revision: Some(current.revision),
+    })
 }
 
 pub async fn update_record(
@@ -513,6 +1278,7 @@ pub async fn create_view(
     workspace: &str,
     table: &str,
     write: &ViewWrite<'_>,
+    actor: Option<&Actor>,
 ) -> Result<ViewDto, StoreError> {
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
@@ -529,6 +1295,18 @@ pub async fn create_view(
     };
     let view = normalize_write(table, write, kind, config, group, &fields)?;
     let saved = insert_view(&mut tx, workspace, table, &view).await?;
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            table,
+            "view.created",
+            "view",
+            &saved.id,
+            actor,
+        )
+        .await?;
+    }
     commit(tx).await?;
     Ok(saved)
 }
@@ -539,6 +1317,7 @@ pub async fn save_view(
     table: &str,
     view: &str,
     write: &ViewWrite<'_>,
+    actor: Option<&Actor>,
 ) -> Result<ViewDto, StoreError> {
     let mut tx = begin(pool).await?;
     lock_table(&mut tx, workspace, table).await?;
@@ -569,8 +1348,76 @@ pub async fn save_view(
         &fields,
     )?;
     let saved = update_view(&mut tx, workspace, table, view, &spec).await?;
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            table,
+            "view.updated",
+            "view",
+            &saved.id,
+            actor,
+        )
+        .await?;
+    }
     commit(tx).await?;
     Ok(saved)
+}
+
+pub async fn delete_view(
+    pool: &PgPool,
+    workspace: &str,
+    table: &str,
+    view_id: &str,
+    actor: Option<&Actor>,
+) -> Result<DeletedDto, StoreError> {
+    let table_lower = table.to_ascii_lowercase();
+    let view_lower = view_id.to_ascii_lowercase();
+    let mut tx = begin(pool).await?;
+    lock_table(&mut tx, workspace, &table_lower).await?;
+    let views = load_views(&mut tx, workspace, &table_lower).await?;
+    let target = views
+        .iter()
+        .find(|item| item.id.eq_ignore_ascii_case(&view_lower))
+        .ok_or(StoreError::NotFound("找不到这个视图"))?;
+    if target.kind == "grid" {
+        let grid_count = views.iter().filter(|item| item.kind == "grid").count();
+        if grid_count <= 1 {
+            return Err(StoreError::ReferenceConflict {
+                code: "last_grid_view",
+                message: "无法删除表格中最后一个网格视图".to_owned(),
+                hint: "每张表至少需要保留一个网格视图；请先新建其他网格视图后再删除",
+            });
+        }
+    }
+    sqlx::query(
+        "DELETE FROM generic_view
+         WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid",
+    )
+    .bind(&view_lower)
+    .bind(&table_lower)
+    .bind(workspace)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+    if let Some(actor) = actor {
+        publish_metadata_event(
+            &mut tx,
+            workspace,
+            &table_lower,
+            "view.deleted",
+            "view",
+            &view_lower,
+            actor,
+        )
+        .await?;
+    }
+    commit(tx).await?;
+    Ok(DeletedDto {
+        deleted: true,
+        id: view_lower,
+        revision: None,
+    })
 }
 
 fn normalize_write(
@@ -757,6 +1604,105 @@ pub(super) async fn lock_table(
         return Err(StoreError::NotFound("找不到这张表"));
     }
     Ok(())
+}
+
+async fn lock_workspace_tables_sorted(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    primary_table: &str,
+) -> Result<(), StoreError> {
+    let primary = primary_table.to_ascii_lowercase();
+    let rows = sqlx::query(
+        "SELECT id::text FROM generic_table WHERE workspace_id = $1::uuid ORDER BY id FOR UPDATE",
+    )
+    .bind(workspace)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(failed)?;
+    let exists = rows
+        .iter()
+        .any(|row| row.get::<String, _>(0).eq_ignore_ascii_case(&primary));
+    if !exists {
+        return Err(StoreError::NotFound("找不到这张表"));
+    }
+    Ok(())
+}
+
+async fn publish_metadata_event(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    event_type: &str,
+    topic: &str,
+    entity_id: &str,
+    actor: &Actor,
+) -> Result<(), StoreError> {
+    let empty = BTreeMap::new();
+    let digest = collab::digest_str(&format!("{event_type}:{entity_id}"));
+    collab::insert_event(
+        tx,
+        &EventWrite {
+            workspace,
+            table,
+            event_type,
+            topic,
+            entity_id,
+            record_id: None,
+            base_revision: 0,
+            client_revision: 0,
+            record_revision: 0,
+            values: &empty,
+            actor,
+            digest: &digest,
+        },
+    )
+    .await
+}
+
+fn json_contains_uuid(value: &Value, target_lower: &str) -> bool {
+    match value {
+        Value::String(text) => text.eq_ignore_ascii_case(target_lower),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| json_contains_uuid(item, target_lower)),
+        Value::Object(map) => map
+            .values()
+            .any(|item| json_contains_uuid(item, target_lower)),
+        _ => false,
+    }
+}
+
+pub(super) fn view_references_field(view: &ViewDto, field_id: &str) -> bool {
+    let target = field_id.to_ascii_lowercase();
+    if view
+        .columns
+        .as_ref()
+        .is_some_and(|cols| cols.iter().any(|id| id.eq_ignore_ascii_case(&target)))
+    {
+        return true;
+    }
+    if view
+        .filter
+        .as_ref()
+        .is_some_and(|filter| filter.field_id.eq_ignore_ascii_case(&target))
+    {
+        return true;
+    }
+    if view
+        .sort
+        .as_ref()
+        .is_some_and(|sort| sort.field_id.eq_ignore_ascii_case(&target))
+    {
+        return true;
+    }
+    if view
+        .group
+        .as_deref()
+        .is_some_and(|group| group.eq_ignore_ascii_case(&target))
+    {
+        return true;
+    }
+    json_contains_uuid(&view.config, &target)
 }
 
 pub(super) async fn next_position(
@@ -1009,6 +1955,49 @@ pub(super) async fn lock_record(
         .map_err(failed)?
         .ok_or(StoreError::NotFound("找不到这条记录"))?;
     Ok(record_from_maps(&row, &[], &HashMap::new()))
+}
+
+async fn load_record_in_table(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    fields: &[FieldDto],
+    record: &str,
+) -> Result<RecordDto, StoreError> {
+    let created = ts("created_at");
+    let updated = ts("updated_at");
+    let sql = format!(
+        "SELECT id::text, revision, {created}, {updated}
+         FROM generic_record
+         WHERE id = $1::uuid AND table_id = $2::uuid AND workspace_id = $3::uuid"
+    );
+    let row = sqlx::query(&sql)
+        .bind(record)
+        .bind(table)
+        .bind(workspace)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(failed)?
+        .ok_or(StoreError::NotFound("找不到这条记录"))?;
+    let cells = sqlx::query(
+        "SELECT field_id::text, value::text FROM generic_cell WHERE record_id = $1::uuid AND workspace_id = $2::uuid",
+    )
+    .bind(record)
+    .bind(workspace)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(failed)?;
+    let mut values = HashMap::new();
+    for cell in cells {
+        let field_id: String = cell.get(0);
+        let raw: Option<String> = cell.get(1);
+        let value = match raw {
+            Some(text) => serde_json::from_str(&text).map_err(|_| StoreError::Failed)?,
+            None => Value::Null,
+        };
+        values.insert(field_id, value);
+    }
+    Ok(record_from_maps(&row, fields, &values))
 }
 
 pub(super) async fn load_record(
@@ -1264,5 +2253,52 @@ mod tests {
             record_option_label(&[f1, f2], &record(rec_id, BTreeMap::new())),
             "未命名记录 (12345678)"
         );
+    }
+
+    #[test]
+    fn view_references_field_detects_columns_filter_sort_group_and_config() {
+        let f1 = "11111111-1111-4111-8111-111111111111";
+        let f2 = "22222222-2222-4222-8222-222222222222";
+        let base = ViewDto {
+            id: "55555555-5555-4555-8555-555555555555".to_owned(),
+            name: "All".to_owned(),
+            kind: "grid".to_owned(),
+            config: json!({}),
+            columns: None,
+            filter: None,
+            sort: None,
+            group: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        assert!(!view_references_field(&base, f1));
+
+        let mut with_cols = base.clone();
+        with_cols.columns = Some(vec![f1.to_ascii_uppercase()]);
+        assert!(view_references_field(&with_cols, f1));
+        assert!(!view_references_field(&with_cols, f2));
+
+        let mut with_filter = base.clone();
+        with_filter.filter = Some(StoredFilter {
+            field_id: f1.to_owned(),
+            op: "eq".to_owned(),
+            value: Some(json!("ok")),
+        });
+        assert!(view_references_field(&with_filter, f1));
+
+        let mut with_sort = base.clone();
+        with_sort.sort = Some(StoredSort {
+            field_id: f1.to_owned(),
+            direction: "asc".to_owned(),
+        });
+        assert!(view_references_field(&with_sort, f1));
+
+        let mut with_group = base.clone();
+        with_group.group = Some(f1.to_owned());
+        assert!(view_references_field(&with_group, f1));
+
+        let mut with_cfg = base.clone();
+        with_cfg.config = json!({ "required_fields": [f1] });
+        assert!(view_references_field(&with_cfg, f1));
     }
 }

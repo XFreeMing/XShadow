@@ -797,7 +797,7 @@ func writeSkills(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	// what keeps that consolidation from costing recall, and it must therefore
 	// name the skill that actually holds those contracts.
 	if platformSlug != "" {
-		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import — load the `" + platformSlug + "` skill and open the reference(s) its routing table names for the domains your task touches.\n\n")
+		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import, tables — load the `" + platformSlug + "` skill and open the reference(s) its routing table names for the domains your task touches (for task tables or generic tables, open `references/tables.md` in `" + platformSlug + "` or run `multica table --help`).\n\n")
 	}
 }
 
@@ -823,7 +823,8 @@ func writeTraecliSkills(b *strings.Builder, skills []SkillContextForEnv) {
 	}
 	b.WriteString("\n")
 	if platformSlug != "" {
-		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import — read `" + skillPath(platformSlug) + "` and open the reference(s) its routing table names for the domains your task touches.\n\n")
+		tablesRefPath := filepath.ToSlash(filepath.Join(skillsDirPath("", "traecli"), platformSlug, "references", "tables.md"))
+		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, mentions, agents, squads, autopilots, projects, runtimes, local environments, skill import, tables — read `" + skillPath(platformSlug) + "` and open the reference(s) its routing table names for the domains your task touches (for task tables or generic tables, read `" + tablesRefPath + "` or run `multica table --help`).\n\n")
 	}
 }
 
