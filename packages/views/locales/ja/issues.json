@@ -506,6 +506,8 @@
       "no_results": "一致する列がありません",
       "add": "列を追加",
       "hide": "列を非表示",
+      "move_up": "{{column}}を上へ",
+      "move_down": "{{column}}を下へ",
       "reorder": "{{column}} 列を並べ替え",
       "title": "タスク",
       "identifier": "ID",

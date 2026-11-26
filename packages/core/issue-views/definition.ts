@@ -52,6 +52,8 @@ export function issueViewDefinitionFromState(state: IssueViewState): IssueViewDe
       cardProperties: state.cardProperties,
       cardPropertyIds: state.cardPropertyIds,
       tableColumns: state.tableColumns,
+      gridColumnOrder: state.gridColumnOrder,
+      gridHiddenColumnIds: state.gridHiddenColumnIds,
       tableGrouping: state.tableGrouping,
       tableHierarchy: state.tableHierarchy,
       tableCalculation: state.tableCalculation,

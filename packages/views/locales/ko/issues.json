@@ -506,6 +506,8 @@
       "no_results": "일치하는 열이 없습니다",
       "add": "열 추가",
       "hide": "열 숨기기",
+      "move_up": "{{column}} 위로",
+      "move_down": "{{column}} 아래로",
       "reorder": "{{column}} 열 순서 변경",
       "title": "태스크",
       "identifier": "식별자",

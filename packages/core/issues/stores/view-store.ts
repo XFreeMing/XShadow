@@ -22,6 +22,13 @@ import {
   type IssueRelationFilter,
   type NegatableFilterDimension,
 } from "./filter-tree";
+import {
+  DEFAULT_GRID_COLUMN_ORDER,
+  isGridColumnKey,
+  normalizeGridColumnOrder,
+  normalizeGridHiddenColumnIds,
+  type GridColumnKey,
+} from "../grid-columns";
 
 export {
   DUE_DATE_FILTERS,
@@ -91,6 +98,8 @@ export type TableGrouping =
   | "project"
   | `property:${string}`;
 export type TableCalculation = "none" | "sum" | "average" | "count";
+
+export type { GridColumnKey } from "../grid-columns";
 
 export const TABLE_SYSTEM_COLUMNS: readonly TableSystemColumnKey[] = [
   "title",
@@ -391,6 +400,10 @@ export interface IssueViewState {
   tableCollapsedParents: string[];
   tableHierarchy: boolean;
   tableCalculation: TableCalculation;
+  /** Multidimensional grid column order (includes hidden columns). */
+  gridColumnOrder: GridColumnKey[];
+  /** Hidden multidimensional grid columns. Title is always shown. */
+  gridHiddenColumnIds: GridColumnKey[];
   setViewMode: (mode: ViewMode) => void;
   setGanttZoom: (zoom: GanttZoom) => void;
   toggleGanttShowCompleted: () => void;
@@ -451,6 +464,9 @@ export interface IssueViewState {
   toggleTableParentCollapsed: (issueId: string) => void;
   toggleTableHierarchy: () => void;
   setTableCalculation: (calculation: TableCalculation) => void;
+  setGridColumnHidden: (key: GridColumnKey, hidden: boolean) => void;
+  moveGridColumn: (key: GridColumnKey, direction: -1 | 1) => void;
+  syncGridColumnCatalog: (catalog: readonly GridColumnKey[]) => void;
 }
 
 export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): IssueViewState => ({
@@ -492,6 +508,8 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   tableCollapsedParents: [],
   tableHierarchy: true,
   tableCalculation: "none",
+  gridColumnOrder: [...DEFAULT_GRID_COLUMN_ORDER],
+  gridHiddenColumnIds: [],
 
   setViewMode: (mode) =>
     set((state) => ({
@@ -799,6 +817,40 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   toggleTableHierarchy: () =>
     set((state) => ({ tableHierarchy: !state.tableHierarchy })),
   setTableCalculation: (tableCalculation) => set({ tableCalculation }),
+  setGridColumnHidden: (key, hidden) =>
+    set((state) => {
+      if (key === "title") return state;
+      const hiddenIds = new Set(state.gridHiddenColumnIds);
+      if (hidden) hiddenIds.add(key);
+      else hiddenIds.delete(key);
+      return { gridHiddenColumnIds: [...hiddenIds] };
+    }),
+  moveGridColumn: (key, direction) =>
+    set((state) => {
+      if (key === "title") return state;
+      const order = [...state.gridColumnOrder];
+      const from = order.indexOf(key);
+      if (from < 1) return state;
+      const to = from + direction;
+      if (to < 1 || to >= order.length) return state;
+      const [moved] = order.splice(from, 1);
+      if (!moved) return state;
+      order.splice(to, 0, moved);
+      return { gridColumnOrder: order };
+    }),
+  syncGridColumnCatalog: (catalog) =>
+    set((state) => {
+      const order = normalizeGridColumnOrder(catalog, state.gridColumnOrder);
+      const hidden = normalizeGridHiddenColumnIds(catalog, state.gridHiddenColumnIds);
+      const orderSame =
+        order.length === state.gridColumnOrder.length &&
+        order.every((id, index) => id === state.gridColumnOrder[index]);
+      const hiddenSame =
+        hidden.length === state.gridHiddenColumnIds.length &&
+        hidden.every((id, index) => id === state.gridHiddenColumnIds[index]);
+      if (orderSame && hiddenSame) return state;
+      return { gridColumnOrder: order, gridHiddenColumnIds: hidden };
+    }),
 });
 
 export const viewStorePersistOptions = (name: string) => ({
@@ -844,6 +896,8 @@ export const viewStorePersistOptions = (name: string) => ({
     tableCollapsedParents: state.tableCollapsedParents,
     tableHierarchy: state.tableHierarchy,
     tableCalculation: state.tableCalculation,
+    gridColumnOrder: state.gridColumnOrder,
+    gridHiddenColumnIds: state.gridHiddenColumnIds,
   }),
   // Default Zustand merge is shallow, so a persisted `cardProperties` snapshot
   // saved before a new toggle was introduced wins entirely and the new key is
@@ -901,6 +955,12 @@ export function mergeViewStatePersisted<T extends IssueViewState>(
           typeof (column as TableColumnConfig).key === "string",
       )
     : current.tableColumns;
+  const persistedGridOrder = Array.isArray(p.gridColumnOrder)
+    ? p.gridColumnOrder.filter(isGridColumnKey)
+    : current.gridColumnOrder;
+  const persistedGridHidden = Array.isArray(p.gridHiddenColumnIds)
+    ? [...new Set(p.gridHiddenColumnIds.filter(isGridColumnKey).filter((key) => key !== "title"))]
+    : current.gridHiddenColumnIds;
   const dedupedTableColumns = Array.from(
     new Map(persistedTableColumns.map((column) => [column.key, column])).values(),
   ).filter((column) => column.key !== "title");
@@ -930,6 +990,17 @@ export function mergeViewStatePersisted<T extends IssueViewState>(
       persistedTitle ?? current.tableColumns[0] ?? { key: "title" },
       ...dedupedTableColumns,
     ],
+    gridColumnOrder: (() => {
+      const deduped = [...new Set(persistedGridOrder)];
+      if (!deduped.includes("title")) deduped.unshift("title");
+      else if (deduped[0] !== "title") {
+        const titleIndex = deduped.indexOf("title");
+        deduped.splice(titleIndex, 1);
+        deduped.unshift("title");
+      }
+      return deduped;
+    })(),
+    gridHiddenColumnIds: persistedGridHidden,
     tableCollapsedGroups: Array.isArray(p.tableCollapsedGroups)
       ? p.tableCollapsedGroups
       : current.tableCollapsedGroups,

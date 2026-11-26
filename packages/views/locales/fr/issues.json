@@ -512,6 +512,8 @@
       "no_results": "Aucune colonne correspondante",
       "add": "Ajouter une colonne",
       "hide": "Masquer la colonne",
+      "move_up": "Monter {{column}}",
+      "move_down": "Descendre {{column}}",
       "reorder": "Réorganiser la colonne {{column}}",
       "title": "Tâche",
       "identifier": "Identifiant",

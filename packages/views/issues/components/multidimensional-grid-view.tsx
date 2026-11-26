@@ -1,6 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  catalogGridColumnOrder,
+  gridPropertyColumnId,
+  isGridColumnKey,
+  isGridColumnVisible,
+  type GridColumnKey,
+} from "@multica/core/issues/grid-columns";
+import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { hashKey, useQueries, useQuery } from "@tanstack/react-query";
 import {
   ApitableGrid,
@@ -10,7 +18,8 @@ import {
   type GridLabels,
   type GridRecordView,
 } from "@multica/apitable-grid";
-import { Loader2, Plus } from "@multica/ui/icons";
+import { ArrowDown, ArrowUp, Loader2, Plus } from "@multica/ui/icons";
+import { IconButton } from "@multica/ui/components/common/icon-button";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -61,8 +70,12 @@ export function MultidimensionalGridView({
   const actions = useIssueSurfaceActionsOptional();
   const openModal = useModalStore((s) => s.open);
   const { entryOf } = useIssueStatuses(wsId);
-  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(wsId, true));
-  const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
+  const issueTypesQuery = useQuery(issueTypeListOptions(wsId, true));
+  const propertiesQuery = useQuery(propertyListOptions(wsId));
+  const workspaceIssueTypes = issueTypesQuery.data ?? [];
+  const workspaceProperties = propertiesQuery.data ?? [];
+  const gridCatalogReady =
+    issueTypesQuery.isSuccess && propertiesQuery.isSuccess;
 
   const issueTypeById = useMemo(
     () => new Map(workspaceIssueTypes.map((it) => [it.id, it])),
@@ -280,44 +293,81 @@ export function MultidimensionalGridView({
     [issueById, updateIssue],
   );
 
-  const fields = useMemo<GridFieldView[]>(
-    () => [
-      { id: "title", name: t(($) => $.table.columns.title), kind: "text", cancelOnEscape: true },
-      ...(workspaceIssueTypes.length > 0
-        ? [{ id: "type", name: t(($) => $.detail.prop_type), kind: "text" as const }]
-        : []),
-      { id: "status", name: t(($) => $.table.columns.status), kind: "single_select" },
-      { id: "assignee", name: t(($) => $.table.columns.assignee), kind: "text" },
-      ...workspaceProperties.map((prop) => ({
-        id: `${PROPERTY_COLUMN_PREFIX}${prop.id}`,
-        name: prop.name,
-        kind: "text" as const,
-      })),
-    ],
-    [t, workspaceIssueTypes.length, workspaceProperties],
+  const gridColumnOrder = useViewStore((state) => state.gridColumnOrder);
+  const gridHiddenColumnIds = useViewStore((state) => state.gridHiddenColumnIds);
+  const setGridColumnHidden = useViewStore((state) => state.setGridColumnHidden);
+  const moveGridColumn = useViewStore((state) => state.moveGridColumn);
+  const syncGridColumnCatalog = useViewStore((state) => state.syncGridColumnCatalog);
+
+  const catalogOrder = useMemo(
+    () =>
+      catalogGridColumnOrder(
+        workspaceIssueTypes.length > 0,
+        workspaceProperties.map((prop) => prop.id),
+      ),
+    [workspaceIssueTypes.length, workspaceProperties],
   );
-  // Local to this grid. The issue title is not optional, and other views keep
-  // their own column settings. Track hidden column IDs so newly added custom
-  // properties or task types appear immediately unless explicitly hidden.
-  const [hiddenColumns, setHiddenColumns] = useState<Record<string, boolean>>({});
-  const isColumnVisible = useCallback(
-    (columnId: string) => hiddenColumns[columnId] !== true,
-    [hiddenColumns],
+
+  useEffect(() => {
+    if (!gridCatalogReady) return;
+    syncGridColumnCatalog(catalogOrder);
+  }, [catalogOrder, gridCatalogReady, syncGridColumnCatalog]);
+
+  const hiddenColumnIds = useMemo(
+    () => new Set(gridHiddenColumnIds),
+    [gridHiddenColumnIds],
   );
-  const setColumnVisible = useCallback((columnId: string, visible: boolean) => {
-    setHiddenColumns((current) => {
-      const nextHidden = !visible;
-      if ((current[columnId] === true) === nextHidden) return current;
-      return { ...current, [columnId]: nextHidden };
+
+  const fieldsById = useMemo(() => {
+    const byId = new Map<string, GridFieldView>();
+    byId.set("title", {
+      id: "title",
+      name: t(($) => $.table.columns.title),
+      kind: "text",
+      cancelOnEscape: true,
     });
-  }, []);
+    if (workspaceIssueTypes.length > 0) {
+      byId.set("type", {
+        id: "type",
+        name: t(($) => $.detail.prop_type),
+        kind: "text",
+      });
+    }
+    byId.set("status", {
+      id: "status",
+      name: t(($) => $.table.columns.status),
+      kind: "single_select",
+    });
+    byId.set("assignee", {
+      id: "assignee",
+      name: t(($) => $.table.columns.assignee),
+      kind: "text",
+    });
+    for (const prop of workspaceProperties) {
+      byId.set(gridPropertyColumnId(prop.id), {
+        id: gridPropertyColumnId(prop.id),
+        name: prop.name,
+        kind: "text",
+      });
+    }
+    return byId;
+  }, [t, workspaceIssueTypes.length, workspaceProperties]);
+
+  const menuFields = useMemo(
+    () =>
+      gridColumnOrder
+        .map((columnId) => fieldsById.get(columnId))
+        .filter((field): field is GridFieldView => Boolean(field)),
+    [fieldsById, gridColumnOrder],
+  );
+
   const visibleFields = useMemo(
     () =>
-      fields.filter((field) => {
-        if (field.id === "title") return true;
-        return isColumnVisible(field.id);
-      }),
-    [fields, isColumnVisible],
+      gridColumnOrder
+        .filter((columnId) => isGridColumnVisible(columnId, hiddenColumnIds))
+        .map((columnId) => fieldsById.get(columnId))
+        .filter((field): field is GridFieldView => Boolean(field)),
+    [fieldsById, gridColumnOrder, hiddenColumnIds],
   );
 
   const records = useMemo<GridRecordView[]>(
@@ -467,19 +517,55 @@ export function MultidimensionalGridView({
               <DropdownMenuCheckboxItem checked disabled>
                 {t(($) => $.table.columns.title)}
               </DropdownMenuCheckboxItem>
-              {fields
-                .filter((field) => field.id !== "title")
-                .map((field) => (
-                  <DropdownMenuCheckboxItem
-                    key={field.id}
-                    checked={isColumnVisible(field.id)}
-                    onCheckedChange={(checked) =>
-                      setColumnVisible(field.id, checked)
-                    }
-                  >
-                    {field.name}
-                  </DropdownMenuCheckboxItem>
-                ))}
+              {menuFields
+                .filter(
+                  (field): field is GridFieldView & { id: GridColumnKey } =>
+                    field.id !== "title" && isGridColumnKey(field.id),
+                )
+                .map((field) => {
+                  const columnKey = field.id;
+                  const position = gridColumnOrder.indexOf(columnKey);
+                  const moveUpDisabled = position <= 1;
+                  const moveDownDisabled =
+                    position < 0 || position >= gridColumnOrder.length - 1;
+                  return (
+                    <div
+                      key={field.id}
+                      className="flex items-center gap-0.5 pr-1"
+                      data-column-id={field.id}
+                    >
+                      <DropdownMenuCheckboxItem
+                        className="min-w-0 flex-1"
+                        checked={isGridColumnVisible(columnKey, hiddenColumnIds)}
+                        onCheckedChange={(checked) =>
+                          setGridColumnHidden(columnKey, !checked)
+                        }
+                      >
+                        {field.name}
+                      </DropdownMenuCheckboxItem>
+                      <IconButton
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        label={t(($) => $.table.columns.move_up, { column: field.name })}
+                        disabled={moveUpDisabled}
+                        onClick={() => moveGridColumn(columnKey, -1)}
+                      >
+                        <ArrowUp className="size-3.5" aria-hidden="true" />
+                      </IconButton>
+                      <IconButton
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        label={t(($) => $.table.columns.move_down, { column: field.name })}
+                        disabled={moveDownDisabled}
+                        onClick={() => moveGridColumn(columnKey, 1)}
+                      >
+                        <ArrowDown className="size-3.5" aria-hidden="true" />
+                      </IconButton>
+                    </div>
+                  );
+                })}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button size="sm" variant="outline" onClick={() => onCreateIssue()}>

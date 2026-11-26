@@ -506,6 +506,8 @@
       "no_results": "沒有匹配的列",
       "add": "新增列",
       "hide": "隱藏列",
+      "move_up": "將{{column}}上移",
+      "move_down": "將{{column}}下移",
       "reorder": "重新排列 {{column}} 列",
       "title": "任務",
       "identifier": "編號",

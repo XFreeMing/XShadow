@@ -502,6 +502,8 @@
       "no_results": "No hay columnas que coincidan",
       "add": "Añadir columna",
       "hide": "Ocultar columna",
+      "move_up": "Subir {{column}}",
+      "move_down": "Bajar {{column}}",
       "reorder": "Reordenar la columna {{column}}",
       "title": "Tarea",
       "identifier": "Identificador",

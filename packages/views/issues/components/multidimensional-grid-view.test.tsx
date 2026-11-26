@@ -17,6 +17,7 @@ import type {
   Issue,
   IssueTableRowsRequest,
   IssueTableRowsResponse,
+  ListPropertiesResponse,
   MemberWithUser,
 } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
@@ -169,7 +170,8 @@ function setupApi(overrides: Partial<ApiClient> = {}) {
       { key: "done", label: "Done", category: "done", color: "#0a0", icon: "check-circle", position: 3 },
     ]),
     listIssueWorkflows: vi.fn().mockResolvedValue([]),
-    listProperties: vi.fn().mockResolvedValue([]),
+    listIssueTypes: vi.fn().mockResolvedValue({ issue_types: [], total: 0 }),
+    listProperties: vi.fn().mockResolvedValue({ properties: [], total: 0 }),
     listProjects: vi.fn().mockResolvedValue([]),
     listMembers: vi.fn().mockResolvedValue(MEMBERS),
     listAgents: vi.fn().mockResolvedValue(AGENTS),
@@ -662,6 +664,266 @@ describe("MultidimensionalGridView", () => {
     });
     expect(grid.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
     expect(grid.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+  });
+
+  it("persists hidden columns and column order per surface across remounts", async () => {
+    const issue = makeIssue({
+      id: "uuid-persist",
+      identifier: "XSH-8",
+      title: "Persist task",
+    });
+    setupApi({
+      listIssueTableRows: vi.fn(async () => ({
+        rows: [{ issue, direct_child_count: 0 }],
+        total: 1,
+        branch_total: 1,
+        next_cursor: null,
+        group_key: null,
+        parent_id: null,
+        query_fingerprint: "fp-persist",
+      })),
+    });
+
+    const surfaceA = "workspace:grid-persist-a";
+    const surfaceB = "workspace:grid-persist-b";
+    getIssueSurfaceViewStore(surfaceA).getState().setViewMode("grid");
+    getIssueSurfaceViewStore(surfaceB).getState().setViewMode("grid");
+
+    const qc = createQueryClient();
+    const renderSurface = (surfaceKey: string) =>
+      renderWithI18n(
+        <QueryClientProvider client={qc}>
+          <IssueSurface
+            surfaceKey={surfaceKey}
+            scope={{ type: "workspace", actorKind: "all" }}
+            modes={["board", "list", "table", "grid"]}
+          />
+        </QueryClientProvider>,
+      );
+
+    const { unmount } = renderSurface(surfaceA);
+    await screen.findByDisplayValue("Persist task");
+    const grid = () =>
+      within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+
+    fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Status" }));
+    await waitFor(() => {
+      expect(grid().queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Move Assignee up/i }));
+    await waitFor(() => {
+      const issueHeader = grid().getByRole("columnheader", { name: "Issue" });
+      const assigneeHeader = grid().getByRole("columnheader", { name: "Assignee" });
+      expect(
+        issueHeader.compareDocumentPosition(assigneeHeader) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    expect(getIssueSurfaceViewStore(surfaceA).getState().gridHiddenColumnIds).toContain(
+      "status",
+    );
+    expect(getIssueSurfaceViewStore(surfaceA).getState().gridColumnOrder.slice(0, 3)).toEqual([
+      "title",
+      "assignee",
+      "status",
+    ]);
+
+    unmount();
+    cleanup();
+    document.body.innerHTML = "";
+
+    renderSurface(surfaceA);
+    await screen.findByDisplayValue("Persist task");
+    expect(grid().queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+    expect(grid().getByRole("columnheader", { name: "Assignee" })).toBeInTheDocument();
+    expect(
+      grid()
+        .getByRole("columnheader", { name: "Issue" })
+        .compareDocumentPosition(grid().getByRole("columnheader", { name: "Assignee" })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    cleanup();
+    document.body.innerHTML = "";
+    renderSurface(surfaceB);
+    await screen.findByDisplayValue("Persist task");
+    expect(grid().getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+    expect(grid().getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+    expect(grid().getByRole("columnheader", { name: "Assignee" })).toBeInTheDocument();
+  });
+
+  it("does not rewrite saved column preferences before property and type catalogs load", async () => {
+    const issue = makeIssue({
+      id: "uuid-deferred",
+      identifier: "XSH-10",
+      title: "Deferred catalog task",
+    });
+    let resolveProperties!: (value: ListPropertiesResponse) => void;
+    const propertiesPending = new Promise<ListPropertiesResponse>((resolve) => {
+      resolveProperties = resolve;
+    });
+    setupApi({
+      listIssueTypes: vi.fn().mockResolvedValue({
+        issue_types: [
+          {
+            id: "type-1",
+            workspace_id: "ws-1",
+            name: "Task",
+            fields: [],
+            position: 0,
+            archived: false,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+        total: 1,
+      }),
+      listProperties: vi.fn(() => propertiesPending),
+      listIssueTableRows: vi.fn(async () => ({
+        rows: [{ issue, direct_child_count: 0 }],
+        total: 1,
+        branch_total: 1,
+        next_cursor: null,
+        group_key: null,
+        parent_id: null,
+        query_fingerprint: "fp-deferred",
+      })),
+    });
+
+    const surfaceKey = "workspace:grid-deferred-catalog";
+    const store = getIssueSurfaceViewStore(surfaceKey);
+    store.getState().setViewMode("grid");
+    store.setState({
+      gridColumnOrder: ["title", "assignee", "status", "type", "property:prop-new"],
+      gridHiddenColumnIds: ["type"],
+    });
+
+    const qc = createQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByDisplayValue("Deferred catalog task");
+    expect(store.getState().gridColumnOrder).toEqual([
+      "title",
+      "assignee",
+      "status",
+      "type",
+      "property:prop-new",
+    ]);
+    expect(store.getState().gridHiddenColumnIds).toEqual(["type"]);
+    const grid = within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    expect(grid.queryByRole("columnheader", { name: "Type" })).not.toBeInTheDocument();
+    expect(
+      grid
+        .getByRole("columnheader", { name: "Issue" })
+        .compareDocumentPosition(grid.getByRole("columnheader", { name: "Assignee" })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await act(async () => {
+      resolveProperties({
+        properties: [
+          {
+            id: "prop-new",
+            workspace_id: "ws-1",
+            name: "Estimate",
+            type: "number",
+            description: "",
+            icon: "hash",
+            config: {},
+            position: 0,
+            archived: false,
+            usage_count: 0,
+            created_at: "2026-11-01T00:00:00Z",
+            updated_at: "2026-11-01T00:00:00Z",
+          },
+        ],
+        total: 1,
+      });
+    });
+
+    await waitFor(() => {
+      expect(grid.getByRole("columnheader", { name: "Estimate" })).toBeInTheDocument();
+    });
+    expect(store.getState().gridHiddenColumnIds).toEqual(["type"]);
+    expect(store.getState().gridColumnOrder.indexOf("assignee")).toBeLessThan(
+      store.getState().gridColumnOrder.indexOf("status"),
+    );
+    expect(store.getState().gridColumnOrder).not.toContain("property:removed");
+  });
+
+  it("shows a new custom property column by default and drops stale column ids", async () => {
+    const issue = makeIssue({
+      id: "uuid-prop",
+      identifier: "XSH-9",
+      title: "Property task",
+    });
+    setupApi({
+      listProperties: vi.fn().mockResolvedValue({
+        properties: [
+          {
+            id: "prop-new",
+            workspace_id: "ws-1",
+            name: "Estimate",
+            type: "number",
+            description: "",
+            icon: "hash",
+            config: {},
+            position: 0,
+            archived: false,
+            usage_count: 0,
+            created_at: "2026-11-01T00:00:00Z",
+            updated_at: "2026-11-01T00:00:00Z",
+          },
+        ],
+        total: 1,
+      }),
+      listIssueTableRows: vi.fn(async () => ({
+        rows: [{ issue, direct_child_count: 0 }],
+        total: 1,
+        branch_total: 1,
+        next_cursor: null,
+        group_key: null,
+        parent_id: null,
+        query_fingerprint: "fp-prop",
+      })),
+    });
+
+    const surfaceKey = "workspace:grid-props";
+    const store = getIssueSurfaceViewStore(surfaceKey);
+    store.getState().setViewMode("grid");
+    store.setState({
+      gridColumnOrder: ["title", "property:removed", "status", "assignee"],
+      gridHiddenColumnIds: [],
+    });
+
+    const qc = createQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByDisplayValue("Property task");
+    const grid = within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    await waitFor(() => {
+      expect(grid.getByRole("columnheader", { name: "Estimate" })).toBeInTheDocument();
+    });
+    expect(store.getState().gridColumnOrder).not.toContain("property:removed");
+    expect(store.getState().gridColumnOrder).toContain("property:prop-new");
   });
 
   it("displays saved task types and custom property values in the multidimensional grid alongside untyped legacy tasks", async () => {

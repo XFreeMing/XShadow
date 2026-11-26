@@ -512,6 +512,8 @@
       "no_results": "No matching columns",
       "add": "Add column",
       "hide": "Hide column",
+      "move_up": "Move {{column}} up",
+      "move_down": "Move {{column}} down",
       "reorder": "Reorder {{column}} column",
       "title": "Issue",
       "identifier": "Identifier",
