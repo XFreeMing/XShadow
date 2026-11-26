@@ -471,6 +471,7 @@
     "tooltip_list": "Вид «Список»",
     "tooltip_table": "Вид «Таблица»",
     "tooltip_grid": "Многомерный вид",
+    "tooltip_gallery": "Вид «Галерея»",
     "tooltip_gantt": "Вид «Диаграмма Ганта»",
     "tooltip_swimlane": "Вид «Дорожки»",
     "section": "Вид",
@@ -478,6 +479,7 @@
     "list": "Список",
     "table": "Таблица",
     "grid": "Многомерный вид",
+    "gallery": "Галерея",
     "gantt": "Диаграмма Ганта",
     "swimlane": "Дорожки"
   },

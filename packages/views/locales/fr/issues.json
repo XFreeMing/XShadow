@@ -460,6 +460,7 @@
     "tooltip_list": "Vue liste",
     "tooltip_table": "Vue grille",
     "tooltip_grid": "Vue multidimensionnelle",
+    "tooltip_gallery": "Vue galerie",
     "tooltip_gantt": "Vue Gantt",
     "tooltip_swimlane": "Vue couloirs",
     "section": "Vue",
@@ -467,6 +468,7 @@
     "list": "Liste",
     "table": "Grille",
     "grid": "Vue multidimensionnelle",
+    "gallery": "Galerie",
     "gantt": "Gantt",
     "swimlane": "Couloirs"
   },

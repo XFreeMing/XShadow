@@ -454,6 +454,7 @@
     "tooltip_list": "列表视图",
     "tooltip_table": "表格视图",
     "tooltip_grid": "多维视图",
+    "tooltip_gallery": "画册视图",
     "tooltip_gantt": "甘特图",
     "tooltip_swimlane": "泳道视图",
     "section": "视图",
@@ -461,6 +462,7 @@
     "list": "列表",
     "table": "表格",
     "grid": "多维视图",
+    "gallery": "画册",
     "gantt": "甘特图",
     "swimlane": "泳道"
   },

@@ -108,6 +108,7 @@ export interface IssueSurfaceController {
   viewMode: IssueSurfaceMode;
   allowGantt: boolean;
   allowGrid: boolean;
+  allowGallery: boolean;
   surfaceIssues: Issue[];
   projectIssues: Issue[];
   issues: Issue[];
@@ -452,7 +453,8 @@ export function useIssueSurfaceController({
   const usesGantt = effectiveViewMode === "gantt" && showGanttCalendar;
   const usesTable = effectiveViewMode === "table";
   const usesGrid = effectiveViewMode === "grid";
-  const usesTableRows = usesTable || usesGrid;
+  const usesGallery = effectiveViewMode === "gallery";
+  const usesTableRows = usesTable || usesGrid || usesGallery;
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
   const usesServerStatusSurface =
@@ -1076,6 +1078,7 @@ export function useIssueSurfaceController({
     viewMode: effectiveViewMode,
     allowGantt: allowedModes.has("gantt"),
     allowGrid: allowedModes.has("grid"),
+    allowGallery: allowedModes.has("gallery"),
     ...surfaceData,
     isLoading: data.isLoading || workingDependency.pending || unreadDependency.pending,
     workingAgents,

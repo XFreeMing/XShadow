@@ -460,6 +460,7 @@
     "tooltip_list": "List view",
     "tooltip_table": "Table view",
     "tooltip_grid": "Multidimensional view",
+    "tooltip_gallery": "Gallery view",
     "tooltip_gantt": "Gantt view",
     "tooltip_swimlane": "Swimlane view",
     "section": "View",
@@ -467,6 +468,7 @@
     "list": "List",
     "table": "Table",
     "grid": "Multidimensional view",
+    "gallery": "Gallery",
     "gantt": "Gantt",
     "swimlane": "Swimlane"
   },

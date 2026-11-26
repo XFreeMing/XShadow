@@ -588,6 +588,7 @@ export function IssueViewHeader({
             scopedIssues={controller.surfaceIssues}
             allowGantt={controller.allowGantt}
             allowGrid={controller.allowGrid}
+            allowGallery={controller.allowGallery}
             facetCountsExact={controller.facetCountsExact}
             tableFacetCounts={controller.tableFacetCounts}
             onTableFacetChange={controller.setActiveTableFacet}

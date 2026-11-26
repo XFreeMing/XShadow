@@ -19,7 +19,7 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 function renderDisplay(
-  props: { allowGantt?: boolean; allowGrid?: boolean } = {},
+  props: { allowGantt?: boolean; allowGrid?: boolean; allowGallery?: boolean } = {},
   setup: (store: StoreApi<IssueViewState>) => void = () => {},
 ) {
   setApiInstance(
@@ -82,6 +82,17 @@ describe("Display layout", () => {
 
     fireEvent.click(within(layouts).getByRole("button", { name: "List" }));
     expect(store.getState().viewMode).toBe("list");
+  });
+
+  it("switches to Gallery when allowGallery is enabled", async () => {
+    const store = renderDisplay(
+      { allowGallery: true },
+      (s) => s.getState().setViewMode("board"),
+    );
+
+    const layouts = await screen.findByRole("group", { name: "View" });
+    fireEvent.click(within(layouts).getByRole("button", { name: "Gallery" }));
+    expect(store.getState().viewMode).toBe("gallery");
   });
 
   it("keeps the table's grouping and columns in the panel", async () => {

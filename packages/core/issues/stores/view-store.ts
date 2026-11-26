@@ -40,7 +40,14 @@ export {
   type NegatableFilterDimension,
 };
 
-export type ViewMode = "board" | "list" | "table" | "grid" | "gantt" | "swimlane";
+export type ViewMode =
+  | "board"
+  | "list"
+  | "table"
+  | "grid"
+  | "gallery"
+  | "gantt"
+  | "swimlane";
 export type GanttZoom = "day" | "week" | "month";
 /**
  * Board grouping. Besides the three built-ins, a select-type custom property
@@ -276,7 +283,7 @@ export function defaultSortDirection(field: SortField): SortDirection {
 /** Only expose card controls that the active renderer can honor. */
 export function cardPropertyOptionsForView(viewMode: ViewMode) {
   if (viewMode === "table" || viewMode === "grid" || viewMode === "gantt") return [];
-  if (viewMode === "list") {
+  if (viewMode === "gallery" || viewMode === "list") {
     return CARD_PROPERTY_OPTIONS.filter((option) => option.key !== "description");
   }
   return CARD_PROPERTY_OPTIONS;

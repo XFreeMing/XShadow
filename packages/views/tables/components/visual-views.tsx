@@ -21,6 +21,7 @@ import {
   type OrgNode,
   type ValueFormatLabels,
 } from "./view-helpers";
+import { GalleryCardGrid } from "../../layout/gallery-card-grid";
 
 interface CommonViewProps {
   fields: readonly GenericField[];
@@ -231,20 +232,13 @@ export function GalleryView({
   const labels = useFormatLabels();
 
   if (records.length === 0) {
-    return (
-      <div className="p-6 text-body text-muted-foreground" data-view-kind="gallery">
-        {t(($) => $.sheet.empty_records)}
-      </div>
-    );
+    return <GalleryCardGrid empty={t(($) => $.sheet.empty_records)} />;
   }
 
   const cardFields = visibleFields.filter((f) => f.id !== titleFieldId);
 
   return (
-    <div
-      className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-      data-view-kind="gallery"
-    >
+    <GalleryCardGrid>
       {records.map((record) => {
         const title = resolveRecordTitle(record, fields, titleFieldId, recordOptionsByTable, labels);
         return (
@@ -273,7 +267,7 @@ export function GalleryView({
           </article>
         );
       })}
-    </div>
+    </GalleryCardGrid>
   );
 }
 

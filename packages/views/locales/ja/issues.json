@@ -454,6 +454,7 @@
     "tooltip_list": "リスト表示",
     "tooltip_table": "テーブル表示",
     "tooltip_grid": "多次元ビュー",
+    "tooltip_gallery": "ギャラリー表示",
     "tooltip_gantt": "ガント表示",
     "tooltip_swimlane": "スイムレーン表示",
     "section": "表示",
@@ -461,6 +462,7 @@
     "list": "リスト",
     "table": "テーブル",
     "grid": "多次元ビュー",
+    "gallery": "ギャラリー",
     "gantt": "ガント",
     "swimlane": "スイムレーン"
   },

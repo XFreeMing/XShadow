@@ -450,6 +450,7 @@
     "tooltip_list": "Vista de lista",
     "tooltip_table": "Vista de tabla",
     "tooltip_grid": "Vista multidimensional",
+    "tooltip_gallery": "Vista galería",
     "tooltip_gantt": "Vista de Gantt",
     "tooltip_swimlane": "Vista de carriles",
     "section": "Vista",
@@ -457,6 +458,7 @@
     "list": "Lista",
     "table": "Tabla",
     "grid": "Vista multidimensional",
+    "gallery": "Galería",
     "gantt": "Gantt",
     "swimlane": "Carriles"
   },
