@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -476,17 +477,18 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current, exists, err := h.goalPlanRevision(r.Context(), qtx, locked)
+	prior, exists, err := loadGoalPlanDraft(r.Context(), qtx, locked)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save plan")
 		return
 	}
+	current := prior.Revision
 	if req.ExpectedRevision != current {
 		writeGoalPlanRevisionConflict(w, current)
 		return
 	}
 
-	content, err := h.validateGoalPlanContent(r.Context(), qtx, locked.WorkspaceID, locked.ProjectID, req.Items, req.Edges, false)
+	content, err := h.validateGoalPlanContent(r.Context(), qtx, locked.WorkspaceID, locked.ProjectID, req.Items, req.Edges, prior.Content, false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -502,14 +504,6 @@ func (h *Handler) PutGoalPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var prior db.GoalPlan
-	if req.GenerationID != nil && exists {
-		prior, err = qtx.GetGoalPlan(r.Context(), db.GetGoalPlanParams{WorkspaceID: locked.WorkspaceID, GoalID: locked.ID})
-		if err != nil {
-			writeError(w, 500, "failed to read current plan")
-			return
-		}
-	}
 	var saved db.GoalPlan
 	if exists {
 		saved, err = qtx.UpdateGoalPlanContent(r.Context(), db.UpdateGoalPlanContentParams{
@@ -1164,11 +1158,12 @@ func (h *Handler) SubmitGoalPlanGenerationResult(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "failed to record plan result")
 		return
 	}
-	current, _, err := h.goalPlanRevision(r.Context(), qtx, goal)
+	prior, _, err := loadGoalPlanDraft(r.Context(), qtx, goal)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record plan result")
 		return
 	}
+	current := prior.Revision
 
 	var candidateJSON []byte
 	reviewInput, err := readGoalReviewInput(generation.InputContext)
@@ -1198,7 +1193,7 @@ func (h *Handler) SubmitGoalPlanGenerationResult(w http.ResponseWriter, r *http.
 			writeError(w, 400, "review requires a goal review run")
 			return
 		}
-		content, err := h.validateGoalPlanContent(r.Context(), qtx, goal.WorkspaceID, generation.ProjectID, req.Items, req.Edges, true)
+		content, err := h.validateGoalPlanContent(r.Context(), qtx, goal.WorkspaceID, generation.ProjectID, req.Items, req.Edges, prior.Content, true)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -1320,6 +1315,7 @@ func (h *Handler) validateGoalPlanContent(
 	workspaceID, projectID pgtype.UUID,
 	items []GoalPlanItem,
 	edges []GoalPlanEdge,
+	previous []byte,
 	assignMissingIDs bool,
 ) (GoalPlanContent, error) {
 	if len(items) > goalPlanMaxItems {
@@ -1329,6 +1325,12 @@ func (h *Handler) validateGoalPlanContent(
 		return GoalPlanContent{}, fmt.Errorf("a plan can have at most %d edges", goalPlanMaxEdges)
 	}
 	out := GoalPlanContent{Items: make([]GoalPlanItem, 0, len(items)), Edges: make([]GoalPlanEdge, 0, len(edges))}
+	var saved GoalPlanContent
+	if len(previous) > 0 {
+		if err := json.Unmarshal(previous, &saved); err != nil {
+			return GoalPlanContent{}, fmt.Errorf("read saved plan: %w", err)
+		}
+	}
 	seen := make(map[string]bool, len(items))
 	var methods []workmethod.Template
 	seenDeliveries := make(map[string]bool)
@@ -1415,12 +1417,22 @@ func (h *Handler) validateGoalPlanContent(
 				}
 			}
 			method, ok := workmethod.ResolvePlanMethod(methods, templateID, delivery.MethodID)
+			retained := false
+			if ok && workmethod.IsRetired(method.ID) {
+				retained = slices.ContainsFunc(saved.Items, func(prior GoalPlanItem) bool {
+					return prior.ID == id && prior.Delivery != nil &&
+						prior.Delivery.TaskTemplateID == templateID && (templateID != "" || prior.Delivery.MethodID == method.ID)
+				})
+				if !retained {
+					return GoalPlanContent{}, fmt.Errorf("items[%d].delivery uses a retired method; use the goal's problem-solving record for new work", i)
+				}
+			}
 			if templateID != "" {
 				template, err := q.GetIssueType(ctx, db.GetIssueTypeParams{WorkspaceID: workspaceID, ID: parseUUIDOrInvalid(templateID)})
 				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 					return GoalPlanContent{}, err
 				}
-				if !ok || err != nil || template.ArchivedAt.Valid || (delivery.MethodID != "" && delivery.MethodID != method.ID) {
+				if !ok || err != nil || (template.ArchivedAt.Valid && !retained) || (delivery.MethodID != "" && delivery.MethodID != method.ID) {
 					return GoalPlanContent{}, fmt.Errorf("items[%d].delivery.task_template_id must resolve to an active workspace work method", i)
 				}
 				// Keep the derived method ID for older clients that display it.
@@ -1711,7 +1723,7 @@ func (h *Handler) buildGoalPlanGenerationInput(
 	for _, item := range types {
 		names[uuidToString(item.ID)] = item.Name
 	}
-	input := goalPlanGenerationInput{Project: project, Resources: resources, Methods: methods, TemplateNames: names}
+	input := goalPlanGenerationInput{Project: project, Resources: resources, Methods: workmethod.ActiveCatalog(methods), TemplateNames: names}
 	if hasPlan {
 		input.PlanRevision = plan.Revision
 		if len(plan.Content) > 0 {

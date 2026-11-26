@@ -48,6 +48,9 @@ func matchMethods(methods []Template, input string) []match {
 	var result []match
 	best := 0
 	for _, m := range methods {
+		if IsRetired(m.ID) {
+			continue
+		}
 		pick := match{method: m}
 		for _, w := range m.Keywords {
 			score := wordScore(input, w)
@@ -102,7 +105,7 @@ func taskOutcome(body string) string {
 func RecommendForIssueType(methods []Template, issueTypeID, taskTitle, taskBody, goalText string) Run {
 	if issueTypeID != "" {
 		for _, method := range methods {
-			if method.UsesIssueType(issueTypeID) {
+			if !IsRetired(method.ID) && method.UsesIssueType(issueTypeID) {
 				return Run{State: "ready", Source: "issue_type", Method: snapshot(method), History: []Event{},
 					Reason: "任务类型使用「" + method.Name + "」。"}
 			}

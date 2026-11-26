@@ -51,7 +51,7 @@ case revisions can reuse their earlier receipts.
 
 Examples of changes (base_revision must match the latest read):
   {"action":"start","base_revision":0}
-  {"action":"select","base_revision":0,"method_id":"seven-step"}
+  {"action":"select","base_revision":0,"method_id":"okr"}
   {"action":"adopt_revision","base_revision":5,"method_id":"your-method-id","method_revision":2,"evidence":"Adopt from this working step; retain earlier approvals"}
   {"action":"delegate","base_revision":5,"delegate_agent_id":"<squad member agent UUID>","evidence":"Implement the candidate from the accepted cases"}
   {"action":"offer_candidate","base_revision":5,"delegate_agent_id":"<squad member agent UUID>","evidence":"Assess feasibility using the accepted cases"}

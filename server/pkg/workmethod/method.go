@@ -344,6 +344,9 @@ func (r *Run) Apply(c Change, methods []Template, actor, at string) error {
 		r.State = "working"
 		event.Evidence = r.Reason
 	case "select":
+		if IsRetired(c.MethodID) {
+			return errors.New("该工作方法已停用，请从当前目录选择")
+		}
 		if r.State != "ready" && r.State != "working" {
 			return errors.New("当前阶段不能更换方法")
 		}

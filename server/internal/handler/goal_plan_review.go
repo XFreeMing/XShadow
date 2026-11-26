@@ -510,7 +510,7 @@ func (h *Handler) goalReviewResult(ctx context.Context, q *db.Queries, goal db.G
 	if err != nil {
 		return nil, err
 	}
-	normalized, err := h.validateGoalPlanContent(ctx, q, goal.WorkspaceID, goal.ProjectID, adjusted.Items, adjusted.Edges, true)
+	normalized, err := h.validateGoalPlanContent(ctx, q, goal.WorkspaceID, goal.ProjectID, adjusted.Items, adjusted.Edges, plan.Content, true)
 	if err != nil {
 		return nil, err
 	}

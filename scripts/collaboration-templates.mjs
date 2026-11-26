@@ -57,7 +57,9 @@ function assertCompatible(actual, desired, kind) {
 function propertyMatches(actual, desired) {
   if (desired.type === "select") {
     const { options, ...config } = actual.config;
-    return { ...actual, config: { ...config, options: options?.map(({ name, color }) => ({ name, color })) } };
+    const active = options?.filter(({ name }) =>
+      desired.name !== fields.recipe.name || name !== "七步问题解决 · 调研决策");
+    return { ...actual, config: { ...config, options: active?.map(({ name, color }) => ({ name, color })) } };
   }
   return actual;
 }

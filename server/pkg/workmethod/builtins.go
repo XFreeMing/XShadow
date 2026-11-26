@@ -1,5 +1,21 @@
 package workmethod
 
+// IsRetired keeps the built-in definition readable for existing plans and
+// frozen runs while removing it from new selections and recommendations.
+func IsRetired(id string) bool {
+	return id == "seven-step"
+}
+
+func ActiveCatalog(methods []Template) []Template {
+	active := make([]Template, 0, len(methods))
+	for _, method := range methods {
+		if !IsRetired(method.ID) {
+			active = append(active, method)
+		}
+	}
+	return active
+}
+
 // Builtins returns independently editable values. A running issue keeps its own snapshot.
 func Builtins() []Template {
 	return []Template{

@@ -31,6 +31,10 @@ func (h *Handler) saveWorkMethodTemplate(w http.ResponseWriter, r *http.Request,
 	if _, ok := h.requireWorkspaceMember(w, r, ws, "workspace not found"); !ok {
 		return
 	}
+	if workmethod.IsRetired(methodID) {
+		writeError(w, http.StatusConflict, "该工作方法已停用，请在目标中使用七步问题解决")
+		return
+	}
 	var req struct {
 		workmethod.Template
 		BaseRevision *int `json:"base_revision"`

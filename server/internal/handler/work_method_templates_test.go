@@ -51,9 +51,11 @@ func TestWorkMethodTemplateOverridesAreVersionedAndWorkspaceLocal(t *testing.T) 
 	}
 	put(m, original.Revision).Want(409)
 	got := list(ws)
-	if len(got) != 3 || got[0].Name != m.Name || got[0].Steps[0].Owner.ID != testUserID {
+	if len(got) != 2 || got[0].Name != m.Name || got[0].Steps[0].Owner.ID != testUserID || got[1].ID != "okr" {
 		t.Fatal(got)
 	}
+	old, _ := workmethod.ResolvePlanMethod(workmethod.Builtins(), "", "seven-step")
+	put(old, old.Revision).Want(409)
 	other := list(testWorkspaceID)
 	if other[0].Name != original.Name || other[0].Revision != original.Revision {
 		t.Fatal("override escaped workspace")

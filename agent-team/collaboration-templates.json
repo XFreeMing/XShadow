@@ -46,14 +46,6 @@
         "deliveryReady": "核对当前方法步骤。复验同一候选 SHA 及实际入口。独立验收通过后沿原流程读取 PR、合并到 dev、分支和 worktree 回收回执。"
       }
     },
-    "research": {
-      "name": "七步问题解决 · 调研决策",
-      "method": "seven-step",
-      "required": ["outcome"],
-      "fields": ["outcome", "facts", "samples", "tradeoffs", "delivery", "decisionReady"],
-      "gates": { "向决策者提出行动建议": "decisionReady" },
-      "handoffs": { "decisionReady": "在原任务复核问题定义、证据来源、选项与取舍，并给出最小验证动作。沿七步问题解决方法提交决策。" }
-    },
     "okr": {
       "name": "OKR · 目标规划",
       "method": "okr",
@@ -73,7 +65,6 @@
   "views": [
     { "name": "研发设计与测试准备", "template": "agile", "fields": ["outcome", "facts", "contract", "interaction", "prototype", "designReady", "samples", "testReady"] },
     { "name": "研发交付与收尾", "template": "agile", "fields": ["outcome", "verification", "delivery", "deliveryReady", "replay"] },
-    { "name": "调研与决策", "template": "research", "fields": ["outcome", "facts", "tradeoffs", "delivery", "decisionReady"] },
     { "name": "OKR 与目标规划", "template": "okr", "fields": ["outcome", "facts", "tradeoffs", "delivery", "decisionReady"] },
     { "name": "返工原因与改进", "template": "rework", "fields": ["facts", "rootCause", "prevention", "replay", "learningReady"] }
   ]

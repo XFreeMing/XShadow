@@ -10,6 +10,7 @@ import (
 )
 
 func TestMethodAdmissionOnCreateAndGoalChanges(t *testing.T) {
+	research := registerResearchMethodForTest(t)
 	stored := func(id, want string) {
 		t.Helper()
 		var selected string
@@ -21,7 +22,7 @@ func TestMethodAdmissionOnCreateAndGoalChanges(t *testing.T) {
 	if issue.Revision != 1 {
 		t.Fatalf("fresh issue revision = %d", issue.Revision)
 	}
-	stored(issue.ID, "seven-step")
+	stored(issue.ID, research.ID)
 	updateIssueForTest(t, issue.ID, map[string]any{"status": "done"}).Want(http.StatusConflict)
 	updateIssueForTest(t, issue.ID, map[string]any{"title": "研发回访面板"}).Want(http.StatusOK)
 	stored(issue.ID, "agile")
@@ -42,16 +43,16 @@ func TestMethodAdmissionOnCreateAndGoalChanges(t *testing.T) {
 		testutil.Call(t, testHandler.UpdateGoal, goalRequest("PATCH", "/api/goals/"+goal.ID, testUserID, map[string]any{"title": title}, map[string]string{"id": goal.ID})).Want(http.StatusOK)
 	}
 	patch("调研用户需求")
-	stored(issue.ID, "seven-step")
+	stored(issue.ID, research.ID)
 	base := 0
 	var run workmethod.Run
 	testutil.Call(t, testHandler.ChangeIssueWorkMethod, withURLParam(newRequest("POST", "/api/issues/"+issue.ID+"/work-method", map[string]any{"action": "advance", "base_revision": base, "evidence": "确定调查范围和受访人"}), "id", issue.ID)).Want(http.StatusOK).JSON(&run)
 	patch("提升转化")
-	stored(issue.ID, "seven-step")
+	stored(issue.ID, research.ID)
 	if unlinkGoalIssueViaAPI(t, testUserID, goal.ID, issue.ID) != 204 {
 		t.Fatal("unlink started")
 	}
-	stored(issue.ID, "seven-step")
+	stored(issue.ID, research.ID)
 	done := createIssueForTest(t, map[string]any{"title": "调研已结项事项", "status": "done"})
 	stored(done.ID, "")
 	cancelled := createIssueForTest(t, map[string]any{"title": "调研已取消事项", "status": "cancelled"})

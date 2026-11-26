@@ -21,7 +21,21 @@ func readDeliveryMethod(t *testing.T, id string) workmethod.Run {
 	return run
 }
 
+func registerResearchMethodForTest(t *testing.T) workmethod.Template {
+	t.Helper()
+	method, _ := workmethod.ResolvePlanMethod(workmethod.Builtins(), "", "seven-step")
+	method.Name = "Research fixture " + workflowTestSuffix()
+	testutil.Call(t, testHandler.CreateWorkMethod, newRequest(http.MethodPost, "/api/work-methods", method)).Want(http.StatusCreated).JSON(&method)
+	t.Cleanup(func() {
+		dbfx.Exec(t, `UPDATE workspace SET work_method_templates = COALESCE(
+			(SELECT jsonb_agg(entry) FROM jsonb_array_elements(work_method_templates) AS entry WHERE entry->>'id' <> $2), '[]'::jsonb)
+			WHERE id = $1`, testWorkspaceID, method.ID)
+	})
+	return method
+}
+
 func TestGoalMethodRecommendationInheritedUnlessTaskHasExplicitDeliverable(t *testing.T) {
+	research := registerResearchMethodForTest(t)
 	goal := createGoalViaAPI(t, testUserID, map[string]any{
 		"title": "提升留存", "intent": "关键结果按月复核，次月活跃人数占比提升到 75%。",
 	})
@@ -33,7 +47,7 @@ func TestGoalMethodRecommendationInheritedUnlessTaskHasExplicitDeliverable(t *te
 
 	for _, tc := range []struct{ title, want, source string }{
 		{"本月工作包", "okr", "关联目标"},
-		{"调研用户回访体验", "seven-step", "事项标题"},
+		{"调研用户回访体验", research.ID, "事项标题"},
 	} {
 		id := dbfx.Issue(t, tc.title)
 		if got := linkGoalIssueViaAPI(t, testUserID, goal.ID, id); got != http.StatusNoContent {

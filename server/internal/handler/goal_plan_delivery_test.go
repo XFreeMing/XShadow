@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
@@ -24,21 +26,35 @@ func TestGoalPlanDeliverySeedsAcceptanceAndPreservesStartedMethod(t *testing.T) 
 		Type: "research", MethodID: "seven-step",
 		Criteria: []GoalPlanCriterion{{ID: "E1", Expected: "The conclusion cites the comparison", Verification: "Open both source versions and compare"}},
 	}
-	save := func(revision int) {
+	content := GoalPlanContent{
+		Items: []GoalPlanItem{
+			{ID: nodeID, Title: "Compare the results", Binding: GoalPlanItemBinding{Type: "existing", IssueID: &issue.ID}, Delivery: delivery},
+			{ID: "018f3a9e-2222-7c2b-9f1e-000000000022", Title: "Source archive", Binding: GoalPlanItemBinding{Type: "new"}},
+		},
+		Edges: []GoalPlanEdge{{DependentItemID: nodeID, PrerequisiteItemID: "018f3a9e-2222-7c2b-9f1e-000000000022", Kind: "conditional", Reason: "Only when the comparison uses archival data"}},
+	}
+	save := func(revision, want int) {
 		t.Helper()
 		rec := putPlanRaw(t, goal.ID, map[string]any{
 			"expected_revision": revision,
-			"items": []GoalPlanItem{
-				{ID: nodeID, Title: "Compare the results", Binding: GoalPlanItemBinding{Type: "existing", IssueID: &issue.ID}, Delivery: delivery},
-				{ID: "018f3a9e-2222-7c2b-9f1e-000000000022", Title: "Source archive", Binding: GoalPlanItemBinding{Type: "new"}},
-			},
-			"edges": []GoalPlanEdge{{DependentItemID: nodeID, PrerequisiteItemID: "018f3a9e-2222-7c2b-9f1e-000000000022", Kind: "conditional", Reason: "Only when the comparison uses archival data"}},
+			"items":             content.Items, "edges": content.Edges,
 		})
-		if rec.Code != http.StatusOK {
-			t.Fatalf("save plan: HTTP %d %s", rec.Code, rec.Body.String())
+		if rec.Code != want {
+			t.Fatalf("save plan: HTTP %d %s, want %d", rec.Code, rec.Body.String(), want)
 		}
 	}
-	save(0)
+	save(0, http.StatusBadRequest)
+	raw, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testHandler.Queries.CreateGoalPlan(t.Context(), db.CreateGoalPlanParams{
+		WorkspaceID: parseUUID(testWorkspaceID), GoalID: parseUUID(goal.ID), ProjectID: parseUUID(project),
+		Content: raw, ContextSnapshot: []byte("{}"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	save(1, http.StatusOK)
 	req := func(method, suffix string, body any) *http.Request {
 		return withURLParam(newRequest(method, "/api/issues/"+issue.ID+suffix, body), "id", issue.ID)
 	}
@@ -78,7 +94,7 @@ func TestGoalPlanDeliverySeedsAcceptanceAndPreservesStartedMethod(t *testing.T) 
 
 	delivery.MethodID = "okr"
 	delivery.Criteria[0].Expected = "A later planning proposal"
-	save(1)
+	save(2, http.StatusOK)
 	var after workmethod.Run
 	testutil.Call(t, testHandler.GetIssueWorkMethod, req(http.MethodGet, "/work-method", nil)).Want(200).JSON(&after)
 	if after.Method == nil || after.Method.ID != "seven-step" || after.State != "working" {

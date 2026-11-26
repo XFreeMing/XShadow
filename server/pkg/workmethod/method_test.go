@@ -40,7 +40,7 @@ func rejected(t *testing.T, r *Run, c Change) {
 
 func TestBuiltinMethodsRequireEvidenceReviewAndAllowRework(t *testing.T) {
 	methods := Builtins()
-	for _, m := range methods {
+	for _, m := range ActiveCatalog(methods) {
 		t.Run(m.ID, func(t *testing.T) {
 			if err := Validate(m); err != nil {
 				t.Fatal(err)
@@ -89,6 +89,7 @@ func TestBuiltinMethodsRequireEvidenceReviewAndAllowRework(t *testing.T) {
 
 func TestSelectionOverridesBeforeWorkAndFreezesTemplate(t *testing.T) {
 	methods := Builtins()
+	methods[1].ID = "research"
 	r := Recommend(methods, "miscellaneous", "", "")
 	if r.Method != nil {
 		t.Fatal(r.Method)
@@ -98,9 +99,9 @@ func TestSelectionOverridesBeforeWorkAndFreezesTemplate(t *testing.T) {
 	c.MethodID = "okr"
 	apply(t, &r, c, methods)
 	c = change(&r, "select", "")
-	c.MethodID = "seven-step"
+	c.MethodID = "research"
 	apply(t, &r, c, methods)
-	if r.Method.ID != "seven-step" || r.State != "working" || !strings.Contains(r.Reason, "手动选择") {
+	if r.Method.ID != "research" || r.State != "working" || !strings.Contains(r.Reason, "手动选择") {
 		t.Fatal(r)
 	}
 	methods[1].Steps[0].Name = "replaced step"
@@ -227,6 +228,7 @@ func TestStepContracts(t *testing.T) {
 
 func TestStartAndStepReviewEvidence(t *testing.T) {
 	methods := Builtins()
+	methods[1].ID = "research"
 	step := &methods[1].Steps[0]
 	step.Owner, step.Reviewer = &Actor{Kind: "creator"}, &Actor{Kind: "project_lead"}
 	r := Recommend(methods, "调研用户行为", "", "")
@@ -236,7 +238,7 @@ func TestStartAndStepReviewEvidence(t *testing.T) {
 	if err := r.Apply(c, methods, "member/test", "now"); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
-	c.MethodID = "seven-step"
+	c.MethodID = "research"
 	apply(t, &r, c, methods)
 	if r.State != "working" || r.Reason != initial.Reason || r.Source != "title" || r.Step != 0 {
 		t.Fatal(r)

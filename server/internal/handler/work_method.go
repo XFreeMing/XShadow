@@ -38,7 +38,7 @@ func (h *Handler) ListWorkMethods(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to read work methods")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"methods": methods})
+	writeJSON(w, 200, map[string]any{"methods": workmethod.ActiveCatalog(methods)})
 }
 
 func (h *Handler) GetGoalWorkMethod(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,7 @@ import (
 
 func TestResearchClaimAndProjectHandoffUseIssueMethod(t *testing.T) {
 	seedTestCatalog(t)
+	research := registerResearchMethodForTest(t)
 	agentID := seededReadyAgentID(t)
 	project := deliveryProject(t, "Mixed deliveries", agentID)
 	id := dbfx.Issue(t, "调研客户留存原因", testutil.Cols{"project_id": project, "status": "todo"})
@@ -36,7 +37,7 @@ func TestResearchClaimAndProjectHandoffUseIssueMethod(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := testHandler.getIssuePrefix(context.Background(), issue.WorkspaceID) + "-" + strconv.Itoa(int(issue.Number))
-	for _, text := range []string{"seven-step", "界定决策问题", `"$MULTICA_CLI_PATH" issue method ` + ref + " --change-file", "Required output"} {
+	for _, text := range []string{research.ID, "界定决策问题", `"$MULTICA_CLI_PATH" issue method ` + ref + " --change-file", "Required output"} {
 		if !strings.Contains(claim, text) {
 			t.Fatalf("missing %q from claim: %s", text, claim)
 		}
@@ -54,7 +55,8 @@ func TestMethodReviewGatesManualBatchAndPullRequestCompletion(t *testing.T) {
 	ctx := context.Background()
 	seedTestCatalog(t)
 	methods := workmethod.Builtins()
-	run := workmethod.Recommend(methods, "调研客户流失原因", "", "")
+	old, _ := workmethod.ResolvePlanMethod(methods, "", "seven-step")
+	run := workmethod.Run{Method: &old, State: "ready"}
 	revision := run.Revision
 	if err := run.Apply(workmethod.Change{Action: "advance", BaseRevision: &revision, Evidence: "Research question and scope"}, methods, "reviewer", "2026-11-19T00:00:00Z"); err != nil {
 		t.Fatal(err)
