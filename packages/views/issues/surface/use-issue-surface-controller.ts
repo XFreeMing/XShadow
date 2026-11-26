@@ -157,7 +157,7 @@ export interface IssueSurfaceController {
   /** Load one server facet when its filter submenu is opened. */
   setActiveTableFacet: (facet: IssueTableFacetSpec | null) => void;
   setTableSearch: (query: string) => void;
-  exportTableIssues: () => Promise<Issue[]>;
+  exportTableIssues: (query?: IssueTableQuerySpec) => Promise<Issue[]>;
   isLoading: boolean;
   /** See IssueSurfaceData.isRefreshing — placeholder-backed revalidation. */
   isRefreshing: boolean;
@@ -1053,7 +1053,7 @@ export function useIssueSurfaceController({
 
   const workingAgents = facetWorkingAgents;
 
-  const exportTableIssues = useCallback(async () => {
+  const exportTableIssues = useCallback(async (query = tableQuerySpec) => {
     const issues: Issue[] = [];
     const seenIssueIds = new Set<string>();
     const seenCursors = new Set<string>();
@@ -1066,7 +1066,7 @@ export function useIssueSurfaceController({
         seenCursors.add(cursor);
       }
       const page = await api.listIssueTableRows({
-        query: tableQuerySpec,
+        query,
         group: { kind: "none" },
         group_key: null,
         hierarchy: { enabled: false },

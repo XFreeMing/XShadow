@@ -34,6 +34,7 @@ type rustIssueListQuery struct {
 	ProjectID          *string                `json:"project_id,omitempty"`
 	ProjectIDs         []pgtype.UUID          `json:"project_ids,omitempty"`
 	ProjectStatuses    []string               `json:"project_statuses,omitempty"`
+	IssueTypeID        *string                `json:"issue_type_id,omitempty"`
 	IncludeNoProject   bool                   `json:"include_no_project,omitempty"`
 	LabelIDs           []pgtype.UUID          `json:"label_ids,omitempty"`
 	IDs                *[]pgtype.UUID         `json:"ids,omitempty"`

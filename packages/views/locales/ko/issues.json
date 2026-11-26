@@ -479,6 +479,9 @@
     "org_chart": "구조도"
   },
   "table": {
+    "all_task_types": "모든 작업 유형",
+    "general_task_type": "일반 작업",
+    "property_not_applicable": "이 작업 유형에 적용되지 않는 속성",
     "select_all": "표시된 모든 태스크 선택",
     "select_issue": "{{identifier}} 선택",
     "sort_ascending": "오름차순",

@@ -352,6 +352,8 @@ export interface IssueTableFilterCondition {
 }
 
 export interface IssueTableFilters {
+  /** Match a concrete task type ID, or "none" for general tasks. */
+  issue_type_id?: string;
   statuses?: IssueStatus[];
   priorities?: IssuePriority[];
   assignees?: IssueActorRef[];

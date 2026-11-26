@@ -479,6 +479,9 @@
     "org_chart": "組織図"
   },
   "table": {
+    "all_task_types": "すべてのタスクタイプ",
+    "general_task_type": "一般タスク",
+    "property_not_applicable": "このタスクタイプには適用されないプロパティです",
     "select_all": "表示中のタスクをすべて選択",
     "select_issue": "{{identifier}} を選択",
     "sort_ascending": "昇順",

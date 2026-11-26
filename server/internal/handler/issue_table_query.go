@@ -88,6 +88,7 @@ type issueTableIssueDateBoundRequest struct {
 }
 
 type issueTableFiltersRequest struct {
+	IssueTypeID       string               `json:"issue_type_id,omitempty"`
 	Statuses          []string             `json:"statuses,omitempty"`
 	Priorities        []string             `json:"priorities,omitempty"`
 	Assignees         []issueTableActorRef `json:"assignees,omitempty"`
@@ -301,6 +302,10 @@ func canonicalIssueTableFingerprint(workspaceID string, spec issueTableQuerySpec
 	normalized := spec
 	normalized.Search = strings.TrimSpace(normalized.Search)
 	normalized.Scope.AssigneeTypes = sortedUniqueStrings(normalized.Scope.AssigneeTypes)
+	normalized.Filters.IssueTypeID = strings.TrimSpace(normalized.Filters.IssueTypeID)
+	if id, err := util.ParseUUID(normalized.Filters.IssueTypeID); err == nil {
+		normalized.Filters.IssueTypeID = uuidToString(id)
+	}
 	normalized.Filters.Statuses = sortedUniqueStrings(normalized.Filters.Statuses)
 	normalized.Filters.Priorities = sortedUniqueStrings(normalized.Filters.Priorities)
 	normalized.Filters.ProjectIDs = sortedUniqueStrings(normalized.Filters.ProjectIDs)
@@ -752,6 +757,20 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		}
 		native.Relations = &rustIssueRelations{UserID: uuidToString(userUUID), Kinds: relations}
 		appendFilter("relations", "("+strings.Join(ors, " OR ")+")")
+	}
+
+	if typeID := strings.TrimSpace(spec.Filters.IssueTypeID); typeID != "" {
+		if typeID == issueTableFilterNoneValue {
+			where = append(where, "i.issue_type_id IS NULL")
+			native.IssueTypeID = &typeID
+		} else {
+			id, ok := parseUUIDOrBadRequest(w, typeID, "filters.issue_type_id")
+			if !ok {
+				return issueTableSQL{}, false
+			}
+			where = append(where, fmt.Sprintf("i.issue_type_id = %s::uuid", addArg(id)))
+			native.IssueTypeID = uuidToPtr(id)
+		}
 	}
 
 	projectIDs, ok := parseIssueTableUUIDList(w, spec.Filters.ProjectIDs, "filters.project_ids")

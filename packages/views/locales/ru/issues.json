@@ -496,6 +496,9 @@
     "org_chart": "Структура"
   },
   "table": {
+    "all_task_types": "Все типы задач",
+    "general_task_type": "Обычная задача",
+    "property_not_applicable": "Свойство не применяется к этому типу задач",
     "select_all": "Выбрать все видимые задачи",
     "select_issue": "Выбрать {{identifier}}",
     "sort_ascending": "По возрастанию",

@@ -485,6 +485,9 @@
     "swimlane": "Swimlane"
   },
   "table": {
+    "all_task_types": "All task types",
+    "general_task_type": "General task",
+    "property_not_applicable": "Property does not apply to this task type",
     "select_all": "Select all visible issues",
     "select_issue": "Select {{identifier}}",
     "sort_ascending": "Ascending",

@@ -479,6 +479,9 @@
     "org_chart": "架構圖"
   },
   "table": {
+    "all_task_types": "全部類型",
+    "general_task_type": "一般任務",
+    "property_not_applicable": "此屬性不適用於這個任務類型",
     "select_all": "選擇所有可見任務",
     "select_issue": "選擇 {{identifier}}",
     "sort_ascending": "升序",

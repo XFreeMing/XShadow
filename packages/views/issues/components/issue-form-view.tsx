@@ -448,7 +448,7 @@ export function IssueFormView({ scope, createDefaults, formUploadKey }: IssueFor
                   />
                   <DropdownMenuContent align="start">
                     <DropdownMenuItem onClick={() => selectIssueType(undefined)}>
-                      {t(($) => $.form.type_none)}
+                      {t(($) => $.table.general_task_type)}
                     </DropdownMenuItem>
                     {workspaceIssueTypes.map((issueType) => (
                       <DropdownMenuItem

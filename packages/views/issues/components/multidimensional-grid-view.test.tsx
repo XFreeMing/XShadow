@@ -958,19 +958,21 @@ describe("MultidimensionalGridView", () => {
         "prop-reads": 0,
       },
     });
-    setupApi({
-      listIssueTableRows: vi.fn().mockResolvedValue({
-        rows: [
-          { issue: researchIssue, direct_child_count: 0 },
-          { issue: legacyIssue, direct_child_count: 0 },
-        ],
-        total: 2,
-        branch_total: 2,
+    const listIssueTableRows = vi.fn(async ({ query }: IssueTableRowsRequest): Promise<IssueTableRowsResponse> => {
+      const type = query.filters.issue_type_id;
+      const issues = type === "none" ? [legacyIssue] : type ? [researchIssue] : [researchIssue, legacyIssue];
+      return {
+        rows: issues.map((issue) => ({ issue, direct_child_count: 0 })),
+        total: issues.length,
+        branch_total: issues.length,
         next_cursor: null,
         group_key: null,
         parent_id: null,
-        query_fingerprint: "fp-typed",
-      }),
+        query_fingerprint: `fp-${type ?? "all"}`,
+      };
+    });
+    setupApi({
+      listIssueTableRows,
       listIssueTypes: vi.fn().mockResolvedValue({
         issue_types: [
           {
@@ -1046,6 +1048,24 @@ describe("MultidimensionalGridView", () => {
     expect(grid.getByText("Research")).toBeInTheDocument();
     expect(grid.getByText(/example\.com\/paper/)).toBeInTheDocument();
     expect(grid.getAllByText("0").length).toBeGreaterThanOrEqual(2);
+    expect(grid.getByLabelText("Property does not apply to this task type")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "All task types" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "General task" }));
+    await waitFor(() => expect(listIssueTableRows).toHaveBeenLastCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ filters: expect.objectContaining({ issue_type_id: "none" }) }),
+    })));
+    expect(await screen.findByDisplayValue("Legacy untyped task")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Research task")).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Source URL" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "General task" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Research" }));
+    expect(await screen.findByDisplayValue("Research task")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Legacy untyped task")).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Source URL" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New issue" }));
+    expect(useModalStore.getState().data).toMatchObject({ issue_type_id: "type-research" });
   });
 
   it("pages native status groups, collapses branches, and prunes live selection", async () => {

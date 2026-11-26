@@ -485,6 +485,9 @@
     "org_chart": "Organigramme"
   },
   "table": {
+    "all_task_types": "Tous les types de tâches",
+    "general_task_type": "Tâche générale",
+    "property_not_applicable": "Cette propriété ne s’applique pas à ce type de tâche",
     "select_all": "Sélectionner toutes les tâches visibles",
     "select_issue": "Sélectionner {{identifier}}",
     "sort_ascending": "Croissant",

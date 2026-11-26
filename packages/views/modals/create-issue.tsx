@@ -1,7 +1,7 @@
 "use client";
 
 import { issueStatusCategory } from "@multica/core/issues";
-import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLink, resolveClickIntent, useNavigation } from "../navigation";
 import {
@@ -106,8 +106,10 @@ import { useIssueLimitUpgradePrompt } from "./use-issue-limit-upgrade-prompt";
 import { CopyParentFields } from "./copy-parent-fields";
 import {
   applyIssueTypeSelection,
+  issueTypeIncludesProperty,
   missingRequiredIssueTypeFields,
   orderedIssueTypePropertyEntries,
+  specializedIssuePropertyIds,
 } from "../issues/issue-type-create-fields";
 
 // ManualCreatePanel — manual-mode body of the create-issue dialog. Renders
@@ -316,8 +318,9 @@ export function ManualCreatePanel({
     (data?.due_date as string | undefined) ?? draft.shared.dueDate,
   );
   const [labelIds, setLabelIds] = useState<string[]>(draft.manual.labelIds);
+  const presetTypeId = typeof data?.issue_type_id === "string" ? data.issue_type_id : undefined;
   const [issueTypeId, setIssueTypeId] = useState<string | undefined>(
-    (data?.issue_type_id as string | undefined) ?? draft.manual.issueTypeId,
+    data?.issue_type_id === null ? undefined : presetTypeId ?? draft.manual.issueTypeId,
   );
   const [propertyValues, setPropertyValues] = useState(draft.manual.propertyValues ?? {});
   const [customPropertyPickerId, setCustomPropertyPickerId] = useState<string | null>(null);
@@ -370,8 +373,31 @@ export function ManualCreatePanel({
   const queryClient = useQueryClient();
   const { categoryOf: draftStatusCategory, colorOf, iconOf } = useIssueStatuses(wsId);
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
-  const { data: workspaceIssueTypes = [] } = useQuery(issueTypeListOptions(wsId));
+  const { data: typeCatalog = [], isSuccess: issueTypesLoaded } = useQuery(issueTypeListOptions(wsId, true));
+  const workspaceIssueTypes = typeCatalog.filter((type) => !type.archived);
   const selectedIssueType = workspaceIssueTypes.find((it) => it.id === issueTypeId) ?? null;
+  const specializedPropertyIds = useMemo(() => specializedIssuePropertyIds(typeCatalog), [typeCatalog]);
+  const availableProperties = workspaceProperties.filter((property) =>
+    issueTypeIncludesProperty(property.id, specializedPropertyIds, selectedIssueType));
+  const initialTypePreset = useRef(data?.issue_type_id === null || presetTypeId !== undefined);
+  useEffect(() => {
+    if (!initialTypePreset.current || !issueTypesLoaded) return;
+    initialTypePreset.current = false;
+    const current = useIssueDraftStore.getState().draft.manual;
+    const next = applyIssueTypeSelection(
+      presetTypeId,
+      typeCatalog.filter((type) => !type.archived),
+      current.propertyValues ?? {},
+      appliedTypeDefaultsRef.current,
+    );
+    appliedTypeDefaultsRef.current = next.appliedTypeDefaults;
+    setPropertyValues(next.propertyValues);
+    setManual({
+      issueTypeId: next.issueTypeId,
+      issueTypeDefaultIds: [...next.appliedTypeDefaults],
+      propertyValues: next.propertyValues,
+    });
+  }, [issueTypesLoaded, presetTypeId, setManual, typeCatalog]);
   const { data: parentIssue } = useQuery({
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
@@ -1045,7 +1071,7 @@ export function ManualCreatePanel({
                   <CopyParentFields
                     key={parentIssue.id}
                     parent={parentIssue}
-                    properties={workspaceProperties}
+                    properties={availableProperties}
                     disabled={submitBusy}
                     onCopy={(copy) => {
                       if (copy.priority !== undefined) updatePriority(copy.priority);
@@ -1167,14 +1193,14 @@ export function ManualCreatePanel({
                         <span className="max-w-32 truncate">
                           {selectedIssueType
                             ? selectedIssueType.name
-                            : t(($) => $.create_issue.task_type_default)}
+                            : tIssues(($) => $.table.general_task_type)}
                         </span>
                       </PillButton>
                     }
                   />
                   <DropdownMenuContent align="start" className="w-52">
                     <DropdownMenuItem onClick={() => selectIssueType(undefined)}>
-                      <span className="truncate">{t(($) => $.create_issue.task_type_default)}</span>
+                      <span className="truncate">{tIssues(($) => $.table.general_task_type)}</span>
                       {!selectedIssueType && <Check className="ml-auto size-3.5" />}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -1520,14 +1546,14 @@ export function ManualCreatePanel({
                     <ArrowDown className="h-3.5 w-3.5" />
                     {t(($) => $.create_issue.add_subissue)}
                   </DropdownMenuItem>
-                  {workspaceProperties.length > 0 && (
+                  {availableProperties.length > 0 && (
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>
                         <Shapes className="h-3.5 w-3.5" />
                         {t(($) => $.create_issue.custom_properties)}
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent className="w-56">
-                        {workspaceProperties.map((property) => (
+                        {availableProperties.map((property) => (
                           <DropdownMenuItem
                             key={property.id}
                             disabled={Object.prototype.hasOwnProperty.call(

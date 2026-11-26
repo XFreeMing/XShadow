@@ -11,11 +11,11 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
-  Shapes,
   X,
 } from "@multica/ui/icons";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { DEFAULT_GRID_COLUMN_ORDER } from "@multica/core/issues/grid-columns";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { propertyListOptions } from "@multica/core/properties";
 import { workMethodCatalogOptions } from "@multica/core/issue-workflows/queries";
@@ -56,6 +56,7 @@ import {
   CustomPropertyValueInput,
 } from "../../issues/components/pickers/custom-property-picker";
 import { useT } from "../../i18n";
+import { specializedIssuePropertyIds } from "../../issues/issue-type-create-fields";
 import { useStatusLabel } from "../../issues/utils/status-label";
 import { WorkMethodEditor } from "../../workflows/work-method-editor";
 import { WorkMethodSteps } from "../../workflows/work-method-step";
@@ -72,6 +73,7 @@ export function TaskTemplatesSection({
   canEditMethods?: boolean;
 }) {
   const { t } = useT("settings");
+  const { t: issueText } = useT("issues");
   const wsId = useWorkspaceId();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<IssueType | null>(null);
@@ -80,7 +82,7 @@ export function TaskTemplatesSection({
   const { data: issueTypes = [], isLoading, isError, refetch } = useQuery(
     issueTypeListOptions(wsId, true),
   );
-  const { data: properties = [] } = useQuery(propertyListOptions(wsId, true));
+  const { data: properties = [], isSuccess: propertiesLoaded } = useQuery(propertyListOptions(wsId, true));
   const { data: methods = [] } = useQuery({
     ...workMethodCatalogOptions(wsId),
     enabled: !!wsId,
@@ -100,6 +102,8 @@ export function TaskTemplatesSection({
     [issueTypes],
   );
   const visible = showArchived ? issueTypes : issueTypes.filter((it) => !it.archived);
+  const specializedPropertyIds = specializedIssuePropertyIds(issueTypes);
+  const commonFields = activeProperties.filter((property) => !specializedPropertyIds.has(property.id));
 
   return (
     <section id="task-templates" aria-labelledby="task-templates-heading" className="space-y-3">
@@ -108,9 +112,6 @@ export function TaskTemplatesSection({
           <h2 id="task-templates-heading" className="text-heading font-semibold">
             {t(($) => $.properties.issue_types.title)}
           </h2>
-          <span className="text-caption tabular-nums text-muted-foreground">
-            {activeCount}/{MAX_ACTIVE_ISSUE_TYPES}
-          </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {issueTypes.length > activeCount && (
@@ -145,84 +146,98 @@ export function TaskTemplatesSection({
               {t(($) => $.properties.issue_types.retry)}
             </Button>
           </div>
-        ) : visible.length === 0 ? (
-          <div className="px-4 py-8 text-center">
-            <Shapes className="mx-auto size-5 text-faint-foreground" />
-            <p className="mt-2 text-body font-medium">
-              {t(($) => $.properties.issue_types.empty)}
-            </p>
-          </div>
         ) : (
-          <div className="divide-y divide-surface-border">
-            {visible.map((issueType) => (
-              <div
-                key={issueType.id}
-                className="flex items-start justify-between gap-2 px-4 py-2"
-              >
-                <details className="min-w-0 flex-1">
-                  <summary className="cursor-pointer rounded-sm py-1 text-body font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                    {issueType.name}
-                    {issueType.archived && (
-                      <Badge variant="outline" className="ms-2 text-micro">
-                        {t(($) => $.properties.archived_badge)}
-                      </Badge>
-                    )}
-                  </summary>
-                  <TaskTemplateDetails issueType={issueType} propertyById={propertyById} methods={methods} canEditMethods={canEditMethods} />
-                </details>
-
-                {canManage && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <IconButton
-                          variant="ghost"
-                          size="icon-sm"
-                          label={t(($) => $.properties.issue_types.actions_aria, {
-                            name: issueType.name,
-                          })}
-                        >
-                          <MoreHorizontal className="size-4" />
-                        </IconButton>
-                      }
-                    />
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setEditing(issueType)}>
-                        <Pencil className="size-3.5" />
-                        {t(($) => $.properties.issue_types.edit)}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() =>
-                          update.mutate(
-                            { id: issueType.id, archived: !issueType.archived },
-                            {
-                              onError: (err) =>
-                                toast.error(
-                                  err instanceof Error
-                                    ? err.message
-                                    : t(($) => $.properties.save_failed),
-                                ),
-                            },
-                          )
-                        }
-                      >
-                        {issueType.archived ? (
-                          <>
-                            <ArchiveRestore className="size-3.5" />
-                            {t(($) => $.properties.issue_types.restore)}
-                          </>
-                        ) : (
-                          <>
-                            <Archive className="size-3.5" />
-                            {t(($) => $.properties.issue_types.archive)}
-                          </>
-                        )}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
+          <div className="space-y-2 p-4">
+            <details>
+              <summary className="cursor-pointer rounded-sm py-1 text-body font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                {t(($) => $.properties.issue_types.abstract_task)}
+              </summary>
+              <p className="mt-2 text-caption text-muted-foreground">
+                {t(($) => $.properties.issue_types.inherited_fields)}
+              </p>
+              <ul className="my-2 flex flex-wrap gap-1.5">
+                {DEFAULT_GRID_COLUMN_ORDER.filter((key) => key !== "type").map((key) => (
+                  <li key={key}><Badge variant="outline">{issueText(($) => $.table.columns[key])}</Badge></li>
+                ))}
+                {propertiesLoaded && commonFields.map((property) => (
+                  <li key={property.id}><Badge variant="outline">{property.name}</Badge></li>
+                ))}
+              </ul>
+            </details>
+            <div className="ms-2 divide-y divide-surface-border border-s border-surface-border">
+              <div className="px-4 py-2 text-body font-medium">
+                {issueText(($) => $.table.general_task_type)}
               </div>
-            ))}
+              {visible.map((issueType) => (
+                <div
+                  key={issueType.id}
+                  className="flex items-start justify-between gap-2 px-4 py-2"
+                >
+                  <details className="min-w-0 flex-1">
+                    <summary className="cursor-pointer rounded-sm py-1 text-body font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                      {issueType.name}
+                      {issueType.archived && (
+                        <Badge variant="outline" className="ms-2 text-micro">
+                          {t(($) => $.properties.archived_badge)}
+                        </Badge>
+                      )}
+                    </summary>
+                    <TaskTemplateDetails issueType={issueType} propertyById={propertyById} methods={methods} canEditMethods={canEditMethods} />
+                  </details>
+
+                  {canManage && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <IconButton
+                            variant="ghost"
+                            size="icon-sm"
+                            label={t(($) => $.properties.issue_types.actions_aria, {
+                              name: issueType.name,
+                            })}
+                          >
+                            <MoreHorizontal className="size-4" />
+                          </IconButton>
+                        }
+                      />
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setEditing(issueType)}>
+                          <Pencil className="size-3.5" />
+                          {t(($) => $.properties.issue_types.edit)}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() =>
+                            update.mutate(
+                              { id: issueType.id, archived: !issueType.archived },
+                              {
+                                onError: (err) =>
+                                  toast.error(
+                                    err instanceof Error
+                                      ? err.message
+                                      : t(($) => $.properties.save_failed),
+                                  ),
+                              },
+                            )
+                          }
+                        >
+                          {issueType.archived ? (
+                            <>
+                              <ArchiveRestore className="size-3.5" />
+                              {t(($) => $.properties.issue_types.restore)}
+                            </>
+                          ) : (
+                            <>
+                              <Archive className="size-3.5" />
+                              {t(($) => $.properties.issue_types.archive)}
+                            </>
+                          )}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

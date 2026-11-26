@@ -39,6 +39,7 @@ pub struct IssueListQuery {
     project_id: Option<String>,
     project_ids: Vec<String>,
     project_statuses: Vec<String>,
+    issue_type_id: Option<String>,
     include_no_project: bool,
     label_ids: Vec<String>,
     ids: Option<Vec<String>>,
@@ -322,6 +323,17 @@ fn add_query_conditions<'a>(sql: &mut QueryBuilder<'a, Postgres>, query: &'a Iss
         add_actor_filter(sql, "creator", std::slice::from_ref(actor), false);
     }
     add_project_filter(sql, query);
+    match query.issue_type_id.as_deref() {
+        Some("none") => {
+            sql.push(" AND i.issue_type_id IS NULL");
+        }
+        Some(id) => {
+            sql.push(" AND i.issue_type_id = ")
+                .push_bind(id)
+                .push("::uuid");
+        }
+        None => (),
+    }
     if !query.project_statuses.is_empty() {
         sql.push(" AND EXISTS (SELECT 1 FROM project p WHERE p.id = i.project_id AND p.workspace_id = i.workspace_id AND p.status = ANY(")
             .push_bind(&query.project_statuses)

@@ -153,6 +153,10 @@ describe("TaskTemplatesSection", () => {
   it("shows template fields, formulas and method bindings to non-admins", async () => {
     const user = userEvent.setup();
     renderSection(false);
+    await user.click(await screen.findByText("Task (abstract)"));
+    expect(screen.getByText("General task")).toBeVisible();
+    expect(screen.getByText("Assignee")).toBeVisible();
+    await user.click(screen.getByText("Task (abstract)"));
     await user.click(await screen.findByText("Research"));
     expect(screen.getByRole("table", { name: "Table preview" })).toBeVisible();
     expect(screen.getByRole("columnheader", { name: /Status/ })).toBeVisible();
@@ -163,7 +167,7 @@ describe("TaskTemplatesSection", () => {
     expect(screen.getByText("IF({Source URL}, TRUE, FALSE)")).toBeVisible();
     expect(screen.getByText("Research method")).toBeVisible();
     expect(screen.getByText(/Submit evidence.*Evidence ready/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /New work method/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New task type" })).toBeNull();
   });
 
   it("allows admin to create a new task type with ordered fields and required toggle", async () => {
@@ -171,7 +175,7 @@ describe("TaskTemplatesSection", () => {
     renderSection(true);
     await screen.findByText("Research");
 
-    await user.click(screen.getByRole("button", { name: /New work method/i }));
+    await user.click(screen.getByRole("button", { name: "New task type" }));
     const nameInput = await screen.findByLabelText("Name");
     await user.type(nameInput, "Delivery");
 

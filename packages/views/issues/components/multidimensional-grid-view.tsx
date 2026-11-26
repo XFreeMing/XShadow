@@ -31,6 +31,8 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { toast } from "sonner";
@@ -54,6 +56,7 @@ import type {
   Issue,
   IssueProperty,
   IssueTableQuerySpec,
+  IssueType,
   Project,
   UpdateIssueRequest,
 } from "@multica/core/types";
@@ -80,6 +83,7 @@ import { ProjectPicker } from "../../projects/components/project-picker";
 import { runConfirmIntent } from "../actions/run-confirm-gate";
 import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
 import { useIssuePeekClick } from "../surface/peek-context";
+import { issueTypeIncludesProperty, specializedIssuePropertyIds } from "../issue-type-create-fields";
 import { priorityLabel } from "../utils/priority-label";
 import { useStatusLabel } from "../utils/status-label";
 import type { IssueCreateDefaults } from "../surface/types";
@@ -99,6 +103,8 @@ import { TableIssueSearch } from "./table-view";
 
 const GRID_PAGE_LIMIT = 50;
 const INITIAL_CURSORS: Array<string | null> = [null];
+const EMPTY_ISSUE_TYPES: IssueType[] = [];
+const EMPTY_PROPERTIES: IssueProperty[] = [];
 const PROPERTY_COLUMN_PREFIX = "property:";
 
 function GridLabelCell({ issue }: { issue: Issue }) {
@@ -155,7 +161,7 @@ export interface MultidimensionalGridViewProps {
   onSearchChange?: (query: string) => void;
   onCreateIssue: (defaults?: IssueCreateDefaults) => void;
   showBatchToolbar: boolean;
-  exportIssues: () => Promise<Issue[]>;
+  exportIssues: (query?: IssueTableQuerySpec) => Promise<Issue[]>;
   resolveExportLookups?: (needs: {
     projects: boolean;
     childProgress: boolean;
@@ -166,7 +172,7 @@ export interface MultidimensionalGridViewProps {
 }
 
 export function MultidimensionalGridView({
-  serverQuery,
+  serverQuery: baseQuery,
   childProgressMap,
   search = "",
   onSearchChange,
@@ -197,8 +203,21 @@ export function MultidimensionalGridView({
   const [exporting, setExporting] = useState<"all" | "selected" | null>(null);
   const issueTypesQuery = useQuery(issueTypeListOptions(wsId, true));
   const propertiesQuery = useQuery(propertyListOptions(wsId));
-  const workspaceIssueTypes = issueTypesQuery.data ?? [];
-  const workspaceProperties = propertiesQuery.data ?? [];
+  const workspaceIssueTypes = issueTypesQuery.data ?? EMPTY_ISSUE_TYPES;
+  const workspaceProperties = propertiesQuery.data ?? EMPTY_PROPERTIES;
+  const [chosenTypeId, setChosenTypeId] = useState("all");
+  const concreteTypes = workspaceIssueTypes.filter((type) => !type.archived);
+  const chosenType = concreteTypes.find((type) => type.id === chosenTypeId);
+  const typeFilter = chosenType?.id ?? (chosenTypeId === "none" ? "none" : null);
+  const generalTaskLabel = t(($) => $.table.general_task_type);
+  const specializedPropertyIds = useMemo(
+    () => specializedIssuePropertyIds(workspaceIssueTypes),
+    [workspaceIssueTypes],
+  );
+  const serverQuery = useMemo(() => typeFilter === null ? baseQuery : {
+    ...baseQuery,
+    filters: { ...baseQuery.filters, issue_type_id: typeFilter },
+  }, [baseQuery, typeFilter]);
   const gridCatalogReady =
     issueTypesQuery.isSuccess && propertiesQuery.isSuccess;
 
@@ -682,6 +701,7 @@ export function MultidimensionalGridView({
       kind: "text",
     });
     for (const prop of workspaceProperties) {
+      if (typeFilter !== null && !issueTypeIncludesProperty(prop.id, specializedPropertyIds, chosenType)) continue;
       byId.set(gridPropertyColumnId(prop.id), {
         id: gridPropertyColumnId(prop.id),
         name: prop.name,
@@ -695,7 +715,7 @@ export function MultidimensionalGridView({
       }
     }
     return byId;
-  }, [t, tableColumns, workspaceIssueTypes.length, workspaceProperties]);
+  }, [chosenType, specializedPropertyIds, t, tableColumns, typeFilter, workspaceIssueTypes.length, workspaceProperties]);
 
   const menuFields = useMemo(
     () =>
@@ -829,7 +849,7 @@ export function MultidimensionalGridView({
             )
           : getActorName;
         const rows =
-          mode === "all" ? await exportIssues() : selectedIssues;
+          mode === "all" ? await exportIssues(serverQuery) : selectedIssues;
         const headers = exportColumnKeysResolved.map((key) => {
           if (isGridColumnKey(key)) {
             const field = fieldsById.get(key);
@@ -843,7 +863,7 @@ export function MultidimensionalGridView({
             resolvePriorityLabel,
             issueTypeName: issue.issue_type_id
               ? issueTypeById.get(issue.issue_type_id)?.name ?? null
-              : null,
+              : generalTaskLabel,
             propertyById: exportPropertyById,
             getActorName: exportActorName,
             projectMap: exportLookups.projectMap,
@@ -876,6 +896,7 @@ export function MultidimensionalGridView({
       exportColumnKeys,
       exportIssues,
       fieldsById,
+      generalTaskLabel,
       getActorName,
       groupProjectMap,
       childProgressMap,
@@ -885,6 +906,7 @@ export function MultidimensionalGridView({
       resolvePriorityLabel,
       resolveStatusLabel,
       selectedIssues,
+      serverQuery,
       t,
       wsId,
       gridCatalogReady,
@@ -899,7 +921,7 @@ export function MultidimensionalGridView({
     ): GridRecordView => {
       const typeName = issue.issue_type_id
         ? issueTypeById.get(issue.issue_type_id)?.name ?? null
-        : null;
+        : generalTaskLabel;
       const progress = childProgressMap?.get(issue.id);
       const propValues: Record<string, GridCellValue> = {};
       for (const prop of workspaceProperties) {
@@ -938,7 +960,7 @@ export function MultidimensionalGridView({
         },
       };
     },
-    [childProgressMap, issueTypeById, workspaceIssueTypes.length, workspaceProperties],
+    [childProgressMap, generalTaskLabel, issueTypeById, workspaceIssueTypes.length, workspaceProperties],
   );
 
   const hierarchyToggleLabel = t(($) => $.table.toggle_sub_issues);
@@ -1160,7 +1182,9 @@ export function MultidimensionalGridView({
                 {issueType.name}
               </span>
             ) : (
-              <span className="text-muted-foreground">{t(($) => $.table.empty_value)}</span>
+              <span className="text-muted-foreground">
+                {issue.issue_type_id ? t(($) => $.table.empty_value) : generalTaskLabel}
+              </span>
             )}
           </div>
         );
@@ -1325,6 +1349,14 @@ export function MultidimensionalGridView({
         const issueType = issue.issue_type_id
           ? issueTypeById.get(issue.issue_type_id)
           : undefined;
+        if (issueTypesQuery.isSuccess && issue.properties?.[propertyId] === undefined
+          && !issueTypeIncludesProperty(propertyId, specializedPropertyIds, issueType)) {
+          return (
+            <span className="px-2 text-muted-foreground" aria-label={t(($) => $.table.property_not_applicable)}>
+              {t(($) => $.table.empty_value)}
+            </span>
+          );
+        }
         const isRequired = Boolean(
           issueType?.fields.some((f) => f.property_id === propertyId && f.required),
         );
@@ -1343,13 +1375,36 @@ export function MultidimensionalGridView({
       }
       return undefined;
     },
-    [childProgressMap, getActorName, issueById, issueTypeById, locale, propertyById, t, updateIssue],
+    [childProgressMap, generalTaskLabel, getActorName, issueById, issueTypeById, issueTypesQuery.isSuccess, locale, propertyById, specializedPropertyIds, t, updateIssue],
   );
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border/60 px-4 py-2">
         <div className="flex items-center gap-3">
+          {concreteTypes.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button type="button" size="sm" variant="outline" />}>
+                <span className="max-w-36 truncate">
+                  {chosenType?.name ?? (typeFilter === "none" ? generalTaskLabel : t(($) => $.table.all_task_types))}
+                </span>
+                <ChevronDown className="size-3" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuRadioGroup value={typeFilter ?? "all"} onValueChange={setChosenTypeId}>
+                  <DropdownMenuRadioItem value="all">
+                    {t(($) => $.table.all_task_types)}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="none">{generalTaskLabel}</DropdownMenuRadioItem>
+                  {concreteTypes.map((type) => (
+                    <DropdownMenuRadioItem key={type.id} value={type.id}>
+                      <span className="truncate">{type.name}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {onSearchChange && (
             <TableIssueSearch
               value={search}
@@ -1460,7 +1515,9 @@ export function MultidimensionalGridView({
                 })}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button size="sm" variant="outline" onClick={() => onCreateIssue()}>
+          <Button size="sm" variant="outline" onClick={() => onCreateIssue(
+            typeFilter === null ? undefined : { issue_type_id: chosenType?.id ?? null },
+          )}>
             <Plus className="size-3.5" aria-hidden="true" />
             {t(($) => $.views.new_issue)}
           </Button>

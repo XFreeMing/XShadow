@@ -475,6 +475,9 @@
     "org_chart": "Organigrama"
   },
   "table": {
+    "all_task_types": "Todos los tipos de tareas",
+    "general_task_type": "Tarea general",
+    "property_not_applicable": "La propiedad no se aplica a este tipo de tarea",
     "select_all": "Seleccionar todas las tareas visibles",
     "select_issue": "Seleccionar {{identifier}}",
     "sort_ascending": "Ascendente",

@@ -479,6 +479,9 @@
     "swimlane": "泳道"
   },
   "table": {
+    "all_task_types": "全部类型",
+    "general_task_type": "普通任务",
+    "property_not_applicable": "此属性不适用于该任务类型",
     "select_all": "选择所有可见任务",
     "select_issue": "选择 {{identifier}}",
     "sort_ascending": "升序",

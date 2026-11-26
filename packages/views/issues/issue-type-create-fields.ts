@@ -1,5 +1,18 @@
 import type { IssueProperty, IssuePropertyValue, IssueType } from "@multica/core/types";
 
+export function specializedIssuePropertyIds(issueTypes: readonly IssueType[]) {
+  return new Set(issueTypes.flatMap((type) => type.fields.map((field) => field.property_id)));
+}
+
+export function issueTypeIncludesProperty(
+  propertyId: string,
+  specializedIds: ReadonlySet<string>,
+  issueType?: IssueType | null,
+) {
+  return !specializedIds.has(propertyId)
+    || issueType?.fields.some((field) => field.property_id === propertyId) === true;
+}
+
 export function applyIssueTypeSelection(
   nextTypeId: string | undefined,
   workspaceIssueTypes: IssueType[],

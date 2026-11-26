@@ -167,6 +167,7 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
 import { propertyListOptions } from "@multica/core/properties";
 import { issueTypeListOptions } from "@multica/core/issue-types";
+import { issueTypeIncludesProperty, specializedIssuePropertyIds } from "../issue-type-create-fields";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import {
   selectExpandedResolved,
@@ -2819,6 +2820,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         : null,
     [issue?.issue_type_id, workspaceIssueTypes],
   );
+  const specializedPropertyIds = useMemo(
+    () => specializedIssuePropertyIds(workspaceIssueTypes),
+    [workspaceIssueTypes],
+  );
 
   // Sub-issue rows only surface live definitions: the display picker offers
   // non-archived properties, and chips render only ids that resolve here.
@@ -3045,11 +3050,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     persistDescriptionSave(draft);
   };
 
+  const addableCustomProperties = workspaceProperties.filter((property) =>
+    !property.archived && !isComputedPropertyType(property.type) && !visibleCustomProps.has(property.id)
+    && issue.properties?.[property.id] === undefined && !specializedPropertyIds.has(property.id),
+  );
   const canAddProperty = OPTIONAL_PROP_KEYS.some(
     (key) => !visibleOptionalProps.has(key) && (key !== "stage" || issue.parent_issue_id != null),
-  ) || workspaceProperties.some(
-    (property) => !property.archived && !isComputedPropertyType(property.type) && !visibleCustomProps.has(property.id) && issue.properties?.[property.id] === undefined,
-  );
+  ) || addableCustomProperties.length > 0;
   // "+ Add property" — an inline row at the bottom of the Properties grid
   // that opens a Popover listing optional fields not yet displayed. Hidden
   // once every optional field is on screen.
@@ -3104,19 +3111,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </span>
             </button>
           ))}
-          {(() => {
-            const addable = workspaceProperties.filter(
-              (p) =>
-                !p.archived &&
-                !isComputedPropertyType(p.type) &&
-                !visibleCustomProps.has(p.id) &&
-                issue.properties?.[p.id] === undefined,
-            );
-            if (addable.length === 0) return null;
-            return (
+          {addableCustomProperties.length > 0 && (
               <>
                 <div className="my-1 h-px bg-border" />
-                {addable.map((p) => (
+                {addableCustomProperties.map((p) => (
                   <TruncatedTooltip key={p.id} content={p.name}>
                     <button
                       type="button"
@@ -3133,8 +3131,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   </TruncatedTooltip>
                 ))}
               </>
-            );
-          })()}
+          )}
         </PopoverContent>
       </Popover>
     </div>
@@ -3221,14 +3218,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             </PropRow>
           )}
 
-          {/* Task type — rendered when the issue belongs to a configured workspace task type. */}
-          {currentIssueType && (
+          {(currentIssueType || (!issue.issue_type_id && workspaceIssueTypes.length > 0)) && (
             <PropRow label={t(($) => $.detail.prop_type)}>
               <span
                 data-testid="issue-detail-type"
                 className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-caption font-medium text-foreground"
               >
-                {currentIssueType.name}
+                {currentIssueType?.name ?? t(($) => $.table.general_task_type)}
               </span>
             </PropRow>
           )}
@@ -3253,7 +3249,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               if (seen.has(p.id)) continue;
               if (
                 issue.properties?.[p.id] !== undefined ||
-                (!p.archived && (isComputedPropertyType(p.type) || visibleCustomProps.has(p.id)))
+                (!p.archived && (visibleCustomProps.has(p.id) || (isComputedPropertyType(p.type)
+                  && issueTypeIncludesProperty(p.id, specializedPropertyIds, currentIssueType))))
               ) {
                 ordered.push({ property: p, required: false });
               }
