@@ -724,8 +724,12 @@ func methodClaimBrief(run workmethod.Run, issueRef string, ownsStep, stepContext
 	if step.Inputs != "" {
 		fmt.Fprintf(&b, "Inputs: %s\n", step.Inputs)
 	}
-	if step.Instructions != "" {
-		fmt.Fprintf(&b, "Instructions: %s\n", step.Instructions)
+	instructions := step.Instructions
+	if ownsStep && run.Method.Kind == "development" {
+		instructions = step.InstructionsForClaim()
+	}
+	if instructions != "" {
+		fmt.Fprintf(&b, "Instructions: %s\n", instructions)
 	}
 	for i, check := range step.Checks {
 		fmt.Fprintf(&b, "Check [%d]: %s\n", i, check)

@@ -1,6 +1,9 @@
 package workmethod
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 // The original definition identifies workspaces that only rebound the roles.
 // Edited procedures and the snapshots on existing issues keep their contract.
@@ -122,7 +125,7 @@ func storyArtifactAgile() Template {
 	return m
 }
 
-func agileTemplate() Template {
+func coveragePreflightAgile() Template {
 	m := storyArtifactAgile()
 	m.Revision++
 	criteria, coverage, candidate, delivery := &m.Steps[0], &m.Steps[1], &m.Steps[2], &m.Steps[3]
@@ -135,10 +138,39 @@ func agileTemplate() Template {
 	return m
 }
 
+func agileTemplate() Template {
+	m := coveragePreflightAgile()
+	m.Revision++
+	for i := range m.Steps {
+		m.Steps[i].Instructions = m.Steps[i].InstructionsForClaim()
+	}
+	return m
+}
+
+// InstructionsForClaim also gives custom methods the optional performance
+// guidance without changing their stored instructions or approval checklist.
+func (s Step) InstructionsForClaim() string {
+	var guidance string
+	switch s.Gate {
+	case "criteria":
+		guidance = "涉及性能时，先用代表性用户负载测当前入口，标出端到端基线和主要耗时环节，再确定本次改动范围。"
+	case "coverage":
+		guidance = "性能优化用获准样本冻结原行为及异常判据，由独立验收人保管一组有区分力的留出样本。"
+	case "candidate":
+		guidance = "性能优化只改测到的主要瓶颈。交接基线、候选、同一负载的复跑入口及恢复路径。"
+	case "delivery":
+		guidance = "性能优化在同一候选上独立复演留出样本，并交错运行基线与候选。用重复基线估计波动，报告包含调用和等待的用户入口耗时。"
+	}
+	if guidance == "" || strings.Contains(s.Instructions, guidance) {
+		return s.Instructions
+	}
+	return strings.TrimSpace(s.Instructions + " " + guidance)
+}
+
 // LegacyAgileTemplates supplies the historical procedure definitions for
 // catalog readers that apply the same assignment-preserving upgrade.
 func LegacyAgileTemplates() []Template {
-	return []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile(), storyArtifactAgile()}
+	return []Template{legacyAgile(), evidenceGatedAgile(), ruleBasedAgile(), domainDrivenAgile(), testFirstAgile(), storyArtifactAgile(), coveragePreflightAgile()}
 }
 
 func upgradeAgile(m Template) Template {

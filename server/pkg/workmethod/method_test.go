@@ -308,6 +308,45 @@ func TestAgileUpgradeFromEvidenceGates(t *testing.T) {
 	}
 }
 
+func TestAgilePerformanceGuidanceKeepsCoverageAndAssignments(t *testing.T) {
+	previous := coveragePreflightAgile()
+	previous.Revision = 29
+	previous.Steps[2].Owner = &Actor{Kind: "squad", ID: "7604601f-d1a3-4424-9bd2-924fd10b148a"}
+	previous.Steps[2].Reviewer = &Actor{Kind: "agent", ID: "9f4696af-037d-4b39-829e-d55c5828c07a"}
+	previous.Steps[2].SelfClaim = true
+	frozen := snapshot(previous)
+
+	current := Catalog([]Template{previous})[0]
+	if current.Revision != previous.Revision+1 {
+		t.Fatalf("previous coverage procedure did not upgrade: %+v", current)
+	}
+	if err := Validate(current); err != nil {
+		t.Fatal(err)
+	}
+	for i, step := range current.Steps {
+		if step.Instructions == frozen.Steps[i].Instructions {
+			t.Fatalf("missing guidance in step %d", i+1)
+		}
+		step.Instructions = frozen.Steps[i].Instructions
+		if !reflect.DeepEqual(step, frozen.Steps[i]) {
+			t.Fatalf("changed the handoff contract in step %d: %+v", i+1, step)
+		}
+	}
+	if !reflect.DeepEqual(snapshot(previous), frozen) {
+		t.Fatal("changed a previously selected method")
+	}
+	custom := previous.Steps[3]
+	custom.Instructions = "Project-specific independent review."
+	brief := custom.InstructionsForClaim()
+	if !strings.HasPrefix(brief, custom.Instructions) || !strings.Contains(brief, "重复基线") {
+		t.Fatalf("custom delivery missed optional claim guidance: %s", brief)
+	}
+	custom.Instructions = brief
+	if custom.InstructionsForClaim() != brief {
+		t.Fatal("repeated claim guidance already present in the procedure")
+	}
+}
+
 func TestAgileCatalogRevisionCarriesDomainRulesIntoNewStories(t *testing.T) {
 	previous := ruleBasedAgile()
 	previous.Revision = 8
