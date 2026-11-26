@@ -30,6 +30,7 @@ import { projectListOptions } from "@multica/core/projects/queries";
 import { propertyListOptions } from "@multica/core/properties";
 import type { Issue, IssueProperty, IssueTableQuerySpec, Project } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { GraphCardFrame, GraphCanvasEdges, type GraphEdgeItem } from "../../common/graph-visuals";
 import { PropertyIcon } from "../../common/property-icon";
 import { useLocale, useT } from "../../i18n";
 import { LabelChip } from "../../labels/label-chip";
@@ -42,10 +43,12 @@ import {
   useIsIssuePeeked,
   useIssuePeekActions,
   useIssuePeekClick,
+  useIssuePeekId,
 } from "../surface/peek-context";
 import { resolveCardCustomProperties } from "../utils/card-custom-properties";
 import {
   buildOrgChartLayout,
+  collectOrgChartFocusChain,
   type OrgChartNode,
   type OrgChartOrientation,
 } from "../utils/org-chart";
@@ -73,18 +76,30 @@ function OrgChartNodeCard({
   project,
   childProgress,
   workspaceProperties,
+  isDimmed,
+  isFocused,
   onToggleCollapse,
   onChangeParent,
   onRemoveParent,
+  onFocusNode,
+  onBlurNode,
+  onHoverNode,
+  onUnhoverNode,
 }: {
   node: OrgChartNode;
   orientation: OrgChartOrientation;
   project?: Project;
   childProgress?: ChildProgress;
   workspaceProperties: IssueProperty[];
+  isDimmed: boolean;
+  isFocused: boolean;
   onToggleCollapse: (issueId: string) => void;
   onChangeParent: (node: OrgChartNode) => void;
   onRemoveParent: (issue: Issue) => void;
+  onFocusNode: (issueId: string) => void;
+  onBlurNode: (issueId: string) => void;
+  onHoverNode: (issueId: string) => void;
+  onUnhoverNode: (issueId: string) => void;
 }) {
   const { issue } = node;
   const wsId = useWorkspaceId();
@@ -147,6 +162,8 @@ function OrgChartNodeCard({
     (cardProperties.labels && (issue.labels?.length ?? 0) > 0) ||
     cardCustomProperties.length > 0;
 
+  const statusCategory = issueStatusCategory(issue);
+
   return (
     <div
       className="absolute"
@@ -158,17 +175,20 @@ function OrgChartNodeCard({
       }}
     >
       <IssueActionsContextMenu issue={issue}>
-        <article
+        <GraphCardFrame
           {...{ [PEEK_TARGET_ATTR]: issue.id }}
           data-issue-id={issue.id}
           data-org-root={node.rootReason ?? undefined}
+          isSelected={peeked || isFocused}
+          isDimmed={isDimmed}
+          tone={statusCategory === "done" ? "done" : undefined}
+          onMouseEnter={() => onHoverNode(issue.id)}
+          onMouseLeave={() => onUnhoverNode(issue.id)}
           className={cn(
-            "group relative flex h-full flex-col justify-between rounded-lg border bg-surface px-3 py-2.5 shadow-2xs transition-colors hover:border-foreground/30",
-            node.rootReason === "top_level" && "border-border border-t-2 border-t-brand/70",
+            "group h-full",
+            node.rootReason === "top_level" && "border-t-2 border-t-brand/70",
             node.rootReason === "missing_parent" && "border-dashed border-warning/70",
             node.rootReason === "cycle" && "border-destructive/60",
-            !node.isRoot && "border-border",
-            peeked && "ring-2 ring-brand/60",
           )}
         >
           {/* Top row: status, identifier, root badge, parent actions */}
@@ -177,7 +197,7 @@ function OrgChartNodeCard({
               status={issue.status}
               color={colorOf(issue.status)}
               icon={iconOf(issue.status)}
-              category={issueStatusCategory(issue) ?? undefined}
+              category={statusCategory ?? undefined}
               className="size-3.5 shrink-0"
             />
             <span className="shrink-0 text-caption tabular-nums text-muted-foreground">
@@ -193,7 +213,7 @@ function OrgChartNodeCard({
                 {rootBadge.label}
               </span>
             )}
-            <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0.5">
               <button
                 type="button"
                 aria-label={t(($) => $.org_chart.change_parent)}
@@ -223,18 +243,20 @@ function OrgChartNodeCard({
             </div>
           </div>
 
-          {/* Title button — opens original task */}
+          {/* Title button — opens original task, supports up to two lines like GoalTaskMap */}
           <button
             type="button"
             onClick={openIssue}
-            className="mt-1 block w-full truncate text-left text-body font-medium text-foreground hover:underline"
+            onFocus={() => onFocusNode(issue.id)}
+            onBlur={() => onBlurNode(issue.id)}
+            className="mt-0.5 block w-full text-left text-caption font-medium text-foreground outline-none after:absolute after:inset-0 after:rounded-lg hover:underline focus-visible:after:ring-2 focus-visible:after:ring-ring"
             title={issue.title}
           >
-            {issue.title}
+            <span className="line-clamp-2">{issue.title}</span>
           </button>
 
           {/* Footer metadata row */}
-          <div className="mt-1.5 flex min-h-5 items-center gap-1.5 overflow-hidden text-caption text-muted-foreground">
+          <div className="pointer-events-none relative z-10 mt-0.5 flex min-h-4 items-center gap-1.5 overflow-hidden text-micro text-muted-foreground [&>*]:pointer-events-auto">
             {hasVisibleMetadata ? (
               <>
                 {cardProperties.priority && issue.priority !== "none" && (
@@ -258,7 +280,7 @@ function OrgChartNodeCard({
                 )}
                 {cardProperties.childProgress && childProgress && (
                   <span className="inline-flex shrink-0 items-center gap-1">
-                    <ProgressRing done={childProgress.done} total={childProgress.total} size={13} />
+                    <ProgressRing done={childProgress.done} total={childProgress.total} size={12} />
                     <span className="tabular-nums text-micro">
                       {childProgress.done}/{childProgress.total}
                     </span>
@@ -298,7 +320,7 @@ function OrgChartNodeCard({
               </span>
             )}
           </div>
-        </article>
+        </GraphCardFrame>
       </IssueActionsContextMenu>
 
       {/* Expand / collapse subtree trigger */}
@@ -316,6 +338,7 @@ function OrgChartNodeCard({
             onToggleCollapse(issue.id);
           }}
           className={cn(
+            // eslint-disable-next-line no-restricted-syntax -- subtree child count indicator pill on card edge
             "absolute z-10 inline-flex h-5 items-center gap-0.5 rounded-full border border-border bg-background px-1.5 text-micro font-medium tabular-nums text-muted-foreground shadow-2xs transition-colors hover:border-foreground/30 hover:text-foreground",
             orientation === "vertical"
               ? "bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2"
@@ -347,9 +370,12 @@ export function IssueOrgChartView({ serverQuery }: IssueOrgChartViewProps) {
   const surfaceActions = useIssueSurfaceActionsOptional();
   const updateIssueMutation = useUpdateIssue();
 
-  const [orientation, setOrientation] = useState<OrgChartOrientation>("vertical");
+  const [orientation, setOrientation] = useState<OrgChartOrientation>("horizontal");
   const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [zoom, setZoom] = useState(1);
+  const [hoveredIssueId, setHoveredIssueId] = useState<string | null>(null);
+  const [focusedIssueId, setFocusedIssueId] = useState<string | null>(null);
+  const peekedIssueId = useIssuePeekId();
 
   const {
     issues,
@@ -376,6 +402,32 @@ export function IssueOrgChartView({ serverQuery }: IssueOrgChartViewProps) {
     () => layout.nodes.map((node) => node.issue.id),
     [layout.nodes],
   );
+
+  const visibleIssueIdSet = useMemo(
+    () => new Set(visibleIssueIds),
+    [visibleIssueIds],
+  );
+
+  // Active focus is hover, then keyboard focus, then peeked issue (if visible in layout).
+  const activeFocusId = useMemo(() => {
+    if (hoveredIssueId && visibleIssueIdSet.has(hoveredIssueId)) return hoveredIssueId;
+    if (focusedIssueId && visibleIssueIdSet.has(focusedIssueId)) return focusedIssueId;
+    if (peekedIssueId && visibleIssueIdSet.has(peekedIssueId)) return peekedIssueId;
+    return null;
+  }, [hoveredIssueId, focusedIssueId, peekedIssueId, visibleIssueIdSet]);
+
+  const highlightedChainIds = useMemo(() => {
+    if (!activeFocusId) return null;
+    return collectOrgChartFocusChain(activeFocusId, layout.nodes);
+  }, [activeFocusId, layout.nodes]);
+
+  const handleFocusNode = useCallback((id: string) => {
+    setFocusedIssueId(id);
+  }, []);
+
+  const handleBlurNode = useCallback((id: string) => {
+    setFocusedIssueId((cur) => (cur === id ? null : cur));
+  }, []);
 
   // Side peek steps through visible nodes in layout order.
   const peek = useIssuePeekActions();
@@ -675,37 +727,54 @@ export function IssueOrgChartView({ serverQuery }: IssueOrgChartViewProps) {
                 height={layout.height}
                 className="pointer-events-none absolute inset-0"
               >
-                {layout.edges.map((edge) => (
-                  <path
-                    key={edge.id}
-                    data-org-edge={edge.id}
-                    d={edge.path}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    className="text-foreground/30"
-                  />
-                ))}
+                <GraphCanvasEdges
+                  edges={layout.edges.map((edge) => {
+                    const isHighlighted =
+                      highlightedChainIds !== null &&
+                      highlightedChainIds.has(edge.parentId) &&
+                      highlightedChainIds.has(edge.childId);
+                    const isDimmed = highlightedChainIds !== null && !isHighlighted;
+                    const item: GraphEdgeItem = {
+                      id: edge.id,
+                      "data-org-edge": edge.id,
+                      path: edge.path,
+                      isHighlighted,
+                      isDimmed,
+                    };
+                    return item;
+                  })}
+                />
               </svg>
 
               {/* Issue node cards */}
-              {layout.nodes.map((node) => (
-                <OrgChartNodeCard
-                  key={node.issue.id}
-                  node={node}
-                  orientation={orientation}
-                  project={
-                    node.issue.project_id
-                      ? projectMap.get(node.issue.project_id)
-                      : undefined
-                  }
-                  childProgress={childProgressMap.get(node.issue.id)}
-                  workspaceProperties={workspaceProperties}
-                  onToggleCollapse={toggleCollapse}
-                  onChangeParent={handleChangeParent}
-                  onRemoveParent={handleRemoveParent}
-                />
-              ))}
+              {layout.nodes.map((node) => {
+                const isDimmed =
+                  highlightedChainIds !== null && !highlightedChainIds.has(node.issue.id);
+
+                return (
+                  <OrgChartNodeCard
+                    key={node.issue.id}
+                    node={node}
+                    orientation={orientation}
+                    project={
+                      node.issue.project_id
+                        ? projectMap.get(node.issue.project_id)
+                        : undefined
+                    }
+                    childProgress={childProgressMap.get(node.issue.id)}
+                    workspaceProperties={workspaceProperties}
+                    isDimmed={isDimmed}
+                    isFocused={activeFocusId === node.issue.id}
+                    onToggleCollapse={toggleCollapse}
+                    onChangeParent={handleChangeParent}
+                    onRemoveParent={handleRemoveParent}
+                    onFocusNode={handleFocusNode}
+                    onBlurNode={handleBlurNode}
+                    onHoverNode={setHoveredIssueId}
+                    onUnhoverNode={(id) => setHoveredIssueId((cur) => (cur === id ? null : cur))}
+                  />
+                );
+              })}
             </div>
           </div>
         </div>

@@ -36,12 +36,32 @@ export interface OrgChartLayout {
   cycleIssueIds: string[];
 }
 
-export const ORG_CHART_CARD_WIDTH = 256;
-export const ORG_CHART_CARD_HEIGHT = 118;
-const SIBLING_GAP = 24;
-const LEVEL_GAP = 52;
-const ROOT_GAP = 40;
+export const ORG_CHART_CARD_WIDTH = 232;
+export const ORG_CHART_CARD_HEIGHT = 88;
+const SIBLING_GAP = 14;
+const LEVEL_GAP = 56;
+const ROOT_GAP = 28;
 const CANVAS_PADDING = 32;
+
+/**
+ * Returns the set of node IDs on the ancestor path + visible subtree of `focusId`
+ * (excluding sibling branches).
+ */
+export function collectOrgChartFocusChain(
+  focusId: string,
+  nodes: readonly OrgChartNode[],
+): Set<string> {
+  const nodeById = new Map(nodes.map((node) => [node.issue.id, node]));
+  const focus = nodeById.get(focusId);
+  if (!focus) return new Set();
+
+  const result = new Set([focusId, ...focus.descendantIds.filter((id) => nodeById.has(id))]);
+  for (let id = focus.parentId; id; id = nodeById.get(id)?.parentId ?? null) {
+    result.add(id);
+  }
+
+  return result;
+}
 
 /**
  * Build a deterministic, acyclic forest layout from a flat list of authorized
@@ -288,16 +308,17 @@ export function buildOrgChartLayout(
       const x1 = parent.x + parent.width / 2;
       const y1 = parent.y + parent.height;
       const x2 = child.x + child.width / 2;
-      const y2 = child.y;
+      const y2 = child.y - 2;
       const midY = y1 + (y2 - y1) / 2;
       path = `M ${x1} ${y1} V ${midY} H ${x2} V ${y2}`;
     } else {
-      const x1 = parent.x + parent.width;
+      // Offset start past the collapse trigger circle if present on parent's right edge
+      const x1 = parent.x + parent.width + (parent.directChildCount > 0 && !parent.collapsed ? 10 : 0);
       const y1 = parent.y + parent.height / 2;
-      const x2 = child.x;
+      const x2 = child.x - 2;
       const y2 = child.y + child.height / 2;
-      const midX = x1 + (x2 - x1) / 2;
-      path = `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`;
+      const dx = Math.max(20, (x2 - x1) * 0.5);
+      path = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
     }
 
     edges.push({

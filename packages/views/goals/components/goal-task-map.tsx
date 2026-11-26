@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { Goal, GoalPlan, Issue } from "@multica/core/types";
 import {
   ArrowUpRight,
@@ -29,6 +29,7 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Spinner } from "@multica/ui/components/ui/spinner";
 import { cn } from "@multica/ui/lib/utils";
+import { GraphCardFrame, GraphCanvasEdges, type GraphEdgeItem } from "../../common/graph-visuals";
 import { useT } from "../../i18n";
 import { AppLink } from "../../navigation";
 import { StatusIcon } from "../../issues/components/status-icon";
@@ -97,7 +98,6 @@ export function GoalTaskMap({
   executionEnableBlocked,
 }: GoalTaskMapProps) {
   const { t } = useT("goals");
-  const arrowId = useId().replace(/:/g, "");
   const [view, setView] = useState<GoalTaskMapView>("mindmap");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(new Set());
@@ -436,61 +436,41 @@ export function GoalTaskMap({
               height={graph.canvasHeight}
               className="pointer-events-none absolute inset-0"
             >
-              <defs>
-                <marker
-                  id={arrowId}
-                  viewBox="0 0 8 8"
-                  refX="7"
-                  refY="4"
-                  markerWidth="5"
-                  markerHeight="5"
-                  orient="auto"
-                >
-                  <path d="M0 0 L8 4 L0 8 Z" fill="context-stroke" />
-                </marker>
-              </defs>
-              {graph.edges.map((edge) => {
-                const fromPos =
-                  edge.fromId === GOAL_ROOT_ID
-                    ? graph.rootPosition
-                    : graph.positions.get(edge.fromId);
-                const toPos = graph.positions.get(edge.toId);
-                if (!fromPos || !toPos) return null;
+              <GraphCanvasEdges
+                edges={graph.edges.flatMap((edge) => {
+                  const fromPos =
+                    edge.fromId === GOAL_ROOT_ID
+                      ? graph.rootPosition
+                      : graph.positions.get(edge.fromId);
+                  const toPos = graph.positions.get(edge.toId);
+                  if (!fromPos || !toPos) return [];
 
-                const x1 = fromPos.x + fromPos.width;
-                const y1 = fromPos.cy;
-                const x2 = toPos.x - (edge.kind === "goal" ? 0 : 2);
-                const y2 = toPos.cy;
-                const dx = Math.max(24, (x2 - x1) * 0.5);
-                const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+                  const x1 = fromPos.x + fromPos.width;
+                  const y1 = fromPos.cy;
+                  const x2 = toPos.x - (edge.kind === "goal" ? 0 : 2);
+                  const y2 = toPos.cy;
+                  const dx = Math.max(24, (x2 - x1) * 0.5);
+                  const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
 
-                const isHighlighted =
-                  highlightedIds !== null &&
-                  (edge.fromId === GOAL_ROOT_ID
-                    ? highlightedIds.has(edge.toId)
-                    : highlightedIds.has(edge.fromId) && highlightedIds.has(edge.toId));
-                const isDimmed = highlightedIds !== null && !isHighlighted;
+                  const isHighlighted =
+                    highlightedIds !== null &&
+                    (edge.fromId === GOAL_ROOT_ID
+                      ? highlightedIds.has(edge.toId)
+                      : highlightedIds.has(edge.fromId) && highlightedIds.has(edge.toId));
+                  const isDimmed = highlightedIds !== null && !isHighlighted;
 
-                return (
-                  <path
-                    key={edge.id}
-                    d={d}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={isHighlighted ? 2.25 : 1.5}
-                    strokeDasharray={edge.kind === "conditional" ? "5 4" : undefined}
-                    markerEnd={edge.kind === "goal" ? undefined : `url(#${arrowId})`}
-                    className={
-                      isHighlighted
-                        ? "text-brand transition-opacity"
-                        : edge.kind === "goal"
-                          ? "text-border transition-opacity"
-                          : "text-muted-foreground/70 transition-opacity"
-                    }
-                    opacity={isDimmed ? 0.16 : 0.9}
-                  />
-                );
-              })}
+                  const edgeItem: GraphEdgeItem = {
+                    id: edge.id,
+                    path: d,
+                    isHighlighted,
+                    isDimmed,
+                    isDashed: edge.kind === "conditional",
+                    hasArrow: edge.kind !== "goal",
+                    subtle: edge.kind === "goal",
+                  };
+                  return [edgeItem];
+                })}
+              />
             </svg>
 
             {/* Goal Root Node */}
@@ -532,7 +512,7 @@ export function GoalTaskMap({
               const title = node.title || t(($) => $.plan.untitled_item);
 
               return (
-                <div
+                <GraphCardFrame
                   key={node.id}
                   data-testid={`mindmap-node-${node.id}`}
                   style={{
@@ -543,19 +523,10 @@ export function GoalTaskMap({
                   }}
                   onMouseEnter={() => setHoveredId(node.id)}
                   onMouseLeave={() => setHoveredId((cur) => (cur === node.id ? null : cur))}
-                  className={cn(
-                    "absolute flex flex-col justify-between rounded-lg border bg-card px-2.5 py-2 shadow-2xs transition-all",
-                    isSelected
-                      ? "border-brand ring-2 ring-brand/45"
-                      : node.isCurrent
-                        ? "border-brand/70 bg-brand/[0.04]"
-                        : node.isWaiting
-                          ? "border-warning/60"
-                          : node.isDone
-                            ? "border-success/40"
-                            : "border-border hover:border-foreground/30",
-                    isDimmed && "opacity-35",
-                  )}
+                  isSelected={isSelected}
+                  className="absolute"
+                  tone={node.isCurrent ? "current" : node.isWaiting ? "waiting" : node.isDone ? "done" : undefined}
+                  isDimmed={isDimmed}
                 >
                   <div className="flex items-center justify-between gap-1">
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -628,7 +599,7 @@ export function GoalTaskMap({
                       </span>
                     ) : null}
                   </div>
-                </div>
+                </GraphCardFrame>
               );
             })}
           </div>
