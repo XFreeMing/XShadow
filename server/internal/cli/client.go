@@ -616,6 +616,64 @@ func (c *APIClient) UploadChatAttachment(ctx context.Context, fileData []byte, f
 	return result, nil
 }
 
+// PostMultipartFileRaw uploads fileData as the multipart "file" field to a
+// relative API path with optional extra headers (e.g. Idempotency-Key) and
+// returns the raw JSON response body.
+func (c *APIClient) PostMultipartFileRaw(ctx context.Context, apiPath string, fileData []byte, filename string, extraHeaders map[string]string) (json.RawMessage, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	part, err := writer.CreateFormFile("file", filepath.Base(filename))
+	if err != nil {
+		return nil, fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := part.Write(fileData); err != nil {
+		return nil, fmt.Errorf("write file data: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+apiPath, &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	c.setHeaders(req)
+	for k, v := range extraHeaders {
+		if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+			req.Header.Set(k, v)
+		}
+	}
+
+	httpClient := c.HTTPClient
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > httpClient.Timeout {
+			clientCopy := *httpClient
+			clientCopy.Timeout = remaining
+			httpClient = &clientCopy
+		}
+	}
+
+	resp, err := httpClient.Do(req)
+	err = wrapTransport(req, err)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return nil, newHTTPError(http.MethodPost, apiPath, resp)
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, wrapBodyRead(req, err)
+	}
+	return json.RawMessage(raw), nil
+}
+
 // UploadFileWithURL uploads a file via multipart form to /api/upload-file
 // without associating it with an issue or comment. It decodes the full
 // AttachmentResponse and returns the attachment ID and URL.

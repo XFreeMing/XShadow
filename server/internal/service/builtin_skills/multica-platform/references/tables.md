@@ -41,7 +41,9 @@ A `409` (`cursor_query_mismatch`) means the paging cursor does not match the que
 
 ### Fields (`"$MULTICA_CLI_PATH" table field`)
 
-Supported kinds: `text`, `number`, `date`, `single_select`, `checkbox`, `relation`, `lookup`, `formula`.
+Supported kinds: `text`, `number`, `date`, `single_select`, `checkbox`, `relation`, `lookup`, `formula`, `attachment`.
+
+- `attachment` cells store an array of server-issued attachment UUIDs uploaded to the **same table** (`null` or `[]` clears the cell). Arbitrary URLs and cross-table or cross-workspace attachment IDs are rejected on record create, update, batch, and form submit. Uploading an attachment does not mutate any record; reference the returned `attachment.id` via normal revisioned cell writes.
 
 - `"$MULTICA_CLI_PATH" table field list <table-id>` — `GET /api/tables/<table-id>/fields`
 - `"$MULTICA_CLI_PATH" table field get <table-id> <field-id>` — `GET /api/tables/<table-id>/fields/<field-id>`
@@ -69,6 +71,15 @@ Supported kinds: `text`, `number`, `date`, `single_select`, `checkbox`, `relatio
 
 - `"$MULTICA_CLI_PATH" table record comment list <table-id> <record-id> [--after N] [--limit N]` — `GET /api/tables/<table-id>/records/<record-id>/comments`
 - `"$MULTICA_CLI_PATH" table record comment create <table-id> <record-id> --input <file|->` — `POST /api/tables/<table-id>/records/<record-id>/comments` (`{"body": "...", "parent_id": "<uuid>"}`)
+
+### Attachments (`"$MULTICA_CLI_PATH" table attachment`)
+
+Attachments are scoped to a single workspace and table, stored via the workspace's managed object storage, and served only through authenticated table-scoped endpoints (never raw object URLs). Deleting a table queues durable storage cleanup for that table's attachments.
+
+- `"$MULTICA_CLI_PATH" table attachment list <table-id>` — `GET /api/tables/<table-id>/attachments`
+- `"$MULTICA_CLI_PATH" table attachment upload <table-id> --file <path> --key <uuid>` — `POST /api/tables/<table-id>/attachments` (`multipart/form-data` with `Idempotency-Key: <uuid>`). Identical retries return the same attachment without creating duplicate objects; reusing `--key` with different file content returns `409` (`idempotency_conflict`).
+- `"$MULTICA_CLI_PATH" table attachment get <table-id> <attachment-id>` — `GET /api/tables/<table-id>/attachments/<attachment-id>`
+- `"$MULTICA_CLI_PATH" table attachment download <table-id> <attachment-id> --file <path>` — `GET /api/tables/<table-id>/attachments/<attachment-id>/content` (downloads bytes through the relative API path to a file inside the current working directory)
 
 ### Views & Forms (`"$MULTICA_CLI_PATH" table view`)
 

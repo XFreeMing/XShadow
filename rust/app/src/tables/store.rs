@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -314,6 +314,31 @@ pub async fn delete_table(
 
     sqlx::query(
         "DELETE FROM generic_presence WHERE workspace_id = $1::uuid AND table_id = $2::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "INSERT INTO issue_attachment_object_delete_outbox (
+            attachment_id, workspace_id, storage_key, object_url
+         )
+         SELECT id, workspace_id, storage_key, object_url
+         FROM generic_table_attachment
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid
+         ON CONFLICT (attachment_id) DO NOTHING",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
+    sqlx::query(
+        "DELETE FROM generic_table_attachment
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid",
     )
     .bind(workspace)
     .bind(&table_lower)
@@ -1036,6 +1061,61 @@ pub async fn submit_form(
     Ok(record)
 }
 
+pub(super) async fn validate_attachment_refs(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    fields: &[FieldDto],
+    normalized: &BTreeMap<String, Option<Value>>,
+) -> Result<(), StoreError> {
+    let attachment_field_ids: BTreeSet<&str> = fields
+        .iter()
+        .filter(|field| field.kind == "attachment")
+        .map(|field| field.id.as_str())
+        .collect();
+    if attachment_field_ids.is_empty() {
+        return Ok(());
+    }
+    let mut referenced = BTreeSet::new();
+    for (field_id, cell) in normalized {
+        if !attachment_field_ids.contains(field_id.as_str()) {
+            continue;
+        }
+        let Some(Value::Array(items)) = cell else {
+            continue;
+        };
+        for item in items {
+            let Some(id) = item.as_str() else {
+                return Err(StoreError::Invalid("附件标识必须是有效的 UUID"));
+            };
+            referenced.insert(id.to_ascii_lowercase());
+        }
+    }
+    if referenced.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = referenced.iter().cloned().collect();
+    let ready: Vec<String> = sqlx::query_scalar(
+        "SELECT lower(id::text)
+         FROM generic_table_attachment
+         WHERE workspace_id = $1::uuid
+           AND table_id = $2::uuid
+           AND status = 'ready'
+           AND id = ANY($3::text[]::uuid[])",
+    )
+    .bind(workspace)
+    .bind(table)
+    .bind(&ids)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(failed)?;
+    let ready_set: BTreeSet<String> = ready.into_iter().collect();
+    if ready_set.len() != referenced.len() {
+        return Err(StoreError::Invalid("附件不存在、尚未就绪或不属于当前表"));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn create_record_in_tx(
     tx: &mut Transaction<'_, Postgres>,
@@ -1047,6 +1127,7 @@ pub(super) async fn create_record_in_tx(
     actor: Option<&super::collab::Actor>,
     batch_id: Option<&str>,
 ) -> Result<RecordDto, StoreError> {
+    validate_attachment_refs(tx, workspace, table, fields, normalized).await?;
     let reverse_plan =
         relation::validate_and_plan_reverse(tx, workspace, fields, None, normalized, locked_tables)
             .await?;

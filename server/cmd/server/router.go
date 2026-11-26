@@ -2355,6 +2355,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						next.ServeHTTP(w, req)
 					})
 				})
+				r.Route("/{tableId}/attachments", func(r chi.Router) {
+					r.Get("/", h.ListTableAttachments)
+					r.Post("/", h.UploadTableAttachment)
+					r.Get("/{attachmentId}", h.GetTableAttachment)
+					r.Get("/{attachmentId}/content", h.DownloadTableAttachmentContent)
+				})
 				r.HandleFunc("/", tablesBridge.ServeHTTP)
 				r.HandleFunc("/*", tablesBridge.ServeHTTP)
 			})

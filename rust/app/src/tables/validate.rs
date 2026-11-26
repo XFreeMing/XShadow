@@ -13,6 +13,7 @@ pub const KINDS: &[&str] = &[
     "relation",
     "lookup",
     "formula",
+    "attachment",
 ];
 
 pub const VIEW_KINDS: &[&str] = &[
@@ -202,8 +203,39 @@ pub fn normalize_value(field: &FieldDef, value: &Value) -> Result<Option<Value>,
             Ok(Some(Value::Bool(checked)))
         }
         "relation" => relation::normalize_cell(value),
+        "attachment" => normalize_attachment_cell(value),
         _ => Err("不支持的字段类型"),
     }
+}
+
+pub const MAX_ATTACHMENT_CELL_ITEMS: usize = 50;
+
+pub fn normalize_attachment_cell(value: &Value) -> Result<Option<Value>, &'static str> {
+    let Some(items) = value.as_array() else {
+        return Err("附件字段需要附件标识数组");
+    };
+    if items.is_empty() {
+        return Ok(None);
+    }
+    if items.len() > MAX_ATTACHMENT_CELL_ITEMS {
+        return Err("单个附件单元格最多关联 50 个附件");
+    }
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(raw) = item.as_str() else {
+            return Err("附件标识必须是有效的 UUID");
+        };
+        let trimmed = raw.trim();
+        if !is_uuid(trimmed) {
+            return Err("附件标识必须是有效的 UUID");
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if seen.insert(lower.clone()) {
+            normalized.push(Value::String(lower));
+        }
+    }
+    Ok(Some(Value::Array(normalized)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1219,5 +1251,33 @@ mod tests {
         assert!(
             validate_form_submission("form", None, &json!({}), &fields, &computed_field).is_err()
         );
+    }
+
+    #[test]
+    fn attachment_field_accepts_uuid_arrays_and_rejects_urls() {
+        assert_eq!(
+            normalize_config("attachment", &json!({})).unwrap(),
+            json!({})
+        );
+        assert!(normalize_config("attachment", &json!({"options": []})).is_err());
+
+        let field = FieldDef {
+            id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            kind: "attachment".to_owned(),
+            config: json!({}),
+        };
+        let a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+        assert_eq!(normalize_value(&field, &json!(null)).unwrap(), None);
+        assert_eq!(normalize_value(&field, &json!([])).unwrap(), None);
+        assert_eq!(
+            normalize_value(&field, &json!([a.to_uppercase(), b, a])).unwrap(),
+            Some(json!([a, b]))
+        );
+        assert!(normalize_value(&field, &json!("https://example.com/a.pdf")).is_err());
+        assert!(normalize_value(&field, &json!(["https://example.com/a.pdf"])).is_err());
+        assert!(normalize_value(&field, &json!([a, "not-a-uuid"])).is_err());
+        assert!(normalize_value(&field, &json!([123])).is_err());
     }
 }

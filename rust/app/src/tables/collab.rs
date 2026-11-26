@@ -236,6 +236,7 @@ pub(super) async fn update_record_in_tx(
         locked_tables,
     )
     .await?;
+    super::store::validate_attachment_refs(tx, workspace, table, fields, &normalized).await?;
     write_cells(tx, workspace, record, &normalized).await?;
     bump_revision(tx, workspace, table, record).await?;
     let saved_revision = current.revision + 1;

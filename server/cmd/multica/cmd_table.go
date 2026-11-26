@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -34,6 +36,7 @@ Generic tables (workspace-scoped UUID resources):
   multica table field list|get|create|update|delete
   multica table record list|get|options|create|update|delete|batch
   multica table record comment list|create
+  multica table attachment list|upload|get|download
   multica table view list|get|create|update|delete|submit
   multica table changes <table-id> [--since N]
   multica table presence <table-id> [--record-id UUID] [--field-id UUID] [--input <file|->]`,
@@ -279,6 +282,41 @@ var tableViewSubmitCmd = &cobra.Command{
 	RunE:  runTableViewSubmit,
 }
 
+// --- generic table attachment ---
+
+var tableAttachmentCmd = &cobra.Command{
+	Use:   "attachment",
+	Short: "Manage attachments scoped to a generic table",
+}
+
+var tableAttachmentListCmd = &cobra.Command{
+	Use:   "list <table-id>",
+	Short: "List attachments on a generic table",
+	Args:  exactArgs(1),
+	RunE:  runTableAttachmentList,
+}
+
+var tableAttachmentUploadCmd = &cobra.Command{
+	Use:   "upload <table-id>",
+	Short: "Upload a file attachment to a generic table with an idempotency key",
+	Args:  exactArgs(1),
+	RunE:  runTableAttachmentUpload,
+}
+
+var tableAttachmentGetCmd = &cobra.Command{
+	Use:   "get <table-id> <attachment-id>",
+	Short: "Get metadata for one attachment on a generic table",
+	Args:  exactArgs(2),
+	RunE:  runTableAttachmentGet,
+}
+
+var tableAttachmentDownloadCmd = &cobra.Command{
+	Use:   "download <table-id> <attachment-id>",
+	Short: "Download attachment bytes from a generic table to a local file",
+	Args:  exactArgs(2),
+	RunE:  runTableAttachmentDownload,
+}
+
 // --- collaboration: changes & presence ---
 
 var tableChangesCmd = &cobra.Command{
@@ -334,6 +372,15 @@ func init() {
 	tablePresenceCmd.Flags().String("record-id", "", "Optional record UUID currently focused")
 	tablePresenceCmd.Flags().String("field-id", "", "Optional field UUID currently focused (requires --record-id)")
 
+	tableAttachmentUploadCmd.Flags().String("file", "", "Path to a local file within the working directory to upload")
+	tableAttachmentUploadCmd.Flags().String("key", "", "Idempotency-Key UUID for this upload")
+	tableAttachmentDownloadCmd.Flags().String("file", "", "Destination file path within the working directory")
+
+	tableAttachmentCmd.AddCommand(tableAttachmentListCmd)
+	tableAttachmentCmd.AddCommand(tableAttachmentUploadCmd)
+	tableAttachmentCmd.AddCommand(tableAttachmentGetCmd)
+	tableAttachmentCmd.AddCommand(tableAttachmentDownloadCmd)
+
 	tableTasksCmd.AddCommand(tableTasksRowsCmd)
 	tableTasksCmd.AddCommand(tableTasksGroupsCmd)
 	tableTasksCmd.AddCommand(tableTasksFacetsCmd)
@@ -372,6 +419,7 @@ func init() {
 	tableCmd.AddCommand(tableDeleteCmd)
 	tableCmd.AddCommand(tableFieldCmd)
 	tableCmd.AddCommand(tableRecordCmd)
+	tableCmd.AddCommand(tableAttachmentCmd)
 	tableCmd.AddCommand(tableViewCmd)
 	tableCmd.AddCommand(tableChangesCmd)
 	tableCmd.AddCommand(tablePresenceCmd)
@@ -1030,4 +1078,134 @@ func runTablePresence(cmd *cobra.Command, args []string) error {
 		body["field_id"] = fieldID
 	}
 	return tablePostAndPrint(cmd, "/api/tables/"+tableID+"/presence", body)
+}
+
+func runTableAttachmentList(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	return tableGetAndPrint(cmd, "/api/tables/"+tableID+"/attachments")
+}
+
+func runTableAttachmentGet(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	attachmentID, err := parseTableUUID("attachment-id", args[1])
+	if err != nil {
+		return err
+	}
+	return tableGetAndPrint(cmd, "/api/tables/"+tableID+"/attachments/"+attachmentID)
+}
+
+func runTableAttachmentUpload(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	keyRaw, _ := cmd.Flags().GetString("key")
+	keyID, err := parseTableUUID("key", keyRaw)
+	if err != nil {
+		return err
+	}
+	filePath, _ := cmd.Flags().GetString("file")
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("--file is required")
+	}
+	if isHTTPURL(filePath) {
+		return fmt.Errorf("--file accepts a local file path, not a URL: %s", filePath)
+	}
+	if err := ensureFileFlagWithinWorkdir(cmd, "file", "file", filePath); err != nil {
+		return err
+	}
+	const maxTableAttachmentBytes = 100 << 20
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open --file %q: %w", filePath, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxTableAttachmentBytes+1))
+	if err != nil {
+		return fmt.Errorf("read --file %q: %w", filePath, err)
+	}
+	if len(data) > maxTableAttachmentBytes {
+		return fmt.Errorf("--file %q exceeds the 100 MiB upload limit", filePath)
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+
+	raw, err := client.PostMultipartFileRaw(
+		ctx,
+		"/api/tables/"+tableID+"/attachments",
+		data,
+		filepath.Base(filePath),
+		map[string]string{"Idempotency-Key": keyID},
+	)
+	if err != nil {
+		return err
+	}
+	return writeTableJSON(cmd, raw)
+}
+
+func runTableAttachmentDownload(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	attachmentID, err := parseTableUUID("attachment-id", args[1])
+	if err != nil {
+		return err
+	}
+	filePath, _ := cmd.Flags().GetString("file")
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("--file is required")
+	}
+	if isHTTPURL(filePath) {
+		return fmt.Errorf("--file accepts a local file path, not a URL: %s", filePath)
+	}
+	if err := ensureFileFlagWithinWorkdir(cmd, "file", "file", filePath); err != nil {
+		return err
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+
+	// Always fetch via the known relative API path so auth tokens are never sent
+	// to an arbitrary or external URL.
+	relPath := "/api/tables/" + tableID + "/attachments/" + attachmentID + "/content"
+	data, err := client.DownloadFile(ctx, relPath)
+	if err != nil {
+		return fmt.Errorf("download table attachment: %w", err)
+	}
+
+	dir := filepath.Dir(filePath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
+	}
+	if err := os.WriteFile(filePath, data, 0o644); err != nil {
+		return fmt.Errorf("write --file %q: %w", filePath, err)
+	}
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		abs = filePath
+	}
+	return cli.PrintJSON(cmd.OutOrStdout(), map[string]any{
+		"table_id":      tableID,
+		"attachment_id": attachmentID,
+		"path":          abs,
+		"size_bytes":    len(data),
+	})
 }

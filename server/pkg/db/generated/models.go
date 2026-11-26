@@ -914,6 +914,24 @@ type GenericTable struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GenericTableAttachment struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	TableID        pgtype.UUID        `json:"table_id"`
+	UploaderType   string             `json:"uploader_type"`
+	UploaderID     pgtype.UUID        `json:"uploader_id"`
+	IdempotencyKey pgtype.UUID        `json:"idempotency_key"`
+	Filename       string             `json:"filename"`
+	ContentType    string             `json:"content_type"`
+	SizeBytes      int64              `json:"size_bytes"`
+	ContentSha256  string             `json:"content_sha256"`
+	StorageKey     string             `json:"storage_key"`
+	ObjectUrl      string             `json:"object_url"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ReadyAt        pgtype.Timestamptz `json:"ready_at"`
+}
+
 type GenericView struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
