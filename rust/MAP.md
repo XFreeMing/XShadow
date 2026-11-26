@@ -76,11 +76,11 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_COMMENT_DELETE_PILOT` 为 `DELETE /api/comments/{id}` 指定试点工作区，默认关闭。覆盖成员作者删除本人无回复、无文件附件的顶层无项目 `comment` 叶子；允许保留普通评论回应。Rust 先锁 issue 再锁评论，锁后 fresh 读排除子评论/附件/补充/活跃主触发或合并入队行；先删 `comment_reaction` 再删评论行并 touch issue；Go 保留 204/404、`comment:deleted` 与回执读回。有回复/补充/队列或其它形态继续走 Go（含取消与墓碑）；带托管上传附件须另启 `COMMENT_DELETE_UPLOADS`。
 
-`XSHADOW_ISSUES_RUST_COMMENT_DELETE_TOMBSTONE_PILOT` 须在同一工作区与 `COMMENT_DELETE` 同时启用，默认关闭。覆盖相同 plain 形状但当前仍有回复的顶层评论：Rust 在同一事务清空正文与 resolution、删除回应后写 `deleted_at` 墓碑并 touch issue，Go 发 `comment:updated`（永不发 `comment:deleted`）。公开 204/404 与 Go 墓碑语义不变；晚于回执的有效事项修订可被接受。无 TOMBSTONE 试点时带回复删除仍走 Go。
+`XSHADOW_ISSUES_RUST_COMMENT_DELETE_TOMBSTONE_PILOT` 须在同一工作区与 `COMMENT_DELETE` 同时启用，默认关闭。覆盖相同 plain 形状但当前仍有回复的顶层评论：Rust 在同一事务清空正文与 resolution、删除回应后写 `deleted_at` 墓碑并 touch issue，Go 发 `comment:updated`（永不发 `comment:deleted`）。公开 204/404 与 Go 墓碑语义不变；晚于回执的有效事项修订可被接受。无 TOMBSTONE 试点时带回复删除仍走 Go。无附件墓碑沿用 bodyless `go_mode=tombstone`；有受管上传时另启 `COMMENT_DELETE_UPLOADS` 并在同一 body 携带 `attachment_cleanup`。
 
-`XSHADOW_ISSUES_RUST_COMMENT_DELETE_UPLOADS_PILOT` 须在同一工作区与 `COMMENT_DELETE` 同时启用，默认关闭。覆盖相同 plain 形状但仅绑定本评论受管工作区上传附件的顶层叶子：Go 预构建 attachment 计划，Rust 同事务写入 `issue_attachment_object_delete_outbox`、删 attachment 行、删评论并 touch issue；Go 校验 `object_cleanup_attachment_ids` 后立即投递清理。无 bodyless 回执字节兼容。
+`XSHADOW_ISSUES_RUST_COMMENT_DELETE_UPLOADS_PILOT` 须在同一工作区与 `COMMENT_DELETE` 同时启用，默认关闭。覆盖相同 plain 形状但仅绑定本评论受管工作区上传附件的顶层叶子、墓碑或末级回复：Go 预构建 attachment 计划，Rust 同事务写入 `issue_attachment_object_delete_outbox`、删 attachment 行，再硬删评论或写墓碑 / 修剪祖先并 touch issue；Go 校验 `object_cleanup_attachment_ids` 后立即投递清理。无 bodyless 回执字节兼容。
 
-`XSHADOW_ISSUES_RUST_COMMENT_DELETE_REPLY_PILOT` 须在同一工作区与 `COMMENT_DELETE` 同时启用，默认关闭。覆盖相同 plain 形状、无子回复的末级回复：Rust 以 `reply_leaf` 删除 live 叶、按旧顺序向上清理连续无子墓碑祖先（至多 256 层），回执 `removed_ids` 叶→根；Go 用路由期父链计划核验回执前缀（不依赖已删行读回），按序发多条 `comment:deleted`、单次 durable 唤醒。仍有子回复的回复继续走 Go。
+`XSHADOW_ISSUES_RUST_COMMENT_DELETE_REPLY_PILOT` 须在同一工作区与 `COMMENT_DELETE` 同时启用，默认关闭。覆盖相同 plain 形状、无子回复的末级回复：Rust 以 `reply_leaf` 删除 live 叶、按旧顺序向上清理连续无子墓碑祖先（至多 256 层），回执 `removed_ids` 叶→根；Go 用路由期父链计划核验回执前缀（不依赖已删行读回），按序发多条 `comment:deleted`、单次 durable 唤醒。仍有子回复的回复继续走 Go。无附件回复沿用 bodyless `go_mode=reply_leaf`；有受管上传时另启 `COMMENT_DELETE_UPLOADS` 并在同一 body 携带 `attachment_cleanup`。
 
 `XSHADOW_ISSUES_RUST_COMMENT_EDIT_PILOT` 为 `PUT /api/comments/{id}` 的严格正文编辑指定试点工作区，默认关闭。覆盖成员作者、无项目、未指派或成员指派、顶层 `comment` 类型、带正 `expected_revision`、可选 `content_base`、无附件替换/抑制/提及/笔记语法/任务补充/来源行族/触发队列的形态。Go 保留公开校验、反应与附件水合、`revision_conflict` 与 `comment:updated` 事件；Rust 按 issue `FOR UPDATE` 再锁评论、复用 `UpdateComment` CAS，正文真变时清 `source_task_id` 与抑制列表并推进任务 `revision`/`last_activity_at`，不变重放仍发事件且不附带 `issue_revision`。无取消与派工；试点选定后不回退 Go。
 

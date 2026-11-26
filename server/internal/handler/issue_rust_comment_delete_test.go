@@ -11,7 +11,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestCommentDeleteUsesRustRejectsReply(t *testing.T) {
+func TestPlanRustTopLevelCommentDeleteRejectsReply(t *testing.T) {
 	t.Parallel()
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodDelete, "/api/comments/1", nil)
@@ -25,13 +25,13 @@ func TestCommentDeleteUsesRustRejectsReply(t *testing.T) {
 		ParentID:   parent,
 		IssueID:    util.MustParseUUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
 	}
-	ok, err := h.commentDeleteUsesRust(req, issue, comment, "member", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", false)
-	if err != nil || ok {
-		t.Fatalf("reply delete uses rust = %v err=%v, want false", ok, err)
+	plan, err := h.planRustTopLevelCommentDelete(req, issue, comment, "member", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", false)
+	if err != nil || plan.UseRust {
+		t.Fatalf("reply delete plan = %v err=%v, want Go fallback", plan, err)
 	}
 }
 
-func TestCommentDeleteUsesRustTombstoneNeedsReplies(t *testing.T) {
+func TestPlanRustTombstoneCommentDeleteNeedsReplies(t *testing.T) {
 	t.Parallel()
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodDelete, "/api/comments/1", nil)
@@ -43,9 +43,9 @@ func TestCommentDeleteUsesRustTombstoneNeedsReplies(t *testing.T) {
 		Type:       "comment",
 		IssueID:    util.MustParseUUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
 	}
-	ok, err := h.commentDeleteUsesRustTombstone(req, issue, comment, "member", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", false)
-	if err != nil || ok {
-		t.Fatalf("leaf delete uses tombstone rust = %v err=%v, want false", ok, err)
+	plan, err := h.planRustTombstoneCommentDelete(req, issue, comment, "member", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", false)
+	if err != nil || plan.UseRust {
+		t.Fatalf("leaf tombstone plan = %v err=%v, want Go fallback", plan, err)
 	}
 }
 

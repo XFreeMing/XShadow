@@ -121,9 +121,10 @@ type IssueReadBridge struct {
 //     including upstream replyless tombstone pruning. Requires COMMENT_DELETE on the same
 //     workspace. Disabled by default.
 //   - XSHADOW_ISSUES_RUST_COMMENT_DELETE_UPLOADS_PILOT: comma-separated workspace slugs
-//     or UUIDs for native member hard deletes on plain top-level leaf comments that bind only
-//     managed workspace upload attachments on the same comment. Requires COMMENT_DELETE on the
-//     same workspace. Disabled by default.
+//     or UUIDs for native member deletes on plain projectless comments that bind only managed
+//     workspace upload attachments on the same comment (top-level leaf, tombstone, or leaf
+//     reply). Requires COMMENT_DELETE on the same workspace and the matching shape pilot
+//     when the delete is not a bodyless leaf. Disabled by default.
 //   - XSHADOW_ISSUES_RUST_REACTION_PILOT: comma-separated workspace slugs or
 //     UUIDs for native member task reaction writes on POST/DELETE …/reactions
 //     on projectless tasks. Disabled by default; agent and project-scoped tasks

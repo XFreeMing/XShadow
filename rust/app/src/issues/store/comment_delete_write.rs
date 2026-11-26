@@ -282,33 +282,13 @@ fn validate_delete_shape(
     {
         return Err(IssueCommentDeleteError::RouteChanged);
     }
-    match mode {
-        CommentDeleteGoMode::Leaf => {
-            if shape.is_reply || shape.has_replies {
-                return Err(IssueCommentDeleteError::RouteChanged);
-            }
-            match (shape.has_attachments, attachment_plan_len) {
-                (true, 0) => return Err(IssueCommentDeleteError::RouteChanged),
-                (false, n) if n > 0 => return Err(IssueCommentDeleteError::RouteChanged),
-                _ => {}
-            }
-        }
-        CommentDeleteGoMode::Tombstone => {
-            if shape.is_reply || !shape.has_replies {
-                return Err(IssueCommentDeleteError::RouteChanged);
-            }
-            if shape.has_attachments || attachment_plan_len > 0 {
-                return Err(IssueCommentDeleteError::RouteChanged);
-            }
-        }
-        CommentDeleteGoMode::ReplyLeaf => {
-            if !shape.is_reply || shape.has_replies {
-                return Err(IssueCommentDeleteError::RouteChanged);
-            }
-            if shape.has_attachments || attachment_plan_len > 0 {
-                return Err(IssueCommentDeleteError::RouteChanged);
-            }
-        }
+    let matches_route = match mode {
+        CommentDeleteGoMode::Leaf => !shape.is_reply && !shape.has_replies,
+        CommentDeleteGoMode::Tombstone => !shape.is_reply && shape.has_replies,
+        CommentDeleteGoMode::ReplyLeaf => shape.is_reply && !shape.has_replies,
+    };
+    if !matches_route || shape.has_attachments != (attachment_plan_len > 0) {
+        return Err(IssueCommentDeleteError::RouteChanged);
     }
     Ok(())
 }
@@ -390,10 +370,6 @@ pub async fn delete_issue_comment(
     }
     let mode = request.go_mode;
     let attachment_plan = request.attachment_cleanup;
-    if !attachment_plan.is_empty() && mode != CommentDeleteGoMode::Leaf {
-        return Err(IssueCommentDeleteError::RouteChanged);
-    }
-
     let mut tx = pool.begin().await?;
     if !lock_comment_write_member(&mut tx, workspace_id, user_id).await? {
         return Err(IssueCommentDeleteError::Access(IssueReadError::NotFound(
@@ -438,7 +414,7 @@ pub async fn delete_issue_comment(
         &attachment_plan,
     )
     .await?;
-    if mode == CommentDeleteGoMode::Leaf && !attachment_plan.is_empty() {
+    if !attachment_plan.is_empty() {
         record_and_delete_direct_uploads(&mut tx, workspace_id, &attachment_plan)
             .await
             .map_err(map_attachment_delete_error)?;
@@ -457,7 +433,7 @@ pub async fn delete_issue_comment(
         CommentDeleteGoMode::ReplyLeaf => {
             let (removed_ids, removed_id) =
                 delete_reply_leaf(&mut tx, comment_id, workspace_id, &issue_id).await?;
-            (removed_id, None, removed_ids, Vec::new())
+            (removed_id, None, removed_ids, object_cleanup_ids)
         }
         CommentDeleteGoMode::Leaf => {
             let (removed_id, _) =
@@ -492,7 +468,7 @@ pub async fn delete_issue_comment(
                 tombstone.id.clone(),
                 Some(tombstone),
                 Vec::new(),
-                Vec::new(),
+                object_cleanup_ids,
             )
         }
     };
@@ -507,4 +483,84 @@ pub async fn delete_issue_comment(
         removed_ids,
         object_cleanup_attachment_ids: cleanup_ids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn locked_shape(is_reply: bool, has_replies: bool, has_attachments: bool) -> LockedDeleteShape {
+        LockedDeleteShape {
+            issue_id: String::new(),
+            is_reply,
+            is_deleted: false,
+            author_type: "member".into(),
+            author_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into(),
+            comment_type: "comment".into(),
+            has_source: false,
+            has_suppress: false,
+            has_quick_action: false,
+            has_plugin: false,
+            project_id: None,
+            assignee_type: None,
+            has_supplement: false,
+            has_replies,
+            has_attachments,
+        }
+    }
+
+    fn member_actor() -> CallerActor {
+        CallerActor::Member {
+            user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into(),
+        }
+    }
+
+    #[test]
+    fn tombstone_rejects_attachment_without_plan() {
+        let err = validate_delete_shape(
+            &locked_shape(false, true, true),
+            &member_actor(),
+            true,
+            CommentDeleteGoMode::Tombstone,
+            0,
+        )
+        .expect_err("late attachment without plan must route-change");
+        assert!(matches!(err, IssueCommentDeleteError::RouteChanged));
+    }
+
+    #[test]
+    fn tombstone_rejects_plan_without_attachment() {
+        let err = validate_delete_shape(
+            &locked_shape(false, true, false),
+            &member_actor(),
+            true,
+            CommentDeleteGoMode::Tombstone,
+            1,
+        )
+        .expect_err("plan without attachment must route-change");
+        assert!(matches!(err, IssueCommentDeleteError::RouteChanged));
+    }
+
+    #[test]
+    fn reply_leaf_rejects_attachment_without_plan() {
+        let err = validate_delete_shape(
+            &locked_shape(true, false, true),
+            &member_actor(),
+            true,
+            CommentDeleteGoMode::ReplyLeaf,
+            0,
+        )
+        .expect_err("late attachment without plan must route-change");
+        assert!(matches!(err, IssueCommentDeleteError::RouteChanged));
+    }
+
+    #[test]
+    fn comment_delete_wire_accepts_tombstone_attachment_cleanup() {
+        let request: IssueCommentDeleteRequest = serde_json::from_str(
+            r#"{"go_mode":"tombstone","attachment_cleanup":[{"attachment_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","object_url":"http://x/u","storage_key":"workspaces/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(request.go_mode, CommentDeleteGoMode::Tombstone);
+        assert_eq!(request.attachment_cleanup.len(), 1);
+    }
 }

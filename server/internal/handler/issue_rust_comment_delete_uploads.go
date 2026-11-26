@@ -11,7 +11,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-type rustCommentDeleteLeafPlan struct {
+type rustCommentDeletePlan struct {
 	UseRust        bool
 	AttachmentPlan []rustIssueDeleteAttachmentPlanItem
 }
@@ -26,21 +26,11 @@ func (h *Handler) commentDeleteUploadsPilotEnabled(
 	return matchesIssuePilot(ctx, h.Queries, h.IssueReadBridge.CommentDeleteUploadsPilotScopes, uuidToString(workspaceID), workspaceID)
 }
 
-func (h *Handler) planRustTopLevelCommentDelete(
+func (h *Handler) planRustCommentDeleteAttachments(
 	r *http.Request,
-	issue db.Issue,
 	existing db.Comment,
-	actorType, actorID string,
-	hasReplies bool,
-) (rustCommentDeleteLeafPlan, error) {
-	var none rustCommentDeleteLeafPlan
-	if hasReplies || existing.ParentID.Valid {
-		return none, nil
-	}
-	shared, err := h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
-	if err != nil || !shared {
-		return none, err
-	}
+) (rustCommentDeletePlan, error) {
+	var none rustCommentDeletePlan
 	attached, err := h.Queries.CommentHasFileAttachments(r.Context(), db.CommentHasFileAttachmentsParams{
 		CommentID: existing.ID, WorkspaceID: existing.WorkspaceID,
 	})
@@ -48,7 +38,7 @@ func (h *Handler) planRustTopLevelCommentDelete(
 		return none, err
 	}
 	if !attached {
-		return rustCommentDeleteLeafPlan{UseRust: true}, nil
+		return rustCommentDeletePlan{UseRust: true}, nil
 	}
 	uploadOn, err := h.commentDeleteUploadsPilotEnabled(r.Context(), existing.WorkspaceID)
 	if err != nil || !uploadOn {
@@ -61,7 +51,61 @@ func (h *Handler) planRustTopLevelCommentDelete(
 	if !ok {
 		return none, nil
 	}
-	return rustCommentDeleteLeafPlan{UseRust: true, AttachmentPlan: plan}, nil
+	return rustCommentDeletePlan{UseRust: true, AttachmentPlan: plan}, nil
+}
+
+func (h *Handler) planRustTopLevelCommentDelete(
+	r *http.Request,
+	issue db.Issue,
+	existing db.Comment,
+	actorType, actorID string,
+	hasReplies bool,
+) (rustCommentDeletePlan, error) {
+	var none rustCommentDeletePlan
+	if hasReplies || existing.ParentID.Valid {
+		return none, nil
+	}
+	shared, err := h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	if err != nil || !shared {
+		return none, err
+	}
+	return h.planRustCommentDeleteAttachments(r, existing)
+}
+
+func (h *Handler) planRustTombstoneCommentDelete(
+	r *http.Request,
+	issue db.Issue,
+	existing db.Comment,
+	actorType, actorID string,
+	hasReplies bool,
+) (rustCommentDeletePlan, error) {
+	var none rustCommentDeletePlan
+	if !hasReplies || existing.ParentID.Valid {
+		return none, nil
+	}
+	shared, err := h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	if err != nil || !shared {
+		return none, err
+	}
+	return h.planRustCommentDeleteAttachments(r, existing)
+}
+
+func (h *Handler) planRustReplyCommentDelete(
+	r *http.Request,
+	issue db.Issue,
+	existing db.Comment,
+	actorType, actorID string,
+	hasReplies bool,
+) (rustCommentDeletePlan, error) {
+	var none rustCommentDeletePlan
+	if hasReplies || !existing.ParentID.Valid {
+		return none, nil
+	}
+	shared, err := h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	if err != nil || !shared {
+		return none, err
+	}
+	return h.planRustCommentDeleteAttachments(r, existing)
 }
 
 func (h *Handler) buildRustCommentDeleteAttachmentPlan(

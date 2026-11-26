@@ -3799,7 +3799,13 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if tombstoneOn {
-				useRustDelete, pilotErr = h.commentDeleteUsesRustTombstone(r, issue, comment, actorType, actorID, hasReplies)
+				tombPlan, tombErr := h.planRustTombstoneCommentDelete(r, issue, comment, actorType, actorID, hasReplies)
+				if tombErr != nil {
+					pilotErr = tombErr
+				} else {
+					useRustDelete = tombPlan.UseRust
+					attachmentPlan = tombPlan.AttachmentPlan
+				}
 			}
 		} else if comment.ParentID.Valid {
 			replyOn, replyErr := h.commentDeleteReplyPilotEnabled(r.Context(), comment.WorkspaceID)
@@ -3809,12 +3815,18 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if replyOn {
-				useRustDelete, pilotErr = h.commentDeleteUsesRustReply(r, issue, comment, actorType, actorID, hasReplies)
-				if pilotErr == nil && useRustDelete {
-					replyBranch, pilotErr = h.commentDeleteReplyBranchScope(r.Context(), comment)
-					if errors.Is(pilotErr, pgx.ErrNoRows) {
-						writeError(w, http.StatusNotFound, "comment not found")
-						return
+				replyPlan, replyErr := h.planRustReplyCommentDelete(r, issue, comment, actorType, actorID, hasReplies)
+				if replyErr != nil {
+					pilotErr = replyErr
+				} else {
+					useRustDelete = replyPlan.UseRust
+					attachmentPlan = replyPlan.AttachmentPlan
+					if useRustDelete {
+						replyBranch, pilotErr = h.commentDeleteReplyBranchScope(r.Context(), comment)
+						if errors.Is(pilotErr, pgx.ErrNoRows) {
+							writeError(w, http.StatusNotFound, "comment not found")
+							return
+						}
 					}
 				}
 				useRustReply = useRustDelete
