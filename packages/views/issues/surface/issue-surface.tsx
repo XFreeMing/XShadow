@@ -426,9 +426,8 @@ function IssueSurfaceContent({
               <IssueArchitectureSources
                 serverQuery={controller.tableQuerySpec}
                 projectId={controller.projectId}
-              >
-                <IssueOrgChartView serverQuery={controller.tableQuerySpec} />
-              </IssueArchitectureSources>
+                renderHierarchy={(rowPages) => <IssueOrgChartView rowPages={rowPages} />}
+              />
             )}
             {controller.viewMode === "swimlane" && (
               <SwimLaneView

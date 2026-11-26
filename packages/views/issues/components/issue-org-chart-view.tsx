@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -25,16 +25,14 @@ import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { childIssueProgressOptions } from "@multica/core/issues/queries";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { useModalStore } from "@multica/core/modals";
-import { useWorkspacePaths } from "@multica/core/paths";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { propertyListOptions } from "@multica/core/properties";
-import type { Issue, IssueProperty, IssueTableQuerySpec, Project } from "@multica/core/types";
+import type { Issue, IssueProperty, Project } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { GraphCardFrame, GraphCanvasEdges, type GraphEdgeItem } from "../../common/graph-visuals";
 import { PropertyIcon } from "../../common/property-icon";
 import { useLocale, useT } from "../../i18n";
 import { LabelChip } from "../../labels/label-chip";
-import { resolveClickIntent, useIntentNavigate } from "../../navigation";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { IssueActionsContextMenu } from "../actions";
 import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
@@ -42,7 +40,6 @@ import {
   PEEK_TARGET_ATTR,
   useIsIssuePeeked,
   useIssuePeekActions,
-  useIssuePeekClick,
   useIssuePeekId,
 } from "../surface/peek-context";
 import { resolveCardCustomProperties } from "../utils/card-custom-properties";
@@ -58,16 +55,14 @@ import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
 import { PriorityIcon } from "./priority-icon";
 import { ProgressRing } from "./progress-ring";
 import { StatusIcon } from "./status-icon";
-import { useIssueTableFlatRowPages } from "./use-issue-table-flat-row-pages";
+import type { useIssueTableFlatRowPages } from "./use-issue-table-flat-row-pages";
 
-const ORG_CHART_PAGE_LIMIT = 100;
-const ORG_CHART_AUTO_LOAD_MAX_PAGES = 10;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 1.5;
 const ZOOM_STEP = 0.15;
 
 export interface IssueOrgChartViewProps {
-  serverQuery: IssueTableQuerySpec;
+  rowPages: ReturnType<typeof useIssueTableFlatRowPages>;
 }
 
 function OrgChartNodeCard({
@@ -106,9 +101,7 @@ function OrgChartNodeCard({
   const locale = useLocale();
   const { t } = useT("issues");
   const { colorOf, iconOf } = useIssueStatuses(wsId);
-  const paths = useWorkspacePaths();
-  const handlePeekClick = useIssuePeekClick();
-  const intentNavigate = useIntentNavigate();
+  const peekActions = useIssuePeekActions();
   const peeked = useIsIssuePeeked(issue.id);
   const cardProperties = useViewStore((s) => s.cardProperties);
   const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
@@ -117,21 +110,6 @@ function OrgChartNodeCard({
     cardPropertyIds,
     workspaceProperties,
     issue,
-  );
-
-  const openIssue = useCallback(
-    (event: MouseEvent) => {
-      if (handlePeekClick(issue.id, event)) {
-        if (event.shiftKey) globalThis.window?.getSelection()?.removeAllRanges();
-        return;
-      }
-      intentNavigate(
-        paths.issueDetail(issue.id),
-        resolveClickIntent(event),
-        issue.identifier,
-      );
-    },
-    [handlePeekClick, intentNavigate, issue.id, issue.identifier, paths],
   );
 
   const rootBadge =
@@ -246,7 +224,8 @@ function OrgChartNodeCard({
           {/* Title button — opens original task, supports up to two lines like GoalTaskMap */}
           <button
             type="button"
-            onClick={openIssue}
+            aria-pressed={peeked}
+            onClick={() => peekActions?.open(issue.id)}
             onFocus={() => onFocusNode(issue.id)}
             onBlur={() => onBlurNode(issue.id)}
             className="mt-0.5 block w-full text-left text-caption font-medium text-foreground outline-none after:absolute after:inset-0 after:rounded-lg hover:underline focus-visible:after:ring-2 focus-visible:after:ring-ring"
@@ -362,7 +341,7 @@ function OrgChartNodeCard({
   );
 }
 
-export function IssueOrgChartView({ serverQuery }: IssueOrgChartViewProps) {
+export function IssueOrgChartView({ rowPages }: IssueOrgChartViewProps) {
   const wsId = useWorkspaceId();
   const { t } = useT("issues");
   const cardProperties = useViewStore((s) => s.cardProperties);
@@ -388,10 +367,7 @@ export function IssueOrgChartView({ serverQuery }: IssueOrgChartViewProps) {
     handleLoadMore,
     retryHead,
     retryTail,
-  } = useIssueTableFlatRowPages(wsId, serverQuery, ORG_CHART_PAGE_LIMIT, {
-    autoLoadAll: true,
-    maxAutoLoadPages: ORG_CHART_AUTO_LOAD_MAX_PAGES,
-  });
+  } = rowPages;
 
   const layout = useMemo(
     () => buildOrgChartLayout(issues, { collapsedIds, orientation }),
@@ -704,7 +680,10 @@ export function IssueOrgChartView({ serverQuery }: IssueOrgChartViewProps) {
           {t(($) => $.org_chart.empty)}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-auto bg-muted/15">
+        <div
+          data-board-scroller=""
+          className="flex-1 min-h-0 overflow-auto bg-muted/15 group-data-[peek-open]/peek:pr-[var(--issue-peek-width)]"
+        >
           <div
             className="relative"
             style={{

@@ -65,20 +65,6 @@ vi.mock("../../i18n", () => ({
   }),
 }));
 
-vi.mock("../../navigation", () => ({
-  AppLink: ({ children, href, ...props }: React.ComponentProps<"a">) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
-
-vi.mock("@multica/core/paths", () => ({
-  useWorkspacePaths: () => ({
-    issueDetail: (id: string) => `/ws/issues/${id}`,
-  }),
-}));
-
 const SERVER_QUERY: IssueTableQuerySpec = {
   scope: { kind: "project", project_id: "proj-1" },
   filters: {},
@@ -233,12 +219,14 @@ describe("buildGoalDependencyGraphData", () => {
 
 describe("IssueArchitectureSources", () => {
   it("defaults to hierarchy children and switches to goal dependencies using filtered rows", async () => {
+    // When multiple goals exist or plan edges are empty, hierarchy remains default
     const listGoals = vi.fn().mockResolvedValue({
       goals: [
         makeGoal("goal-no-project", "Workspace Goal", null),
         makeGoal("goal-1", "Launch Goal", "proj-1"),
+        makeGoal("goal-2", "Second Goal", "proj-1"),
       ],
-      total: 2,
+      total: 3,
     });
     const getGoalPlan = vi.fn().mockResolvedValue(makePlan("goal-1", "proj-1"));
     const listIssueTableRows = vi.fn().mockResolvedValue({
@@ -260,15 +248,16 @@ describe("IssueArchitectureSources", () => {
 
     const { container } = render(
       <QueryClientProvider client={createQueryClient()}>
-        <IssueArchitectureSources serverQuery={SERVER_QUERY} projectId="proj-1">
-          <div data-testid="org-chart-child">Original Org Chart</div>
-        </IssueArchitectureSources>
+        <IssueArchitectureSources
+          serverQuery={SERVER_QUERY}
+          projectId="proj-1"
+          renderHierarchy={() => <div data-testid="org-chart-child">Original Org Chart</div>}
+        />
       </QueryClientProvider>,
     );
 
-    // Default renders hierarchy children and does not fetch goals yet
+    // Default renders hierarchy children
     expect(screen.getByTestId("org-chart-child")).toBeTruthy();
-    expect(listGoals).not.toHaveBeenCalled();
 
     // Switch to Goal dependencies
     fireEvent.click(screen.getByRole("button", { name: "Goal dependencies" }));
@@ -289,6 +278,53 @@ describe("IssueArchitectureSources", () => {
     expect(edges[0]?.getAttribute("data-to-id")).toBe("iss-2");
 
     // Switching back restores original children
+    fireEvent.click(screen.getByRole("button", { name: "Hierarchy" }));
+    expect(screen.getByTestId("org-chart-child")).toBeTruthy();
+  });
+
+  it("automatically defaults to goal dependencies when visible tasks have no visible parent-child and unique goal has real edges", async () => {
+    const listGoals = vi.fn().mockResolvedValue({
+      goals: [makeGoal("goal-1", "Launch Goal", "proj-1")],
+      total: 1,
+    });
+    const getGoalPlan = vi.fn().mockResolvedValue(makePlan("goal-1", "proj-1"));
+    const listIssueTableRows = vi.fn().mockResolvedValue({
+      rows: [
+        { issue: makeIssue("iss-1", "MUL-1", "First") },
+        { issue: makeIssue("iss-2", "MUL-2", "Second") },
+        { issue: makeIssue("iss-3", "MUL-3", "Task from another project", "proj-2") },
+      ],
+      total: 3,
+      next_cursor: null,
+    });
+
+    setApiInstance({
+      listGoals,
+      getGoalPlan,
+      listIssueTableRows,
+    } as unknown as ApiClient);
+
+    const { container } = render(
+      <QueryClientProvider client={createQueryClient()}>
+        <IssueArchitectureSources
+          serverQuery={{ ...SERVER_QUERY, scope: { kind: "workspace" } }}
+          renderHierarchy={() => <div data-testid="org-chart-child">Original Org Chart</div>}
+        />
+      </QueryClientProvider>,
+    );
+
+    // Automatically selects goal dependencies
+    await waitFor(() => {
+      expect(screen.getByText("MUL-1")).toBeTruthy();
+      expect(screen.getByText("MUL-2")).toBeTruthy();
+    });
+
+    const edges = container.querySelectorAll("[data-dependency-edge]");
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.getAttribute("data-from-id")).toBe("iss-1");
+    expect(edges[0]?.getAttribute("data-to-id")).toBe("iss-2");
+
+    // Manual selection has unconditional priority: switching to hierarchy works
     fireEvent.click(screen.getByRole("button", { name: "Hierarchy" }));
     expect(screen.getByTestId("org-chart-child")).toBeTruthy();
   });
@@ -319,9 +355,11 @@ describe("IssueArchitectureSources", () => {
 
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <IssueArchitectureSources serverQuery={SERVER_QUERY} projectId="proj-1">
-          <div data-testid="org-chart-child">Original Org Chart</div>
-        </IssueArchitectureSources>
+        <IssueArchitectureSources
+          serverQuery={SERVER_QUERY}
+          projectId="proj-1"
+          renderHierarchy={() => <div data-testid="org-chart-child">Original Org Chart</div>}
+        />
       </QueryClientProvider>,
     );
 

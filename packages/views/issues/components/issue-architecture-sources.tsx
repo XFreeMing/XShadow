@@ -28,11 +28,13 @@ type ArchitectureSourceMode = "hierarchy" | "goal_dependencies" | "relation";
 export interface IssueArchitectureSourcesProps {
   serverQuery: IssueTableQuerySpec;
   projectId?: string;
-  children: ReactNode;
+  children?: ReactNode;
+  renderHierarchy?: (rowPages: ArchitectureRowPages) => ReactNode;
 }
 
 const DEPENDENCY_ROW_PAGE_LIMIT = 100;
 const DEPENDENCY_ROW_AUTO_LOAD_MAX_PAGES = 10;
+type ArchitectureRowPages = ReturnType<typeof useIssueTableFlatRowPages>;
 type DependencyGraphData = { rows: readonly Issue[]; edges: IssueDependencyEdge[] };
 
 /**
@@ -90,9 +92,47 @@ export function IssueArchitectureSources({
   serverQuery,
   projectId,
   children,
+  renderHierarchy,
 }: IssueArchitectureSourcesProps) {
   const { t } = useT("issues");
-  const [mode, setMode] = useState<ArchitectureSourceMode>("hierarchy");
+  const wsId = useWorkspaceId();
+  const [manualMode, setManualMode] = useState<ArchitectureSourceMode | null>(null);
+
+  const rowPages = useIssueTableFlatRowPages(wsId, serverQuery, DEPENDENCY_ROW_PAGE_LIMIT, {
+    autoLoadAll: true,
+    maxAutoLoadPages: DEPENDENCY_ROW_AUTO_LOAD_MAX_PAGES,
+  });
+  const { hasVisibleHierarchy, visibleProjectIds } = useMemo(() => {
+    const issueIds = new Set(rowPages.issues.map((issue) => issue.id));
+    return {
+      hasVisibleHierarchy: rowPages.issues.some(
+        (issue) => issue.parent_issue_id !== null && issueIds.has(issue.parent_issue_id),
+      ),
+      visibleProjectIds: new Set(rowPages.issues.flatMap((issue) => issue.project_id ? [issue.project_id] : [])),
+    };
+  }, [rowPages.issues]);
+
+  const canChooseGoal = !manualMode && !hasVisibleHierarchy && visibleProjectIds.size > 0;
+  const goalsQuery = useInfiniteQuery({
+    ...goalListPagesOptions(wsId, { projectId }),
+    enabled: !!wsId && canChooseGoal,
+  });
+  const visibleGoals = goalsQuery.data?.pages
+    .flatMap((page) => page.goals)
+    .filter((goal) => goal.project_id !== null && visibleProjectIds.has(goal.project_id)) ?? [];
+  const autoGoal = !goalsQuery.hasNextPage && visibleGoals.length === 1 ? visibleGoals[0] : undefined;
+  const planQuery = useQuery({
+    ...goalPlanOptions(wsId, autoGoal?.id ?? ""),
+    enabled: !!wsId && canChooseGoal && !!autoGoal,
+  });
+  const autoGoalId = useMemo(() => {
+    const plan = planQuery.data;
+    if (hasVisibleHierarchy || !autoGoal || plan?.goal_id !== autoGoal.id
+      || plan.project_id !== autoGoal.project_id) return undefined;
+    const { edges } = buildGoalDependencyGraphData(plan, rowPages.issues, autoGoal.project_id);
+    return edges.length > 0 ? autoGoal.id : undefined;
+  }, [hasVisibleHierarchy, autoGoal, planQuery.data, rowPages.issues]);
+  const activeMode = manualMode ?? (autoGoalId ? "goal_dependencies" : "hierarchy");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -107,20 +147,24 @@ export function IssueArchitectureSources({
           <Button
             key={value}
             size="sm"
-            variant={mode === value ? "secondary" : "ghost"}
-            aria-pressed={mode === value}
-            onClick={() => setMode(value)}
+            variant={activeMode === value ? "secondary" : "ghost"}
+            aria-pressed={activeMode === value}
+            onClick={() => setManualMode(value)}
           >
             {label}
           </Button>
         ))}
       </div>
-      {mode === "hierarchy" ? (
-        children
-      ) : mode === "goal_dependencies" ? (
-        <GoalDependencyPicker serverQuery={serverQuery} projectId={projectId} />
+      {activeMode === "hierarchy" ? (
+        renderHierarchy ? renderHierarchy(rowPages) : children
+      ) : activeMode === "goal_dependencies" ? (
+        <GoalDependencyPicker
+          projectId={projectId}
+          defaultGoalId={autoGoalId}
+          rowPages={rowPages}
+        />
       ) : (
-        <IssueRelationDependencyPicker serverQuery={serverQuery} />
+        <IssueRelationDependencyPicker rowPages={rowPages} />
       )}
     </div>
   );
@@ -147,7 +191,7 @@ export function buildIssueRelationGraphData(
   return { rows, edges };
 }
 
-function IssueRelationDependencyPicker({ serverQuery }: { serverQuery: IssueTableQuerySpec }) {
+function IssueRelationDependencyPicker({ rowPages }: { rowPages: ArchitectureRowPages }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const properties = useQuery(propertyListOptions(wsId));
@@ -191,8 +235,7 @@ function IssueRelationDependencyPicker({ serverQuery }: { serverQuery: IssueTabl
       </div>
       <VisibleDependencyRows
         key={field.id}
-        wsId={wsId}
-        serverQuery={serverQuery}
+        rowPages={rowPages}
         relationLabel={field.name}
         graph={(rows) => buildIssueRelationGraphData(rows, field.id, publicProjectIds)}
       />
@@ -201,19 +244,22 @@ function IssueRelationDependencyPicker({ serverQuery }: { serverQuery: IssueTabl
 }
 
 function GoalDependencyPicker({
-  serverQuery,
   projectId,
+  defaultGoalId,
+  rowPages,
 }: {
-  serverQuery: IssueTableQuerySpec;
   projectId?: string;
+  defaultGoalId?: string;
+  rowPages: ArchitectureRowPages;
 }) {
   const { t } = useT("goals");
   const wsId = useWorkspaceId();
   const query = useInfiniteQuery(goalListPagesOptions(wsId, { projectId }));
   const goals =
     query.data?.pages.flatMap((page) => page.goals).filter((goal) => goal.project_id) ?? [];
-  const [selectedId, setSelectedId] = useState("");
-  const goal = goals.find((item) => item.id === selectedId) ?? goals[0];
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const effectiveGoalId = selectedId ?? defaultGoalId;
+  const goal = (effectiveGoalId ? goals.find((item) => item.id === effectiveGoalId) : null) ?? goals[0];
   const choices = goals.map((item) => ({ value: item.id, label: item.title }));
 
   if (query.isLoading) return <Spinner className="m-4" />;
@@ -258,8 +304,8 @@ function GoalDependencyPicker({
           key={goal.id}
           wsId={wsId}
           goal={goal}
-          serverQuery={serverQuery}
-        />
+          rowPages={rowPages}
+          />
       )}
     </div>
   );
@@ -280,11 +326,11 @@ function GoalLoadRetry({ onRetry }: { onRetry: () => void }) {
 function GoalDependencyCanvas({
   wsId,
   goal,
-  serverQuery,
+  rowPages,
 }: {
   wsId: string;
   goal: Goal;
-  serverQuery: IssueTableQuerySpec;
+  rowPages: ArchitectureRowPages;
 }) {
   const { t: issueText } = useT("issues");
   const planQuery = useQuery(goalPlanOptions(wsId, goal.id));
@@ -300,25 +346,23 @@ function GoalDependencyCanvas({
   }
   return (
     <VisibleDependencyRows
-      wsId={wsId}
-      serverQuery={serverQuery}
+      rowPages={rowPages}
       graph={(rows) => buildGoalDependencyGraphData(plan, rows, goal.project_id)}
     />
   );
 }
 
-function VisibleDependencyRows({ wsId, serverQuery, graph, relationLabel }: {
-  wsId: string;
-  serverQuery: IssueTableQuerySpec;
+function VisibleDependencyRows({
+  rowPages,
+  graph,
+  relationLabel,
+}: {
+  rowPages: ArchitectureRowPages;
   graph: (rows: readonly Issue[]) => DependencyGraphData;
   relationLabel?: string;
 }) {
   const { t: issueText } = useT("issues");
   const { t: goalText } = useT("goals");
-  const rowPages = useIssueTableFlatRowPages(wsId, serverQuery, DEPENDENCY_ROW_PAGE_LIMIT, {
-    autoLoadAll: true,
-    maxAutoLoadPages: DEPENDENCY_ROW_AUTO_LOAD_MAX_PAGES,
-  });
   if (rowPages.isHeadLoading) return <Spinner className="m-4" />;
   if (rowPages.isHeadError) {
     return (

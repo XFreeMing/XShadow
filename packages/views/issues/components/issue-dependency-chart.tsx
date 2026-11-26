@@ -1,13 +1,16 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo } from "react";
 import { AlertTriangle } from "@multica/ui/icons";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
-import { useWorkspacePaths } from "@multica/core/paths";
 import type { Issue } from "@multica/core/types";
 import { useT } from "../../i18n";
-import { AppLink } from "../../navigation";
+import {
+  PEEK_TARGET_ATTR,
+  useIssuePeekActions,
+  useIssuePeekId,
+} from "../surface/peek-context";
 
 export type IssueDependencyEdgeKind = "required" | "conditional";
 
@@ -349,15 +352,28 @@ export function IssueDependencyChart({
   const noLinks = relationLabel
     ? issueText(($) => $.org_chart.relation_no_edges)
     : goalText(($) => $.plan.no_dependencies);
-  const paths = useWorkspacePaths();
   const arrowId = useId().replace(/:/g, "");
-  const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
+  const peekActions = useIssuePeekActions();
+  const peekId = useIssuePeekId();
 
   const layout = useMemo(() => buildDependencyChartLayout(rows, edges), [rows, edges]);
 
-  const activeIssueId =
-    selectedIssueId && layout.nodeById.has(selectedIssueId) ? selectedIssueId : null;
+  const activeIssueId = peekId && layout.nodeById.has(peekId) ? peekId : null;
   const activeNode = activeIssueId ? layout.nodeById.get(activeIssueId) ?? null : null;
+
+  // Publish visible issue ids to peek navigation in layout order (connected nodes first, then unrelated)
+  const visibleOrderIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const node of layout.nodes) ids.push(node.issue.id);
+    for (const row of layout.unrelatedRows) ids.push(row.id);
+    return ids;
+  }, [layout.nodes, layout.unrelatedRows]);
+
+  useEffect(() => {
+    peekActions?.publishColumns([visibleOrderIds]);
+  }, [peekActions, visibleOrderIds]);
+
+  useEffect(() => () => peekActions?.publishColumns(null), [peekActions]);
 
   const { upstreamEdges, downstreamEdges, highlightedIssueIds } = useMemo(() => {
     if (!activeIssueId) {
@@ -416,7 +432,10 @@ export function IssueDependencyChart({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div
+        data-board-scroller=""
+        className="min-h-0 flex-1 overflow-auto group-data-[peek-open]/peek:pr-[var(--issue-peek-width)]"
+      >
         {layout.nodes.length > 0 && (
           <div
             className="relative"
@@ -491,11 +510,11 @@ export function IssueDependencyChart({
               const isHighlighted = highlightedIssueIds.has(node.issue.id);
               const isDimmed = activeIssueId !== null && !isHighlighted;
               return (
-                <div
+                <button
                   key={node.issue.id}
-                  role="button"
-                  tabIndex={0}
+                  type="button"
                   aria-pressed={isSelected}
+                  {...{ [PEEK_TARGET_ATTR]: node.issue.id }}
                   data-testid="dependency-chart-card"
                   data-issue-id={node.issue.id}
                   style={{
@@ -504,17 +523,7 @@ export function IssueDependencyChart({
                     width: node.width,
                     height: node.height,
                   }}
-                  onClick={() =>
-                    setSelectedIssueId((curr) => (curr === node.issue.id ? null : node.issue.id))
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setSelectedIssueId((curr) =>
-                        curr === node.issue.id ? null : node.issue.id,
-                      );
-                    }
-                  }}
+                  onClick={() => peekActions?.open(node.issue.id)}
                   className={cn(
                     "absolute flex cursor-pointer flex-col justify-between rounded-lg border bg-card px-3 py-2 text-left shadow-2xs transition-all",
                     isSelected
@@ -527,23 +536,13 @@ export function IssueDependencyChart({
                     isDimmed && "opacity-35",
                   )}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <AppLink
-                      href={paths.issueDetail(node.issue.id)}
-                      onClick={(event) => event.stopPropagation()}
-                      className="truncate font-mono text-caption text-muted-foreground hover:text-foreground hover:underline"
-                    >
-                      {node.issue.identifier}
-                    </AppLink>
-                  </div>
-                  <AppLink
-                    href={paths.issueDetail(node.issue.id)}
-                    onClick={(event) => event.stopPropagation()}
-                    className="line-clamp-2 text-body font-medium text-foreground hover:underline"
-                  >
+                  <span className="truncate font-mono text-caption text-muted-foreground">
+                    {node.issue.identifier}
+                  </span>
+                  <span className="line-clamp-2 text-body font-medium text-foreground">
                     {node.issue.title}
-                  </AppLink>
-                </div>
+                  </span>
+                </button>
               );
             })}
           </div>
@@ -559,26 +558,29 @@ export function IssueDependencyChart({
             </h3>
             <div className="flex flex-wrap gap-3">
               {layout.unrelatedRows.map((issue) => (
-                <div
+                <button
                   key={issue.id}
+                  type="button"
+                  aria-pressed={peekId === issue.id}
+                  {...{ [PEEK_TARGET_ATTR]: issue.id }}
                   data-testid="dependency-chart-unrelated-card"
                   data-issue-id={issue.id}
                   style={{ width: NODE_WIDTH }}
-                  className="flex flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2 shadow-2xs"
+                  onClick={() => peekActions?.open(issue.id)}
+                  className={cn(
+                    "flex cursor-pointer flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-2xs transition-all text-left",
+                    peekId === issue.id
+                      ? "border-brand ring-2 ring-brand/40"
+                      : "border-border hover:border-foreground/30",
+                  )}
                 >
-                  <AppLink
-                    href={paths.issueDetail(issue.id)}
-                    className="truncate font-mono text-caption text-muted-foreground hover:text-foreground hover:underline"
-                  >
+                  <span className="truncate font-mono text-caption text-muted-foreground">
                     {issue.identifier}
-                  </AppLink>
-                  <AppLink
-                    href={paths.issueDetail(issue.id)}
-                    className="line-clamp-2 text-body font-medium text-foreground hover:underline"
-                  >
+                  </span>
+                  <span className="line-clamp-2 text-body font-medium text-foreground">
                     {issue.title}
-                  </AppLink>
-                </div>
+                  </span>
+                </button>
               ))}
             </div>
           </section>
@@ -592,12 +594,9 @@ export function IssueDependencyChart({
         >
           <div className="mb-2 flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
-              <AppLink
-                href={paths.issueDetail(activeNode.issue.id)}
-                className="shrink-0 font-mono text-caption text-muted-foreground hover:underline"
-              >
+              <span className="shrink-0 font-mono text-caption text-muted-foreground">
                 {activeNode.issue.identifier}
-              </AppLink>
+              </span>
               <span className="truncate font-medium text-foreground">
                 {activeNode.issue.title}
               </span>
@@ -605,7 +604,7 @@ export function IssueDependencyChart({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setSelectedIssueId(null)}
+              onClick={() => peekActions?.close()}
             >
               {goalText(($) => $.map.close_inspector)}
             </Button>
@@ -627,12 +626,13 @@ export function IssueDependencyChart({
                     return (
                       <li key={edge.id} className="rounded border bg-background px-2.5 py-1.5 text-caption">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <AppLink
-                            href={paths.issueDetail(prereq.id)}
+                          <button
+                            type="button"
+                            onClick={() => peekActions?.open(prereq.id)}
                             className="font-mono text-muted-foreground hover:underline"
                           >
                             {prereq.identifier}
-                          </AppLink>
+                          </button>
                           <span className="font-medium text-foreground">{prereq.title}</span>
                           <span
                             className={cn(
@@ -672,12 +672,13 @@ export function IssueDependencyChart({
                     return (
                       <li key={edge.id} className="rounded border bg-background px-2.5 py-1.5 text-caption">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <AppLink
-                            href={paths.issueDetail(dep.id)}
+                          <button
+                            type="button"
+                            onClick={() => peekActions?.open(dep.id)}
                             className="font-mono text-muted-foreground hover:underline"
                           >
                             {dep.identifier}
-                          </AppLink>
+                          </button>
                           <span className="font-medium text-foreground">{dep.title}</span>
                           <span
                             className={cn(

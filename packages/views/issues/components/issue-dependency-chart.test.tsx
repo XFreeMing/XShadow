@@ -1,9 +1,11 @@
 /**
  * @vitest-environment jsdom
  */
+import { useState, type ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Issue } from "@multica/core/types";
+import { IssuePeekActionsContext, IssuePeekIdContext } from "../surface/peek-context";
 import {
   buildDependencyChartLayout,
   IssueDependencyChart,
@@ -38,23 +40,21 @@ vi.mock("../../i18n", () => ({
   }),
 }));
 
-vi.mock("../../navigation", () => ({
-  AppLink: ({
-    children,
-    href,
-    ...props
-  }: React.ComponentProps<"a">) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
-
-vi.mock("@multica/core/paths", () => ({
-  useWorkspacePaths: () => ({
-    issueDetail: (id: string) => `/ws/issues/${id}`,
-  }),
-}));
+function TestPeekHost({ children }: { children: ReactNode }) {
+  const [issueId, setIssueId] = useState<string | null>(null);
+  return (
+    <IssuePeekActionsContext.Provider value={{
+      open: setIssueId,
+      close: () => setIssueId(null),
+      toggle: (id) => setIssueId((current) => current === id ? null : id),
+      publishColumns: () => {},
+    }}>
+      <IssuePeekIdContext.Provider value={issueId}>
+        {children}
+      </IssuePeekIdContext.Provider>
+    </IssuePeekActionsContext.Provider>
+  );
+}
 
 function makeIssue(id: string, identifier: string, title: string): Issue {
   return {
@@ -135,25 +135,27 @@ describe("buildDependencyChartLayout", () => {
 });
 
 describe("IssueDependencyChart", () => {
-  it("renders links, distinguishes required vs conditional arrows, and reveals reasons on inspect", () => {
+  it("reveals dependency reasons for the previewed card and switches previews from the inspector", () => {
     const a = makeIssue("a", "MUL-1", "API schema");
     const b = makeIssue("b", "MUL-2", "Feature flag");
     const c = makeIssue("c", "MUL-3", "UI client");
     const solo = makeIssue("solo", "MUL-4", "Release notes");
 
     const { container } = render(
-      <IssueDependencyChart
-        rows={[a, b, c, solo]}
-        edges={[
-          { fromId: "a", toId: "c", kind: "required", reason: "Needs endpoint types" },
-          { fromId: "b", toId: "c", kind: "conditional", reason: "Only when flag enabled" },
-        ]}
-      />,
+      <TestPeekHost>
+        <IssueDependencyChart
+          rows={[a, b, c, solo]}
+          edges={[
+            { fromId: "a", toId: "c", kind: "required", reason: "Needs endpoint types" },
+            { fromId: "b", toId: "c", kind: "conditional", reason: "Only when flag enabled" },
+          ]}
+        />
+      </TestPeekHost>,
     );
 
-    // Original task links
-    const links = screen.getAllByRole("link", { name: "MUL-3" });
-    expect(links[0]?.getAttribute("href")).toBe("/ws/issues/c");
+    // Card identifiers and titles rendered in card frame
+    expect(screen.getByText("MUL-3")).toBeTruthy();
+    expect(screen.getByText("UI client")).toBeTruthy();
 
     // Required vs conditional SVG edges with direction prerequisite -> dependent
     const requiredEdge = container.querySelector('[data-from-id="a"][data-to-id="c"] path');
@@ -172,6 +174,12 @@ describe("IssueDependencyChart", () => {
     const inspector = screen.getByTestId("dependency-edge-inspector");
     expect(inspector.textContent).toContain("Needs endpoint types");
     expect(inspector.textContent).toContain("Only when flag enabled");
+
+    // Clicking task in inspector switches selected task
+    fireEvent.click(screen.getByRole("button", { name: "MUL-1", exact: true }));
+    expect(cardC.getAttribute("aria-pressed")).toBe("false");
+    const cardA = container.querySelector('[data-testid="dependency-chart-card"][data-issue-id="a"]')!;
+    expect(cardA.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("renders empty state when there are no visible rows", () => {
