@@ -234,7 +234,8 @@ type Handler struct {
 	AutopilotService       *service.AutopilotService
 	// Entitlements supplies workspace-scoped commercial gates. A nil provider
 	// preserves self-hosted behavior without extra reads.
-	Entitlements entitlement.Provider
+	Entitlements          entitlement.Provider
+	ReworkAnalysisSquadID pgtype.UUID
 	// SeatCapacity executes Cloud's pre-purchased human-seat protocol. Nil or
 	// disabled preserves self-hosted behavior.
 	SeatCapacity          seatcapacity.Executor
