@@ -91,6 +91,7 @@
     "restart": "核对最新步骤",
     "submit_review": "提交评审",
     "steps": "方法步骤",
+    "squad_handoff": "小队交接 · {{from}} → {{to}}",
     "history": "证据与评审历史",
     "development": "研发",
     "research": "调研研究",

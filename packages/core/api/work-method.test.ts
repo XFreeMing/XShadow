@@ -66,6 +66,27 @@ it("reads a goal recommendation without creating a run", async () => {
   expect(fetch.mock.calls[0]?.[0]).toContain("/api/goals/goal/work-method");
 });
 
+it("preserves a squad handoff receipt without requiring it in older runs", async () => {
+  const handoff = {
+    task_id: "00000000-0000-4000-8000-000000000001",
+    from_squad_id: "00000000-0000-4000-8000-000000000002",
+    to_squad_id: "00000000-0000-4000-8000-000000000003",
+    from_step: 0,
+    to_step: 1,
+    run_revision: 3,
+  };
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+    method, step: 0, state: "review", revision: 3,
+    history: [
+      { action: "advance", step: 0, actor: "agent/A", at: "today" },
+      { action: "approve", step: 0, actor: "member/B", at: "today", squad_handoff: handoff },
+      { action: "approve", step: 0, actor: "member/B", at: "today", squad_handoff: { ...handoff, task_id: "invalid" } },
+    ],
+  })));
+  const { history } = await new ApiClient("https://example.test").getIssueWorkMethod("DEV-1");
+  expect(history.map((event) => event.squad_handoff)).toEqual([undefined, handoff, undefined]);
+});
+
 it("preserves a squad candidate's self-claim setting and rejects a non-boolean setting", async () => {
   const candidate = {
     ...method,

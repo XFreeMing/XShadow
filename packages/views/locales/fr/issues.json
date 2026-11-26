@@ -91,6 +91,7 @@
     "restart": "Vérifier l’étape actuelle",
     "submit_review": "Soumettre pour revue",
     "steps": "Étapes de la méthode",
+    "squad_handoff": "Passation entre équipes · {{from}} → {{to}}",
     "history": "Historique des preuves et revues",
     "development": "Développement",
     "research": "Recherche",

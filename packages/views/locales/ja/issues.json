@@ -91,6 +91,7 @@
     "restart": "最新のステップを確認",
     "submit_review": "審査に提出",
     "steps": "手法のステップ",
+    "squad_handoff": "チーム引き継ぎ · {{from}} → {{to}}",
     "history": "根拠と審査の履歴",
     "development": "開発",
     "research": "調査・研究",

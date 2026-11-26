@@ -101,7 +101,7 @@ func (h *Handler) createReworkAnalysis(ctx context.Context, tx pgx.Tx, parent db
 		note += "将根因、预防办法和下一张同类任务的复验与效率证据填入本任务表格对应属性。"
 	}
 	task, err := h.TaskService.CreateWorkMethodHandoff(ctx, h.Queries.WithTx(dispatch), issue, squad.LeaderID, squad.ID, 0,
-		note, requester, source, pgtype.UUID{})
+		note, requester, source, pgtype.UUID{}, pgtype.UUID{})
 	if err != nil {
 		slog.Warn("rework analysis awaiting assignment", "issue_id", uuidToString(issue.ID), "error", err)
 		return issue, emptyTask, nil

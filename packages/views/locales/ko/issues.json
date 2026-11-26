@@ -91,6 +91,7 @@
     "restart": "최신 단계 확인",
     "submit_review": "검토 요청",
     "steps": "방법 단계",
+    "squad_handoff": "스쿼드 인계 · {{from}} → {{to}}",
     "history": "근거 및 검토 기록",
     "development": "개발",
     "research": "조사·연구",

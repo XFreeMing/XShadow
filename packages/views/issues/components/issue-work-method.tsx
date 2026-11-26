@@ -575,6 +575,17 @@ function MethodCard({
                           )}
                         {method.steps[entry.step]?.name ?? method.name}
                       </p>
+                      {entry.squad_handoff && (
+                        <p
+                          className="break-words text-caption font-medium"
+                          title={entry.squad_handoff.task_id}
+                        >
+                          {t(($) => $.method.squad_handoff, {
+                            from: getActorName("squad", entry.squad_handoff.from_squad_id),
+                            to: getActorName("squad", entry.squad_handoff.to_squad_id),
+                          })}
+                        </p>
+                      )}
                       {entry.checked_items && (
                         <ul className="space-y-1 text-caption">
                           {historicalMethods[i]?.steps[

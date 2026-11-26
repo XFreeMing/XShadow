@@ -81,6 +81,27 @@ function mount(patch: Partial<WorkMethodRun> = {}) {
   return change;
 }
 
+it("shows the delivering squad, receiving squad, and receiving run in the method history", async () => {
+  mount({ history: [{
+    action: "approve",
+    step: 0,
+    evidence: "Independently verified the fixture",
+    actor: "member/Bella",
+    at: "2026-11-19T08:00:00Z",
+    squad_handoff: {
+      task_id: "receiving-run",
+      from_squad_id: "Design and TDD",
+      to_squad_id: "General development",
+      from_step: 0,
+      to_step: 1,
+      run_revision: 3,
+    },
+  }] });
+  const receipt = await screen.findByText("Squad handoff · Design and TDD → General development");
+  expect(receipt).toHaveAttribute("title", "receiving-run");
+  expect(screen.getByText("Independently verified the fixture")).toBeInTheDocument();
+});
+
 it("displays the GitHub pull request and keeps pending cleanup visible after approval", async () => {
   const merge = "c".repeat(40);
   mount({

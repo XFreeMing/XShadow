@@ -355,6 +355,7 @@ test("portable template contains the current roster without machine identities o
   assert.equal(template.agents.length, 22);
   assert.equal(template.skills.length, 21);
   assert.deepEqual(personalTemplate.squads.map(({ key, leader }) => ({ key, leader })), [
+    { key: "general-development", leader: "pm" },
     { key: "rework-analysis", leader: "chief" },
     { key: "design-tdd", leader: "acceptance-automation" },
     { key: "ui-interaction", leader: "ux" },

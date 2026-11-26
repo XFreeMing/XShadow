@@ -91,6 +91,7 @@
     "restart": "Consultar el paso actual",
     "submit_review": "Enviar a revisión",
     "steps": "Pasos del método",
+    "squad_handoff": "Traspaso entre equipos · {{from}} → {{to}}",
     "history": "Historial de evidencias y revisiones",
     "development": "Desarrollo",
     "research": "Investigación",

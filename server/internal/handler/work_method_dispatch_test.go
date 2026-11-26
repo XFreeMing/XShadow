@@ -136,6 +136,78 @@ func TestMethodDispatchRollsBackWhenAgentHasNoRuntime(t *testing.T) {
 	}
 }
 
+func TestApprovedSquadDeliveryCreatesOneBoundHandoffToTheNextSquad(t *testing.T) {
+	runtime := dbfx.Runtime(t, "Squad handoff runtime")
+	designLead := dbfx.Agent(t, "Design lead", runtime)
+	buildLead := dbfx.Agent(t, "Build lead", "")
+	design := dbfx.Squad(t, "Design and TDD", designLead)
+	build := dbfx.Squad(t, "Implementation", buildLead)
+	method := workmethod.Template{Name: "Squad handoff " + workflowTestSuffix(), Kind: "research", Review: "Independent review",
+		Steps: []workmethod.Step{
+			{Name: "Prepare tests", Output: "Reproducible fixture", Checks: []string{"Run fixture"},
+				Owner: &workmethod.Actor{Kind: "squad", ID: design}, Reviewer: &workmethod.Actor{Kind: "member", ID: testUserID}},
+			{Name: "Deliver", Output: "Verified result",
+				Owner: &workmethod.Actor{Kind: "squad", ID: build}, Reviewer: &workmethod.Actor{Kind: "member", ID: testUserID}},
+		},
+	}
+	var saved workmethod.Template
+	testutil.Call(t, testHandler.CreateWorkMethod, newRequest("POST", "/api/work-methods?workspace_id="+testWorkspaceID, method)).Want(201).JSON(&saved)
+	issue := dbfx.Issue(t, "Prepare and consume the same fixture", testutil.Cols{"status": "todo"})
+	change := func(agentID, taskID string, body map[string]any, want int) workmethod.Run {
+		t.Helper()
+		req := goalRequest("POST", "/api/issues/"+issue+"/work-method", testUserID, body, map[string]string{"id": issue})
+		req.Header.Set("X-Agent-ID", agentID)
+		req.Header.Set("X-Task-ID", taskID)
+		resp := testutil.Call(t, testHandler.ChangeIssueWorkMethod, req).Want(want)
+		var run workmethod.Run
+		if want == 200 {
+			resp.JSON(&run)
+		}
+		return run
+	}
+	change("", "", map[string]any{"action": "select", "base_revision": 0, "method_id": saved.ID}, 200)
+	designTask := methodStageTask(t, issue, 1)
+	change(designLead, uuidToString(designTask.ID), map[string]any{
+		"action": "advance", "base_revision": 1, "evidence": "Fixture submitted for independent review",
+	}, 200)
+	if taskCountFor(t, issue, buildLead) != 0 {
+		t.Fatal("implementation was scheduled before review")
+	}
+
+	approval := map[string]any{"action": "approve", "base_revision": 2, "checked_items": []int{0}, "evidence": "Independently verified the fixture"}
+	change("", "", approval, 409)
+	if run := readDeliveryMethod(t, issue); run.Revision != 2 || run.State != "review" || run.History[1].SquadHandoff != nil {
+		t.Fatalf("failed dispatch advanced the method: %+v", run)
+	}
+	dbfx.Exec(t, "UPDATE agent SET runtime_id=$1 WHERE id=$2", runtime, buildLead)
+	run := change("", "", approval, 200)
+	queued := methodStageTask(t, issue, 3)
+	want := workmethod.SquadHandoff{
+		TaskID: uuidToString(queued.ID), FromSquadID: design, ToSquadID: build, FromStep: 0, ToStep: 1, RunRevision: 3,
+	}
+	event := run.History[2]
+	if event.SquadHandoff == nil || *event.SquadHandoff != want || event.Actor != "member/"+testUserID {
+		t.Fatalf("handoff %+v, want %+v with independent reviewer", event, want)
+	}
+	if !queued.IsLeaderTask || uuidToString(queued.SquadID) != build || uuidToString(queued.AgentID) != buildLead ||
+		!strings.Contains(queued.HandoffNote.String, event.SquadHandoff.Brief()) {
+		t.Fatalf("receiving run was not bound to the handoff: %+v", queued)
+	}
+	change("", "", approval, 409)
+	if taskCountFor(t, issue, buildLead) != 1 {
+		t.Fatal("replaying the transition created another receiving run")
+	}
+	if persisted := readDeliveryMethod(t, issue).History[2].SquadHandoff; persisted == nil || *persisted != want {
+		t.Fatalf("persisted handoff %+v, want %+v", persisted, want)
+	}
+	continued := change(buildLead, uuidToString(queued.ID), map[string]any{
+		"action": "advance", "base_revision": 3, "evidence": "Implemented and reran the accepted fixture",
+	}, 200)
+	if continued.Revision != 4 || continued.State != "review" || continued.Step != 1 {
+		t.Fatalf("receiving squad did not continue the same issue: %+v", continued)
+	}
+}
+
 func TestConcurrentMethodStartAndAgentHandoffShareOneTaskPerRevision(t *testing.T) {
 	rt := dbfx.Runtime(t, "Handoff runtime")
 	agent := dbfx.Agent(t, "Method executor", rt)
@@ -194,7 +266,7 @@ func TestAgileDurableHandoffAfterLostNotification(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	task, err := testHandler.TaskService.CreateWorkMethodHandoff(ctx, db.New(tx), issue, util.MustParseUUID(agent), pgtype.UUID{}, 6, "Recover revision 6", util.MustParseUUID(testUserID), nil, pgtype.UUID{})
+	task, err := testHandler.TaskService.CreateWorkMethodHandoff(ctx, db.New(tx), issue, util.MustParseUUID(agent), pgtype.UUID{}, 6, "Recover revision 6", util.MustParseUUID(testUserID), nil, pgtype.UUID{}, pgtype.UUID{})
 	if err != nil {
 		t.Fatal(err)
 	}

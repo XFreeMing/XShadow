@@ -91,6 +91,7 @@
     "restart": "Review latest step",
     "submit_review": "Submit for review",
     "steps": "Method steps",
+    "squad_handoff": "Squad handoff · {{from}} → {{to}}",
     "history": "Evidence and review history",
     "development": "Development",
     "research": "Research",

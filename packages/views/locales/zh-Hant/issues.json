@@ -91,6 +91,7 @@
     "restart": "核對最新步驟",
     "submit_review": "提交審查",
     "steps": "方法步驟",
+    "squad_handoff": "小隊交接 · {{from}} → {{to}}",
     "history": "證據與審查記錄",
     "development": "研發",
     "research": "調查研究",

@@ -81,6 +81,7 @@ type Run struct {
 }
 
 type Event struct {
+	SquadHandoff      *SquadHandoff        `json:"squad_handoff,omitempty"`
 	DeliveryReceipt   *DeliveryReceipt     `json:"delivery_receipt,omitempty"`
 	CoveragePreflight []CoveragePreflight  `json:"coverage_preflight,omitempty"`
 	CandidateFailure  *CandidateFailure    `json:"candidate_failure,omitempty"`

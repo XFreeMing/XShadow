@@ -50,7 +50,7 @@ func (s *TaskService) createWorkflowSquadHandoffTask(ctx context.Context, issue 
 
 // CreateWorkMethodHandoff writes the next stage's task alongside the issue
 // revision that selected it. The due row survives a currently occupied slot.
-func (s *TaskService) CreateWorkMethodHandoff(ctx context.Context, q *db.Queries, issue db.Issue, agentID, squadID pgtype.UUID, methodRevision int, note string, actorUserID pgtype.UUID, parent *db.AgentTaskQueue, executionID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) CreateWorkMethodHandoff(ctx context.Context, q *db.Queries, issue db.Issue, agentID, squadID pgtype.UUID, methodRevision int, note string, actorUserID pgtype.UUID, parent *db.AgentTaskQueue, executionID, taskID pgtype.UUID) (db.AgentTaskQueue, error) {
 	scoped := &TaskService{Queries: q, Composio: s.Composio, FeatureFlags: s.FeatureFlags}
 	attr := attribution.ClassifyDirect(attribution.DirectFacts{IssueID: issue.ID, ActorUserID: actorUserID})
 	if parent != nil {
@@ -59,6 +59,9 @@ func (s *TaskService) CreateWorkMethodHandoff(ctx context.Context, q *db.Queries
 	params, err := scoped.prepareMentionTask(ctx, issue, agentID, pgtype.UUID{}, nil, squadID.Valid, squadID, false, note, attr, pgtype.UUID{}, OriginDerived, false)
 	if err != nil {
 		return db.AgentTaskQueue{}, err
+	}
+	if taskID.Valid {
+		params.ID = taskID
 	}
 	params.FireAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	params.GoalExecutionID = executionID

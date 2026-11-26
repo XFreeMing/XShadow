@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -336,6 +337,19 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 		}
 		boardStatus = pgtype.Text{String: status, Valid: true}
 	}
+	var receivingTaskID pgtype.UUID
+	var squadHandoff *workmethod.SquadHandoff
+	if squadID.Valid && len(issue.WorkMethodRun) > 0 {
+		var before workmethod.Run
+		if err := json.Unmarshal(issue.WorkMethodRun, &before); err != nil {
+			writeError(w, 500, "failed to read previous method phase")
+			return db.Issue{}, false
+		}
+		taskID := dbid.NewV7()
+		if squadHandoff = run.RecordSquadHandoff(before, uuidToString(taskID)); squadHandoff != nil {
+			receivingTaskID = taskID
+		}
+	}
 	raw, err := json.Marshal(run)
 	if err != nil {
 		writeError(w, 500, "failed to encode method run")
@@ -366,7 +380,10 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 		if failure := run.CandidateFailureReview(); failure != nil {
 			note += "\n" + failure.ReviewBrief()
 		}
-		task, err = h.TaskService.CreateWorkMethodHandoff(ctx, q, updated, agentID, squadID, run.Revision, note, human, parent, executionID)
+		if squadHandoff != nil {
+			note += "\n" + squadHandoff.Brief()
+		}
+		task, err = h.TaskService.CreateWorkMethodHandoff(ctx, q, updated, agentID, squadID, run.Revision, note, human, parent, executionID, receivingTaskID)
 		if err != nil {
 			slog.Warn("work method dispatch failed", "issue_id", uuidToString(issue.ID), "error", err)
 			writeError(w, 409, "工作方法派工未成功，请检查接收人的运行环境与访问权限")
