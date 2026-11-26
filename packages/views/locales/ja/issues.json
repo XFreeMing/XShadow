@@ -466,7 +466,9 @@
     "gantt": "ガント",
     "swimlane": "スイムレーン",
     "tooltip_calendar": "カレンダー表示",
-    "calendar": "カレンダー"
+    "tooltip_form": "フォーム表示",
+    "calendar": "カレンダー",
+    "form": "フォーム"
   },
   "table": {
     "select_all": "表示中のタスクをすべて選択",
@@ -2163,6 +2165,13 @@
     "status_failed": "幕僚長がこの回答を処理できませんでした",
     "status_no_record": "幕僚長の実行は終了しましたが、対応記録がありません",
     "description_toggle": "タスクの説明"
+  },
+  "form": {
+    "sr_label": "新規タスク",
+    "heading": "新規タスク",
+    "type_placeholder": "タスク種別",
+    "type_none": "種別なし",
+    "create_another": "続けて作成"
   },
   "calendar": {
     "prev": "Previous month",

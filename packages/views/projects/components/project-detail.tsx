@@ -608,7 +608,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           ) : (
           <IssueSurface
             scope={issueScope}
-            modes={["board", "list", "table", "grid", "gallery", "calendar", "swimlane", "gantt"]}
+            modes={["board", "list", "table", "grid", "gallery", "calendar", "form", "swimlane", "gantt"]}
             renderHeader={({ controller }) => (
               <IssueViewHeader
                 controller={controller}

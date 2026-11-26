@@ -456,6 +456,7 @@
     "tooltip_grid": "多维视图",
     "tooltip_gallery": "画册视图",
     "tooltip_calendar": "日历视图",
+    "tooltip_form": "表单视图",
     "tooltip_gantt": "甘特图",
     "tooltip_swimlane": "泳道视图",
     "section": "视图",
@@ -465,6 +466,7 @@
     "grid": "多维视图",
     "gallery": "画册",
     "calendar": "日历",
+    "form": "表单",
     "gantt": "甘特图",
     "swimlane": "泳道"
   },
@@ -535,6 +537,13 @@
       "average": "平均值",
       "count": "计数"
     }
+  },
+  "form": {
+    "sr_label": "新建任务",
+    "heading": "新建任务",
+    "type_placeholder": "任务类型",
+    "type_none": "无类型",
+    "create_another": "再建一条"
   },
   "calendar": {
     "prev": "上个月",

@@ -462,7 +462,9 @@
     "gantt": "Gantt",
     "swimlane": "Carriles",
     "tooltip_calendar": "Vista calendario",
-    "calendar": "Calendario"
+    "tooltip_form": "Vista formulario",
+    "calendar": "Calendario",
+    "form": "Formulario"
   },
   "table": {
     "select_all": "Seleccionar todas las tareas visibles",
@@ -2244,6 +2246,13 @@
     "status_failed": "El jefe de gabinete no pudo procesar esta respuesta",
     "status_no_record": "La ejecución del jefe de gabinete terminó sin un registro de gestión",
     "description_toggle": "Descripción de la tarea"
+  },
+  "form": {
+    "sr_label": "Nueva tarea",
+    "heading": "Nueva tarea",
+    "type_placeholder": "Tipo de tarea",
+    "type_none": "Sin tipo",
+    "create_another": "Crear otra"
   },
   "calendar": {
     "prev": "Previous month",

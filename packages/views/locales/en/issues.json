@@ -462,6 +462,7 @@
     "tooltip_grid": "Multidimensional view",
     "tooltip_gallery": "Gallery view",
     "tooltip_calendar": "Calendar view",
+    "tooltip_form": "Form view",
     "tooltip_gantt": "Gantt view",
     "tooltip_swimlane": "Swimlane view",
     "section": "View",
@@ -471,6 +472,7 @@
     "grid": "Multidimensional view",
     "gallery": "Gallery",
     "calendar": "Calendar",
+    "form": "Form",
     "gantt": "Gantt",
     "swimlane": "Swimlane"
   },
@@ -541,6 +543,13 @@
       "average": "Average",
       "count": "Count"
     }
+  },
+  "form": {
+    "sr_label": "New task",
+    "heading": "New task",
+    "type_placeholder": "Task type",
+    "type_none": "No type",
+    "create_another": "Create another"
   },
   "calendar": {
     "prev": "Previous month",

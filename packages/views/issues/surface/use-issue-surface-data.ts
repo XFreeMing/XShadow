@@ -112,6 +112,7 @@ export function useIssueSurfaceData({
   queryPlan,
   projectId,
   usesGantt,
+  usesForm,
   usesTable,
   serverStatusBranches,
   serverGroupBranches,
@@ -146,6 +147,7 @@ export function useIssueSurfaceData({
   queryPlan: IssueSurfaceQueryPlan;
   projectId?: string;
   usesGantt: boolean;
+  usesForm: boolean;
   usesTable: boolean;
   serverStatusBranches: IssueStatusBranches;
   serverGroupBranches: IssueGroupBranches;
@@ -550,6 +552,7 @@ export function useIssueSurfaceData({
       !projectCatalogDependency.error &&
       !relationDependency.error &&
       !usesGantt &&
+      !usesForm &&
       !usesTable &&
       (serverStatusBranches.enabled
         ? serverStatusBranches.isTotalKnown &&

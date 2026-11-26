@@ -24,6 +24,7 @@ function renderDisplay(
     allowGrid?: boolean;
     allowGallery?: boolean;
     allowCalendar?: boolean;
+    allowForm?: boolean;
   } = {},
   setup: (store: StoreApi<IssueViewState>) => void = () => {},
 ) {
@@ -109,6 +110,17 @@ describe("Display layout", () => {
     const layouts = await screen.findByRole("group", { name: "View" });
     fireEvent.click(within(layouts).getByRole("button", { name: "Calendar" }));
     expect(store.getState().viewMode).toBe("calendar");
+  });
+
+  it("switches to Form when allowForm is enabled", async () => {
+    const store = renderDisplay(
+      { allowForm: true },
+      (s) => s.getState().setViewMode("board"),
+    );
+
+    const layouts = await screen.findByRole("group", { name: "View" });
+    fireEvent.click(within(layouts).getByRole("button", { name: "Form" }));
+    expect(store.getState().viewMode).toBe("form");
   });
 
   it("keeps the table's grouping and columns in the panel", async () => {

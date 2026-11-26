@@ -466,7 +466,9 @@
     "gantt": "甘特圖",
     "swimlane": "泳道",
     "tooltip_calendar": "日曆檢視",
-    "calendar": "日曆"
+    "tooltip_form": "表單檢視",
+    "calendar": "日曆",
+    "form": "表單"
   },
   "table": {
     "select_all": "選擇所有可見任務",
@@ -2163,6 +2165,13 @@
     "status_failed": "幕僚長未能處理這條答覆",
     "status_no_record": "幕僚長執行已結束，但沒有留下處理記錄",
     "description_toggle": "任務說明"
+  },
+  "form": {
+    "sr_label": "新建任務",
+    "heading": "新建任務",
+    "type_placeholder": "任務類型",
+    "type_none": "無類型",
+    "create_another": "再建一條"
   },
   "calendar": {
     "prev": "上個月",

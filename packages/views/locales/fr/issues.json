@@ -472,7 +472,9 @@
     "gantt": "Gantt",
     "swimlane": "Couloirs",
     "tooltip_calendar": "Vue calendrier",
-    "calendar": "Calendrier"
+    "tooltip_form": "Vue formulaire",
+    "calendar": "Calendrier",
+    "form": "Formulaire"
   },
   "table": {
     "select_all": "Sélectionner toutes les tâches visibles",
@@ -2244,6 +2246,13 @@
     "status_failed": "Le chef de cabinet n'a pas pu traiter cette réponse",
     "status_no_record": "L'exécution du chef de cabinet s'est terminée sans trace de traitement",
     "description_toggle": "Description de la tâche"
+  },
+  "form": {
+    "sr_label": "Nouvelle tâche",
+    "heading": "Nouvelle tâche",
+    "type_placeholder": "Type de tâche",
+    "type_none": "Aucun type",
+    "create_another": "Créer une autre"
   },
   "calendar": {
     "prev": "Previous month",

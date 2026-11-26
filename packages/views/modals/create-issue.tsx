@@ -104,6 +104,11 @@ import { useT } from "../i18n";
 import { SourceContextPreviewCard, useSourceContextFailureMessage } from "./source-context-preview";
 import { useIssueLimitUpgradePrompt } from "./use-issue-limit-upgrade-prompt";
 import { CopyParentFields } from "./copy-parent-fields";
+import {
+  applyIssueTypeSelection,
+  missingRequiredIssueTypeFields,
+  orderedIssueTypePropertyEntries,
+} from "../issues/issue-type-create-fields";
 
 // ManualCreatePanel — manual-mode body of the create-issue dialog. Renders
 // DialogContent + everything inside; the surrounding `<Dialog>` is owned by
@@ -464,34 +469,19 @@ export function ManualCreatePanel({
   };
 
   const selectIssueType = (nextTypeId: string | undefined) => {
-    const nextType = nextTypeId
-      ? workspaceIssueTypes.find((it) => it.id === nextTypeId) ?? null
-      : null;
-    const nextValues = { ...propertyValues };
-    // Remove untouched defaults from the previously selected type without
-    // discarding values the user explicitly entered.
-    for (const defaultPropId of appliedTypeDefaultsRef.current) {
-      delete nextValues[defaultPropId];
-    }
-    const nextAppliedDefaults = new Set<string>();
-    if (nextType) {
-      for (const field of nextType.fields) {
-        if (
-          field.default_value !== undefined &&
-          !Object.prototype.hasOwnProperty.call(nextValues, field.property_id)
-        ) {
-          nextValues[field.property_id] = field.default_value;
-          nextAppliedDefaults.add(field.property_id);
-        }
-      }
-    }
-    appliedTypeDefaultsRef.current = nextAppliedDefaults;
-    setIssueTypeId(nextType?.id);
-    setPropertyValues(nextValues);
+    const next = applyIssueTypeSelection(
+      nextTypeId,
+      workspaceIssueTypes,
+      propertyValues,
+      appliedTypeDefaultsRef.current,
+    );
+    appliedTypeDefaultsRef.current = next.appliedTypeDefaults;
+    setIssueTypeId(next.issueTypeId);
+    setPropertyValues(next.propertyValues);
     setManual({
-      issueTypeId: nextType?.id,
-      issueTypeDefaultIds: [...nextAppliedDefaults],
-      propertyValues: nextValues,
+      issueTypeId: next.issueTypeId,
+      issueTypeDefaultIds: [...next.appliedTypeDefaults],
+      propertyValues: next.propertyValues,
     });
     setPropertyErrorId(null);
     setMissingRequiredError(null);
@@ -912,11 +902,7 @@ export function ManualCreatePanel({
       return;
     }
     if (selectedIssueType) {
-      const missingFields = selectedIssueType.fields.filter(
-        (field) =>
-          field.required &&
-          !Object.prototype.hasOwnProperty.call(propertyValues, field.property_id),
-      );
+      const missingFields = missingRequiredIssueTypeFields(selectedIssueType, propertyValues);
       if (missingFields.length > 0) {
         const firstMissing = missingFields[0]!;
         const propById = new Map(workspaceProperties.map((prop) => [prop.id, prop]));
@@ -1335,31 +1321,12 @@ export function ManualCreatePanel({
                   detail, but write into the persisted draft until creation.
                   When a task type is selected, its fields render first in exact
                   configured order, followed by any extra populated properties. */}
-              {(() => {
-                const propertyById = new Map(workspaceProperties.map((prop) => [prop.id, prop]));
-                const orderedEntries: Array<{
-                  property: (typeof workspaceProperties)[number];
-                  required: boolean;
-                }> = [];
-                const seenIds = new Set<string>();
-                if (selectedIssueType) {
-                  for (const field of selectedIssueType.fields) {
-                    const prop = propertyById.get(field.property_id);
-                    if (!prop) continue;
-                    seenIds.add(prop.id);
-                    orderedEntries.push({ property: prop, required: field.required });
-                  }
-                }
-                for (const prop of workspaceProperties) {
-                  if (seenIds.has(prop.id)) continue;
-                  if (
-                    Object.prototype.hasOwnProperty.call(propertyValues, prop.id) ||
-                    customPropertyPickerId === prop.id
-                  ) {
-                    orderedEntries.push({ property: prop, required: false });
-                  }
-                }
-                return orderedEntries.map(({ property, required }) => {
+              {orderedIssueTypePropertyEntries(
+                selectedIssueType,
+                workspaceProperties,
+                propertyValues,
+                customPropertyPickerId,
+              ).map(({ property, required }) => {
                   const value = propertyValues[property.id];
                   const isMissingRequired = required && value === undefined;
                   return (
@@ -1407,8 +1374,7 @@ export function ManualCreatePanel({
                       />
                     </div>
                   );
-                });
-              })()}
+                })}
 
               {/* Parent chip — appears when parent is set.
                   Placed before the ⋯ so it wraps to a new line with ⋯ if

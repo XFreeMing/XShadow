@@ -483,7 +483,9 @@
     "gantt": "Диаграмма Ганта",
     "swimlane": "Дорожки",
     "tooltip_calendar": "Вид «Календарь»",
-    "calendar": "Календарь"
+    "tooltip_form": "Вид «Форма»",
+    "calendar": "Календарь",
+    "form": "Форма"
   },
   "table": {
     "select_all": "Выбрать все видимые задачи",
@@ -2412,6 +2414,13 @@
     "status_failed": "Руководитель аппарата не смог обработать этот ответ",
     "status_no_record": "Запуск руководителя аппарата завершился без записи об обработке",
     "description_toggle": "Описание задачи"
+  },
+  "form": {
+    "sr_label": "Новая задача",
+    "heading": "Новая задача",
+    "type_placeholder": "Тип задачи",
+    "type_none": "Без типа",
+    "create_another": "Создать ещё"
   },
   "calendar": {
     "prev": "Previous month",

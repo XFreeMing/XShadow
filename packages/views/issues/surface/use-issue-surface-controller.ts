@@ -110,6 +110,7 @@ export interface IssueSurfaceController {
   allowGrid: boolean;
   allowGallery: boolean;
   allowCalendar: boolean;
+  allowForm: boolean;
   surfaceIssues: Issue[];
   projectIssues: Issue[];
   issues: Issue[];
@@ -456,6 +457,7 @@ export function useIssueSurfaceController({
   const usesGrid = effectiveViewMode === "grid";
   const usesGallery = effectiveViewMode === "gallery";
   const usesCalendar = effectiveViewMode === "calendar";
+  const usesForm = effectiveViewMode === "form";
   const usesTableRows = usesTable || usesGrid || usesGallery || usesCalendar;
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
@@ -938,6 +940,7 @@ export function useIssueSurfaceController({
     queryPlan,
     projectId,
     usesGantt,
+    usesForm,
     usesTable: usesTableRows,
     serverStatusBranches,
     serverGroupBranches,
@@ -1082,6 +1085,7 @@ export function useIssueSurfaceController({
     allowGrid: allowedModes.has("grid"),
     allowGallery: allowedModes.has("gallery"),
     allowCalendar: allowedModes.has("calendar"),
+    allowForm: allowedModes.has("form"),
     ...surfaceData,
     isLoading: data.isLoading || workingDependency.pending || unreadDependency.pending,
     workingAgents,
@@ -1100,6 +1104,7 @@ export function useIssueSurfaceController({
       !membershipUnresolved &&
       data.isEmpty &&
       !data.isRefreshing &&
+      !usesForm &&
       !(usesTable && (tableSearch.trim() || debouncedActiveSearch)),
     filterDependencyError: failedDependency
       ? { kind: failedDependency[0], retry: failedDependency[1].retry }

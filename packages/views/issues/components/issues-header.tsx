@@ -20,6 +20,7 @@ import {
   Image,
   LayoutGrid,
   List,
+  SquarePen,
   ListTree,
   Search,
   SignalHigh,
@@ -1823,6 +1824,7 @@ const LAYOUTS: { mode: ViewMode; Icon: typeof List }[] = [
   { mode: "grid", Icon: LayoutGrid },
   { mode: "gallery", Icon: Image },
   { mode: "calendar", Icon: CalendarDays },
+  { mode: "form", Icon: SquarePen },
   { mode: "swimlane", Icon: Waves },
   { mode: "gantt", Icon: ChartGantt },
 ];
@@ -1834,6 +1836,7 @@ export function IssueDisplayControls({
   allowGrid = false,
   allowGallery = false,
   allowCalendar = false,
+  allowForm = false,
   dateFilter = null,
   onDateFilterChange,
   facetCountsExact = true,
@@ -1861,6 +1864,7 @@ export function IssueDisplayControls({
   allowGrid?: boolean;
   allowGallery?: boolean;
   allowCalendar?: boolean;
+  allowForm?: boolean;
   /**
    * Whether `scopedIssues` covers the surface's full window. Table does not
    * use loaded rows for counts; server-paged List, Board, and Swimlane follow
@@ -2043,7 +2047,8 @@ export function IssueDisplayControls({
     (viewMode === "gantt" && !allowGantt) ||
     (viewMode === "grid" && !allowGrid) ||
     (viewMode === "gallery" && !allowGallery) ||
-    (viewMode === "calendar" && !allowCalendar)
+    (viewMode === "calendar" && !allowCalendar) ||
+    (viewMode === "form" && !allowForm)
       ? "list"
       : viewMode;
   const layouts = LAYOUTS.filter(
@@ -2051,7 +2056,8 @@ export function IssueDisplayControls({
       (mode !== "gantt" || allowGantt) &&
       (mode !== "grid" || allowGrid) &&
       (mode !== "gallery" || allowGallery) &&
-      (mode !== "calendar" || allowCalendar),
+      (mode !== "calendar" || allowCalendar) &&
+      (mode !== "form" || allowForm),
   );
   const LayoutIcon = hideViewToggle
     ? SlidersHorizontal

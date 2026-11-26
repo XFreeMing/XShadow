@@ -466,7 +466,9 @@
     "gantt": "간트",
     "swimlane": "스윔레인",
     "tooltip_calendar": "캘린더 보기",
-    "calendar": "캘린더"
+    "tooltip_form": "양식 보기",
+    "calendar": "캘린더",
+    "form": "양식"
   },
   "table": {
     "select_all": "표시된 모든 태스크 선택",
@@ -2163,6 +2165,13 @@
     "status_failed": "비서실장이 이 답변을 처리하지 못했습니다",
     "status_no_record": "비서실장 실행이 끝났지만 처리 기록이 없습니다",
     "description_toggle": "작업 설명"
+  },
+  "form": {
+    "sr_label": "새 작업",
+    "heading": "새 작업",
+    "type_placeholder": "작업 유형",
+    "type_none": "유형 없음",
+    "create_another": "다음 작업 만들기"
   },
   "calendar": {
     "prev": "Previous month",

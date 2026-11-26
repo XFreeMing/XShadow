@@ -45,6 +45,7 @@ import { ListView } from "../components/list-view";
 import { MultidimensionalGridView } from "../components/multidimensional-grid-view";
 import { IssueGalleryView } from "../components/issue-gallery-view";
 import { IssueCalendarView } from "../components/issue-calendar-view";
+import { IssueFormView } from "../components/issue-form-view";
 import { SwimLaneView } from "../components/swimlane-view";
 import { TableView } from "../components/table-view";
 import { useT } from "../../i18n";
@@ -84,7 +85,11 @@ export function IssueSurfaceWithStore({ store, baseline, ...props }: Omit<IssueS
   const wsId = useWorkspaceId();
   return <ViewStoreProvider store={store}>
     <ViewBaselineProvider baseline={baseline}>
-      <IssueSurfaceContent key={wsId} {...props} />
+      <IssueSurfaceContent
+        key={wsId}
+        {...props}
+        formUploadKey={`${wsId}:${issueScopeKey(props.scope)}`}
+      />
     </ViewBaselineProvider>
   </ViewStoreProvider>;
 }
@@ -190,6 +195,7 @@ export function IssueSurface({
           scope={effectiveScope}
           modes={modes}
           createDefaults={createDefaults}
+          formUploadKey={`${wsId}:${resolvedSurfaceKey}`}
           search={search}
           renderHeader={renderHeader}
           renderEmpty={renderEmpty}
@@ -212,6 +218,7 @@ function IssueSurfaceContent({
   scope,
   modes,
   createDefaults,
+  formUploadKey,
   search,
   renderHeader,
   renderEmpty,
@@ -220,7 +227,7 @@ function IssueSurfaceContent({
   showClientEmpty,
   batchToolbar,
   contentClassName,
-}: Omit<IssueSurfaceComponentProps, "surfaceKey">) {
+}: Omit<IssueSurfaceComponentProps, "surfaceKey"> & { formUploadKey: string }) {
   const workspaceId = useWorkspaceId();
   // One polling owner for the whole surface; individual cards only select cache data.
   useQuery({ ...workspaceWakeupSummariesOptions(workspaceId), refetchInterval: 10_000 });
@@ -317,6 +324,12 @@ function IssueSurfaceContent({
               </div>
             ) : <GanttView issues={controller.filteredGanttIssues} />)}
           </IssueGanttPanel>
+        ) : controller.viewMode === "form" ? (
+          <IssueFormView
+            scope={scope}
+            createDefaults={createDefaults}
+            formUploadKey={formUploadKey}
+          />
         ) : pending ? pending : controller.isEmpty || shouldShowClientEmpty ? (
           // A filtered-empty surface is NOT an empty surface. Claiming "no
           // issues here yet" and offering to create one is wrong when the rows

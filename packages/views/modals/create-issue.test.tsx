@@ -137,6 +137,7 @@ const emptyIssueDraft = () => ({
     assigneeId: undefined as string | undefined,
     labelIds: [] as string[],
     propertyValues: {} as Record<string, string | number | boolean | string[]>,
+    issueTypeDefaultIds: undefined as string[] | undefined,
   },
   agent: {
     prompt: "",
@@ -1152,6 +1153,7 @@ describe("CreateIssueModal", () => {
           "property-stale": "old value",
           "property-tier": "option-enterprise",
         },
+        issueTypeDefaultIds: ["property-stale", "property-tier"],
       };
       mockDraftStore.draft.shared.priority = "high";
       const originalDraft = structuredClone(mockDraftStore.draft);
@@ -1212,10 +1214,18 @@ describe("CreateIssueModal", () => {
       expect(screen.getByPlaceholderText("Issue title")).toHaveValue("Keep this draft");
       expect(screen.getByPlaceholderText("Add description...")).toHaveValue("Keep this body");
       const remainingProperties = { "property-tier": "option-enterprise" };
-      expect(mockSetManual).toHaveBeenCalledWith({ propertyValues: remainingProperties });
+      const remainingDefaults = ["property-tier"];
+      expect(mockSetManual).toHaveBeenCalledWith({
+        propertyValues: remainingProperties,
+        issueTypeDefaultIds: remainingDefaults,
+      });
       expect(mockDraftStore.draft).toEqual({
         ...originalDraft,
-        manual: { ...originalDraft.manual, propertyValues: remainingProperties },
+        manual: {
+          ...originalDraft.manual,
+          propertyValues: remainingProperties,
+          issueTypeDefaultIds: remainingDefaults,
+        },
       });
       if (path === "ordinary") {
         const persisted = JSON.parse(localStorage.getItem("multica_issue_draft:property-recovery")!);
