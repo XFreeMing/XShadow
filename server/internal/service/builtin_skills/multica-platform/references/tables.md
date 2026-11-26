@@ -35,7 +35,7 @@ A `409` (`cursor_query_mismatch`) means the paging cursor does not match the que
 
 - `"$MULTICA_CLI_PATH" table list` — `GET /api/tables`
 - `"$MULTICA_CLI_PATH" table get <table-id> [--view <view-id>]` — `GET /api/tables/<table-id>` (returns `table`, `fields`, `views`, `records`, `active_view_id`)
-- `"$MULTICA_CLI_PATH" table create --input <file|->` — `POST /api/tables` (`{"name": "..."}`)
+- `"$MULTICA_CLI_PATH" table create --input <file|->` — `POST /api/tables` (`{"name": "..."}` or `{"name": "...", "fields": [{"name": "Estimate", "kind": "number"}]}`). Initial fields and the table are created atomically.
 - `"$MULTICA_CLI_PATH" table rename <table-id> --input <file|->` — `PATCH /api/tables/<table-id>` (`{"name": "..."}`)
 - `"$MULTICA_CLI_PATH" table delete <table-id>` — `DELETE /api/tables/<table-id>` (owner/admin; blocked with `409` if referenced by other tables or issue properties)
 
@@ -83,7 +83,7 @@ Attachments are scoped to a single workspace and table, stored via the workspace
 
 ### Views & Forms (`"$MULTICA_CLI_PATH" table view`)
 
-Supported view kinds: `grid`, `kanban`, `gallery`, `form`.
+Supported view kinds: `grid`, `kanban`, `gallery`, `calendar`, `gantt`, `org_chart`, `form`.
 
 - `"$MULTICA_CLI_PATH" table view list <table-id>` — `GET /api/tables/<table-id>/views`
 - `"$MULTICA_CLI_PATH" table view get <table-id> <view-id>` — `GET /api/tables/<table-id>/views/<view-id>`
@@ -104,3 +104,10 @@ Point-in-time revisions and exact historical table snapshots (each committed tra
 - `"$MULTICA_CLI_PATH" table history list <table-id> [--limit N] [--cursor <cursor>]` — `GET /api/tables/<table-id>/history` (lists bounded paged committed revisions in reverse chronological order with `revision`, `recorded_at`, `baseline`, `summary`, `baseline_revision`, `latest_revision`, `has_more`, and `next_cursor`)
 - `"$MULTICA_CLI_PATH" table history snapshot <table-id> (--revision N | --timestamp <iso8601>)` — `GET /api/tables/<table-id>/history/snapshot?revision=N` (or `timestamp=...`). Returns `revision`, `recorded_at`, `baseline`, `computed_values_mode` (`"stored_raw_only"`), historical `table` metadata, `fields` (including formula/lookup schema), `views`, `records` with record `revision`, and stored raw cell `values` keyed by field UUID of that exact committed state. Formula/lookup fields are retained in schema without recomputing unmaterialized values. Queries before the table's history baseline or outside recorded bounds return `404` with error code `history_not_available`.
 - `"$MULTICA_CLI_PATH" table history deleted <table-id> [--limit N] [--cursor <cursor>]` — `GET /api/tables/<table-id>/history/deleted` (lists removed record IDs from recorded history with `record_id`, `deleted_at_revision`, `deleted_at`, `has_more`, and `next_cursor`)
+
+### Templates (`"$MULTICA_CLI_PATH" table template`)
+
+- `"$MULTICA_CLI_PATH" table template export <table-id> [--sample-record-ids <id,id,...>]` — `GET /api/tables/<table-id>/template`. Save the returned versioned JSON directly for import. Export includes field and view definitions. By default it includes zero records. An explicit sample can include up to 50 rows with text, number, date, single-select or checkbox cells.
+- `"$MULTICA_CLI_PATH" table template import --input <file|->` — `POST /api/tables/templates/import`. The import creates the table, fields, views and optional samples in one operation. Change `name` in the input to choose a new name. The response contains the new IDs in `id_map`. Formulas, same-table one-way relations, lookups and saved views bind to the new IDs. Invalid definitions abort the entire import.
+
+Templates omit task and user identities, permissions, comments, history, and attachment contents. Cross-table dependencies and bidirectional relation definitions return `409` with `unsupported_template_dependency`; use direct schema operations to configure those links in the destination workspace. Filters that compare a cell against a specific attachment or related record ID require portable filter criteria before export.

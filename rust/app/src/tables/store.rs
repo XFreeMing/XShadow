@@ -154,6 +154,7 @@ pub async fn create_table(
             sort: None,
             group: None,
         },
+        0,
     )
     .await?;
     commit(tx).await?;
@@ -488,7 +489,15 @@ pub async fn get_record(
         .iter()
         .any(|field| field.kind == "lookup" || field.kind == "formula")
     {
-        projection::project_sheet(&mut tx, workspace, &table.id, &mut fields, &mut records).await?;
+        projection::project_sheet(
+            &mut tx,
+            workspace,
+            &table.id,
+            &mut fields,
+            &mut records,
+            projection::PrimaryRows::Subset,
+        )
+        .await?;
     }
     commit(tx).await?;
     Ok(records.pop().expect("one record"))
@@ -1418,7 +1427,7 @@ pub async fn create_view(
         GroupUpdate::Keep => None,
     };
     let view = normalize_write(table, write, kind, config, group, &fields)?;
-    let saved = insert_view(&mut tx, workspace, table, &view).await?;
+    let saved = insert_view(&mut tx, workspace, table, &view, 0).await?;
     if let Some(actor) = actor {
         publish_metadata_event(
             &mut tx,
@@ -1646,7 +1655,15 @@ async fn load_sheet(
         .as_ref()
         .and_then(|id| views.iter().find(|view| &view.id == id));
     let mut records = load_records(tx, workspace, &table.id, &fields).await?;
-    projection::project_sheet(tx, workspace, &table.id, &mut fields, &mut records).await?;
+    projection::project_sheet(
+        tx,
+        workspace,
+        &table.id,
+        &mut fields,
+        &mut records,
+        projection::PrimaryRows::All,
+    )
+    .await?;
     if let Some(view) = active_view {
         if let Some(filter) = &view.filter {
             let field = fields.iter().find(|item| item.id == filter.field_id);
@@ -1697,7 +1714,7 @@ async fn load_sheet(
     })
 }
 
-fn def_of(field: &FieldDto) -> FieldDef {
+pub(super) fn def_of(field: &FieldDto) -> FieldDef {
     FieldDef {
         id: field.id.clone(),
         kind: field.kind.clone(),
@@ -1847,7 +1864,7 @@ pub(super) async fn next_position(
     Ok(position)
 }
 
-async fn insert_table(
+pub(super) async fn insert_table(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     name: &str,
@@ -1868,17 +1885,19 @@ async fn insert_table(
     table_from_row(&row)
 }
 
-async fn insert_view(
+pub(super) async fn insert_view(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
     view: &StoredView,
+    order: i32,
 ) -> Result<ViewDto, StoreError> {
     let created = ts("created_at");
     let updated = ts("updated_at");
     let sql = format!(
-        "INSERT INTO generic_view (workspace_id, table_id, name, kind, config, columns, filter, sort, group_field)
-         VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9)
+        "INSERT INTO generic_view (workspace_id, table_id, name, kind, config, columns, filter, sort, group_field, created_at, updated_at)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9,
+                 now() + $10::int * interval '1 microsecond', now() + $10::int * interval '1 microsecond')
          RETURNING id::text, name, kind, config::text, columns::text, filter::text, sort::text, group_field, {created}, {updated}"
     );
     let row = sqlx::query(&sql)
@@ -1891,6 +1910,7 @@ async fn insert_view(
         .bind(json_option(&view.filter)?)
         .bind(json_option(&view.sort)?)
         .bind(&view.group)
+        .bind(order)
         .fetch_one(&mut **tx)
         .await
         .map_err(failed)?;
@@ -1928,7 +1948,7 @@ async fn update_view(
     view_from_row(&row)
 }
 
-async fn load_table(
+pub(super) async fn load_table(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -1981,7 +2001,7 @@ async fn load_field_defs(
     Ok(fields.iter().map(def_of).collect())
 }
 
-async fn load_views(
+pub(super) async fn load_views(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,

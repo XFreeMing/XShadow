@@ -18,6 +18,7 @@ use super::collab::{self, Actor};
 use super::comments;
 use super::history::{self, HistoryError};
 use super::store::{self, RecordDto, StoreError};
+use super::template::{self, TemplateError, TemplateImportRequest};
 use super::validate::{StoredFilter, StoredSort, is_uuid};
 
 struct Tables {
@@ -71,6 +72,8 @@ pub fn router(pool: PgPool, token: String) -> Router {
     let state = Arc::new(Tables { pool, token });
     Router::new()
         .route("/internal/tables", get(list_tables).post(create_table))
+        .route("/internal/tables/templates/import", post(import_template))
+        .route("/internal/tables/{id}/template", get(export_template))
         .route(
             "/internal/tables/{id}",
             get(get_sheet).patch(rename_table).delete(delete_table),
@@ -165,14 +168,80 @@ async fn list_tables(
 async fn create_table(
     State(app): State<Arc<Tables>>,
     Extension(Workspace(ws)): Extension<Workspace>,
-    body: Result<Json<NameBody>, axum::extract::rejection::JsonRejection>,
+    body: Result<Json<CreateTableBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let Ok(Json(body)) = body else {
         return invalid("请求格式不正确");
     };
+    if !body.fields.is_empty() {
+        return match template::create_with_fields(&app.pool, &ws, body.name, body.fields).await {
+            Ok(created) => (StatusCode::CREATED, Json(created)).into_response(),
+            Err(err) => template_error(err),
+        };
+    }
     match store::create_table(&app.pool, &ws, &body.name).await {
         Ok(created) => (StatusCode::CREATED, Json(created)).into_response(),
         Err(err) => store_error(err),
+    }
+}
+
+#[derive(Deserialize)]
+struct TemplateExportQuery {
+    sample_record_ids: Option<String>,
+}
+
+async fn export_template(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+    Query(query): Query<TemplateExportQuery>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    let samples = match template::parse_sample_record_ids_query(query.sample_record_ids.as_deref())
+    {
+        Ok(samples) => samples,
+        Err(err) => return template_error(err),
+    };
+    match template::export_template(&app.pool, &ws, &id, &samples).await {
+        Ok(template) => Json(template).into_response(),
+        Err(err) => template_error(err),
+    }
+}
+
+async fn import_template(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    body: Result<Json<TemplateImportRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return invalid("请求格式不正确");
+    };
+    let Ok(actor) = require_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    match template::import_template(&app.pool, &ws, &body, Some(&actor)).await {
+        Ok(created) => (StatusCode::CREATED, Json(created)).into_response(),
+        Err(err) => template_error(err),
+    }
+}
+
+fn template_error(err: TemplateError) -> Response {
+    match err {
+        TemplateError::Store(err) => store_error(err),
+        TemplateError::NotFound(message) => store_error(StoreError::NotFound(message)),
+        TemplateError::Invalid { code, message } => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": message, "code": code })),
+        )
+            .into_response(),
+        TemplateError::UnsupportedDependency { message, dependencies } => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": message, "code": "unsupported_template_dependency", "dependencies": dependencies })),
+        )
+            .into_response(),
     }
 }
 
@@ -240,6 +309,13 @@ async fn get_sheet(
 #[derive(Deserialize)]
 struct NameBody {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateTableBody {
+    name: String,
+    #[serde(default)]
+    fields: Vec<template::TemplateFieldInput>,
 }
 
 #[derive(Deserialize)]

@@ -37,6 +37,7 @@ Generic tables (workspace-scoped UUID resources):
   multica table record list|get|options|create|update|delete|batch
   multica table record comment list|create
   multica table attachment list|upload|get|download
+  multica table template export|import
   multica table view list|get|create|update|delete|submit
   multica table changes <table-id> [--since N]
   multica table history list|snapshot|deleted <table-id> ...
@@ -462,6 +463,7 @@ func init() {
 	tableCmd.AddCommand(tableFieldCmd)
 	tableCmd.AddCommand(tableRecordCmd)
 	tableCmd.AddCommand(tableAttachmentCmd)
+	tableCmd.AddCommand(newTableTemplateCmd())
 	tableCmd.AddCommand(tableViewCmd)
 	tableCmd.AddCommand(tableChangesCmd)
 	tableCmd.AddCommand(tableHistoryCmd)

@@ -327,7 +327,15 @@ async fn values_for_table_records(
     }
     let mut records: Vec<_> = records.into_values().collect();
     if derived {
-        projection::project_sheet(tx, workspace, table_id, &mut fields, &mut records).await?;
+        projection::project_sheet(
+            tx,
+            workspace,
+            table_id,
+            &mut fields,
+            &mut records,
+            projection::PrimaryRows::All,
+        )
+        .await?;
     }
     Ok(records
         .into_iter()

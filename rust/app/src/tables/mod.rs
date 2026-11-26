@@ -14,6 +14,7 @@ pub(crate) mod issue_derived;
 mod projection;
 mod relation;
 pub(crate) mod store;
+mod template;
 mod validate;
 
 pub use http::router;

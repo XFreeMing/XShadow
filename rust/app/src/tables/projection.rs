@@ -109,7 +109,7 @@ fn parse_stored_ast(config: &Value) -> Result<Expr, &'static str> {
     serde_json::from_value(raw.clone()).map_err(|_| "公式语法树无效")
 }
 
-fn stored_formula_config(expr: &Expr, rendered: &str) -> Result<Value, StoreError> {
+pub(super) fn stored_formula_config(expr: &Expr, rendered: &str) -> Result<Value, StoreError> {
     let ast = serde_json::to_value(expr).map_err(|_| StoreError::Failed)?;
     let mut refs = Vec::new();
     expr.refs(&mut refs);
@@ -305,7 +305,7 @@ pub(super) fn field_dependencies(kind: &str, config: &Value) -> Vec<String> {
     }
 }
 
-fn has_cycle_from(graph: &BTreeMap<String, Vec<String>>, start: &str) -> bool {
+pub(super) fn has_cycle_from(graph: &BTreeMap<String, Vec<String>>, start: &str) -> bool {
     fn dfs(
         graph: &BTreeMap<String, Vec<String>>,
         node: &str,
@@ -661,12 +661,18 @@ impl Evaluator {
     }
 }
 
+pub(super) enum PrimaryRows {
+    All,
+    Subset,
+}
+
 pub(super) async fn project_sheet(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table_id: &str,
     fields: &mut [FieldDto],
     records: &mut [RecordDto],
+    primary_rows: PrimaryRows,
 ) -> Result<(), StoreError> {
     let has_derived = fields
         .iter()
@@ -680,6 +686,7 @@ pub(super) async fn project_sheet(
 
     let mut tables = HashMap::new();
     tables.insert(table_id.to_owned(), primary_snapshot);
+    let mut primary_is_complete = matches!(primary_rows, PrimaryRows::All);
 
     let mut pending: VecDeque<(String, String, usize)> = initial_targets
         .into_iter()
@@ -693,13 +700,17 @@ pub(super) async fn project_sheet(
         {
             continue;
         }
-        if !tables.contains_key(&target_table) {
+        if !tables.contains_key(&target_table) || (target_table == table_id && !primary_is_complete)
+        {
             let target_fields = load_fields(tx, workspace, &target_table).await?;
             let target_records = load_records(tx, workspace, &target_table, &target_fields).await?;
             tables.insert(
                 target_table.clone(),
                 TableSnapshot::from_parts(&target_fields, &target_records),
             );
+            if target_table == table_id {
+                primary_is_complete = true;
+            }
         }
         if let Some(snapshot) = tables.get(&target_table) {
             let mut seed = BTreeSet::new();
