@@ -5,12 +5,13 @@ import { AppLink } from "../../navigation";
 import { useSortable, defaultAnimateLayoutChanges } from "@dnd-kit/sortable";
 import type { AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { Issue, IssueProperty, Project, UpdateIssueRequest } from "@multica/core/types";
+import type { Issue, Project, UpdateIssueRequest } from "@multica/core/types";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { propertyListOptions } from "@multica/core/properties";
 import { issueTypeListOptions } from "@multica/core/issue-types";
 import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
+import { resolveCardCustomProperties } from "../utils/card-custom-properties";
 import { descriptionPreview } from "./description-preview";
 import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { CalendarClock, CalendarDays } from "@multica/ui/icons";
@@ -89,12 +90,12 @@ export const BoardCardContent = memo(function BoardCardContent({
   const issueType = issue.issue_type_id
     ? workspaceIssueTypes.find((it) => it.id === issue.issue_type_id) ?? null
     : null;
-  // Custom properties toggled on in Display options, in toggle order, only
-  // when this issue actually carries a value.
-  const cardCustomProperties = cardPropertyIds
-    .filter((id) => id !== groupedPropertyId)
-    .map((id) => workspaceProperties.find((p) => p.id === id))
-    .filter((p): p is IssueProperty => !!p && issue.properties?.[p.id] !== undefined);
+  const cardCustomProperties = resolveCardCustomProperties(
+    cardPropertyIds,
+    workspaceProperties,
+    issue,
+    { excludePropertyId: groupedPropertyId },
+  );
   const labels = issue.labels ?? [];
 
   const surfaceActions = useIssueSurfaceActionsOptional();
@@ -268,7 +269,11 @@ export const BoardCardContent = memo(function BoardCardContent({
               className="inline-flex max-w-[160px] items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground"
             >
               <PropertyIcon property={property} className="size-3 text-micro" />
-              <CustomPropertyValueDisplay property={property} value={issue.properties?.[property.id]} />
+              <CustomPropertyValueDisplay
+                property={property}
+                value={issue.properties?.[property.id]}
+                issueId={issue.id}
+              />
             </span>
           ))}
         </div>

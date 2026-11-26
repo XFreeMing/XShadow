@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CalendarDays, Check, ExternalLink, X } from "@multica/ui/icons";
 import { toast } from "sonner";
-import type { Issue, IssueComputedPropertyValue, IssueProperty, IssuePropertyValue } from "@multica/core/types";
+import type { Issue, IssueProperty, IssuePropertyValue } from "@multica/core/types";
 import { hasUnknownActorRef, isComputedPropertyType, isListPropertyType, MAX_ISSUE_PROPERTY_SELECT_VALUES } from "@multica/core/types";
 import {
   useSetIssueProperty,
@@ -25,6 +25,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { useLocale, useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
 import { useComputedIssuePropertyValue } from "../computed-property-context";
+import { ComputedPropertyReadonlyDisplay } from "../computed-property-readonly-display";
 import { PropertyPicker, PickerItem, PickerEmpty } from "./property-picker";
 import { ActorPropertyPicker, ActorPropertyDisplay } from "./actor-property-picker";
 import {
@@ -110,7 +111,7 @@ export function CustomPropertyValueEditor({
     toast.error(error instanceof Error ? error.message : String(error));
 
   if (isComputedPropertyType(property.type)) {
-    return <ComputedValue value={computedValue} />;
+    return <ComputedPropertyReadonlyDisplay value={computedValue} />;
   }
 
   return (
@@ -147,19 +148,6 @@ export function CustomPropertyValueEditor({
       }}
     />
   );
-}
-
-function formatComputedValue(value: IssueComputedPropertyValue): string {
-  if (Array.isArray(value)) return value.map(formatComputedValue).join(", ");
-  return value === null ? "" : String(value);
-}
-
-function ComputedValue({ value }: { value: IssueComputedPropertyValue | undefined }) {
-  const { t } = useT("issues");
-  const label = value === undefined ? "" : formatComputedValue(value);
-  return label
-    ? <span className="min-w-0 truncate" title={label}>{label}</span>
-    : <span className="text-muted-foreground">{t(($) => $.pickers.custom_property.empty)}</span>;
 }
 
 /**
@@ -721,23 +709,37 @@ function ListPropertyEditor({
 export function CustomPropertyValueDisplay({
   property,
   value,
+  issueId,
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
+  /** Required for lookup / formula values loaded via ComputedIssuePropertyProvider. */
+  issueId?: string;
 }) {
   const { t } = useT("issues");
   const locale = useLocale();
-  if (value === undefined) {
+  const computedValue = useComputedIssuePropertyValue(
+    issueId ?? "",
+    property.id,
+  );
+  const displayValue = isComputedPropertyType(property.type)
+    ? computedValue
+    : value;
+  if (displayValue === undefined) {
     return (
       <span className="text-muted-foreground">
         {t(($) => $.pickers.custom_property.empty)}
       </span>
     );
   }
+  if (isComputedPropertyType(property.type)) {
+    return <ComputedPropertyReadonlyDisplay value={computedValue} />;
+  }
+
   const options = property.config.options ?? [];
   switch (property.type) {
     case "select": {
-      const option = options.find((o) => o.id === value);
+      const option = options.find((o) => o.id === displayValue);
       if (!option) {
         return (
           <span className="text-muted-foreground">

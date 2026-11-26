@@ -8,7 +8,8 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
 import type { GanttZoom } from "@multica/core/issues/stores/view-store";
 import { projectListOptions } from "@multica/core/projects/queries";
-import type { Issue, IssueStatusCategory } from "@multica/core/types";
+import { propertyListOptions } from "@multica/core/properties";
+import type { Issue, IssueProperty, IssueStatusCategory } from "@multica/core/types";
 import { issueStatusCategory, statusColumnKeys } from "@multica/core/issues";
 import { dateOnlyToUTCDate } from "@multica/core/issues/date";
 import { cn } from "@multica/ui/lib/utils";
@@ -33,6 +34,9 @@ import { IssueActionsContextMenu } from "../actions";
 import { sortIssues } from "../utils/sort";
 import { useLocale, useT } from "../../i18n";
 import { IssuePrototypePreview } from "./issue-prototype-preview";
+import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
+import { resolveCardCustomProperties } from "../utils/card-custom-properties";
+import { ComputedPropertyViewBoundary } from "./computed-property-view-boundary";
 
 // Date utilities — everything is UTC-day-aligned so a `due_date` ISO string
 // produced anywhere maps to exactly one column on the axis.
@@ -308,12 +312,16 @@ function ScheduledRow({
   dayPx,
   totalDays,
   onPreview,
+  workspaceProperties,
+  cardPropertyIds,
 }: {
   issue: Issue;
   range: Range;
   dayPx: number;
   totalDays: number;
   onPreview: () => void;
+  workspaceProperties: IssueProperty[];
+  cardPropertyIds: readonly string[];
 }) {
   const { t } = useT("issues");
   const locale = useLocale();
@@ -325,6 +333,11 @@ function ScheduledRow({
     enabled: !!issue.project_id,
   });
   const project = issue.project_id ? projects.find((pr) => pr.id === issue.project_id) : undefined;
+  const cardCustomProperties = resolveCardCustomProperties(
+    cardPropertyIds,
+    workspaceProperties,
+    issue,
+  );
   const peeked = useIsIssuePeeked(issue.id);
   const peekLinkProps = useIssuePeekLinkProps(issue.id);
   const linkProps = {
@@ -459,6 +472,18 @@ function ScheduledRow({
                       {t(($) => $.gantt.inverted_dates_warning)}
                     </span>
                   )}
+                  {cardCustomProperties.map((property) => (
+                    <span key={property.id} className="flex items-center gap-2">
+                      <span className="shrink-0 text-muted-foreground">
+                        {property.name}
+                      </span>
+                      <CustomPropertyValueDisplay
+                        property={property}
+                        value={issue.properties?.[property.id]}
+                        issueId={issue.id}
+                      />
+                    </span>
+                  ))}
                 </div>
               </TooltipContent>
             </Tooltip>
@@ -473,12 +498,15 @@ function ScheduledRow({
 
 export function GanttView({ issues }: { issues: Issue[] }) {
   const { t } = useT("issues");
+  const wsId = useWorkspaceId();
   const [previewId, setPreviewId] = useState<string | null>(null);
   const zoom = useViewStore((s) => s.ganttZoom);
   const showCompleted = useViewStore((s) => s.ganttShowCompleted);
+  const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
   const sortBy = useViewStore((s) => s.sortBy);
   const sortDirection = useViewStore((s) => s.sortDirection);
   const act = useViewStoreApi().getState();
+  const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
   // Board order for `sort=status`, archived included: an issue can still sit on
   // an archived status and has to rank with the rest (MUL-7379).
   const statusCatalog = useIssueStatuses(useWorkspaceId());
@@ -499,6 +527,10 @@ export function GanttView({ issues }: { issues: Issue[] }) {
     const sortField = sortBy === "position" ? "start_date" : sortBy;
     return sortIssues(issues, sortField, sortDirection, statusOrder);
   }, [issues, sortBy, sortDirection, statusOrder]);
+  const visibleIssueIds = useMemo(
+    () => scheduled.map((issue) => issue.id),
+    [scheduled],
+  );
   const previewIssue = scheduled.find((issue) => issue.id === previewId);
 
   // Side peek steps through the rows top to bottom.
@@ -525,7 +557,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
     el.scrollLeft = target;
   }, [todayOffsetDays, dayPx, empty]);
 
-  return (
+  const ganttBody = (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Toolbar */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
@@ -612,6 +644,8 @@ export function GanttView({ issues }: { issues: Issue[] }) {
                 dayPx={dayPx}
                 totalDays={totalDays}
                 onPreview={() => setPreviewId(issue.id)}
+                workspaceProperties={workspaceProperties}
+                cardPropertyIds={cardPropertyIds}
               />
             ))}
           </div>
@@ -621,5 +655,16 @@ export function GanttView({ issues }: { issues: Issue[] }) {
         <IssuePrototypePreview key={previewIssue.id} issue={previewIssue} onClose={() => setPreviewId(null)} />
       )}
     </div>
+  );
+
+  return (
+    <ComputedPropertyViewBoundary
+      wsId={wsId}
+      issueIds={visibleIssueIds}
+      cardPropertyIds={cardPropertyIds}
+      workspaceProperties={workspaceProperties}
+    >
+      {ganttBody}
+    </ComputedPropertyViewBoundary>
   );
 }

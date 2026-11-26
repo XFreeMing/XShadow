@@ -103,6 +103,7 @@ import {
   SWIMLANE_GROUPINGS,
   CARD_PROPERTY_OPTIONS,
   cardPropertyOptionsForView,
+  showsCardCustomPropertyIds,
   sortOptionsForView,
   ISSUE_RELATION_FILTERS,
   type ActorFilterValue,
@@ -2011,6 +2012,9 @@ export function IssueDisplayControls({
     childProgress: "card_child_progress",
   };
   const availableCardPropertyOptions = cardPropertyOptionsForView(viewMode);
+  const showCardCustomPropertyIds = showsCardCustomPropertyIds(viewMode);
+  const hasCardProperties = availableCardPropertyOptions.length > 0 ||
+    (showCardCustomPropertyIds && workspaceProperties.length > 0);
   const availableSortOptions = sortOptionsForView(viewMode, grouping);
   const sortPropertyId = propertyIdFromViewKey(sortBy);
   const groupingPropertyId = propertyIdFromViewKey(grouping);
@@ -2063,7 +2067,7 @@ export function IssueDisplayControls({
     ? SlidersHorizontal
     : LAYOUTS.find(({ mode }) => mode === layout)!.Icon;
   const hasLayoutOptions =
-    showColumnToggles || viewMode === "table" || availableCardPropertyOptions.length > 0;
+    showColumnToggles || viewMode === "table" || hasCardProperties;
   const controlButtonClass = "h-8 w-8 gap-1 px-0 text-muted-foreground md:h-7 md:w-auto md:px-2.5";
   const controlLabelClass = "hidden md:inline @max-3xl/issue-header:hidden";
 
@@ -2414,7 +2418,7 @@ export function IssueDisplayControls({
                   />
                 </div>
               )}
-              {availableCardPropertyOptions.length > 0 && (
+              {hasCardProperties && (
                 <div>
                   <span className="text-caption font-medium text-muted-foreground">
                     {t(($) => $.display.card_properties_section)}
@@ -2431,7 +2435,7 @@ export function IssueDisplayControls({
                         {t(($) => $.display[CARD_PROPERTY_LABEL_KEY[opt.key]])}
                       </DisplayChip>
                     ))}
-                    {workspaceProperties.map((property) => (
+                    {showCardCustomPropertyIds && workspaceProperties.map((property) => (
                       <DisplayChip
                         key={property.id}
                         pressed={cardPropertyIds.includes(property.id)}

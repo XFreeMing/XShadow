@@ -3,6 +3,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   cardPropertyOptionsForView,
+  showsCardCustomPropertyIds,
   sortOptionsForView,
   viewStoreSlice,
   mergeViewStatePersisted,
@@ -159,6 +160,8 @@ describe("issue view defaults", () => {
       cardPropertyOptionsForView("list").map((option) => option.key),
     ).not.toContain("description");
     expect(cardPropertyOptionsForView("gantt")).toEqual([]);
+    expect(showsCardCustomPropertyIds("gantt")).toBe(true);
+    expect(showsCardCustomPropertyIds("table")).toBe(false);
     expect(
       sortOptionsForView("board", "assignee").map((option) => option.value),
     ).not.toContain("position");

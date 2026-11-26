@@ -10,15 +10,36 @@ import {
   type IssueViewState,
   viewStoreSlice,
 } from "@multica/core/issues/stores/view-store";
+import type { StoreApi } from "zustand/vanilla";
 import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-context";
 import type { Issue } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { IssueContextMenuProvider } from "../actions";
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQuery: () => ({ data: [] }),
-}));
+const workspaceProperties = vi.hoisted(() => [
+  {
+    id: "prop-formula",
+    workspace_id: "workspace-1",
+    name: "Points",
+    type: "formula",
+    config: {},
+    archived: false,
+    position: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+]);
+
+vi.mock("@multica/core/properties", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/properties")>();
+  return {
+    ...actual,
+    propertyListOptions: () => ({
+      queryKey: ["properties", "workspace-1", "list", false],
+      queryFn: async () => workspaceProperties,
+    }),
+  };
+});
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "workspace-1",
@@ -56,6 +77,8 @@ vi.mock("@multica/core/paths", async (importOriginal) => {
   };
 });
 
+import { issueComputedPropertiesOptions } from "@multica/core/properties";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { GanttView } from "./gantt-view";
 
 const ISSUE = {
@@ -82,14 +105,29 @@ const ISSUE = {
   updated_at: "2026-03-01T00:00:00Z",
 } as unknown as Issue;
 
-function renderGantt(locale: "en" | "zh-Hans") {
+function renderGantt(
+  locale: "en" | "zh-Hans",
+  setup?: (store: StoreApi<IssueViewState>) => void,
+) {
   const store = createStore<IssueViewState>()(viewStoreSlice);
+  setup?.(store);
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  qc.setQueryData(
+    issueComputedPropertiesOptions("workspace-1", ["issue-1"]).queryKey,
+    {
+      "issue-1": { "prop-formula": 7 },
+    },
+  );
   return renderWithI18n(
-    <ViewStoreProvider store={store}>
-      <IssueContextMenuProvider>
-        <GanttView issues={[ISSUE]} />
-      </IssueContextMenuProvider>
-    </ViewStoreProvider>,
+    <QueryClientProvider client={qc}>
+      <ViewStoreProvider store={store}>
+        <IssueContextMenuProvider>
+          <GanttView issues={[ISSUE]} />
+        </IssueContextMenuProvider>
+      </ViewStoreProvider>
+    </QueryClientProvider>,
     { locale },
   );
 }
@@ -136,5 +174,20 @@ describe("GanttView date localization", () => {
 
     expect(screen.getByText("Mar 2026")).toBeTruthy();
     expect(container.textContent ?? "").not.toMatch(/年/);
+  });
+
+  it("shows selected computed fields beside the hover date range", async () => {
+    vi.useRealTimers();
+    try {
+      renderGantt("en", (store) => {
+        store.getState().toggleCardPropertyId("prop-formula");
+      });
+
+      expect(await screen.findByText("Points")).toBeInTheDocument();
+      expect(screen.getAllByText("7").length).toBeGreaterThan(0);
+    } finally {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-04T12:00:00Z"));
+    }
   });
 });

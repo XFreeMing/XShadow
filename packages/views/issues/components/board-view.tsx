@@ -76,6 +76,7 @@ import {
   projectGroupId,
 } from "../utils/drag-utils";
 import { useStatusLabel } from "../utils/status-label";
+import { ComputedPropertyViewBoundary } from "./computed-property-view-boundary";
 
 function isStatusGroup(
   group: BoardColumnGroup,
@@ -282,6 +283,7 @@ function BoardViewImpl({
 }) {
   const { t } = useT("issues");
   const storeGrouping = useViewStore((s) => s.grouping);
+  const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
   const sortBy = useViewStore((s) => s.sortBy);
   const boardWsId = useWorkspaceId();
   const catalog = useIssueStatuses(boardWsId);
@@ -825,7 +827,15 @@ function BoardViewImpl({
     setColumns(buildColumns(groupedIssues, groups, grouping, groupingOptionIds));
   }, [groupedIssues, groups, grouping, groupingOptionIds, setColumns, isDraggingRef]);
 
-  return (
+  const visibleIssueIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const columnIds of Object.values(columns)) {
+      for (const id of columnIds) ids.add(id);
+    }
+    return Array.from(ids);
+  }, [columns]);
+
+  const boardBody = (
     <BoardWorkflowContext.Provider value={boardWorkflow}>
     <DndContext
       sensors={sensors}
@@ -956,6 +966,17 @@ function BoardViewImpl({
       }}
     />
     </BoardWorkflowContext.Provider>
+  );
+
+  return (
+    <ComputedPropertyViewBoundary
+      wsId={boardWsId}
+      issueIds={visibleIssueIds}
+      cardPropertyIds={cardPropertyIds}
+      workspaceProperties={workspaceProperties}
+    >
+      {boardBody}
+    </ComputedPropertyViewBoundary>
   );
 }
 

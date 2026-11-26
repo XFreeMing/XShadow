@@ -20,6 +20,8 @@ import { useIssuePeekClick } from "../surface/peek-context";
 import { IssueActionsContextMenu } from "../actions";
 import { useStatusLabel } from "../utils/status-label";
 import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
+import { resolveCardCustomProperties } from "../utils/card-custom-properties";
+import { ComputedPropertyViewBoundary } from "./computed-property-view-boundary";
 import { PriorityIcon } from "./priority-icon";
 import { ProgressRing } from "./progress-ring";
 import { StatusIcon } from "./status-icon";
@@ -59,9 +61,11 @@ function IssueGalleryCard({
   const intentNavigate = useIntentNavigate();
   const storeProperties = useViewStore((s) => s.cardProperties);
   const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
-  const cardCustomProperties = cardPropertyIds
-    .map((id) => workspaceProperties.find((p) => p.id === id))
-    .filter((p): p is IssueProperty => !!p && issue.properties?.[p.id] !== undefined);
+  const cardCustomProperties = resolveCardCustomProperties(
+    cardPropertyIds,
+    workspaceProperties,
+    issue,
+  );
   const labels = issue.labels ?? [];
 
   const openIssue = useCallback(
@@ -181,6 +185,7 @@ function IssueGalleryCard({
           <CustomPropertyValueDisplay
             property={property}
             value={issue.properties?.[property.id]}
+            issueId={issue.id}
           />
         </span>
       ),
@@ -217,6 +222,7 @@ export function IssueGalleryView({ serverQuery }: IssueGalleryViewProps) {
   const wsId = useWorkspaceId();
   const { t } = useT("issues");
   const cardProperties = useViewStore((s) => s.cardProperties);
+  const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
   const {
     issues,
     total,
@@ -229,6 +235,7 @@ export function IssueGalleryView({ serverQuery }: IssueGalleryViewProps) {
     retryHead,
     retryTail,
   } = useIssueTableFlatRowPages(wsId, serverQuery, GALLERY_PAGE_LIMIT);
+  const visibleIssueIds = useMemo(() => issues.map((issue) => issue.id), [issues]);
 
   const propertiesQuery = useQuery(propertyListOptions(wsId));
   const workspaceProperties = propertiesQuery.data ?? [];
@@ -273,8 +280,8 @@ export function IssueGalleryView({ serverQuery }: IssueGalleryViewProps) {
     return <GalleryCardGrid empty={t(($) => $.table.empty)} />;
   }
 
-  return (
-    <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+  const body = (
+    <>
       <div className="flex-1 min-h-0 overflow-auto">
         <GalleryCardGrid>
           {issues.map((issue) => (
@@ -310,6 +317,17 @@ export function IssueGalleryView({ serverQuery }: IssueGalleryViewProps) {
           ) : null}
         </div>
       </div>
-    </div>
+    </>
+  );
+
+  return (
+    <ComputedPropertyViewBoundary
+      wsId={wsId}
+      issueIds={visibleIssueIds}
+      cardPropertyIds={cardPropertyIds}
+      workspaceProperties={workspaceProperties}
+    >
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">{body}</div>
+    </ComputedPropertyViewBoundary>
   );
 }

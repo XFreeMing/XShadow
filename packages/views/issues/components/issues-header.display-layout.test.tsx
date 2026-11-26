@@ -6,6 +6,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
+import { propertyListOptions } from "@multica/core/properties";
+import type { IssueProperty } from "@multica/core/types";
 import {
   type IssueViewState,
   viewStoreSlice,
@@ -27,6 +29,7 @@ function renderDisplay(
     allowForm?: boolean;
   } = {},
   setup: (store: StoreApi<IssueViewState>) => void = () => {},
+  properties: IssueProperty[] = [],
 ) {
   setApiInstance(
     new Proxy({}, { get: () => async () => ({}) }) as unknown as ApiClient,
@@ -34,6 +37,7 @@ function renderDisplay(
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  qc.setQueryData(propertyListOptions("ws-1").queryKey, { properties, total: properties.length });
   const store = createStore<IssueViewState>()(viewStoreSlice);
   setup(store);
   renderWithI18n(
@@ -77,6 +81,17 @@ describe("Display layout", () => {
 
     const layouts = await screen.findByRole("group", { name: "View" });
     expect(within(layouts).getByRole("button", { name: "Gantt" })).toBeInTheDocument();
+  });
+
+  it("shows custom field selection in Gantt when it has no built-in card options", async () => {
+    const store = renderDisplay({ allowGantt: true }, (s) => s.getState().setViewMode("gantt"), [{
+      id: "calc-cost", workspace_id: "ws-1", name: "Calculated cost", type: "formula",
+      config: { expression: "1 + 2" }, position: 0, archived: false, usage_count: 0,
+      created_at: "2026-11-26T00:00:00Z", updated_at: "2026-11-26T00:00:00Z",
+    }]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Calculated cost" }));
+    expect(store.getState().cardPropertyIds).toEqual(["calc-cost"]);
   });
 
   it("switches to Multidimensional view and back when allowGrid is enabled", async () => {

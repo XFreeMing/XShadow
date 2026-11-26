@@ -299,6 +299,17 @@ export function cardPropertyOptionsForView(viewMode: ViewMode) {
   return CARD_PROPERTY_OPTIONS;
 }
 
+/** Workspace custom-property toggles (`cardPropertyIds`) these views honor. */
+export function showsCardCustomPropertyIds(viewMode: ViewMode): boolean {
+  return (
+    viewMode === "board" ||
+    viewMode === "list" ||
+    viewMode === "gallery" ||
+    viewMode === "swimlane" ||
+    viewMode === "gantt"
+  );
+}
+
 export function sortOptionsForView(
   _viewMode: ViewMode,
   grouping: IssueGrouping,
