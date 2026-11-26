@@ -16,6 +16,7 @@ use sqlx::PgPool;
 use super::batch::{self, BatchError, BatchErrorKind};
 use super::collab::{self, Actor};
 use super::comments;
+use super::history::{self, HistoryError};
 use super::store::{self, RecordDto, StoreError};
 use super::validate::{StoredFilter, StoredSort, is_uuid};
 
@@ -100,6 +101,15 @@ pub fn router(pool: PgPool, token: String) -> Router {
             get(list_record_comments).post(create_record_comment),
         )
         .route("/internal/tables/{id}/changes", get(list_changes))
+        .route("/internal/tables/{id}/history", get(list_history))
+        .route(
+            "/internal/tables/{id}/history/snapshot",
+            get(get_history_snapshot),
+        )
+        .route(
+            "/internal/tables/{id}/history/deleted",
+            get(list_history_deleted),
+        )
         .route(
             "/internal/tables/{id}/presence",
             get(get_presence).post(touch_presence),
@@ -1094,6 +1104,99 @@ fn store_error_parts(err: StoreError) -> (StatusCode, Value) {
 
 fn invalid(message: &'static str) -> Response {
     error_response(StatusCode::BAD_REQUEST, "invalid_value", message, None)
+}
+
+#[derive(Deserialize)]
+struct HistoryListQuery {
+    limit: Option<i64>,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HistorySnapshotQuery {
+    revision: Option<i64>,
+    timestamp: Option<String>,
+}
+
+async fn list_history(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+    query: Result<Query<HistoryListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    let Ok(Query(query)) = query else {
+        return invalid("查询参数无效");
+    };
+    match history::list_history(&app.pool, &ws, &id, query.limit, query.cursor.as_deref()).await {
+        Ok(list) => Json(list).into_response(),
+        Err(err) => history_error(err),
+    }
+}
+
+async fn get_history_snapshot(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+    query: Result<Query<HistorySnapshotQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    let Ok(Query(query)) = query else {
+        return invalid("查询参数无效");
+    };
+    let target = match history::parse_snapshot_target(query.revision, query.timestamp.as_deref()) {
+        Ok(target) => target,
+        Err(err) => return history_error(err),
+    };
+    match history::get_snapshot(&app.pool, &ws, &id, target).await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => history_error(err),
+    }
+}
+
+async fn list_history_deleted(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    Path(id): Path<String>,
+    query: Result<Query<HistoryListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    let Ok(Query(query)) = query else {
+        return invalid("查询参数无效");
+    };
+    match history::list_deleted_records(&app.pool, &ws, &id, query.limit, query.cursor.as_deref())
+        .await
+    {
+        Ok(list) => Json(list).into_response(),
+        Err(err) => history_error(err),
+    }
+}
+
+fn history_error(err: HistoryError) -> Response {
+    match err {
+        HistoryError::NotFound(message) => {
+            error_response(StatusCode::NOT_FOUND, "not_found", message, None)
+        }
+        HistoryError::NotAvailable(message) => error_response(
+            StatusCode::NOT_FOUND,
+            "history_not_available",
+            message,
+            None,
+        ),
+        HistoryError::Invalid(message) => invalid(message),
+        HistoryError::Failed => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "tables_failed",
+            "无法读取表格历史",
+            None,
+        ),
+    }
 }
 
 fn error_response(

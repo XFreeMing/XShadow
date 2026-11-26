@@ -8,6 +8,7 @@ mod batch;
 mod collab;
 mod comments;
 pub(crate) mod formula;
+mod history;
 mod http;
 pub(crate) mod issue_derived;
 mod projection;

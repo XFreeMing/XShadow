@@ -96,3 +96,11 @@ Supported view kinds: `grid`, `kanban`, `gallery`, `form`.
 
 - `"$MULTICA_CLI_PATH" table changes <table-id> [--since N]` — `GET /api/tables/<table-id>/changes` (returns `latest`, `next_since`, ordered typed `changes` with `event_type`, `topic`, `entity_id`, `actor`, and active `presence`)
 - `"$MULTICA_CLI_PATH" table presence <table-id> [--record-id UUID] [--field-id UUID] [--input <file|->]` — `POST /api/tables/<table-id>/presence` (refreshes this actor's presence lease and returns the current snapshot)
+
+### Time Machine & Snapshots (`"$MULTICA_CLI_PATH" table history`)
+
+Point-in-time revisions and exact historical table snapshots (each committed transaction affecting a table creates one revision; failed or rolled-back transactions leave no history):
+
+- `"$MULTICA_CLI_PATH" table history list <table-id> [--limit N] [--cursor <cursor>]` — `GET /api/tables/<table-id>/history` (lists bounded paged committed revisions in reverse chronological order with `revision`, `recorded_at`, `baseline`, `summary`, `baseline_revision`, `latest_revision`, `has_more`, and `next_cursor`)
+- `"$MULTICA_CLI_PATH" table history snapshot <table-id> (--revision N | --timestamp <iso8601>)` — `GET /api/tables/<table-id>/history/snapshot?revision=N` (or `timestamp=...`). Returns `revision`, `recorded_at`, `baseline`, `computed_values_mode` (`"stored_raw_only"`), historical `table` metadata, `fields` (including formula/lookup schema), `views`, `records` with record `revision`, and stored raw cell `values` keyed by field UUID of that exact committed state. Formula/lookup fields are retained in schema without recomputing unmaterialized values. Queries before the table's history baseline or outside recorded bounds return `404` with error code `history_not_available`.
+- `"$MULTICA_CLI_PATH" table history deleted <table-id> [--limit N] [--cursor <cursor>]` — `GET /api/tables/<table-id>/history/deleted` (lists removed record IDs from recorded history with `record_id`, `deleted_at_revision`, `deleted_at`, `has_more`, and `next_cursor`)

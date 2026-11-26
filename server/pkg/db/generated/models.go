@@ -856,6 +856,23 @@ type GenericField struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GenericHistoryRevision struct {
+	Revision      int64              `json:"revision"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	TableID       pgtype.UUID        `json:"table_id"`
+	TransactionID int64              `json:"transaction_id"`
+	RecordedAt    pgtype.Timestamptz `json:"recorded_at"`
+	Baseline      bool               `json:"baseline"`
+}
+
+type GenericHistoryVersion struct {
+	Revision    int64       `json:"revision"`
+	Kind        string      `json:"kind"`
+	EntityID    pgtype.UUID `json:"entity_id"`
+	SecondaryID pgtype.UUID `json:"secondary_id"`
+	Payload     []byte      `json:"payload"`
+}
+
 type GenericPresence struct {
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
 	TableID     pgtype.UUID        `json:"table_id"`

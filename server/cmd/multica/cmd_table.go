@@ -39,6 +39,7 @@ Generic tables (workspace-scoped UUID resources):
   multica table attachment list|upload|get|download
   multica table view list|get|create|update|delete|submit
   multica table changes <table-id> [--since N]
+  multica table history list|snapshot|deleted <table-id> ...
   multica table presence <table-id> [--record-id UUID] [--field-id UUID] [--input <file|->]`,
 }
 
@@ -333,6 +334,34 @@ var tablePresenceCmd = &cobra.Command{
 	RunE:  runTablePresence,
 }
 
+// --- time machine: history & snapshots ---
+
+var tableHistoryCmd = &cobra.Command{
+	Use:   "history",
+	Short: "Inspect committed table history, point-in-time snapshots, and deleted records",
+}
+
+var tableHistoryListCmd = &cobra.Command{
+	Use:   "list <table-id>",
+	Short: "List bounded paged committed revisions for a generic table",
+	Args:  exactArgs(1),
+	RunE:  runTableHistoryList,
+}
+
+var tableHistorySnapshotCmd = &cobra.Command{
+	Use:   "snapshot <table-id>",
+	Short: "Get an exact historical snapshot by --revision or --timestamp",
+	Args:  exactArgs(1),
+	RunE:  runTableHistorySnapshot,
+}
+
+var tableHistoryDeletedCmd = &cobra.Command{
+	Use:   "deleted <table-id>",
+	Short: "List deleted record IDs from recorded table history",
+	Args:  exactArgs(1),
+	RunE:  runTableHistoryDeleted,
+}
+
 func init() {
 	for _, cmd := range []*cobra.Command{
 		tableTasksRowsCmd,
@@ -368,6 +397,19 @@ func init() {
 	tableRecordCommentListCmd.Flags().Int("limit", 0, "Maximum number of comments to return (1-100)")
 
 	tableChangesCmd.Flags().Int64("since", 0, "Return table changes with seq > since")
+
+	tableHistoryListCmd.Flags().Int("limit", 0, "Maximum number of revisions to return (1-200)")
+	tableHistoryListCmd.Flags().String("cursor", "", "Pagination cursor from a previous history list response")
+
+	tableHistorySnapshotCmd.Flags().Int64("revision", 0, "Target committed history revision (positive integer)")
+	tableHistorySnapshotCmd.Flags().String("timestamp", "", "Target point-in-time timestamp (RFC3339 / ISO-8601)")
+
+	tableHistoryDeletedCmd.Flags().Int("limit", 0, "Maximum number of deleted records to return (1-200)")
+	tableHistoryDeletedCmd.Flags().String("cursor", "", "Pagination cursor from a previous deleted-records response")
+
+	tableHistoryCmd.AddCommand(tableHistoryListCmd)
+	tableHistoryCmd.AddCommand(tableHistorySnapshotCmd)
+	tableHistoryCmd.AddCommand(tableHistoryDeletedCmd)
 
 	tablePresenceCmd.Flags().String("record-id", "", "Optional record UUID currently focused")
 	tablePresenceCmd.Flags().String("field-id", "", "Optional field UUID currently focused (requires --record-id)")
@@ -422,6 +464,7 @@ func init() {
 	tableCmd.AddCommand(tableAttachmentCmd)
 	tableCmd.AddCommand(tableViewCmd)
 	tableCmd.AddCommand(tableChangesCmd)
+	tableCmd.AddCommand(tableHistoryCmd)
 	tableCmd.AddCommand(tablePresenceCmd)
 }
 
@@ -1040,6 +1083,93 @@ func runTableChanges(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--since must be >= 0")
 		}
 		path += "?since=" + strconv.FormatInt(since, 10)
+	}
+	return tableGetAndPrint(cmd, path)
+}
+
+func runTableHistoryList(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	params := url.Values{}
+	if cmd.Flags().Changed("limit") {
+		limit, _ := cmd.Flags().GetInt("limit")
+		if limit <= 0 || limit > 200 {
+			return fmt.Errorf("--limit must be between 1 and 200")
+		}
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	if cmd.Flags().Changed("cursor") {
+		cursor, _ := cmd.Flags().GetString("cursor")
+		cursor = strings.TrimSpace(cursor)
+		if cursor == "" {
+			return fmt.Errorf("--cursor must not be empty")
+		}
+		params.Set("cursor", cursor)
+	}
+	path := "/api/tables/" + tableID + "/history"
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return tableGetAndPrint(cmd, path)
+}
+
+func runTableHistorySnapshot(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	hasRev := cmd.Flags().Changed("revision")
+	hasTS := cmd.Flags().Changed("timestamp")
+	if hasRev == hasTS {
+		return fmt.Errorf("provide exactly one of --revision or --timestamp")
+	}
+	params := url.Values{}
+	if hasRev {
+		rev, _ := cmd.Flags().GetInt64("revision")
+		if rev <= 0 {
+			return fmt.Errorf("--revision must be a positive integer")
+		}
+		params.Set("revision", strconv.FormatInt(rev, 10))
+	} else {
+		rawTS, _ := cmd.Flags().GetString("timestamp")
+		rawTS = strings.TrimSpace(rawTS)
+		if rawTS == "" {
+			return fmt.Errorf("--timestamp must not be empty")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, rawTS); err != nil {
+			return fmt.Errorf("invalid --timestamp %q: must be RFC3339 / ISO-8601", rawTS)
+		}
+		params.Set("timestamp", rawTS)
+	}
+	return tableGetAndPrint(cmd, "/api/tables/"+tableID+"/history/snapshot?"+params.Encode())
+}
+
+func runTableHistoryDeleted(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	params := url.Values{}
+	if cmd.Flags().Changed("limit") {
+		limit, _ := cmd.Flags().GetInt("limit")
+		if limit <= 0 || limit > 200 {
+			return fmt.Errorf("--limit must be between 1 and 200")
+		}
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	if cmd.Flags().Changed("cursor") {
+		cursor, _ := cmd.Flags().GetString("cursor")
+		cursor = strings.TrimSpace(cursor)
+		if cursor == "" {
+			return fmt.Errorf("--cursor must not be empty")
+		}
+		params.Set("cursor", cursor)
+	}
+	path := "/api/tables/" + tableID + "/history/deleted"
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
 	}
 	return tableGetAndPrint(cmd, path)
 }
