@@ -27,7 +27,7 @@ use super::store::{
     IssueCommentEdit, IssueCommentEditError, IssueCreateError, IssueCreateRequest,
     IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError,
     IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
-    OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueRelativeMove, IssueRelativeMoveError, OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -216,6 +216,7 @@ pub fn router(pool: PgPool, token: String) -> Router {
             put(update_issue_workflow_squad_handoff),
         )
         .route("/internal/issues/{id}/assign", put(update_issue_assign))
+        .route("/internal/issues/{id}/move", post(move_issue_relative_handler))
         .route(
             "/internal/issues/{id}/comments",
             post(create_issue_comment).layer(DefaultBodyLimit::disable()),
@@ -1146,6 +1147,45 @@ async fn update_issue_status(
         Err(IssueStatusEditError::Snapshot(error)) => {
             eprintln!("rust issue status write snapshot failed: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+    }
+}
+
+async fn move_issue_relative_handler(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(request): Json<IssueRelativeMove>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::move_issue_relative(&app.pool, &ctx.workspace_id, &ctx.actor, &id, request).await {
+        Ok(write) => Json(write).into_response(),
+        Err(IssueRelativeMoveError::Access(IssueReadError::NotFound(message))) => {
+            error_response(StatusCode::NOT_FOUND, message)
+        }
+        Err(IssueRelativeMoveError::Access(IssueReadError::Forbidden(message))) => {
+            error_response(StatusCode::FORBIDDEN, message)
+        }
+        Err(IssueRelativeMoveError::InvalidInput(message)) => {
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+        Err(IssueRelativeMoveError::Conflict(message)) => {
+            error_response(StatusCode::CONFLICT, message)
+        }
+        Err(IssueRelativeMoveError::RevisionConflict(actual_revision)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(error) => {
+            if let IssueRelativeMoveError::Database(error) = error {
+                eprintln!("rust issue relative move failed: {error}");
+            } else if let IssueRelativeMoveError::Snapshot(error) = error {
+                eprintln!("rust issue relative move snapshot failed: {error}");
+            }
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to move issue")
         }
     }
 }

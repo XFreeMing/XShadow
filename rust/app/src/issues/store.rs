@@ -12,6 +12,8 @@ pub use list::{
 };
 mod ordinary;
 pub use ordinary::{OrdinaryIssueEdit, OrdinaryIssueEditError, update_ordinary_issue};
+mod move_write;
+pub use move_write::{IssueRelativeMove, IssueRelativeMoveError, move_issue_relative};
 mod metadata_write;
 pub use metadata_write::{IssueMetadataWrite, IssueMetadataWriteError, write_issue_metadata};
 mod property_write;

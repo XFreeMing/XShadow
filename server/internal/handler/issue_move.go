@@ -35,6 +35,7 @@ var issueMoveFields = map[string]struct{}{
 // stays on one path. The legacy PUT endpoint remains unchanged for released
 // clients.
 func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	id := chi.URLParam(r, "id")
 	current, ok := h.loadIssueForUser(w, r, id)
 	if !ok {
@@ -110,6 +111,29 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 	if beforeID != nil && afterID != nil && *beforeID == *afterID {
 		writeError(w, http.StatusBadRequest, "move anchors must be distinct")
 		return
+	}
+
+	expectedRevision, ok := parseMoveExpectedRevision(w, fields)
+	if !ok {
+		return
+	}
+
+	if issueMovePositionOnly(fields) {
+		useRust, err := h.issueMoveUsesRust(r, current.WorkspaceID)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue move route")
+			}
+			return
+		}
+		if useRust {
+			userID, ok := requireUserID(w, r)
+			if !ok {
+				return
+			}
+			h.moveIssuePositionOnlyViaRust(w, r, userID, current, beforeID, afterID, expectedRevision)
+			return
+		}
 	}
 
 	// V1 intentionally keeps the canonical write on UpdateIssue so released

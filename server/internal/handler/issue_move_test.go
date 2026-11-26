@@ -144,6 +144,23 @@ func TestMoveIssueRejectsUnsafeInputs(t *testing.T) {
 			},
 			wantError: "before_id cannot be the moved issue",
 		},
+		{
+			name: "invalid expected revision",
+			body: map[string]any{
+				"before_id":         nil,
+				"after_id":          nil,
+				"expected_revision": "stale",
+			},
+			wantError: "invalid request body",
+		},
+		{
+			name: "overlapping anchors",
+			body: map[string]any{
+				"before_id": movedIssueID,
+				"after_id":  movedIssueID,
+			},
+			wantError: "before_id cannot be the moved issue",
+		},
 	}
 
 	for _, tc := range tests {
