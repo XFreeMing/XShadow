@@ -39,6 +39,11 @@ func TestTableFullCRUDComputedChangesAndPresence(t *testing.T) {
 				t.Errorf("record delete expected_revision = %q, want 2", r.URL.Query().Get("expected_revision"))
 			}
 			_, _ = io.WriteString(w, `{"deleted":true,"id":"`+testTableRecordID1+`","revision":2}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/tables/"+testTableID1+"/records/batch":
+			if !strings.Contains(string(bodyBytes), `"idempotency_key"`) {
+				t.Errorf("record batch body missing idempotency_key: %s", string(bodyBytes))
+			}
+			_, _ = io.WriteString(w, `{"operation":"create","idempotency_key":"`+testTableViewID1+`","batch_id":"`+testTableRecordID1+`","records":[{"id":"`+testTableRecordID1+`","revision":1,"values":{}}]}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/tables/"+testTableID1+"/views":
 			_, _ = io.WriteString(w, `{"views":[{"id":"`+testTableViewID1+`","name":"All","kind":"grid"}]}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/tables/"+testTableID1+"/views/"+testTableViewID1:
@@ -87,6 +92,9 @@ func TestTableFullCRUDComputedChangesAndPresence(t *testing.T) {
 	if out, err := runRootTableCommand(t, `{"expected_revision":2}`, "table", "record", "delete", testTableID1, testTableRecordID1, "--input", "-"); err != nil || !strings.Contains(out, `"deleted": true`) {
 		t.Fatalf("table record delete via input = (%q, %v)", out, err)
 	}
+	if out, err := runRootTableCommand(t, `{"idempotency_key":"`+testTableViewID1+`","operation":"create","records":[{"values":{"`+testTableFieldID1+`":"Alpha"}}]}`, "table", "record", "batch", testTableID1, "--input", "-"); err != nil || !strings.Contains(out, `"batch_id"`) {
+		t.Fatalf("table record batch = (%q, %v)", out, err)
+	}
 	if out, err := runRootTableCommand(t, "", "table", "view", "list", testTableID1); err != nil || !strings.Contains(out, testTableViewID1) {
 		t.Fatalf("table view list = (%q, %v)", out, err)
 	}
@@ -128,6 +136,12 @@ func TestTableNewSubcommandsRejectInvalidInputsBeforeNetwork(t *testing.T) {
 		{name: "presence field without record", args: []string{"table", "presence", testTableID1, "--field-id", testTableFieldID1}},
 		{name: "changes negative since", args: []string{"table", "changes", testTableID1, "--since", "-1"}},
 		{name: "computed missing input", args: []string{"table", "tasks", "computed"}},
+		{name: "batch missing input", args: []string{"table", "record", "batch", testTableID1}},
+		{name: "batch bad idempotency key", stdin: `{"idempotency_key":"bad","operation":"create","records":[{"values":{}}]}`, args: []string{"table", "record", "batch", testTableID1, "--input", "-"}},
+		{name: "batch unknown operation", stdin: `{"idempotency_key":"` + testTableViewID1 + `","operation":"upsert","records":[{"values":{}}]}`, args: []string{"table", "record", "batch", testTableID1, "--input", "-"}},
+		{name: "batch empty records", stdin: `{"idempotency_key":"` + testTableViewID1 + `","operation":"create","records":[]}`, args: []string{"table", "record", "batch", testTableID1, "--input", "-"}},
+		{name: "batch duplicate update id", stdin: `{"idempotency_key":"` + testTableViewID1 + `","operation":"update","records":[{"id":"` + testTableRecordID1 + `","expected_revision":1,"values":{"` + testTableFieldID1 + `":"a"}},{"id":"` + strings.ToUpper(testTableRecordID1) + `","expected_revision":1,"values":{"` + testTableFieldID1 + `":"b"}}]}`, args: []string{"table", "record", "batch", testTableID1, "--input", "-"}},
+		{name: "batch delete zero revision", stdin: `{"idempotency_key":"` + testTableViewID1 + `","operation":"delete","records":[{"id":"` + testTableRecordID1 + `","expected_revision":0}]}`, args: []string{"table", "record", "batch", testTableID1, "--input", "-"}},
 	}
 
 	for _, tc := range cases {

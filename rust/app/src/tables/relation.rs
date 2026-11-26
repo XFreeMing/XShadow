@@ -463,6 +463,7 @@ pub(super) async fn apply_reverse_plan(
     source_record_id: &str,
     plan: &ReversePlan,
     actor: &Actor,
+    batch_id: Option<&str>,
 ) -> Result<(), StoreError> {
     let source_id = source_record_id.to_ascii_lowercase();
     for ((target_table_id, target_record_id), ops) in &plan.ops {
@@ -525,6 +526,7 @@ pub(super) async fn apply_reverse_plan(
                 values: &patch,
                 actor,
                 digest: &rev_digest,
+                batch_id,
             },
         )
         .await?;

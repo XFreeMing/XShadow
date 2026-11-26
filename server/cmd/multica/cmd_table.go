@@ -32,7 +32,7 @@ Task tables (read-only; keep task writes on "multica issue"):
 Generic tables (workspace-scoped UUID resources):
   multica table list|get|create|rename|delete
   multica table field list|get|create|update|delete
-  multica table record list|get|options|create|update|delete
+  multica table record list|get|options|create|update|delete|batch
   multica table record comment list|create
   multica table view list|get|create|update|delete|submit
   multica table changes <table-id> [--since N]
@@ -202,6 +202,13 @@ var tableRecordDeleteCmd = &cobra.Command{
 	RunE:  runTableRecordDelete,
 }
 
+var tableRecordBatchCmd = &cobra.Command{
+	Use:   "batch <table-id>",
+	Short: "Atomically create, update, or delete 1-10 records with an idempotency_key",
+	Args:  exactArgs(1),
+	RunE:  runTableRecordBatch,
+}
+
 // --- generic table record comment ---
 
 var tableRecordCommentCmd = &cobra.Command{
@@ -301,6 +308,7 @@ func init() {
 		tableRecordCreateCmd,
 		tableRecordUpdateCmd,
 		tableRecordDeleteCmd,
+		tableRecordBatchCmd,
 		tableRecordCommentCreateCmd,
 		tableViewCreateCmd,
 		tableViewUpdateCmd,
@@ -346,6 +354,7 @@ func init() {
 	tableRecordCmd.AddCommand(tableRecordCreateCmd)
 	tableRecordCmd.AddCommand(tableRecordUpdateCmd)
 	tableRecordCmd.AddCommand(tableRecordDeleteCmd)
+	tableRecordCmd.AddCommand(tableRecordBatchCmd)
 	tableRecordCmd.AddCommand(tableRecordCommentCmd)
 
 	tableViewCmd.AddCommand(tableViewListCmd)
@@ -761,6 +770,91 @@ func runTableRecordDelete(cmd *cobra.Command, args []string) error {
 	}
 	path := fmt.Sprintf("/api/tables/%s/records/%s?expected_revision=%d", tableID, recordID, expectedRev)
 	return tableDeleteAndPrint(cmd, path)
+}
+
+func runTableRecordBatch(cmd *cobra.Command, args []string) error {
+	tableID, err := parseTableUUID("table-id", args[0])
+	if err != nil {
+		return err
+	}
+	payload, obj, err := readTableInputObject(cmd)
+	if err != nil {
+		return err
+	}
+	if err := validateTableRecordBatchInput(obj); err != nil {
+		return err
+	}
+	return tablePostAndPrint(cmd, "/api/tables/"+tableID+"/records/batch", payload)
+}
+
+func validateTableRecordBatchInput(obj map[string]any) error {
+	rawKey, ok := obj["idempotency_key"].(string)
+	if !ok {
+		return fmt.Errorf("idempotency_key is required and must be a UUID")
+	}
+	if _, err := parseTableUUID("idempotency_key", rawKey); err != nil {
+		return err
+	}
+	op, ok := obj["operation"].(string)
+	if !ok || (op != "create" && op != "update" && op != "delete") {
+		return fmt.Errorf("operation must be one of create, update, delete")
+	}
+	rawRecords, ok := obj["records"].([]any)
+	if !ok || len(rawRecords) < 1 || len(rawRecords) > 10 {
+		return fmt.Errorf("records must be a JSON array with 1 to 10 items")
+	}
+	seenIDs := make(map[string]struct{}, len(rawRecords))
+	for i, rawItem := range rawRecords {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item == nil {
+			return fmt.Errorf("records[%d] must be a JSON object", i)
+		}
+		switch op {
+		case "create":
+			if rawValues, exists := item["values"]; exists {
+				if _, ok := rawValues.(map[string]any); !ok {
+					return fmt.Errorf("records[%d].values must be a JSON object", i)
+				}
+			}
+		case "update":
+			rawID, ok := item["id"].(string)
+			if !ok {
+				return fmt.Errorf("records[%d].id is required and must be a UUID", i)
+			}
+			id, err := parseTableUUID(fmt.Sprintf("records[%d].id", i), rawID)
+			if err != nil {
+				return err
+			}
+			if _, dup := seenIDs[id]; dup {
+				return fmt.Errorf("records[%d].id %q is duplicated in batch", i, id)
+			}
+			seenIDs[id] = struct{}{}
+			if _, err := parsePositiveInt64Field(item, "expected_revision"); err != nil {
+				return fmt.Errorf("records[%d].%w", i, err)
+			}
+			vals, ok := item["values"].(map[string]any)
+			if !ok || len(vals) == 0 {
+				return fmt.Errorf("records[%d].values must be a non-empty JSON object", i)
+			}
+		case "delete":
+			rawID, ok := item["id"].(string)
+			if !ok {
+				return fmt.Errorf("records[%d].id is required and must be a UUID", i)
+			}
+			id, err := parseTableUUID(fmt.Sprintf("records[%d].id", i), rawID)
+			if err != nil {
+				return err
+			}
+			if _, dup := seenIDs[id]; dup {
+				return fmt.Errorf("records[%d].id %q is duplicated in batch", i, id)
+			}
+			seenIDs[id] = struct{}{}
+			if _, err := parsePositiveInt64Field(item, "expected_revision"); err != nil {
+				return fmt.Errorf("records[%d].%w", i, err)
+			}
+		}
+	}
+	return nil
 }
 
 func runTableRecordCommentList(cmd *cobra.Command, args []string) error {

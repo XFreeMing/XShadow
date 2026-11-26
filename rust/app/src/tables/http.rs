@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
+use super::batch::{self, BatchError, BatchErrorKind};
 use super::collab::{self, Actor};
 use super::comments;
 use super::store::{self, RecordDto, StoreError};
@@ -89,6 +90,7 @@ pub fn router(pool: PgPool, token: String) -> Router {
             "/internal/tables/{id}/records",
             get(list_records).post(create_record),
         )
+        .route("/internal/tables/{id}/records/batch", post(batch_records))
         .route(
             "/internal/tables/{id}/records/{record_id}",
             get(get_record).patch(update_record).delete(delete_record),
@@ -547,6 +549,32 @@ async fn delete_record(
     }
 }
 
+async fn batch_records(
+    State(app): State<Arc<Tables>>,
+    Extension(Workspace(ws)): Extension<Workspace>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if let Some(response) = bad_id(&id) {
+        return response;
+    }
+    let Ok(Json(raw)) = body else {
+        return invalid("请求格式不正确");
+    };
+    let Ok(actor) = require_actor(&headers) else {
+        return invalid("协作者身份无效");
+    };
+    let req = match batch::BatchRequest::parse(&raw) {
+        Ok(req) => req,
+        Err(err) => return batch_error(err),
+    };
+    match batch::execute_batch(&app.pool, &ws, &id, &actor, &req).await {
+        Ok(result) => Json(result).into_response(),
+        Err(err) => batch_error(err),
+    }
+}
+
 #[derive(Deserialize)]
 struct SinceQuery {
     #[serde(default)]
@@ -996,45 +1024,70 @@ fn bad_view_ids(body: &ViewBody) -> Option<Response> {
 }
 
 fn store_error(err: StoreError) -> Response {
-    match err {
-        StoreError::NotFound(message) => {
-            error_response(StatusCode::NOT_FOUND, "not_found", message, None)
-        }
-        StoreError::Invalid(message) => invalid(message),
-        StoreError::NameTaken => error_response(
+    let (status, body) = store_error_parts(err);
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+fn batch_error(err: BatchError) -> Response {
+    let (status, mut body) = match err.kind {
+        BatchErrorKind::Store(store_err) => store_error_parts(store_err),
+        BatchErrorKind::IdempotencyConflict(message) => (
             StatusCode::CONFLICT,
-            "field_name_taken",
-            "这个表里已经有同名字段",
-            None,
+            json!({ "error": message, "code": "idempotency_conflict" }),
         ),
-        StoreError::Conflict { message, record } => error_response(
+    };
+    if let Some(index) = err.index {
+        body["failed_index"] = json!(index);
+    }
+    if let Some(record_id) = err.record_id {
+        body["record_id"] = json!(record_id);
+    }
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+fn store_error_parts(err: StoreError) -> (StatusCode, Value) {
+    match err {
+        StoreError::NotFound(message) => (
+            StatusCode::NOT_FOUND,
+            json!({ "error": message, "code": "not_found" }),
+        ),
+        StoreError::Invalid(message) => (
+            StatusCode::BAD_REQUEST,
+            json!({ "error": message, "code": "invalid_value" }),
+        ),
+        StoreError::NameTaken => (
             StatusCode::CONFLICT,
-            "revision_conflict",
-            message,
-            Some(*record),
+            json!({ "error": "这个表里已经有同名字段", "code": "field_name_taken" }),
+        ),
+        StoreError::Conflict { message, record } => (
+            StatusCode::CONFLICT,
+            json!({ "error": message, "code": "revision_conflict", "record": *record }),
         ),
         StoreError::ReferenceConflict {
             code,
             message,
             hint,
-        } => {
-            let body = json!({
+        } => (
+            StatusCode::CONFLICT,
+            json!({
                 "error": message,
                 "code": code,
                 "hint": hint,
-            });
-            (
-                StatusCode::CONFLICT,
-                [(header::CONTENT_TYPE, "application/json")],
-                body.to_string(),
-            )
-                .into_response()
-        }
-        StoreError::Failed => error_response(
+            }),
+        ),
+        StoreError::Failed => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "tables_failed",
-            "表格暂时无法保存",
-            None,
+            json!({ "error": "表格暂时无法保存", "code": "tables_failed" }),
         ),
     }
 }

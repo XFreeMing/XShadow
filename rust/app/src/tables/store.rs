@@ -321,6 +321,16 @@ pub async fn delete_table(
     .await
     .map_err(failed)?;
 
+    sqlx::query(
+        "DELETE FROM generic_record_batch_idempotency
+         WHERE workspace_id = $1::uuid AND table_id = $2::uuid",
+    )
+    .bind(workspace)
+    .bind(&table_lower)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+
     sqlx::query("DELETE FROM generic_change WHERE workspace_id = $1::uuid AND table_id = $2::uuid")
         .bind(workspace)
         .bind(&table_lower)
@@ -982,6 +992,7 @@ pub async fn create_record(
         &normalized,
         &locked_tables,
         actor,
+        None,
     )
     .await?;
     commit(tx).await?;
@@ -1018,13 +1029,15 @@ pub async fn submit_form(
         &normalized,
         &locked_tables,
         actor,
+        None,
     )
     .await?;
     commit(tx).await?;
     Ok(record)
 }
 
-async fn create_record_in_tx(
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn create_record_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     table: &str,
@@ -1032,6 +1045,7 @@ async fn create_record_in_tx(
     normalized: &BTreeMap<String, Option<Value>>,
     locked_tables: &[String],
     actor: Option<&super::collab::Actor>,
+    batch_id: Option<&str>,
 ) -> Result<RecordDto, StoreError> {
     let reverse_plan =
         relation::validate_and_plan_reverse(tx, workspace, fields, None, normalized, locked_tables)
@@ -1065,6 +1079,7 @@ async fn create_record_in_tx(
                 topic: "record",
                 entity_id: &id,
                 record_id: Some(&id),
+                batch_id,
                 base_revision: 0,
                 client_revision: 0,
                 record_revision: 1,
@@ -1075,7 +1090,8 @@ async fn create_record_in_tx(
         )
         .await?;
         if reverse_plan.has_writes() {
-            relation::apply_reverse_plan(tx, workspace, &id, &reverse_plan, actor).await?;
+            relation::apply_reverse_plan(tx, workspace, &id, &reverse_plan, actor, batch_id)
+                .await?;
         }
     }
     load_record(tx, workspace, fields, &id).await
@@ -1096,10 +1112,37 @@ pub async fn delete_record(
     let record_lower = record_id.to_ascii_lowercase();
     let mut tx = begin(pool).await?;
     lock_workspace_tables_sorted(&mut tx, workspace, &table_lower).await?;
-    let current = lock_record(&mut tx, workspace, &table_lower, &record_lower).await?;
+    let deleted = delete_record_in_tx(
+        &mut tx,
+        workspace,
+        &table_lower,
+        &record_lower,
+        expected_revision,
+        actor,
+        None,
+    )
+    .await?;
+    commit(tx).await?;
+    Ok(deleted)
+}
+
+pub(super) async fn delete_record_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table_lower: &str,
+    record_id: &str,
+    expected_revision: i64,
+    actor: &Actor,
+    batch_id: Option<&str>,
+) -> Result<DeletedDto, StoreError> {
+    if expected_revision <= 0 {
+        return Err(StoreError::Invalid("记录版本号无效"));
+    }
+    let record_lower = record_id.to_ascii_lowercase();
+    let current = lock_record(tx, workspace, table_lower, &record_lower).await?;
     if current.revision != expected_revision {
-        let fields = load_fields(&mut tx, workspace, &table_lower).await?;
-        let fresh = load_record(&mut tx, workspace, &fields, &record_lower).await?;
+        let fields = load_fields(tx, workspace, table_lower).await?;
+        let fresh = load_record(tx, workspace, &fields, &record_lower).await?;
         return Err(StoreError::Conflict {
             message: "这条记录已在其他窗口更新，无法按过期版本删除",
             record: Box::new(fresh),
@@ -1119,9 +1162,9 @@ pub async fn delete_record(
          )",
     )
     .bind(workspace)
-    .bind(&table_lower)
+    .bind(table_lower)
     .bind(&record_lower)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(failed)?;
     if referenced_by_issue {
@@ -1145,10 +1188,10 @@ pub async fn delete_record(
          )",
     )
     .bind(workspace)
-    .bind(&table_lower)
+    .bind(table_lower)
     .bind(&record_lower)
     .bind(&record_lower)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(failed)?;
     if referenced_by_record {
@@ -1162,7 +1205,7 @@ pub async fn delete_record(
     sqlx::query("DELETE FROM generic_cell WHERE workspace_id = $1::uuid AND record_id = $2::uuid")
         .bind(workspace)
         .bind(&record_lower)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(failed)?;
 
@@ -1171,9 +1214,9 @@ pub async fn delete_record(
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND record_id = $3::uuid",
     )
     .bind(workspace)
-    .bind(&table_lower)
+    .bind(table_lower)
     .bind(&record_lower)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(failed)?;
 
@@ -1183,9 +1226,9 @@ pub async fn delete_record(
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND record_id = $3::uuid",
     )
     .bind(workspace)
-    .bind(&table_lower)
+    .bind(table_lower)
     .bind(&record_lower)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(failed)?;
 
@@ -1194,9 +1237,9 @@ pub async fn delete_record(
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND id = $3::uuid",
     )
     .bind(workspace)
-    .bind(&table_lower)
+    .bind(table_lower)
     .bind(&record_lower)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(failed)?;
 
@@ -1206,14 +1249,15 @@ pub async fn delete_record(
         current.revision
     ));
     collab::insert_event(
-        &mut tx,
+        tx,
         &EventWrite {
             workspace,
-            table: &table_lower,
+            table: table_lower,
             event_type: "record.deleted",
             topic: "record",
             entity_id: &record_lower,
             record_id: Some(&record_lower),
+            batch_id,
             base_revision: current.revision,
             client_revision: expected_revision,
             record_revision: current.revision,
@@ -1224,7 +1268,6 @@ pub async fn delete_record(
     )
     .await?;
 
-    commit(tx).await?;
     Ok(DeletedDto {
         deleted: true,
         id: record_lower,
@@ -1606,7 +1649,7 @@ pub(super) async fn lock_table(
     Ok(())
 }
 
-async fn lock_workspace_tables_sorted(
+pub(super) async fn lock_workspace_tables_sorted(
     tx: &mut Transaction<'_, Postgres>,
     workspace: &str,
     primary_table: &str,
@@ -1648,6 +1691,7 @@ async fn publish_metadata_event(
             topic,
             entity_id,
             record_id: None,
+            batch_id: None,
             base_revision: 0,
             client_revision: 0,
             record_revision: 0,

@@ -6,7 +6,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use super::relation;
 use super::store::{
-    RecordDto, StoreError, begin, commit, failed, load_fields, load_record, lock_record,
+    FieldDto, RecordDto, StoreError, begin, commit, failed, load_fields, load_record, lock_record,
     normalize_values, ts, write_cells,
 };
 
@@ -37,6 +37,8 @@ pub struct ChangeDto {
     pub topic: String,
     pub entity_id: String,
     pub record_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
     pub base_revision: i64,
     pub client_revision: i64,
     pub record_revision: i64,
@@ -163,26 +165,60 @@ pub async fn update_record(
     let mut tx = begin(pool).await?;
     let touched: Vec<String> = values.keys().cloned().collect();
     let locked_tables = relation::prepare_table_locks(&mut tx, workspace, table, &touched).await?;
-    let current = lock_record(&mut tx, workspace, table, record).await?;
     let fields = load_fields(&mut tx, workspace, table).await?;
-    let normalized = normalize_values(&fields, values)?;
-    let digest = digest(&normalized)?;
-    let fresh = load_record(&mut tx, workspace, &fields, record).await?;
-    if same_write(
+    let saved = update_record_in_tx(
         &mut tx,
         workspace,
         table,
+        &fields,
+        &locked_tables,
         record,
         expected_revision,
+        values,
         actor,
-        &digest,
+        None,
     )
-    .await?
+    .await?;
+    commit(tx).await?;
+    Ok(saved)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn update_record_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &str,
+    table: &str,
+    fields: &[FieldDto],
+    locked_tables: &[String],
+    record: &str,
+    expected_revision: i64,
+    values: &BTreeMap<String, Value>,
+    actor: &Actor,
+    batch_id: Option<&str>,
+) -> Result<RecordDto, StoreError> {
+    if values.is_empty() || expected_revision <= 0 {
+        return Err(StoreError::Invalid("没有要保存的字段"));
+    }
+    let current = lock_record(tx, workspace, table, record).await?;
+    let normalized = normalize_values(fields, values)?;
+    let digest = digest(&normalized)?;
+    let fresh = load_record(tx, workspace, fields, record).await?;
+    if batch_id.is_none()
+        && same_write(
+            tx,
+            workspace,
+            table,
+            record,
+            expected_revision,
+            actor,
+            &digest,
+        )
+        .await?
         && cells_match(&fresh, &normalized)
     {
         return Ok(fresh);
     }
-    let steps = load_steps(&mut tx, workspace, table, record).await?;
+    let steps = load_steps(tx, workspace, table, record).await?;
     let patch: BTreeSet<String> = normalized.keys().cloned().collect();
     let decision = decide(current.revision, expected_revision, &steps, &patch);
     let Decision::Apply { base } = decision else {
@@ -192,19 +228,19 @@ pub async fn update_record(
         });
     };
     let reverse_plan = relation::validate_and_plan_reverse(
-        &mut tx,
+        tx,
         workspace,
-        &fields,
+        fields,
         Some(&fresh.values),
         &normalized,
-        &locked_tables,
+        locked_tables,
     )
     .await?;
-    write_cells(&mut tx, workspace, record, &normalized).await?;
-    bump_revision(&mut tx, workspace, table, record).await?;
+    write_cells(tx, workspace, record, &normalized).await?;
+    bump_revision(tx, workspace, table, record).await?;
     let saved_revision = current.revision + 1;
     insert_change(
-        &mut tx,
+        tx,
         &ChangeWrite {
             workspace,
             table,
@@ -215,13 +251,12 @@ pub async fn update_record(
             values: &normalized,
             actor,
             digest: &digest,
+            batch_id,
         },
     )
     .await?;
-    relation::apply_reverse_plan(&mut tx, workspace, record, &reverse_plan, actor).await?;
-    let saved = load_record(&mut tx, workspace, &fields, record).await?;
-    commit(tx).await?;
-    Ok(saved)
+    relation::apply_reverse_plan(tx, workspace, record, &reverse_plan, actor, batch_id).await?;
+    load_record(tx, workspace, fields, record).await
 }
 
 fn cells_match(record: &RecordDto, patch: &BTreeMap<String, Option<Value>>) -> bool {
@@ -338,6 +373,7 @@ pub(super) struct ChangeWrite<'a> {
     pub values: &'a BTreeMap<String, Option<Value>>,
     pub actor: &'a Actor,
     pub digest: &'a str,
+    pub batch_id: Option<&'a str>,
 }
 
 pub(super) struct EventWrite<'a> {
@@ -347,6 +383,7 @@ pub(super) struct EventWrite<'a> {
     pub topic: &'a str,
     pub entity_id: &'a str,
     pub record_id: Option<&'a str>,
+    pub batch_id: Option<&'a str>,
     pub base_revision: i64,
     pub client_revision: i64,
     pub record_revision: i64,
@@ -368,6 +405,7 @@ pub(super) async fn insert_change(
             topic: "record",
             entity_id: write.record,
             record_id: Some(write.record),
+            batch_id: write.batch_id,
             base_revision: write.base,
             client_revision: write.client_revision,
             record_revision: write.record_revision,
@@ -391,12 +429,12 @@ pub(super) async fn insert_event(
     let encoded = serde_json::to_string(&fields).map_err(|_| StoreError::Failed)?;
     sqlx::query(
         "INSERT INTO generic_change (
-            workspace_id, table_id, seq, event_type, topic, entity_id, record_id,
+            workspace_id, table_id, seq, event_type, topic, entity_id, record_id, batch_id,
             base_revision, client_revision, record_revision,
             fields, actor_source, actor_id, task_id, actor_label, op_digest
          ) VALUES (
-            $1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7::uuid,
-            $8, $9, $10, $11::jsonb, $12, $13::uuid, $14::uuid, $15, $16
+            $1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7::uuid, $8::uuid,
+            $9, $10, $11, $12::jsonb, $13, $14::uuid, $15::uuid, $16, $17
          )",
     )
     .bind(write.workspace)
@@ -406,6 +444,7 @@ pub(super) async fn insert_event(
     .bind(write.topic)
     .bind(write.entity_id)
     .bind(write.record_id)
+    .bind(write.batch_id)
     .bind(write.base_revision)
     .bind(write.client_revision)
     .bind(write.record_revision)
@@ -490,14 +529,15 @@ async fn load_changes(
     since: i64,
 ) -> Result<Vec<ChangeDto>, StoreError> {
     let created = ts("created_at");
+    let fetch_limit = PAGE + 1;
     let sql = format!(
         "SELECT seq, event_type, topic, COALESCE(entity_id, record_id)::text, record_id::text,
-                base_revision, client_revision, record_revision, fields::text,
+                batch_id::text, base_revision, client_revision, record_revision, fields::text,
                 actor_source, actor_id::text, task_id::text, actor_label, {created}
          FROM generic_change
          WHERE workspace_id = $1::uuid AND table_id = $2::uuid AND seq > $3
          ORDER BY seq
-         LIMIT {PAGE}"
+         LIMIT {fetch_limit}"
     );
     let rows = sqlx::query(&sql)
         .bind(workspace)
@@ -506,14 +546,14 @@ async fn load_changes(
         .fetch_all(&mut **tx)
         .await
         .map_err(failed)?;
-    let mut changes = Vec::new();
+    let mut changes = Vec::with_capacity(rows.len());
     for row in rows {
-        let raw: String = row.get(8);
+        let raw: String = row.get(9);
         let fields = serde_json::from_str(&raw).map_err(|_| StoreError::Failed)?;
-        let source: String = row.get(9);
-        let id: String = row.get(10);
-        let task_id: Option<String> = row.get(11);
-        let label: String = row.get(12);
+        let source: String = row.get(10);
+        let id: String = row.get(11);
+        let task_id: Option<String> = row.get(12);
+        let label: String = row.get(13);
         let record_id: Option<String> = row.get(4);
         changes.push(ChangeDto {
             seq: row.get(0),
@@ -521,15 +561,40 @@ async fn load_changes(
             topic: row.get(2),
             entity_id: row.get(3),
             record_id: record_id.unwrap_or_default(),
-            base_revision: row.get(5),
-            client_revision: row.get(6),
-            record_revision: row.get(7),
+            batch_id: row.get(5),
+            base_revision: row.get(6),
+            client_revision: row.get(7),
+            record_revision: row.get(8),
             fields,
             actor: actor_dto(&source, &id, task_id, &label),
-            created_at: row.get(13),
+            created_at: row.get(14),
         });
     }
-    Ok(changes)
+    Ok(trim_split_batch_page(changes, PAGE as usize))
+}
+
+fn trim_split_batch_page(mut changes: Vec<ChangeDto>, page_limit: usize) -> Vec<ChangeDto> {
+    if changes.len() <= page_limit {
+        return changes;
+    }
+    let next_batch_id = changes[page_limit].batch_id.clone();
+    changes.truncate(page_limit);
+    if let Some(split_batch_id) = next_batch_id
+        && changes
+            .last()
+            .and_then(|c| c.batch_id.as_deref())
+            .is_some_and(|id| id == split_batch_id)
+    {
+        let keep_len = changes
+            .iter()
+            .rposition(|c| c.batch_id.as_deref() != Some(split_batch_id.as_str()))
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        if keep_len > 0 {
+            changes.truncate(keep_len);
+        }
+    }
+    changes
 }
 
 pub async fn get_presence(
@@ -697,5 +762,35 @@ mod tests {
         let d = digest_str("record.deleted:11111111-1111-4111-8111-111111111111:2");
         assert_eq!(d.len(), 32);
         assert!(d.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn trim_split_batch_page_keeps_batch_atomic_across_page_boundary() {
+        let make = |seq: i64, batch_id: Option<&str>| ChangeDto {
+            seq,
+            event_type: "record.created".to_owned(),
+            topic: "record".to_owned(),
+            entity_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            record_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            batch_id: batch_id.map(str::to_owned),
+            base_revision: 0,
+            client_revision: 0,
+            record_revision: 1,
+            fields: BTreeMap::new(),
+            actor: actor_dto("member", "22222222-2222-4222-8222-222222222222", None, "M"),
+            created_at: "2026-11-26T00:00:00Z".to_owned(),
+        };
+        let rows = vec![
+            make(1, None),
+            make(2, Some("batch-a")),
+            make(3, Some("batch-a")),
+            make(4, Some("batch-b")),
+            make(5, Some("batch-b")),
+            make(6, Some("batch-b")),
+        ];
+        // Page size 5 splits batch-b across seq 5 and seq 6 -> trims back to seq 3.
+        let page = trim_split_batch_page(rows, 5);
+        let seqs: Vec<i64> = page.into_iter().map(|c| c.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3]);
     }
 }

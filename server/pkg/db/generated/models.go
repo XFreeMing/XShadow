@@ -841,6 +841,7 @@ type GenericChange struct {
 	EventType      string             `json:"event_type"`
 	Topic          string             `json:"topic"`
 	EntityID       pgtype.UUID        `json:"entity_id"`
+	BatchID        pgtype.UUID        `json:"batch_id"`
 }
 
 type GenericField struct {
@@ -875,6 +876,19 @@ type GenericRecord struct {
 	Revision    int64              `json:"revision"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GenericRecordBatchIdempotency struct {
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	TableID        pgtype.UUID        `json:"table_id"`
+	ActorSource    string             `json:"actor_source"`
+	ActorID        pgtype.UUID        `json:"actor_id"`
+	IdempotencyKey pgtype.UUID        `json:"idempotency_key"`
+	Operation      string             `json:"operation"`
+	RequestHash    string             `json:"request_hash"`
+	BatchID        pgtype.UUID        `json:"batch_id"`
+	ResponseJson   []byte             `json:"response_json"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type GenericRecordComment struct {
