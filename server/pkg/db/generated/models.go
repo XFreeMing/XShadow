@@ -1121,6 +1121,13 @@ type GoalPlanGeneration struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GoalProblemSolving struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	GoalID      pgtype.UUID `json:"goal_id"`
+	Revision    int32       `json:"revision"`
+	State       []byte      `json:"state"`
+}
+
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`

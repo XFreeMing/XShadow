@@ -2,6 +2,7 @@ export {
   goalKeys,
   goalListPagesOptions,
   goalDetailOptions,
+  goalProblemSolvingOptions,
   goalIssuesPagesOptions,
   goalPlanOptions,
   goalPlanGenerationOptions,
@@ -14,6 +15,7 @@ export type { GoalListFilters } from "./queries";
 export {
   useOpenGoalConversation,
   useUpdateGoal,
+  useChangeGoalProblemSolving,
   useDeleteGoal,
   useLinkGoalIssue,
   useUnlinkGoalIssue,
@@ -21,3 +23,6 @@ export {
   useSetGoalExecution,
   useCreateGoalPlanGeneration,
 } from "./mutations";
+export type {
+  GoalProblemAction, GoalProblemCommandFields, GoalProblemSolving, GoalProblemState,
+} from "../api/goal-problem-solving";

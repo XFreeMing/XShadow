@@ -465,6 +465,8 @@ func runGoalUnlink(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
+	goalCmd.AddCommand(newGoalSolveCommand())
+
 	goalRecordCmd.Flags().String("file", "", "Path to the goal JSON file")
 	_ = goalRecordCmd.MarkFlagRequired("file")
 	goalCmd.AddCommand(goalRecordCmd)

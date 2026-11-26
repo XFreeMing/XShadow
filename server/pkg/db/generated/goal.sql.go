@@ -149,7 +149,9 @@ func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, e
 
 const deleteGoal = `-- name: DeleteGoal :exec
 WITH removed AS (
-    DELETE FROM goal WHERE id = $1 AND workspace_id = $2 RETURNING id
+    DELETE FROM goal WHERE goal.id = $1 AND goal.workspace_id = $2 RETURNING id
+), removed_problem_solving AS (
+    DELETE FROM goal_problem_solving AS gps WHERE gps.workspace_id = $2 AND gps.goal_id IN (SELECT id FROM removed)
 )
 DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed)
 `
@@ -226,7 +228,9 @@ func (q *Queries) DeleteGoalIssuesByProject(ctx context.Context, arg DeleteGoalI
 
 const deleteGoalsByProject = `-- name: DeleteGoalsByProject :exec
 WITH removed AS (
-    DELETE FROM goal WHERE workspace_id = $1 AND project_id = $2 RETURNING id
+    DELETE FROM goal WHERE goal.workspace_id = $1 AND goal.project_id = $2 RETURNING id
+), removed_problem_solving AS (
+    DELETE FROM goal_problem_solving AS gps WHERE gps.workspace_id = $1 AND gps.goal_id IN (SELECT id FROM removed)
 )
 DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed)
 `

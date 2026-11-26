@@ -140,6 +140,7 @@ var pgBigmOperatorClass = extensionOperatorClass{
 // they are still pending: a fresh self-hosted install, which is exactly where an
 // interrupted build would otherwise leave a permanently unusable index.
 var concurrentIndexCleanups = map[string]string{
+	"739_goal_problem_solving_index":                            "idx_goal_problem_solving_workspace_goal",
 	"725_issue_type_workspace_index":                            "idx_issue_type_workspace",
 	"724_issue_type_workspace_name_index":                       "idx_issue_type_ws_name",
 	"722_issue_type_pkey_index":                                 "issue_type_pkey_uidx",

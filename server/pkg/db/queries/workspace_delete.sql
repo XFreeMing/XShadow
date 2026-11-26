@@ -781,5 +781,7 @@ DELETE FROM goal_issue WHERE goal_issue.workspace_id = $1;
 -- name: DeleteWorkspaceGoals :exec
 WITH removed AS (
     DELETE FROM goal WHERE goal.workspace_id = $1 RETURNING id
+), removed_problem_solving AS (
+    DELETE FROM goal_problem_solving WHERE goal_problem_solving.workspace_id = $1
 )
 DELETE FROM goal_outcome_gallery WHERE goal_id IN (SELECT id FROM removed);

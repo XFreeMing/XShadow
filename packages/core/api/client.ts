@@ -329,6 +329,9 @@ import { createRequestId, createSafeId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
+  GoalProblemSolvingSchema, type GoalProblemAction, type GoalProblemCommandFields, type GoalProblemSolving,
+} from "./goal-problem-solving";
+import {
   RuntimeProfileSchema,
   RuntimeProfileListSchema,
   AgentTaskListSchema,
@@ -4601,6 +4604,25 @@ export class ApiClient {
   async getGoal(id: string): Promise<Goal> {
     const raw = await this.fetch<unknown>(`/api/goals/${id}`);
     return parseWithFallback(raw, GoalSchema, EMPTY_GOAL, { endpoint: "GET /api/goals/:id" });
+  }
+
+  async getGoalProblemSolving(id: string): Promise<GoalProblemSolving | null> {
+    const raw = await this.fetch<unknown>(`/api/goals/${id}/problem-solving`);
+    return parseWithFallback<GoalProblemSolving | null>(raw, GoalProblemSolvingSchema, null, {
+      endpoint: "GET /api/goals/:id/problem-solving",
+    });
+  }
+
+  async changeGoalProblemSolving({
+    id, revision, action, fields, newTaskTitle,
+  }: { id: string; revision: number; action: GoalProblemAction; fields: GoalProblemCommandFields; newTaskTitle?: string }): Promise<GoalProblemSolving | null> {
+    const raw = await this.fetch<unknown>(`/api/goals/${id}/problem-solving/commands`, {
+      method: "POST",
+      body: JSON.stringify({ expected_revision: revision, command: { action, [action]: fields }, new_task_title: newTaskTitle }),
+    });
+    return parseWithFallback<GoalProblemSolving | null>(raw, GoalProblemSolvingSchema, null, {
+      endpoint: "POST /api/goals/:id/problem-solving/commands",
+    });
   }
 
   async updateGoal(id: string, data: UpdateGoalRequest): Promise<Goal> {

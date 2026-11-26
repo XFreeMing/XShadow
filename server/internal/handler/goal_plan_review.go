@@ -606,7 +606,8 @@ func goalPlanReviewView(ctx context.Context, q *db.Queries, plan db.GoalPlan) (*
 func (h *Handler) goalReviewAllows(ctx context.Context, q *db.Queries, goal db.Goal, plan db.GoalPlan, closeout bool) (bool, error) {
 	last, err := q.GetLatestGoalPlanReview(ctx, db.GetLatestGoalPlanReviewParams{WorkspaceID: plan.WorkspaceID, GoalID: plan.GoalID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return true, nil
+		problem, readErr := readGoalProblem(ctx, q, goal)
+		return readErr == nil && problem.State.Current().Number == 1, readErr
 	}
 	if err != nil {
 		return false, err

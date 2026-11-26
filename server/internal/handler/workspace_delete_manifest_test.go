@@ -74,6 +74,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"goal_issue":                         workspaceDelete,
 	"goal_plan":                          workspaceDelete,
 	"goal_plan_generation":               workspaceDelete,
+	"goal_problem_solving":               workspaceDelete,
 	"inbox_item":                         workspaceDelete,
 	"instance_telemetry_state":           workspaceDeleteKeep,
 	"issue":                              workspaceDelete,

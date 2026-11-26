@@ -638,6 +638,22 @@ func (h *Handler) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 	if !h.requireProjectVisible(w, r, workspaceID, locked.ProjectID, http.StatusNotFound, "goal not found") {
 		return
 	}
+	charterEdit := (params.Title.Valid && params.Title.String != locked.Title) ||
+		(params.IntentSet && params.Intent.String != locked.Intent) ||
+		(params.ScopeSet && params.Scope.String != locked.Scope) ||
+		(params.AcceptanceCriteriaSet && params.AcceptanceCriteria.String != locked.AcceptanceCriteria)
+	projectMove := params.ProjectIDSet && locked.ProjectID.Valid && params.ProjectID != locked.ProjectID
+	if charterEdit || projectMove {
+		_, err := qtx.GetGoalProblemSolving(r.Context(), db.GetGoalProblemSolvingParams{WorkspaceID: locked.WorkspaceID, GoalID: locked.ID})
+		if err == nil {
+			writeErrorCode(w, http.StatusConflict, "goal_problem_decision_required", "use the goal's problem-solving decision to revise an active charter")
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			h.writeGoalWriteError(w, r, err, "read problem-solving record")
+			return
+		}
+	}
 	if params.ProjectIDSet && uuidToString(locked.ProjectID) != uuidToString(params.ProjectID) {
 		links, err := qtx.CountGoalIssues(r.Context(), db.CountGoalIssuesParams{
 			WorkspaceID: locked.WorkspaceID,

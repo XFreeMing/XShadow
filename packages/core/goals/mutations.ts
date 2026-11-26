@@ -64,6 +64,26 @@ export function useUpdateGoal() {
   });
 }
 
+export function useChangeGoalProblemSolving() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: async (input: Parameters<typeof api.changeGoalProblemSolving>[0]) => {
+      const result = await api.changeGoalProblemSolving(input);
+      if (!result || result.goal_id !== input.id || result.revision <= input.revision) {
+        throw new Error("The server did not confirm the goal change.");
+      }
+      return result;
+    },
+    onSuccess: (result) => {
+      qc.setQueryData(goalKeys.problemSolving(wsId, result.goal_id), result);
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: goalKeys.all(wsId) });
+    },
+  });
+}
+
 export function useDeleteGoal() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

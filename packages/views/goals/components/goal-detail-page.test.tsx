@@ -80,6 +80,8 @@ describe("GoalDetailPage", () => {
     unlinkGoalIssue: vi.fn(),
     linkGoalIssue: vi.fn(),
     getGoalPlan: vi.fn(),
+    getGoalProblemSolving: vi.fn(),
+    changeGoalProblemSolving: vi.fn(),
   };
 
   beforeEach(() => {
@@ -145,6 +147,50 @@ describe("GoalDetailPage", () => {
     expect(within(dialog).getByRole("img", { name: "Cited answer" })).toHaveAttribute(
       "src", "data:image/png;base64,BBBB",
     );
+  });
+
+  it("opens the seven goal domains and saves a problem through the native goal command", async () => {
+    const snapshot = {
+      goal_id: "goal-1", revision: 0, actor_id: "member/user-1", can_decide: false, current_result_ids: [],
+      state: {
+        goal_versions: [{ number: 1, charter: { title: "Ship goal management", intent: "", scope: "", acceptance_criteria: [] } }],
+        goal_status: "active", problems: [], branches: [], hypotheses: [], prioritizations: [], protocols: [],
+        validation_batches: [], validation_results: [], syntheses: [], decisions: [], proposals: [],
+      },
+    };
+    api.getGoalProblemSolving.mockResolvedValue(snapshot);
+    api.changeGoalProblemSolving.mockResolvedValue({ ...snapshot, revision: 1 });
+    renderPage();
+    const section = await screen.findByRole("region", { name: "Goal problem solving" });
+    const user = userEvent.setup();
+    expect(api.getGoalProblemSolving).not.toHaveBeenCalled();
+    await user.click(within(section).getByRole("button", { name: "Open", exact: true }));
+    const domains = await within(section).findByRole("group", { name: "Problem-solving domains" });
+    expect(within(domains).getAllByRole("button")).toHaveLength(7);
+    await user.click(within(section).getByRole("button", { name: "Define a problem" }));
+    const form = within(section).getByRole("form", { name: "Define a problem" });
+    for (const [label, value] of [
+      ["Statement", "Find the original note"], ["Baseline", "Five minutes with keyword search"],
+      ["Affected users", "Library reader"], ["Constraints", "Use the same sample corpus"],
+      ["Success criterion", "Correct original within three minutes"],
+    ]) {
+      fireEvent.change(within(form).getByLabelText(label), { target: { value } });
+    }
+    expect(form.querySelector(":invalid:not(form)")).toBeNull();
+    const save = within(form).getByRole("button", { name: "Define a problem" });
+    expect(save).toHaveAttribute("type", "submit");
+    await user.click(save);
+    await waitFor(() => expect(api.changeGoalProblemSolving).toHaveBeenCalledWith(expect.objectContaining({
+      id: "goal-1", revision: 0, action: "define_problem",
+      fields: {
+        problem_id: expect.any(String), affected_users: ["Library reader"], constraints: ["Use the same sample corpus"],
+        statement: "Find the original note", baseline: "Five minutes with keyword search",
+        success_criterion: "Correct original within three minutes",
+      },
+    })));
+    await user.click(within(domains).getByRole("button", { name: "Make a decision" }));
+    expect(within(section).getByText("Version 1 · Ship goal management")).toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "Adopt goal revision" })).toBeNull();
   });
 
   it("completes a goal only through the confirmation dialog", async () => {

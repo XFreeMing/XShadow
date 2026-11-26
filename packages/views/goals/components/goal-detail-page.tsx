@@ -43,6 +43,7 @@ import { GoalFormDialog } from "./goal-form-dialog";
 import { GoalLinkTaskDialog } from "./goal-link-task-dialog";
 import { GoalOwnerPicker, type GoalOwnerValue } from "./goal-owner-picker";
 import { GoalPlanSection } from "./goal-plan-section";
+import { GoalProblemSolvingSection } from "./goal-problem-solving";
 import { GoalOutcomeGallery } from "./goal-outcome-gallery";
 import { GoalTaskPrototypes } from "./goal-task-prototypes";
 import { isGoalCompleted, isGoalUnavailableError } from "../status";
@@ -272,6 +273,11 @@ export function GoalDetailPage({ goalId }: { goalId: string }) {
           </p>
         </BriefCard>
       </div>
+
+      <GoalProblemSolvingSection key={`problem-solving-${goal.id}`}
+        wsId={wsId} goalId={goal.id} linkedIssues={linkedIssues}
+        issueHref={(issueID) => wsPaths.issueDetail(issueID)}
+        onLinkTask={() => setLinkOpen(true)} />
 
       <GoalPlanSection
         key={`goal-plan-${goal.id}`}

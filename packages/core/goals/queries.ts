@@ -20,6 +20,8 @@ export const goalKeys = {
   detailAll: (wsId: string) => [...goalKeys.all(wsId), "detail"] as const,
   detail: (wsId: string, goalId: string) =>
     [...goalKeys.detailAll(wsId), goalId] as const,
+  problemSolving: (wsId: string, goalId: string) =>
+    [...goalKeys.detail(wsId, goalId), "problem-solving"] as const,
   issuesAll: (wsId: string) => [...goalKeys.all(wsId), "issues"] as const,
   issues: (wsId: string, goalId: string) =>
     [...goalKeys.issuesAll(wsId), goalId] as const,
@@ -85,6 +87,14 @@ export function goalDetailOptions(wsId: string, goalId: string) {
     queryKey: goalKeys.detail(wsId, goalId),
     queryFn: () => api.getGoal(goalId),
     enabled: !!wsId && !!goalId,
+  });
+}
+
+export function goalProblemSolvingOptions(wsId: string, goalId: string, enabled: boolean) {
+  return queryOptions({
+    queryKey: goalKeys.problemSolving(wsId, goalId),
+    queryFn: () => api.getGoalProblemSolving(goalId),
+    enabled: enabled && !!wsId && !!goalId,
   });
 }
 
