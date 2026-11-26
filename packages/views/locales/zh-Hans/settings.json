@@ -741,6 +741,8 @@
       "type": "类型",
       "type_locked_hint": "创建后类型不可修改。",
       "record_relation_table_required": "请选择该属性要关联的工作区数据表。",
+      "record_relation_target_table": "目标表",
+      "record_relation_select_target_table": "选择目标表",
       "lookup_relation": "记录关联字段",
       "lookup_relation_placeholder": "选择一条记录关联属性",
       "lookup_target_field": "目标字段",

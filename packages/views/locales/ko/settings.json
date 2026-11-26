@@ -741,6 +741,8 @@
       "type": "유형",
       "type_locked_hint": "생성 후에는 유형을 변경할 수 없습니다.",
       "record_relation_table_required": "이 속성에 연결할 워크스페이스 표를 선택하세요.",
+      "record_relation_target_table": "대상 표",
+      "record_relation_select_target_table": "대상 표 선택",
       "lookup_relation": "레코드 연결 필드",
       "lookup_relation_placeholder": "레코드 연결 필드를 선택하세요",
       "lookup_target_field": "대상 필드",

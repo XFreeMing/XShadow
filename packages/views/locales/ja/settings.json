@@ -741,6 +741,8 @@
       "type": "タイプ",
       "type_locked_hint": "作成後にタイプは変更できません。",
       "record_relation_table_required": "このプロパティがリンクするワークスペースのテーブルを選択してください。",
+      "record_relation_target_table": "対象テーブル",
+      "record_relation_select_target_table": "対象テーブルを選択",
       "lookup_relation": "レコードリンク項目",
       "lookup_relation_placeholder": "レコードリンク項目を選択",
       "lookup_target_field": "対象項目",

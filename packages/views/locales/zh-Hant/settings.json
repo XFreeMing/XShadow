@@ -741,6 +741,8 @@
       "type": "型別",
       "type_locked_hint": "建立後型別不可修改。",
       "record_relation_table_required": "請選擇此屬性要關聯的工作區資料表。",
+      "record_relation_target_table": "目標表",
+      "record_relation_select_target_table": "選擇目標表",
       "lookup_relation": "記錄關聯欄位",
       "lookup_relation_placeholder": "選擇記錄關聯欄位",
       "lookup_target_field": "目標欄位",

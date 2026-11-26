@@ -12,7 +12,7 @@ import { useSidebarKeptStore } from "@multica/core/issues/stores/sidebar-kept-st
 import { useSidebarTreeStore } from "@multica/core/issues/stores/sidebar-tree-store";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type { Project } from "@multica/core/types";
-import { Table2, Target } from "@multica/ui/icons";
+import { Target } from "@multica/ui/icons";
 import { useNavigation } from "../../navigation";
 import { IssueContextMenuProvider } from "../../issues/actions";
 import { useIssueViewActions } from "../../issue-views/use-view-actions";
@@ -195,16 +195,6 @@ export function WorkPanel() {
                     label={t(($) => $.nav.goals)}
                     active={isPathWithin(pathname, p.goals())}
                     icon={<Target />}
-                  />
-                </PanelList>
-              </PanelSection>
-              <PanelSection label={t(($) => $.nav.tables)}>
-                <PanelList>
-                  <PanelLink
-                    href={p.tables()}
-                    label={t(($) => $.nav.tables)}
-                    active={isPathWithin(pathname, p.tables())}
-                    icon={<Table2 />}
                   />
                 </PanelList>
               </PanelSection>

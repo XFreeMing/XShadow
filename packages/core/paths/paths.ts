@@ -51,11 +51,6 @@ function workspaceScoped(slug: string) {
     projectDetail: (id: string) => `${ws}/projects/${encode(id)}`,
     goals: () => `${ws}/goals`,
     goalDetail: (id: string) => `${ws}/goals/${encode(id)}`,
-    tables: () => `${ws}/tables`,
-    table: (id: string, viewId?: string) => {
-      const path = `${ws}/tables/${encode(id)}`;
-      return viewId ? `${path}?view=${encode(viewId)}` : path;
-    },
     autopilots: () => `${ws}/autopilots`,
     autopilotDetail: (id: string) => `${ws}/autopilots/${encode(id)}`,
     agents: () => `${ws}/agents`,

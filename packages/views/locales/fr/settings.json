@@ -750,6 +750,8 @@
       "type": "Type",
       "type_locked_hint": "Le type ne peut pas être modifié après création.",
       "record_relation_table_required": "Choisissez la table de l'espace de travail à lier.",
+      "record_relation_target_table": "Tableau cible",
+      "record_relation_select_target_table": "Sélectionner un tableau cible",
       "lookup_relation": "Champ de liaison",
       "lookup_relation_placeholder": "Choisir un champ de liaison",
       "lookup_target_field": "Champ cible",

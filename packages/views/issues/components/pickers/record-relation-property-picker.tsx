@@ -231,14 +231,13 @@ export function RecordRelationTargetTableSelect({
   disabled?: boolean;
 }) {
   const { t: tSettings } = useT("settings");
-  const { t: tTables } = useT("tables");
   const wsId = useWorkspaceId();
   const { data, isLoading } = useQuery(genericTableListOptions(wsId));
   const tables = data?.tables ?? [];
   return (
     <div className="space-y-2">
       <label className="text-body font-medium" htmlFor="property-target-table">
-        {tTables(($) => $.sheet.target_table)}
+        {tSettings(($) => $.properties.editor.record_relation_target_table)}
       </label>
       <select
         id="property-target-table"
@@ -246,9 +245,9 @@ export function RecordRelationTargetTableSelect({
         value={value}
         disabled={disabled || isLoading}
         onChange={(event) => onChange(event.target.value)}
-        aria-label={tTables(($) => $.sheet.select_target_table)}
+        aria-label={tSettings(($) => $.properties.editor.record_relation_select_target_table)}
       >
-        <option value="">{tTables(($) => $.sheet.select_target_table)}</option>
+        <option value="">{tSettings(($) => $.properties.editor.record_relation_select_target_table)}</option>
         {tables.map((table) => (
           <option key={table.id} value={table.id}>
             {table.name}

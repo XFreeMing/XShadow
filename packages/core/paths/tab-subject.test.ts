@@ -13,6 +13,8 @@ describe("parseTabSubject", () => {
     ["/acme/my-issues?scope=agents", { kind: "myAgents" }],
     ["/acme/my-issues?scope=created", { kind: "page", page: "myIssues" }],
     ["/acme/projects", { kind: "page", page: "projects" }],
+    ["/acme/tables", { kind: "page", page: "issues" }],
+    ["/acme/tables/sheet-1", { kind: "page", page: "issues" }],
     ["/acme/autopilots", { kind: "page", page: "autopilots" }],
     ["/acme/agents", { kind: "page", page: "agents" }],
     ["/acme/squads", { kind: "page", page: "squads" }],

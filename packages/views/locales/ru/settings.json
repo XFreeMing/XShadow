@@ -765,6 +765,8 @@
       "type": "Тип",
       "type_locked_hint": "Тип нельзя изменить после создания.",
       "record_relation_table_required": "Выберите таблицу рабочей области для этой связи.",
+      "record_relation_target_table": "Целевая таблица",
+      "record_relation_select_target_table": "Выберите целевую таблицу",
       "lookup_relation": "Поле связи",
       "lookup_relation_placeholder": "Выберите поле связи записей",
       "lookup_target_field": "Целевое поле",

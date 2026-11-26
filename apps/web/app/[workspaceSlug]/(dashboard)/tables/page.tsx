@@ -1,7 +1,11 @@
-"use client";
+import { redirect } from "next/navigation";
+import { paths } from "@multica/core/paths";
 
-import { TablesPage } from "@multica/views/tables/components";
-
-export default function Page() {
-  return <TablesPage />;
+export default async function TablesLegacyRedirectPage({
+  params,
+}: {
+  params: Promise<{ workspaceSlug: string }>;
+}) {
+  const { workspaceSlug } = await params;
+  redirect(paths.workspace(workspaceSlug).issues());
 }

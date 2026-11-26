@@ -750,6 +750,8 @@
       "type": "Tipo",
       "type_locked_hint": "El tipo no se puede cambiar después de la creación.",
       "record_relation_table_required": "Elige la tabla del workspace que vinculará esta propiedad.",
+      "record_relation_target_table": "Tabla de destino",
+      "record_relation_select_target_table": "Seleccionar tabla de destino",
       "lookup_relation": "Campo de enlace",
       "lookup_relation_placeholder": "Elige un campo de enlace",
       "lookup_target_field": "Campo de destino",

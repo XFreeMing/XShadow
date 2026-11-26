@@ -22,6 +22,8 @@ const workspaceRoutes = new Set([
   ...Object.values(WORKSPACE_PAGES).map((page) => page.segment),
   "members",
   "attachments",
+  // Legacy standalone Tables product URLs redirect to issues.
+  "tables",
 ]);
 
 function splitWorkspacePath(path: string): { slug: string; route?: string } | null {
