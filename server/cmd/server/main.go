@@ -848,6 +848,14 @@ func main() {
 	if err := schedulerMgr.Register(scheduler.IssueWakeupJob(&service.IssueWakeupService{Tasks: taskSvc})); err != nil {
 		slog.Error("scheduler: register issue wakeups", "error", err)
 	}
+	if value := os.Getenv("MULTICA_REWORK_ANALYSIS_SQUAD_ID"); value != "" {
+		squadID, err := util.ParseUUID(value)
+		if err != nil {
+			slog.Error("invalid MULTICA_REWORK_ANALYSIS_SQUAD_ID", "error", err)
+			os.Exit(1)
+		}
+		h.ReworkAnalysisSquadID = squadID
+	}
 	if value := os.Getenv("MULTICA_ISSUE_CONTINUATION_MANAGER_ID"); value != "" {
 		managerID, err := util.ParseUUID(value)
 		if err != nil {

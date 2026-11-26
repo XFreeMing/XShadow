@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
@@ -238,6 +239,12 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 			parent = &source
 		}
 	}
+	cycle, repeated := run.RepeatedRework()
+	repeated = repeated && h.ReworkAnalysisSquadID.Valid && issue.ProjectID.Valid
+	var analysisPolicy service.IssueCountPolicy
+	if repeated {
+		analysisPolicy = service.ResolveIssueCountPolicy(r.Context(), h.Entitlements, issue.WorkspaceID)
+	}
 	ctx := h.withWakeupActor(r).Context()
 	if agentID.Valid {
 		ctx = withWakeupHandedTo(ctx, uuidToString(agentID))
@@ -249,6 +256,12 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(ctx)
 	q := h.Queries.WithTx(tx)
+	if repeated {
+		if _, err := q.LockWorkspaceForChatSessionCreate(ctx, issue.WorkspaceID); err != nil {
+			writeError(w, 500, "failed to prepare rework analysis")
+			return db.Issue{}, false
+		}
+	}
 	if lesson != nil {
 		if _, err := q.LockProjectForDelete(ctx, db.LockProjectForDeleteParams{WorkspaceID: issue.WorkspaceID, ID: issue.ProjectID}); err != nil {
 			writeError(w, 409, "project changed; reload the issue")
@@ -256,6 +269,7 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 		}
 	}
 	var executionID pgtype.UUID
+	analysisRequester := parseUUIDOrInvalid(requestUserID(r))
 	if scoped {
 		execution, err := service.CheckGoalExecutionTask(ctx, q, issue, source, true)
 		if err == nil && service.ReadGoalExecutionTask(source).Revision == 0 {
@@ -292,6 +306,9 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 			return db.Issue{}, false
 		}
 		executionID = execution.ID
+		analysisRequester = execution.By
+	} else if actorKind == "agent" && source.AccountableUserID.Valid {
+		analysisRequester = source.AccountableUserID
 	}
 	var boardStatus pgtype.Text
 	status := methodBoardStatus(*run)
@@ -356,13 +373,43 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 			return db.Issue{}, false
 		}
 	}
+	var analysisIssue db.Issue
+	var analysisTask db.AgentTaskQueue
+	if repeated {
+		var analysisSource *db.AgentTaskQueue
+		if actorKind == "agent" && hasSource && source.IssueID == updated.ID && source.AgentID == parseUUIDOrInvalid(actorID) && !isTerminalTaskStatus(source.Status) {
+			analysisSource = &source
+		}
+		analysis, err := tx.Begin(ctx)
+		if err == nil {
+			defer analysis.Rollback(ctx)
+			analysisIssue, analysisTask, err = h.createReworkAnalysis(ctx, analysis, updated, *run, cycle, analysisPolicy, actorKind, parseUUIDOrInvalid(actorID), analysisRequester, analysisSource)
+			if err == nil {
+				err = analysis.Commit(ctx)
+			} else {
+				_ = analysis.Rollback(ctx)
+			}
+		}
+		if err != nil {
+			slog.Warn("could not create rework analysis", "issue_id", uuidToString(updated.ID), "error", err)
+			analysisIssue, analysisTask = db.Issue{}, db.AgentTaskQueue{}
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeError(w, 500, "failed to commit method transition")
 		return db.Issue{}, false
 	}
-	if task.ID.Valid {
-		if err := h.TaskService.PublishWorkMethodHandoff(ctx, task); err != nil {
-			slog.Warn("work method task awaiting runtime poll", "task_id", uuidToString(task.ID), "error", err)
+	if analysisIssue.ID.Valid {
+		h.publish(protocol.EventIssueCreated, ws, actorKind, actorID, map[string]any{
+			"issue": issueToResponse(analysisIssue, h.getIssuePrefix(ctx, issue.WorkspaceID)),
+		})
+		h.publishGoalChanged(ws, actorKind, actorID)
+	}
+	for _, handoff := range []db.AgentTaskQueue{task, analysisTask} {
+		if handoff.ID.Valid {
+			if err := h.TaskService.PublishWorkMethodHandoff(ctx, handoff); err != nil {
+				slog.Warn("work method task awaiting runtime poll", "task_id", uuidToString(handoff.ID), "error", err)
+			}
 		}
 	}
 	return updated, true
