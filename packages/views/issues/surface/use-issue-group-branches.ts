@@ -147,6 +147,7 @@ export function useIssueGroupBranches({
   activateHeadOnMount = false,
   collapsedBranchKeys,
   enabled,
+  rowsEnabled = true,
 }: {
   wsId: string;
   query: IssueTableQuerySpec;
@@ -162,7 +163,10 @@ export function useIssueGroupBranches({
   activateHeadOnMount?: boolean;
   collapsedBranchKeys?: ReadonlySet<string>;
   enabled: boolean;
+  /** When false, load group descriptors only (hierarchy rows own `/rows`). */
+  rowsEnabled?: boolean;
 }): IssueGroupBranches {
+  const loadRows = enabled && rowsEnabled;
   const queryClient = useQueryClient();
   const secondaryIsCategory =
     group.kind === "compound" && group.secondary === "status_category";
@@ -204,7 +208,7 @@ export function useIssueGroupBranches({
 
   const pageTargets = useMemo<PageTarget[]>(
     () =>
-      enabled
+      loadRows
         ? branchKeys.flatMap((key) =>
             (activeCursorState.cursors[key] ?? []).map((cursor) => ({
               key,
@@ -212,7 +216,7 @@ export function useIssueGroupBranches({
             })),
           )
         : [],
-    [activeCursorState.cursors, branchKeys, enabled],
+    [activeCursorState.cursors, branchKeys, loadRows],
   );
   const headPlaceholderRef = useRef(
     new Map<string, IssueTableRowsResponse>(),
@@ -232,10 +236,10 @@ export function useIssueGroupBranches({
             page: { limit: 50, cursor },
           }),
           ...(placeholder ? { placeholderData: () => placeholder } : {}),
-          enabled,
+          enabled: loadRows,
         };
       }),
-    [enabled, group, pageTargets, query, wsId],
+    [group, loadRows, pageTargets, query, wsId],
   );
   const pageResults = useQueries({ queries: pageQueries }) as Array<
     UseQueryResult<IssueTableRowsResponse, Error>
@@ -272,7 +276,7 @@ export function useIssueGroupBranches({
     [branches],
   );
   useEffect(() => {
-    if (!enabled || !activateHeadOnMount) return;
+    if (!loadRows || !activateHeadOnMount) return;
     setCursorState((previous) => {
       if (previous.identity !== identity) {
         return { identity, cursors: {} };
@@ -294,8 +298,8 @@ export function useIssueGroupBranches({
     branchKeys,
     collapsedBranchKeys,
     descriptorByKey,
-    enabled,
     identity,
+    loadRows,
   ]);
   const branchData = useMemo(() => {
     const result = new Map<string, BranchData>();
@@ -465,13 +469,13 @@ export function useIssueGroupBranches({
               total: descriptor.count,
               loaded: branch?.rows.length ?? 0,
               hasMore:
-                enabled &&
+                loadRows &&
                 (active
                   ? !!branch?.nextCursor
                   : descriptor.count > 0 || observeEmptyBranches),
-              isLoading: enabled && (branch?.isLoading ?? false),
-              isFetching: enabled && (branch?.isFetching ?? false),
-              isError: enabled && (branch?.isError ?? false),
+              isLoading: loadRows && (branch?.isLoading ?? false),
+              isFetching: loadRows && (branch?.isFetching ?? false),
+              isError: loadRows && (branch?.isError ?? false),
               loadMore: () => loadMore(descriptor.key),
               retry: () => retry(descriptor.key),
             },
@@ -482,8 +486,8 @@ export function useIssueGroupBranches({
       activeCursorState.cursors,
       branchData,
       branches,
-      enabled,
       loadMore,
+      loadRows,
       observeEmptyBranches,
       retry,
     ],

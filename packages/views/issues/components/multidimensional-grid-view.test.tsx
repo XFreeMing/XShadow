@@ -11,6 +11,7 @@ import {
   pruneIssueSurfaceViewStates,
 } from "@multica/core/issues/stores/surface-view-store";
 import { issueScopeKey } from "@multica/core/issues/surface/scope";
+import type { TableGrouping } from "@multica/core/issues/stores/view-store";
 import { useModalStore } from "@multica/core/modals";
 import type {
   Agent,
@@ -197,6 +198,17 @@ function setupApi(overrides: Partial<ApiClient> = {}) {
   return base;
 }
 
+function prepareGridViewStore(
+  surfaceKey: string,
+  options?: { hierarchy?: boolean; grouping?: TableGrouping },
+) {
+  const store = getIssueSurfaceViewStore(surfaceKey);
+  store.getState().setViewMode("grid");
+  store.getState().setTableGrouping(options?.grouping ?? "none");
+  store.setState({ tableHierarchy: options?.hierarchy ?? false });
+  return store;
+}
+
 describe("MultidimensionalGridView", () => {
   beforeEach(() => {
     mockWsId.current = "ws-1";
@@ -243,7 +255,7 @@ describe("MultidimensionalGridView", () => {
     setupApi({ listIssueTableRows });
 
     const surfaceKey = "project:proj-1:all";
-    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceKey);
 
     const qc = createQueryClient();
     renderWithI18n(
@@ -300,8 +312,8 @@ describe("MultidimensionalGridView", () => {
 
     const scopeA = { type: "project" as const, projectId: "proj-a", actorKind: "all" as const };
     const scopeB = { type: "project" as const, projectId: "proj-b", actorKind: "all" as const };
-    getIssueSurfaceViewStore(issueScopeKey(scopeA)).getState().setViewMode("grid");
-    getIssueSurfaceViewStore(issueScopeKey(scopeB)).getState().setViewMode("grid");
+    prepareGridViewStore(issueScopeKey(scopeA));
+    prepareGridViewStore(issueScopeKey(scopeB));
 
     const qc = createQueryClient();
     const { rerender } = renderWithI18n(
@@ -383,7 +395,7 @@ describe("MultidimensionalGridView", () => {
     setupApi({ listIssueTableRows, updateIssue });
 
     const surfaceKey = "workspace:all";
-    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceKey);
 
     const qc = createQueryClient();
     renderWithI18n(
@@ -533,7 +545,7 @@ describe("MultidimensionalGridView", () => {
     setupApi({ listIssueTableRows });
 
     const surfaceKey = "workspace:all";
-    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceKey);
 
     const qc = createQueryClient();
     renderWithI18n(
@@ -605,7 +617,7 @@ describe("MultidimensionalGridView", () => {
     });
 
     const surfaceKey = "workspace:columns";
-    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceKey);
 
     const qc = createQueryClient();
     renderWithI18n(
@@ -687,8 +699,8 @@ describe("MultidimensionalGridView", () => {
 
     const surfaceA = "workspace:grid-persist-a";
     const surfaceB = "workspace:grid-persist-b";
-    getIssueSurfaceViewStore(surfaceA).getState().setViewMode("grid");
-    getIssueSurfaceViewStore(surfaceB).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceA);
+    prepareGridViewStore(surfaceB);
 
     const qc = createQueryClient();
     const renderSurface = (surfaceKey: string) =>
@@ -794,8 +806,7 @@ describe("MultidimensionalGridView", () => {
     });
 
     const surfaceKey = "workspace:grid-deferred-catalog";
-    const store = getIssueSurfaceViewStore(surfaceKey);
-    store.getState().setViewMode("grid");
+    const store = prepareGridViewStore(surfaceKey);
     store.setState({
       gridColumnOrder: ["title", "assignee", "status", "type", "property:prop-new"],
       gridHiddenColumnIds: ["type"],
@@ -900,8 +911,7 @@ describe("MultidimensionalGridView", () => {
     });
 
     const surfaceKey = "workspace:grid-props";
-    const store = getIssueSurfaceViewStore(surfaceKey);
-    store.getState().setViewMode("grid");
+    const store = prepareGridViewStore(surfaceKey);
     store.setState({
       gridColumnOrder: ["title", "property:removed", "status", "assignee"],
       gridHiddenColumnIds: [],
@@ -1015,7 +1025,7 @@ describe("MultidimensionalGridView", () => {
     });
 
     const surfaceKey = "workspace:typed-tasks";
-    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceKey);
 
     renderWithI18n(
       <QueryClientProvider client={qc}>
@@ -1130,9 +1140,7 @@ describe("MultidimensionalGridView", () => {
     });
 
     const surfaceKey = "workspace:grid-group-status";
-    const store = getIssueSurfaceViewStore(surfaceKey);
-    store.getState().setViewMode("grid");
-    store.getState().setTableGrouping("status");
+    prepareGridViewStore(surfaceKey, { grouping: "status" });
 
     const qc = createQueryClient();
     renderWithI18n(
@@ -1202,7 +1210,7 @@ describe("MultidimensionalGridView", () => {
     setupApi({ listIssueTableRows });
 
     const surfaceKey = "workspace:grid-select";
-    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+    prepareGridViewStore(surfaceKey);
 
     const qc = createQueryClient();
     renderWithI18n(

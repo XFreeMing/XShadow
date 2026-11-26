@@ -17,6 +17,7 @@ import {
   type GridCellValue,
   type GridFieldView,
   type GridGroup,
+  type GridInsertedRow,
   type GridLabels,
   type GridRecordView,
   type GridRowSelection,
@@ -67,6 +68,8 @@ import {
   useIssueTableFlatGroups,
   visibleTableGroupIssues,
 } from "./use-issue-table-flat-groups";
+import { useIssueTableHierarchyRows } from "./use-issue-table-hierarchy-rows";
+import type { HierarchyGridFooter } from "./issue-table-server-branches";
 import { useT } from "../../i18n";
 import { resolveClickIntent, useIntentNavigate } from "../../navigation";
 import { runConfirmIntent } from "../actions/run-confirm-gate";
@@ -144,6 +147,13 @@ export function MultidimensionalGridView({
   const toggleTableGroupCollapsed = useViewStore(
     (state) => state.toggleTableGroupCollapsed,
   );
+  const tableHierarchy = useViewStore((state) => state.tableHierarchy);
+  const tableCollapsedParents = useViewStore(
+    (state) => state.tableCollapsedParents,
+  );
+  const toggleTableParentCollapsed = useViewStore(
+    (state) => state.toggleTableParentCollapsed,
+  );
   const groupablePropertyIds = useMemo(
     () =>
       new Set(
@@ -179,12 +189,18 @@ export function MultidimensionalGridView({
   ]);
 
   const usesServerGrouping = effectiveTableGrouping !== "none";
+  const effectiveHierarchy = tableHierarchy;
   const groupBranches = useIssueTableFlatGroups({
     wsId,
     serverQuery,
     tableGrouping: effectiveTableGrouping,
     collapsedGroupKeys: tableCollapsedGroups,
+    rowsEnabled: usesServerGrouping && !tableHierarchy,
   });
+  const groupKeys = useMemo(
+    () => groupBranches.descriptors.map((descriptor) => descriptor.key),
+    [groupBranches.descriptors],
+  );
   const collapsedGroupSet = useMemo(
     () => new Set(tableCollapsedGroups),
     [tableCollapsedGroups],
@@ -201,8 +217,20 @@ export function MultidimensionalGridView({
     [groupProjectsQuery.data],
   );
 
+  const hierarchyState = useIssueTableHierarchyRows({
+    wsId,
+    serverQuery,
+    serverGroupSpec: groupBranches.serverGroupSpec,
+    tableHierarchy: true,
+    usesServerGrouping,
+    groupKeys,
+    collapsedGroupKeys: tableCollapsedGroups,
+    collapsedParentKeys: tableCollapsedParents,
+    enabled: effectiveHierarchy,
+  });
+
   const pageQueries = useQueries({
-    queries: usesServerGrouping
+    queries: effectiveHierarchy || usesServerGrouping
       ? []
       : cursors.map((cursor) => ({
           ...issueTableRowPageOptions(wsId, {
@@ -255,12 +283,18 @@ export function MultidimensionalGridView({
     };
   }, [cursors, pageQueries]);
 
-  const issues = usesServerGrouping
-    ? visibleTableGroupIssues(groupBranches, collapsedGroupSet)
-    : flatPageState.issues;
-  const total = usesServerGrouping
-    ? groupBranches.total
-    : flatPageState.total;
+  const issues = effectiveHierarchy
+    ? hierarchyState.issues
+    : usesServerGrouping
+      ? visibleTableGroupIssues(groupBranches, collapsedGroupSet)
+      : flatPageState.issues;
+  const total = effectiveHierarchy
+    ? usesServerGrouping
+      ? groupBranches.total
+      : hierarchyState.total
+    : usesServerGrouping
+      ? groupBranches.total
+      : flatPageState.total;
   const nextCursor = flatPageState.nextCursor;
   const validPrefixLength = flatPageState.validPrefixLength;
   const activeTailQuery = flatPageState.activeTailQuery;
@@ -288,14 +322,24 @@ export function MultidimensionalGridView({
   );
 
   const headQuery = pageQueries[0];
-  const isHeadLoading = usesServerGrouping
-    ? groupBranches.enabled &&
-      groupBranches.isLoading &&
-      groupBranches.descriptors.length === 0
-    : Boolean(headQuery && headQuery.isPending && !headQuery.data);
-  const isHeadError = usesServerGrouping
-    ? groupBranches.isError && groupBranches.descriptors.length === 0
-    : Boolean(headQuery && headQuery.isError && !headQuery.data);
+  const isHeadLoading = effectiveHierarchy
+    ? usesServerGrouping
+      ? groupBranches.enabled &&
+        groupBranches.isLoading &&
+        groupBranches.descriptors.length === 0
+      : hierarchyState.isHeadLoading
+    : usesServerGrouping
+      ? groupBranches.enabled &&
+        groupBranches.isLoading &&
+        groupBranches.descriptors.length === 0
+      : Boolean(headQuery && headQuery.isPending && !headQuery.data);
+  const isHeadError = effectiveHierarchy
+    ? usesServerGrouping
+      ? groupBranches.isError && groupBranches.descriptors.length === 0
+      : hierarchyState.isHeadError
+    : usesServerGrouping
+      ? groupBranches.isError && groupBranches.descriptors.length === 0
+      : Boolean(headQuery && headQuery.isError && !headQuery.data);
   const isTailLoading = Boolean(
     activeTailQuery &&
       (activeTailQuery.isPending || activeTailQuery.isFetching) &&
@@ -305,7 +349,7 @@ export function MultidimensionalGridView({
     activeTailQuery && activeTailQuery.isError && !activeTailQuery.data,
   );
   const validCursors = cursors.slice(0, validPrefixLength);
-  const canLoadMore = !usesServerGrouping && Boolean(
+  const canLoadMore = !usesServerGrouping && !tableHierarchy && Boolean(
     nextCursor &&
       !validCursors.includes(nextCursor) &&
       !isTailLoading &&
@@ -640,39 +684,135 @@ export function MultidimensionalGridView({
     ],
   );
 
-  const records = useMemo<GridRecordView[]>(
-    () =>
-      issues.map((issue) => {
-        const typeName = issue.issue_type_id
-          ? issueTypeById.get(issue.issue_type_id)?.name ?? null
-          : null;
-        const propValues: Record<string, GridCellValue> = {};
-        for (const prop of workspaceProperties) {
-          const val = issue.properties?.[prop.id];
-          propValues[`${PROPERTY_COLUMN_PREFIX}${prop.id}`] =
-            val === undefined
-              ? null
-              : Array.isArray(val)
-                ? val.join(", ")
-                : val;
-        }
-        return {
-          id: issue.id,
-          revision: issue.revision ?? 0,
-          values: {
-            title: issue.title,
-            ...(workspaceIssueTypes.length > 0 ? { type: typeName } : {}),
-            status: issue.status,
-            assignee:
-              issue.assignee_type && issue.assignee_id
-                ? `${issue.assignee_type}:${issue.assignee_id}`
-                : null,
-            ...propValues,
-          },
-        };
-      }),
-    [issues, issueTypeById, workspaceIssueTypes.length, workspaceProperties],
+  const buildIssueGridRecord = useCallback(
+    (
+      issue: Issue,
+      hierarchy?: GridRecordView["hierarchy"],
+    ): GridRecordView => {
+      const typeName = issue.issue_type_id
+        ? issueTypeById.get(issue.issue_type_id)?.name ?? null
+        : null;
+      const propValues: Record<string, GridCellValue> = {};
+      for (const prop of workspaceProperties) {
+        const val = issue.properties?.[prop.id];
+        propValues[`${PROPERTY_COLUMN_PREFIX}${prop.id}`] =
+          val === undefined
+            ? null
+            : Array.isArray(val)
+              ? val.join(", ")
+              : val;
+      }
+      return {
+        id: issue.id,
+        revision: issue.revision ?? 0,
+        hierarchy,
+        values: {
+          title: issue.title,
+          ...(workspaceIssueTypes.length > 0 ? { type: typeName } : {}),
+          status: issue.status,
+          assignee:
+            issue.assignee_type && issue.assignee_id
+              ? `${issue.assignee_type}:${issue.assignee_id}`
+              : null,
+          ...propValues,
+        },
+      };
+    },
+    [issueTypeById, workspaceIssueTypes.length, workspaceProperties],
   );
+
+  const hierarchyToggleLabel = t(($) => $.table.toggle_sub_issues);
+
+  const renderHierarchyFooter = useCallback(
+    (item: HierarchyGridFooter) => (
+      <div className="flex items-center gap-2 pl-6">
+        {item.state === "loading" ? (
+          <span className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            {t(($) => $.table.loading_branch)}
+          </span>
+        ) : item.state === "error" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="text-destructive"
+            onClick={() => item.onAction?.()}
+          >
+            {t(($) => $.table.load_more_failed_retry)}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => item.onAction?.()}
+          >
+            {t(($) => $.table.load_more)}
+          </Button>
+        )}
+      </div>
+    ),
+    [t],
+  );
+
+  const { records, insertedRows } = useMemo(() => {
+    if (!effectiveHierarchy) {
+      return {
+        records: issues.map((issue) => buildIssueGridRecord(issue)),
+        insertedRows: [] as GridInsertedRow[],
+      };
+    }
+    if (usesServerGrouping) {
+      return {
+        records: [] as GridRecordView[],
+        insertedRows: hierarchyState.gridItems.flatMap((item) =>
+          item.kind === "footer"
+            ? [
+                {
+                  key: item.key,
+                  groupKey: item.groupKey,
+                  afterRecordId: item.insertAfterIssueId,
+                  content: renderHierarchyFooter(item),
+                },
+              ]
+            : [],
+        ),
+      };
+    }
+    const ordered: GridRecordView[] = [];
+    const branchRows: GridInsertedRow[] = [];
+    for (const item of hierarchyState.gridItems) {
+      if (item.kind === "issue") {
+        ordered.push(
+          buildIssueGridRecord(item.issue, {
+            depth: item.depth,
+            hasChildren: item.hasChildren,
+            collapsed: item.collapsed,
+            toggleLabel: hierarchyToggleLabel,
+            onToggle: () => toggleTableParentCollapsed(item.issue.id),
+          }),
+        );
+        continue;
+      }
+      branchRows.push({
+        key: item.key,
+        groupKey: item.groupKey,
+        afterRecordId: item.insertAfterIssueId,
+        content: renderHierarchyFooter(item),
+      });
+    }
+    return { records: ordered, insertedRows: branchRows };
+  }, [
+    buildIssueGridRecord,
+    effectiveHierarchy,
+    hierarchyState.gridItems,
+    hierarchyToggleLabel,
+    issues,
+    renderHierarchyFooter,
+    toggleTableParentCollapsed,
+    usesServerGrouping,
+  ]);
 
   const recordById = useMemo(
     () => new Map(records.map((record) => [record.id, record])),
@@ -703,6 +843,28 @@ export function MultidimensionalGridView({
       return null;
     }
     return groupBranches.descriptors.map((descriptor) => {
+      if (effectiveHierarchy) {
+        const groupRecords = hierarchyState.gridItems.flatMap((item) =>
+          item.kind === "issue" && item.groupKey === descriptor.key
+            ? [
+                buildIssueGridRecord(item.issue, {
+                  depth: item.depth,
+                  hasChildren: item.hasChildren,
+                  collapsed: item.collapsed,
+                  toggleLabel: hierarchyToggleLabel,
+                  onToggle: () => toggleTableParentCollapsed(item.issue.id),
+                }),
+              ]
+            : [],
+        );
+        return {
+          key: descriptor.key,
+          label: issueTableGroupLabel(descriptor, groupLabelContext),
+          count: descriptor.count,
+          collapsed: collapsedGroupSet.has(descriptor.key),
+          records: groupRecords,
+        };
+      }
       const branchIssues = groupBranches.issuesByKey[descriptor.key] ?? [];
       const page = groupBranches.pagination[descriptor.key];
       return {
@@ -720,12 +882,17 @@ export function MultidimensionalGridView({
       };
     });
   }, [
+    buildIssueGridRecord,
     collapsedGroupSet,
+    effectiveHierarchy,
     groupBranches.descriptors,
     groupBranches.issuesByKey,
     groupBranches.pagination,
     groupLabelContext,
+    hierarchyState.gridItems,
+    hierarchyToggleLabel,
     recordById,
+    toggleTableParentCollapsed,
     usesServerGrouping,
   ]);
 
@@ -955,9 +1122,11 @@ export function MultidimensionalGridView({
             variant="outline"
             onClick={() =>
               void (
-                usesServerGrouping
-                  ? groupBranches.retryGroups()
-                  : headQuery?.refetch()
+                effectiveHierarchy
+                  ? hierarchyState.retryRoot()
+                  : usesServerGrouping
+                    ? groupBranches.retryGroups()
+                    : headQuery?.refetch()
               )
             }
           >
@@ -967,10 +1136,11 @@ export function MultidimensionalGridView({
       ) : (
         <div className="flex-1 min-h-0 overflow-auto">
           <ApitableGrid
-            datasheetId={`issues:${wsId}:${queryIdentity}:${effectiveTableGrouping}`}
+            datasheetId={`issues:${wsId}:${queryIdentity}:${effectiveTableGrouping}:${effectiveHierarchy ? "hierarchy" : "flat"}`}
             fields={visibleFields}
             records={records}
-            groups={gridGroups}
+            groups={usesServerGrouping ? gridGroups : null}
+            insertedRows={effectiveHierarchy ? insertedRows : undefined}
             labels={labels}
             renderCell={renderCell}
             onCellCommit={handleCellCommit}

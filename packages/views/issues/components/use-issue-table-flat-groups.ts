@@ -13,11 +13,13 @@ export function useIssueTableFlatGroups({
   serverQuery,
   tableGrouping,
   collapsedGroupKeys,
+  rowsEnabled = true,
 }: {
   wsId: string;
   serverQuery: IssueTableQuerySpec;
   tableGrouping: string;
   collapsedGroupKeys: readonly string[];
+  rowsEnabled?: boolean;
 }): IssueGroupBranches & { serverGroupSpec: ReturnType<typeof tableGroupSpec> } {
   const serverGroupSpec = useMemo(
     () => tableGroupSpec(tableGrouping),
@@ -39,6 +41,7 @@ export function useIssueTableFlatGroups({
     query: serverQuery,
     group: requestGroup,
     enabled: usesServerGrouping,
+    rowsEnabled,
     activateHeadOnMount: true,
     collapsedBranchKeys: collapsedSet,
   });

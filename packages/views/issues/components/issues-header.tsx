@@ -2355,7 +2355,7 @@ export function IssueDisplayControls({
                   )}
                 </div>
               )}
-              {viewMode === "table" && (
+              {(viewMode === "table" || viewMode === "grid") && (
                 <label className="flex cursor-pointer items-center justify-between gap-3">
                   <span className="min-w-0">
                     <span className="block text-caption font-medium text-muted-foreground">

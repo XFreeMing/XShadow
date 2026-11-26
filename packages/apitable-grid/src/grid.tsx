@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Provider, useDispatch } from "react-redux";
 import { GRID_STYLE_ID, gridCss } from "./grid-css";
 import { GridCell } from "./cell";
 import { createGridStore, hostSnapshot, setPageDatasheet } from "./store";
-import type { GridActor, GridCellRenderer, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch, GridRowSelection } from "./types";
+import type { GridActor, GridCellRenderer, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridInsertedRow, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch, GridRowSelection } from "./types";
 import type { GridSnapshot } from "../third-party/state";
 
 const NO_CONFLICTS: readonly GridConflictMark[] = [];
@@ -130,6 +130,7 @@ export function ApitableGrid({
   onActiveCell,
   onEditEnd,
   onToggleGroup,
+  insertedRows,
   stickyHeader,
   rowSelection,
 }: {
@@ -156,6 +157,7 @@ export function ApitableGrid({
   onActiveCell?: (recordId: string, fieldId: string, revision: number) => void;
   onEditEnd?: () => void;
   onToggleGroup?: (key: string) => void;
+  insertedRows?: readonly GridInsertedRow[];
   stickyHeader?: boolean;
   rowSelection?: GridRowSelection;
 }) {
@@ -175,10 +177,52 @@ export function ApitableGrid({
     if (online) return online;
     return collaborators?.find((item) => item.kind === "recent" && item.recordId === recordId && item.fieldId === fieldId) ?? null;
   };
+  const insertedAfter = useMemo(() => {
+    const map = new Map<string | null, Map<string | null, GridInsertedRow[]>>();
+    for (const row of insertedRows ?? []) {
+      const groupKey = row.groupKey ?? null;
+      const group = map.get(groupKey) ?? new Map<string | null, GridInsertedRow[]>();
+      const bucket = group.get(row.afterRecordId) ?? [];
+      bucket.push(row);
+      group.set(row.afterRecordId, bucket);
+      map.set(groupKey, group);
+    }
+    return map;
+  }, [insertedRows]);
+
+  const renderInserted = (row: GridInsertedRow) => (
+    <tr className="apitable-grid__branch" data-insert-key={row.key} key={row.key}>
+      <td colSpan={fields.length + 1}>{row.content}</td>
+    </tr>
+  );
+
   const renderRecord = (record: GridRecordView, rowIndex: number) => (
     <tr className="apitable-grid__row" data-record-id={record.id} key={record.id}>
       <th className="apitable-grid__rowHead" scope="row">
-        <div className="apitable-grid__rowHeadInner">
+        <div
+          className="apitable-grid__rowHeadInner"
+          style={
+            record.hierarchy
+              ? { paddingLeft: record.hierarchy.depth * 12 + 4 }
+              : undefined
+          }
+        >
+          {record.hierarchy?.hasChildren ? (
+            <button
+              type="button"
+              className="apitable-grid__hierarchyToggle"
+              aria-expanded={!record.hierarchy.collapsed}
+              aria-label={record.hierarchy.toggleLabel}
+              onClick={(event) => {
+                event.stopPropagation();
+                record.hierarchy?.onToggle();
+              }}
+            >
+              {record.hierarchy.collapsed ? "+" : "–"}
+            </button>
+          ) : record.hierarchy ? (
+            <span className="apitable-grid__hierarchySpacer" aria-hidden="true" />
+          ) : null}
           {rowSelection ? (
             <GridRowCheckbox
               checked={rowSelection.selectedRecordIds.has(record.id)}
@@ -229,6 +273,20 @@ export function ApitableGrid({
       })}
     </tr>
   );
+
+  const renderRows = (records: readonly GridRecordView[], start: number, groupKey: string | null) => {
+    const rows: ReactNode[] = [];
+    const inserted = insertedAfter.get(groupKey);
+    const pushInserted = (afterId: string | null) => {
+      for (const row of inserted?.get(afterId) ?? []) rows.push(renderInserted(row));
+    };
+    pushInserted(null);
+    for (const [index, record] of records.entries()) {
+      rows.push(renderRecord(record, start + index));
+      pushInserted(record.id);
+    }
+    return rows;
+  };
 
   useLayoutEffect(() => {
     let style = document.getElementById(GRID_STYLE_ID);
@@ -319,9 +377,7 @@ export function ApitableGrid({
           );
           if (group.collapsed) return [header];
           const start = visibleRecords.findIndex((record) => record.id === group.records[0]?.id);
-          const rows = group.records.map((record, index) =>
-            renderRecord(record, start + index),
-          );
+          const rows = renderRows(group.records, start, group.key);
           const branchTail =
             group.branchError || (group.branchHasMore && group.records.length > 0)
               ? [
@@ -343,7 +399,7 @@ export function ApitableGrid({
                 ]
               : [];
           return [header, ...rows, ...branchTail];
-        }) : visibleRecords.map((record, rowIndex) => renderRecord(record, rowIndex))}
+        }) : renderRows(visibleRecords, 0, null)}
         </tbody>
       </table>
     </Provider>

@@ -25,6 +25,29 @@ const records: GridRecordView[] = [
 ];
 
 describe("ApitableGrid", () => {
+  it("uses consecutive row numbers and arrow navigation across a branch footer", async () => {
+    const user = userEvent.setup();
+    const tasks: GridRecordView[] = [
+      { id: "first", revision: 1, values: { name: "第一项" } },
+      { id: "second", revision: 1, values: { name: "第二项" } },
+      { id: "third", revision: 1, values: { name: "第三项" } },
+    ];
+    render(<ApitableGrid
+      datasheetId="dst"
+      fields={fields.slice(0, 1)}
+      records={tasks}
+      groups={[{ key: "todo", label: "待办", count: 3, collapsed: false, records: tasks }]}
+      insertedRows={[{ key: "more", groupKey: "todo", afterRecordId: "first", content: <button>加载更多</button> }]}
+      labels={labels}
+      onOpenRecord={vi.fn()}
+      onCellCommit={vi.fn()}
+    />);
+    await user.click(screen.getByDisplayValue("第二项"));
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByDisplayValue("第三项")).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Open record 2" })).toHaveTextContent("2");
+  });
+
   it("selects a cell, commits a changed text value, and keeps zero", async () => {
     const user = userEvent.setup();
     const onCellCommit = vi.fn();

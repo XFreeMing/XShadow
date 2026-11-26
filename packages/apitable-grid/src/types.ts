@@ -35,11 +35,28 @@ export interface GridFieldView {
   };
 }
 
+export interface GridRecordHierarchy {
+  depth: number;
+  hasChildren: boolean;
+  collapsed: boolean;
+  toggleLabel: string;
+  onToggle: () => void;
+}
+
 export interface GridRecordView {
   id: string;
   revision: number;
   values: Record<string, GridCellValue | undefined>;
   errors?: Record<string, string>;
+  hierarchy?: GridRecordHierarchy;
+}
+
+export interface GridInsertedRow {
+  key: string;
+  afterRecordId: string | null;
+  /** When groups are shown, footers render only inside the matching group. */
+  groupKey?: string | null;
+  content: ReactNode;
 }
 
 export interface GridConflictMark {

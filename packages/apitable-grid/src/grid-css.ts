@@ -277,6 +277,28 @@ export const gridCss = `
   color: var(--fc3, #8c8c8c);
   font-size: 11px;
 }
+.apitable-grid__hierarchyToggle,
+.apitable-grid__group button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: var(--firstLevelText);
+  padding: 0 2px;
+}
+.apitable-grid__hierarchySpacer {
+  display: inline-block;
+  width: 1.25rem;
+  flex-shrink: 0;
+}
+.apitable-grid__branch td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--shadowColor);
+}
+.apitable-grid__branch button {
+  font: inherit;
+  cursor: pointer;
+}
 .apitable-grid__group td {
   padding: 2px 8px;
   background: var(--rowSelectedBg, rgba(123, 103, 238, 0.08));
