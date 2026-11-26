@@ -39,7 +39,7 @@ import type { Issue } from "@multica/core/types";
 import { BoardView } from "../components/board-view";
 import { BOARD_COL_WIDTH } from "../components/board-column";
 import { BatchActionToolbar } from "../components/batch-action-toolbar";
-import { GanttView } from "../components/gantt-view";
+import { IssueDateSchedule } from "../components/gantt-view";
 import { IssueGanttPanel, type GanttMode } from "../components/issue-gantt-panel";
 import { ListView } from "../components/list-view";
 import { MultidimensionalGridView } from "../components/multidimensional-grid-view";
@@ -234,7 +234,7 @@ function IssueSurfaceContent({
   useQuery({ ...workspaceWakeupSummariesOptions(workspaceId), refetchInterval: 10_000 });
   const { t } = useT("projects");
   const { t: issueText } = useT("issues");
-  const [ganttMode, setGanttMode] = useState<GanttMode>(scope.type === "project" ? "calendar" : "plan");
+  const [ganttMode, setGanttMode] = useState<GanttMode>("calendar");
   const controller = useIssueSurfaceController({
     showGanttCalendar: ganttMode === "calendar",
     scope,
@@ -323,7 +323,12 @@ function IssueSurfaceContent({
                 {issueText(($) => $.table.load_failed)}
                 <Button size="sm" variant="outline" onClick={controller.retryGantt}>{issueText(($) => $.table.load_failed_retry)}</Button>
               </div>
-            ) : <GanttView issues={controller.filteredGanttIssues} />)}
+            ) : (
+              <IssueDateSchedule
+                issues={controller.filteredGanttIssues}
+                serverQuery={controller.tableQuerySpec}
+              />
+            ))}
           </IssueGanttPanel>
         ) : controller.viewMode === "form" ? (
           <IssueFormView

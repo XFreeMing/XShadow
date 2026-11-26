@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { errorCode } from "@multica/core/api";
@@ -12,8 +12,8 @@ import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-
 import type { GanttZoom } from "@multica/core/issues/stores/view-store";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { propertyListOptions } from "@multica/core/properties";
-import type { Issue, IssueProperty, IssueStatusCategory } from "@multica/core/types";
-import { issueStatusCategory, statusColumnKeys } from "@multica/core/issues";
+import type { Issue, IssueProperty, IssueStatusCategory, IssueTableQuerySpec } from "@multica/core/types";
+import { issueBehavesAsAny, issueStatusCategory, statusColumnKeys } from "@multica/core/issues";
 import { dateOnlyToUTCDate } from "@multica/core/issues/date";
 import { cn } from "@multica/ui/lib/utils";
 import {
@@ -48,6 +48,7 @@ import { IssuePrototypePreview } from "./issue-prototype-preview";
 import { CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
 import { resolveCardCustomProperties } from "../utils/card-custom-properties";
 import { ComputedPropertyViewBoundary } from "./computed-property-view-boundary";
+import { useIssueTableFlatRowPages } from "./use-issue-table-flat-row-pages";
 
 // Date utilities — everything is UTC-day-aligned so a `due_date` ISO string
 // produced anywhere maps to exactly one column on the axis.
@@ -320,7 +321,7 @@ const STATUS_BAR_BG: Record<IssueStatusCategory, string> = {
 
 // One row — left label cell + right timeline track with absolute bar.
 
-function ScheduledRow({
+function GanttRow({
   issue,
   range,
   dayPx,
@@ -546,9 +547,41 @@ function ScheduledRow({
   );
 }
 
-// GanttView — public component
+export function IssueDateSchedule({ issues, serverQuery }: {
+  issues: Issue[];
+  serverQuery: IssueTableQuerySpec;
+}) {
+  const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  const showCompleted = useViewStore((state) => state.ganttShowCompleted);
+  const pages = useIssueTableFlatRowPages(wsId, serverQuery, 50);
+  // Keep the existing scheduled window while exposing editable rows from the
+  // paginated issue sheet, including tasks whose first date is being saved.
+  const rows = useMemo(() => {
+    const known = new Set(issues.map((issue) => issue.id));
+    const moreRows = pages.issues.filter((issue) =>
+      !known.has(issue.id) &&
+      (showCompleted || !issueBehavesAsAny(issue, ["done", "closed"])),
+    );
+    return [...issues, ...moreRows];
+  }, [issues, pages.issues, showCompleted]);
 
-export function GanttView({ issues }: { issues: Issue[] }) {
+  let rowPagination: ReactNode;
+  if (pages.isHeadError || pages.isTailError) {
+    rowPagination = (
+      <Button size="sm" variant="outline" onClick={pages.isHeadError ? pages.retryHead : pages.retryTail}>
+        {t(($) => $.table.load_more_failed_retry)}
+      </Button>
+    );
+  } else if (pages.isHeadLoading || pages.isTailLoading) {
+    rowPagination = <span role="status" className="text-caption text-muted-foreground">{t(($) => $.table.loading_branch)}</span>;
+  } else if (pages.canLoadMore) {
+    rowPagination = <Button size="sm" variant="outline" onClick={pages.handleLoadMore}>{t(($) => $.table.load_more)}</Button>;
+  }
+  return <GanttView issues={rows} rowPagination={rowPagination} />;
+}
+
+export function GanttView({ issues, rowPagination }: { issues: Issue[]; rowPagination?: ReactNode }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -567,40 +600,35 @@ export function GanttView({ issues }: { issues: Issue[] }) {
   const today = useMemo(() => startOfDayUTC(new Date()), []);
   const dayPx = DAY_PX_BY_ZOOM[zoom];
 
-  // `issues` is already the canvas set: the surface applies the shared
-  // filters, drops undated rows, and honours `ganttShowCompleted` before
-  // handing it over (see `ganttCanvasRows` in use-issue-surface-data.ts).
-  // Those rules used to live here, which meant the header chip could count
-  // rows this canvas would never draw (MUL-4884). Keep this view a renderer:
-  // it orders rows, it does not decide which ones exist.
-  const scheduled = useMemo(() => {
+  // Undated rows share the sheet, with an empty timeline until a date is set.
+  const sortedRows = useMemo(() => {
     // "position" makes no sense on a gantt — default to start_date asc when
     // the user hasn't picked a more specific sort.
     const sortField = sortBy === "position" ? "start_date" : sortBy;
     return sortIssues(issues, sortField, sortDirection, statusOrder);
   }, [issues, sortBy, sortDirection, statusOrder]);
   const visibleIssueIds = useMemo(
-    () => scheduled.map((issue) => issue.id),
-    [scheduled],
+    () => sortedRows.map((issue) => issue.id),
+    [sortedRows],
   );
-  const previewIssue = scheduled.find((issue) => issue.id === previewId);
+  const previewIssue = sortedRows.find((issue) => issue.id === previewId);
 
   // Side peek steps through the rows top to bottom.
   const peek = useIssuePeekActions();
   useEffect(() => {
-    peek?.publishColumns([scheduled.map((issue) => issue.id)]);
-  }, [peek, scheduled]);
+    peek?.publishColumns([sortedRows.map((issue) => issue.id)]);
+  }, [peek, sortedRows]);
   useEffect(() => () => peek?.publishColumns(null), [peek]);
 
   const range = useMemo(
-    () => computeRange(scheduled, today, zoom),
-    [scheduled, today, zoom],
+    () => computeRange(sortedRows, today, zoom),
+    [sortedRows, today, zoom],
   );
   const totalDays = daysBetween(range.start, range.end);
   const timelineWidth = totalDays * dayPx;
   const todayOffsetDays = daysBetween(range.start, today);
 
-  const empty = scheduled.length === 0;
+  const empty = sortedRows.length === 0;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -652,7 +680,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
       {/* Body — single scroll container drives both vertical + horizontal */}
       {empty ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-body text-muted-foreground">
-          {t(($) => $.gantt.empty)}
+          {rowPagination ?? t(($) => $.table.empty)}
         </div>
       ) : <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
         <div style={{ minWidth: LEFT_COL_WIDTH + timelineWidth }}>
@@ -681,7 +709,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
             />
           </div>
 
-          {/* Scheduled rows + background overlay */}
+          {/* Task rows and their shared timeline grid. */}
           <div className="relative">
             {/* Background gridlines + today line spanning all rows. Positioned
                 starting after the left label column. */}
@@ -692,12 +720,12 @@ export function GanttView({ issues }: { issues: Issue[] }) {
               <BackgroundLayer
                 range={range}
                 dayPx={dayPx}
-                height={scheduled.length * ROW_HEIGHT}
+                height={sortedRows.length * ROW_HEIGHT}
                 todayOffsetDays={todayOffsetDays}
               />
             </div>
-            {scheduled.map((issue) => (
-              <ScheduledRow
+            {sortedRows.map((issue) => (
+              <GanttRow
                 key={issue.id}
                 issue={issue}
                 range={range}
@@ -711,6 +739,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
           </div>
         </div>
       </div>}
+      {!empty && rowPagination && <div className="flex shrink-0 justify-center border-t px-3 py-1.5">{rowPagination}</div>}
       {previewIssue && (
         <IssuePrototypePreview key={previewIssue.id} issue={previewIssue} onClose={() => setPreviewId(null)} />
       )}
