@@ -33,7 +33,8 @@ function useNativeIssueRelationOptions(
     enabled,
   });
   const result = useQuery({
-    queryKey: [...issueKeys.list(wsId), "native-relation", queryIds, search, includeCandidates],
+    // The list cache stores status buckets. Relation options are flat issue rows.
+    queryKey: [...issueKeys.all(wsId), "native-relation", queryIds, search, includeCandidates],
     enabled,
     queryFn: async ({ signal }) => {
       const [selected, candidates] = await Promise.all([

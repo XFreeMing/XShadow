@@ -2214,6 +2214,13 @@ func TestIssueRelationRecordRelation(t *testing.T) {
 	}
 
 	otherWorkspaceID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO workspace (id, name, slug, issue_prefix)
+		VALUES ($1::uuid, 'Foreign issue relation workspace', $2, 'REL')
+	`, otherWorkspaceID, "relation-"+otherWorkspaceID); err != nil {
+		t.Fatalf("create foreign workspace: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, otherWorkspaceID) })
 	var foreignIssueID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number)
