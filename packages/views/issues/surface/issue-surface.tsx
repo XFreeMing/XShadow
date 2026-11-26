@@ -234,7 +234,6 @@ function IssueSurfaceContent({
   // One polling owner for the whole surface; individual cards only select cache data.
   useQuery({ ...workspaceWakeupSummariesOptions(workspaceId), refetchInterval: 10_000 });
   const { t } = useT("projects");
-  const { t: issueText } = useT("issues");
   const [ganttMode, setGanttMode] = useState<GanttMode>("calendar");
   const controller = useIssueSurfaceController({
     showGanttCalendar: ganttMode === "calendar",
@@ -319,17 +318,7 @@ function IssueSurfaceContent({
             out. */}
         {controller.viewMode === "gantt" ? (
           <IssueGanttPanel mode={ganttMode} setMode={setGanttMode} projectId={controller.projectId}>
-            {pending ?? (controller.retryGantt ? (
-              <div role="alert" className="flex items-center gap-2 p-4 text-body">
-                {issueText(($) => $.table.load_failed)}
-                <Button size="sm" variant="outline" onClick={controller.retryGantt}>{issueText(($) => $.table.load_failed_retry)}</Button>
-              </div>
-            ) : (
-              <IssueDateSchedule
-                issues={controller.filteredGanttIssues}
-                serverQuery={controller.tableQuerySpec}
-              />
-            ))}
+            {pending ?? <IssueDateSchedule serverQuery={controller.tableQuerySpec} />}
           </IssueGanttPanel>
         ) : controller.viewMode === "form" ? (
           <IssueFormView
@@ -418,9 +407,13 @@ function IssueSurfaceContent({
             {controller.viewMode === "grid" && (
               <MultidimensionalGridView
                 serverQuery={controller.tableQuerySpec}
+                childProgressMap={controller.childProgressMap}
+                search={controller.tableSearch}
+                onSearchChange={controller.setTableSearch}
                 onCreateIssue={openCreateIssue}
                 showBatchToolbar={shouldShowBatchToolbar}
                 exportIssues={controller.exportTableIssues}
+                resolveExportLookups={controller.resolveTableExportLookups}
               />
             )}
             {controller.viewMode === "gallery" && (

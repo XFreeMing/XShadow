@@ -13,7 +13,6 @@ import {
 } from "@multica/core/issues/stores/surface-view-store";
 import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-context";
 import type {
-  Issue,
   IssueStatusEntry,
   IssueTableGroupsRequest,
   IssueTableRowsRequest,
@@ -197,18 +196,18 @@ describe("useIssueSurfaceController — custom status filter vs a late catalog",
 // active chip is as wrong as blanking the surface, and a failed request would
 // leave it that way for good.
 describe("useIssueSurfaceController — project-status filter vs a late catalog", () => {
-  function renderGantt(surfaceKey: string, projects: () => Promise<unknown>) {
+  function renderSwimlane(surfaceKey: string, projects: () => Promise<unknown>) {
     installApi(async () => ({ statuses: [], categories: [], total: 0 }), projects);
     const { store, Wrapper } = makeWrapper(qc, surfaceKey);
     act(() => {
-      store.getState().setViewMode("gantt");
+      store.getState().setViewMode("swimlane");
       store.getState().toggleProjectStatusFilter("in_progress");
     });
     return renderHook(
       () =>
         useIssueSurfaceController({
           scope: { type: "workspace", actorKind: "all" },
-          modes: ["gantt"],
+          modes: ["swimlane"],
         }),
       { wrapper: Wrapper },
     );
@@ -216,7 +215,7 @@ describe("useIssueSurfaceController — project-status filter vs a late catalog"
 
   it("stays loading while the project catalog is in flight", async () => {
     const projects = deferred<{ projects: never[]; total: number }>();
-    const { result } = renderGantt("workspace:pstatus-pending", () => projects.promise);
+    const { result } = renderSwimlane("workspace:pstatus-pending", () => projects.promise);
 
     await waitFor(() => expect(result.current.isLoading).toBe(true));
 
@@ -229,7 +228,7 @@ describe("useIssueSurfaceController — project-status filter vs a late catalog"
 
   it("surfaces a retryable error when the project catalog fails", async () => {
     const projects = deferred<never>();
-    const { result } = renderGantt("workspace:pstatus-failed", () => projects.promise);
+    const { result } = renderSwimlane("workspace:pstatus-failed", () => projects.promise);
 
     await act(async () => {
       projects.reject(new Error("projects unavailable"));
@@ -238,102 +237,6 @@ describe("useIssueSurfaceController — project-status filter vs a late catalog"
 
     await waitFor(() => expect(result.current.filterDependencyError?.kind).toBe("status"));
     expect(result.current.isEmpty).toBe(false);
-  });
-
-  describe("on a project Gantt", () => {
-    const row = (id: string, projectId: string) =>
-      ({
-        id,
-        workspace_id: "ws-1",
-        number: 1,
-        identifier: id,
-        title: id,
-        description: null,
-        status: "todo",
-        priority: "none",
-        assignee_type: null,
-        assignee_id: null,
-        creator_type: "member",
-        creator_id: "user-1",
-        parent_issue_id: null,
-        project_id: projectId,
-        position: 1,
-        stage: null,
-        start_date: "2026-01-01",
-        due_date: "2026-01-05",
-        metadata: {},
-        properties: {},
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:00Z",
-      }) as Issue;
-    const ROWS = [row("active-row", "p-active"), row("paused-row", "p-paused")];
-    const PROJECTS = {
-      projects: [
-        { id: "p-active", status: "in_progress" },
-        { id: "p-paused", status: "paused" },
-      ],
-      total: 2,
-    };
-
-    function renderProjectGantt(surfaceKey: string, listProjects: () => Promise<unknown>) {
-      installApi(
-        async () => ({ statuses: [], categories: [], total: 0 }),
-        listProjects,
-        async () => ({ issues: ROWS, total: ROWS.length }),
-      );
-      const { store, Wrapper } = makeWrapper(qc, surfaceKey);
-      act(() => {
-        store.getState().setViewMode("gantt");
-        store.getState().toggleProjectStatusFilter("in_progress");
-      });
-      return renderHook(
-        () =>
-          useIssueSurfaceController({
-            scope: { type: "project", projectId: "p-active" },
-            modes: ["gantt"],
-          }),
-        { wrapper: Wrapper },
-      );
-    }
-
-    it("draws only matching rows after a retry recovers the project list", async () => {
-      const listProjects = vi
-        .fn()
-        .mockRejectedValueOnce(new Error("projects unavailable"))
-        .mockResolvedValue(PROJECTS);
-      const { result } = renderProjectGantt("project:pstatus-retry", listProjects);
-
-      await waitFor(() => expect(result.current.filterDependencyError?.kind).toBe("status"));
-      expect(result.current.ganttIssues).toHaveLength(ROWS.length);
-
-      act(() => result.current.filterDependencyError!.retry());
-      await waitFor(() => expect(result.current.filterDependencyError).toBeNull());
-      await waitFor(() =>
-        expect(result.current.filteredGanttIssues.map((issue) => issue.id)).toEqual(["active-row"]),
-      );
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    it("keeps filtering by the last project list when a refetch fails", async () => {
-      const listProjects = vi
-        .fn()
-        .mockResolvedValueOnce(PROJECTS)
-        .mockRejectedValue(new Error("refetch failed"));
-      const { result } = renderProjectGantt("project:pstatus-stale", listProjects);
-      await waitFor(() =>
-        expect(result.current.filteredGanttIssues.map((issue) => issue.id)).toEqual(["active-row"]),
-      );
-
-      await act(async () => {
-        await qc.refetchQueries({ queryKey: ["projects", "ws-1", "list"] }).catch(() => {});
-        // Query observers notify on a timer; let the failure reach the hook.
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-
-      expect(qc.getQueryState(["projects", "ws-1", "list"])?.status).toBe("error");
-      expect(result.current.filterDependencyError).toBeNull();
-      expect(result.current.filteredGanttIssues.map((issue) => issue.id)).toEqual(["active-row"]);
-    });
   });
 
   it("does not hold the surface when no project-status filter is active", async () => {
@@ -356,6 +259,56 @@ describe("useIssueSurfaceController — project-status filter vs a late catalog"
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.filterDependencyError).toBeNull();
+  });
+
+  it("waits for the status catalog in Gantt date schedule when hiding completed and excludes custom done/closed statuses", async () => {
+    const customDone = {
+      id: "st-shipped",
+      workspace_id: "ws-1",
+      key: "shipped",
+      name: "Shipped",
+      category: "done",
+      color: "#22c55e",
+      icon: null,
+      position: 10,
+      is_system: false,
+      archived_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    const customClosed = {
+      ...customDone,
+      id: "st-wontfix",
+      key: "wontfix",
+      name: "Won't Fix",
+      category: "closed",
+    };
+    const listStatuses = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("statuses unavailable"))
+      .mockResolvedValue({ statuses: [customDone, customClosed], categories: [], total: 2 });
+    installApi(listStatuses);
+    const { store, Wrapper } = makeWrapper(qc, "workspace:gantt-status-catalog");
+    act(() => store.getState().setViewMode("gantt"));
+
+    const { result } = renderHook(
+      () =>
+        useIssueSurfaceController({
+          scope: { type: "workspace", actorKind: "all" },
+          modes: ["gantt"],
+          showGanttCalendar: true,
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => expect(result.current.filterDependencyError?.kind).toBe("status"));
+
+    act(() => result.current.filterDependencyError!.retry());
+    await waitFor(() => expect(result.current.filterDependencyError).toBeNull());
+    expect(result.current.tableQuerySpec.filters).toMatchObject({
+      statuses: expect.arrayContaining(["done", "cancelled", "shipped", "wontfix"]),
+      negate: ["statuses"],
+    });
   });
 });
 

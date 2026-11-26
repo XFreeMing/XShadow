@@ -94,15 +94,29 @@ describe("Display layout", () => {
     expect(store.getState().cardPropertyIds).toEqual(["calc-cost"]);
   });
 
-  it("switches to Multidimensional view and back when allowGrid is enabled", async () => {
+  it("switches to Multidimensional table and hides legacy Table when allowGrid is enabled", async () => {
     const store = renderDisplay({ allowGrid: true }, (s) => s.getState().setViewMode("board"));
 
     const layouts = await screen.findByRole("group", { name: "View" });
-    fireEvent.click(within(layouts).getByRole("button", { name: "Multidimensional view" }));
+    expect(within(layouts).queryByRole("button", { name: "Table" })).not.toBeInTheDocument();
+    fireEvent.click(within(layouts).getByRole("button", { name: "Multidimensional table" }));
     expect(store.getState().viewMode).toBe("grid");
 
     fireEvent.click(within(layouts).getByRole("button", { name: "List" }));
     expect(store.getState().viewMode).toBe("list");
+  });
+
+  it("maps persisted legacy table viewMode to Multidimensional table when allowGrid is enabled", async () => {
+    const store = renderDisplay({ allowGrid: true }, (s) => s.getState().setViewMode("table"));
+
+    const layouts = await screen.findByRole("group", { name: "View" });
+    const gridButton = within(layouts).getByRole("button", { name: "Multidimensional table" });
+    expect(gridButton).toHaveAttribute("aria-pressed", "true");
+    // Does not mutate saved viewMode until the user explicitly selects grid.
+    expect(store.getState().viewMode).toBe("table");
+
+    fireEvent.click(gridButton);
+    expect(store.getState().viewMode).toBe("grid");
   });
 
   it("switches to Gallery when allowGallery is enabled", async () => {

@@ -27,6 +27,7 @@ import {
   isGridColumnKey,
   normalizeGridColumnOrder,
   normalizeGridHiddenColumnIds,
+  projectTableColumnsToGrid,
   type GridColumnKey,
 } from "../grid-columns";
 
@@ -985,17 +986,29 @@ export function mergeViewStatePersisted<T extends IssueViewState>(
           typeof (column as TableColumnConfig).key === "string",
       )
     : current.tableColumns;
-  const persistedGridOrder = Array.isArray(p.gridColumnOrder)
-    ? p.gridColumnOrder.filter(isGridColumnKey)
-    : current.gridColumnOrder;
-  const persistedGridHidden = Array.isArray(p.gridHiddenColumnIds)
-    ? [...new Set(p.gridHiddenColumnIds.filter(isGridColumnKey).filter((key) => key !== "title"))]
-    : current.gridHiddenColumnIds;
   const dedupedTableColumns = Array.from(
     new Map(persistedTableColumns.map((column) => [column.key, column])).values(),
   ).filter((column) => column.key !== "title");
   const persistedTitle = persistedTableColumns.find(
     (column) => column.key === "title",
+  );
+  const normalizedTableColumns = [
+    persistedTitle ?? current.tableColumns[0] ?? { key: "title" as const },
+    ...dedupedTableColumns,
+  ];
+  const savedGridOrder = Array.isArray(p.gridColumnOrder)
+    ? p.gridColumnOrder.filter(isGridColumnKey)
+    : current.gridColumnOrder;
+  // A legacy table snapshot can also contain preferences from a different
+  // grid layout. Its visible table columns take precedence when it opens.
+  const projectedGridColumns = p.viewMode === "table"
+    ? projectTableColumnsToGrid(normalizedTableColumns, [...DEFAULT_GRID_COLUMN_ORDER, ...savedGridOrder])
+    : null;
+  const persistedGridOrder = projectedGridColumns?.order ?? savedGridOrder;
+  const persistedGridHidden = projectedGridColumns?.hidden ?? (
+    Array.isArray(p.gridHiddenColumnIds)
+      ? [...new Set(p.gridHiddenColumnIds.filter(isGridColumnKey).filter((key) => key !== "title"))]
+      : current.gridHiddenColumnIds
   );
   const merged = {
     ...current,
@@ -1016,10 +1029,7 @@ export function mergeViewStatePersisted<T extends IssueViewState>(
     collapsedSwimlanes: isRecord(p.collapsedSwimlanes)
       ? { ...current.collapsedSwimlanes, ...p.collapsedSwimlanes }
       : current.collapsedSwimlanes,
-    tableColumns: [
-      persistedTitle ?? current.tableColumns[0] ?? { key: "title" },
-      ...dedupedTableColumns,
-    ],
+    tableColumns: normalizedTableColumns,
     gridColumnOrder: (() => {
       const deduped = [...new Set(persistedGridOrder)];
       if (!deduped.includes("title")) deduped.unshift("title");

@@ -4,8 +4,21 @@ import { buildIssueStatusCatalog } from "@multica/core/issue-statuses/queries";
 vi.mock("@multica/core/issue-statuses/hooks", () => ({
   useIssueStatuses: () => buildIssueStatusCatalog([]),
 }));
-import { describe, expect, it, vi, beforeAll, afterAll } from "vitest";
-import { screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+
+const listIssueTableRowsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@multica/core/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/api")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listIssueTableRows: listIssueTableRowsMock,
+    },
+  };
+});
 import {
   type IssueViewState,
   viewStoreSlice,
@@ -79,7 +92,8 @@ vi.mock("@multica/core/paths", async (importOriginal) => {
 
 import { issueComputedPropertiesOptions } from "@multica/core/properties";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { GanttView } from "./gantt-view";
+import type { IssueTableQuerySpec } from "@multica/core/types";
+import { GanttView, IssueDateSchedule } from "./gantt-view";
 
 const ISSUE = {
   id: "issue-1",
@@ -189,5 +203,134 @@ describe("GanttView date localization", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-03-04T12:00:00Z"));
     }
+  });
+});
+
+describe("IssueDateSchedule table pagination", () => {
+  const serverQuery: IssueTableQuerySpec = {
+    scope: { kind: "project", project_id: "proj-1" },
+    filters: { include_sub_issues: false },
+    sort: { field: "start_date", direction: "asc" },
+  };
+  const datedIssue: Issue = {
+    ...ISSUE,
+    id: "issue-dated",
+    identifier: "MUL-1",
+    title: "Dated task A",
+    project_id: "proj-1",
+    start_date: "2026-03-02",
+    due_date: "2026-03-06",
+  };
+  const undatedIssue: Issue = {
+    ...ISSUE,
+    id: "issue-undated",
+    identifier: "MUL-2",
+    title: "Undated task B",
+    project_id: "proj-1",
+    start_date: null,
+    due_date: null,
+  };
+  const page2Issue: Issue = {
+    ...ISSUE,
+    id: "issue-page2",
+    identifier: "MUL-3",
+    title: "Page two task",
+    project_id: "proj-1",
+    start_date: "2026-03-10",
+    due_date: "2026-03-12",
+  };
+
+  beforeEach(() => {
+    listIssueTableRowsMock.mockReset();
+  });
+
+  function renderSchedule(setup?: (store: StoreApi<IssueViewState>) => void) {
+    const store = createStore<IssueViewState>()(viewStoreSlice);
+    setup?.(store);
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <ViewStoreProvider store={store}>
+          <IssueContextMenuProvider>
+            <IssueDateSchedule serverQuery={serverQuery} />
+          </IssueContextMenuProvider>
+        </ViewStoreProvider>
+      </QueryClientProvider>,
+      { locale: "en" },
+    );
+  }
+
+  it("renders dated and undated issues from table pages and recovers from head and tail errors", async () => {
+    listIssueTableRowsMock
+      .mockRejectedValueOnce(new Error("head failed"))
+      .mockResolvedValueOnce({
+        query_fingerprint: "fp-1",
+        total: 3,
+        group_key: null,
+        parent_id: null,
+        rows: [
+          { issue: datedIssue, has_children: false, child_count: 0 },
+          { issue: undatedIssue, has_children: false, child_count: 0 },
+        ],
+        next_cursor: "cursor-2",
+      })
+      .mockRejectedValueOnce(new Error("tail failed"))
+      .mockResolvedValueOnce({
+        query_fingerprint: "fp-1",
+        total: 3,
+        group_key: null,
+        parent_id: null,
+        rows: [{ issue: page2Issue, has_children: false, child_count: 0 }],
+        next_cursor: null,
+      });
+
+    renderSchedule();
+
+    // Head error recovery
+    const retryHead = await screen.findByRole("button", { name: /retry/i });
+    fireEvent.click(retryHead);
+
+    expect((await screen.findAllByText("Dated task A")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Undated task B")).toBeInTheDocument();
+
+    // Load page 2 -> tail error -> retry tail -> page 2 appears
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+    fireEvent.click(loadMore);
+
+    const retryTail = await screen.findByRole("button", { name: /retry/i });
+    fireEvent.click(retryTail);
+
+    expect((await screen.findAllByText("Page two task")).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(document.querySelectorAll("[data-gantt-issue-id]")).toHaveLength(3),
+    );
+  });
+
+  it("preserves server order when sorting by a custom property", async () => {
+    const first = { ...datedIssue, id: "issue-first", title: "Zebra first", start_date: "2026-03-20" };
+    const second = { ...undatedIssue, id: "issue-second", title: "Alpha second", start_date: "2026-03-01" };
+    listIssueTableRowsMock.mockResolvedValue({
+      query_fingerprint: "fp-prop",
+      total: 2,
+      group_key: null,
+      parent_id: null,
+      rows: [
+        { issue: first, has_children: false, child_count: 0 },
+        { issue: second, has_children: false, child_count: 0 },
+      ],
+      next_cursor: null,
+    });
+
+    renderSchedule((store) => {
+      store.getState().setSortBy("property:prop-formula");
+    });
+
+    await screen.findAllByText("Zebra first");
+    const renderedIds = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-gantt-issue-id]"),
+    ).map((el) => el.dataset.ganttIssueId);
+    expect(renderedIds).toEqual(["issue-first", "issue-second"]);
   });
 });

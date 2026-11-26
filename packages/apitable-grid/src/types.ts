@@ -20,6 +20,7 @@ export interface GridFieldView {
   id: string;
   name: string;
   kind: string;
+  width?: number;
   /** For text cells, Escape discards the unsaved draft. */
   cancelOnEscape?: boolean;
   config?: {

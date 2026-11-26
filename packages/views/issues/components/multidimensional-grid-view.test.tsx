@@ -1238,4 +1238,91 @@ describe("MultidimensionalGridView", () => {
       expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
     });
   });
+
+  it("renders legacy viewMode=table onto native grid, projects tableColumns without mutating saved display, and supports search & column edits", async () => {
+    const datedIssue = makeIssue({
+      id: "uuid-legacy-1",
+      identifier: "XSH-20",
+      title: "Legacy table task",
+      priority: "high",
+      start_date: "2026-11-26",
+      due_date: "2026-11-30",
+    });
+    const listIssueTableRows = vi.fn().mockResolvedValue({
+      rows: [{ issue: datedIssue, direct_child_count: 0 }],
+      total: 1,
+      branch_total: 1,
+      next_cursor: null,
+      group_key: null,
+      parent_id: null,
+      query_fingerprint: "fp-legacy-table",
+    });
+    setupApi({ listIssueTableRows });
+
+    const surfaceKey = "workspace:legacy-table-projected";
+    const store = getIssueSurfaceViewStore(surfaceKey);
+    // Simulate a legacy saved table view seeded via mergeViewStatePersisted:
+    // viewMode="table" with tableColumns specifying title, priority, start_date, due_date.
+    const { mergeViewStatePersisted } = await import("@multica/core/issues/stores/view-store");
+    store.setState(
+      mergeViewStatePersisted(
+        {
+          viewMode: "table",
+          tableColumns: [
+            { key: "title" },
+            { key: "priority" },
+            { key: "start_date" },
+            { key: "due_date" },
+          ],
+        },
+        store.getState(),
+      ),
+    );
+
+    const qc = createQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByDisplayValue("Legacy table task");
+    const grid = () => within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    expect(grid().getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
+    expect(grid().getByRole("columnheader", { name: "Priority" })).toBeInTheDocument();
+    expect(grid().getByRole("columnheader", { name: "Start date" })).toBeInTheDocument();
+    expect(grid().getByRole("columnheader", { name: "Due date" })).toBeInTheDocument();
+    // Columns omitted from legacy tableColumns stay hidden.
+    expect(grid().queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
+    expect(grid().queryByRole("columnheader", { name: "Assignee" })).not.toBeInTheDocument();
+    // Legacy viewMode was NOT mutated on mount.
+    expect(store.getState().viewMode).toBe("table");
+    // Priority and dates from the shared record are readable in the grid.
+    expect(grid().getByText("High")).toBeInTheDocument();
+    expect(grid().getByText(/Nov 26/)).toBeInTheDocument();
+    expect(grid().getByText(/Nov 30/)).toBeInTheDocument();
+
+    // Shared TableIssueSearch is present and drives server search.
+    const searchbox = screen.getByRole("searchbox");
+    fireEvent.change(searchbox, { target: { value: "Legacy" } });
+    await waitFor(() =>
+      expect(listIssueTableRows).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.objectContaining({ search: "Legacy" }),
+        }),
+      ),
+    );
+    await screen.findByDisplayValue("Legacy table task");
+
+    // User can still toggle columns in Grid's Columns menu.
+    fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+    fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "Status" }));
+    await waitFor(() =>
+      expect(grid().getByRole("columnheader", { name: "Status" })).toBeInTheDocument(),
+    );
+  });
 });

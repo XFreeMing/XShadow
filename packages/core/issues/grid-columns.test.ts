@@ -7,8 +7,22 @@ import {
   isGridColumnKey,
   mergeGridColumnState,
   normalizeGridColumnOrder,
+  projectTableColumnsToGrid,
   type GridColumnKey,
 } from "./grid-columns";
+
+const LEGACY_TABLE_SYSTEM_COLUMNS: GridColumnKey[] = [
+  "priority",
+  "start_date",
+  "due_date",
+  "labels",
+  "identifier",
+  "project",
+  "child_progress",
+  "creator",
+  "created_at",
+  "updated_at",
+];
 
 describe("grid column catalog merge", () => {
   const catalog = catalogGridColumnOrder(true, ["estimate", "url"]);
@@ -19,6 +33,7 @@ describe("grid column catalog merge", () => {
       "type",
       "status",
       "assignee",
+      ...LEGACY_TABLE_SYSTEM_COLUMNS,
       gridPropertyColumnId("estimate"),
       gridPropertyColumnId("url"),
     ]);
@@ -26,6 +41,9 @@ describe("grid column catalog merge", () => {
 
   it("rejects invalid persisted keys", () => {
     expect(isGridColumnKey("status")).toBe(true);
+    expect(isGridColumnKey("start_date")).toBe(true);
+    expect(isGridColumnKey("due_date")).toBe(true);
+    expect(isGridColumnKey("priority")).toBe(true);
     expect(isGridColumnKey("property:owner")).toBe(true);
     expect(isGridColumnKey("property:")).toBe(false);
     expect(isGridColumnKey("bogus")).toBe(false);
@@ -38,6 +56,7 @@ describe("grid column catalog merge", () => {
       "status",
       "type",
       "assignee",
+      ...LEGACY_TABLE_SYSTEM_COLUMNS,
       gridPropertyColumnId("estimate"),
       gridPropertyColumnId("url"),
     ]);
@@ -55,6 +74,7 @@ describe("grid column catalog merge", () => {
       "status",
       "assignee",
       "type",
+      ...LEGACY_TABLE_SYSTEM_COLUMNS,
       gridPropertyColumnId("estimate"),
       gridPropertyColumnId("url"),
     ]);
@@ -79,6 +99,7 @@ describe("grid column catalog merge", () => {
       "assignee",
       gridPropertyColumnId("estimate"),
       "type",
+      ...LEGACY_TABLE_SYSTEM_COLUMNS,
       gridPropertyColumnId("url"),
     ]);
     expect(merged.hidden).toEqual([]);
@@ -92,6 +113,40 @@ describe("grid column catalog merge", () => {
       "status",
       "assignee",
     ]);
-    expect(merged).toEqual(["title", "status", "assignee", gridPropertyColumnId("estimate")]);
+    expect(merged).toEqual([
+      "title",
+      "status",
+      "assignee",
+      ...LEGACY_TABLE_SYSTEM_COLUMNS,
+      gridPropertyColumnId("estimate"),
+    ]);
+  });
+
+  it("projects legacy tableColumns order and visibility onto grid schema", () => {
+    const projected = projectTableColumnsToGrid(
+      [
+        { key: "title" },
+        { key: "priority" },
+        { key: "start_date" },
+        { key: "due_date" },
+        { key: "property:estimate" },
+      ],
+      catalog,
+    );
+    expect(projected.order.slice(0, 5)).toEqual([
+      "title",
+      "priority",
+      "start_date",
+      "due_date",
+      gridPropertyColumnId("estimate"),
+    ]);
+    expect(projected.hidden).toContain("status");
+    expect(projected.hidden).toContain("assignee");
+    expect(projected.hidden).toContain(gridPropertyColumnId("url"));
+    expect(projected.hidden).not.toContain("title");
+    expect(projected.hidden).not.toContain("priority");
+    expect(projected.hidden).not.toContain("start_date");
+    expect(projected.hidden).not.toContain("due_date");
+    expect(projected.hidden).not.toContain(gridPropertyColumnId("estimate"));
   });
 });

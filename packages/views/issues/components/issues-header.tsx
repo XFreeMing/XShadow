@@ -2051,17 +2051,21 @@ export function IssueDisplayControls({
           ? t(($) => $.table.columns.project)
           : t(($) => $.table.group_none);
   // A Gantt, Org Chart, Grid, Gallery, or Calendar layout persisted on a surface without it renders as List.
+  // Surfaces that enable Grid unify legacy Table onto Grid without rewriting saved preferences.
   const layout: ViewMode =
-    (viewMode === "gantt" && !allowGantt) ||
-    (viewMode === "org_chart" && !allowOrgChart) ||
-    (viewMode === "grid" && !allowGrid) ||
-    (viewMode === "gallery" && !allowGallery) ||
-    (viewMode === "calendar" && !allowCalendar) ||
-    (viewMode === "form" && !allowForm)
-      ? "list"
-      : viewMode;
+    viewMode === "table" && allowGrid
+      ? "grid"
+      : (viewMode === "gantt" && !allowGantt) ||
+          (viewMode === "org_chart" && !allowOrgChart) ||
+          (viewMode === "grid" && !allowGrid) ||
+          (viewMode === "gallery" && !allowGallery) ||
+          (viewMode === "calendar" && !allowCalendar) ||
+          (viewMode === "form" && !allowForm)
+        ? "list"
+        : viewMode;
   const layouts = LAYOUTS.filter(
     ({ mode }) =>
+      (mode !== "table" || !allowGrid) &&
       (mode !== "gantt" || allowGantt) &&
       (mode !== "org_chart" || allowOrgChart) &&
       (mode !== "grid" || allowGrid) &&
@@ -2073,7 +2077,7 @@ export function IssueDisplayControls({
     ? SlidersHorizontal
     : LAYOUTS.find(({ mode }) => mode === layout)!.Icon;
   const hasLayoutOptions =
-    showColumnToggles || viewMode === "table" || hasCardProperties;
+    showColumnToggles || layout === "table" || layout === "grid" || hasCardProperties;
   const controlButtonClass = "h-8 w-8 gap-1 px-0 text-muted-foreground md:h-7 md:w-auto md:px-2.5";
   const controlLabelClass = "hidden md:inline @max-3xl/issue-header:hidden";
 
@@ -2404,7 +2408,7 @@ export function IssueDisplayControls({
                   />
                 </label>
               )}
-              {viewMode === "table" && (
+              {layout === "table" && (
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-caption font-medium text-muted-foreground">
                     {t(($) => $.table.columns.section)}

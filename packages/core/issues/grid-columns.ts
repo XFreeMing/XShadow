@@ -1,25 +1,24 @@
-export type GridColumnKey =
-  | "title"
-  | "type"
-  | "status"
-  | "assignee"
-  | `property:${string}`;
+export const DEFAULT_GRID_COLUMN_ORDER = [
+  "title",
+  "type",
+  "status",
+  "assignee",
+  "priority",
+  "start_date",
+  "due_date",
+  "labels",
+  "identifier",
+  "project",
+  "child_progress",
+  "creator",
+  "created_at",
+  "updated_at",
+] as const;
 
 export const GRID_PROPERTY_PREFIX = "property:" as const;
+export type GridColumnKey = (typeof DEFAULT_GRID_COLUMN_ORDER)[number] | `property:${string}`;
 
-const GRID_FIXED_COLUMN_KEYS: ReadonlySet<string> = new Set([
-  "title",
-  "type",
-  "status",
-  "assignee",
-]);
-
-export const DEFAULT_GRID_COLUMN_ORDER: readonly GridColumnKey[] = [
-  "title",
-  "type",
-  "status",
-  "assignee",
-];
+const GRID_FIXED_COLUMN_KEYS: ReadonlySet<string> = new Set(DEFAULT_GRID_COLUMN_ORDER);
 
 export function isGridColumnKey(value: unknown): value is GridColumnKey {
   if (typeof value !== "string" || value.length === 0) return false;
@@ -39,12 +38,26 @@ export function catalogGridColumnOrder(
   propertyIds: readonly string[],
 ): GridColumnKey[] {
   return [
-    "title",
-    ...(hasIssueTypes ? (["type"] as const) : []),
-    "status",
-    "assignee",
-    ...propertyIds.map((id) => gridPropertyColumnId(id)),
+    ...DEFAULT_GRID_COLUMN_ORDER.filter((key) => key !== "type" || hasIssueTypes),
+    ...propertyIds.map(gridPropertyColumnId),
   ];
+}
+
+export function projectTableColumnsToGrid(
+  tableColumns: readonly { key: string }[],
+  catalog: readonly GridColumnKey[],
+): { order: GridColumnKey[]; hidden: GridColumnKey[] } {
+  const visibleKeys = tableColumns
+    .map((column) => column.key)
+    .filter(isGridColumnKey);
+  const visibleSet = new Set<GridColumnKey>(["title", ...visibleKeys]);
+  const fullCatalog = [...new Set<GridColumnKey>([...catalog, ...visibleKeys])];
+  return {
+    order: normalizeGridColumnOrder(fullCatalog, visibleKeys),
+    hidden: fullCatalog.filter(
+      (key) => key !== "title" && !visibleSet.has(key),
+    ),
+  };
 }
 
 export function normalizeGridColumnOrder(

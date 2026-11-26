@@ -10,10 +10,11 @@ import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
 import type { GanttZoom } from "@multica/core/issues/stores/view-store";
+import { propertyIdFromViewKey } from "@multica/core/issues/stores/view-store";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { propertyListOptions } from "@multica/core/properties";
 import type { Issue, IssueProperty, IssueStatusCategory, IssueTableQuerySpec } from "@multica/core/types";
-import { issueBehavesAsAny, issueStatusCategory, statusColumnKeys } from "@multica/core/issues";
+import { issueStatusCategory, statusColumnKeys } from "@multica/core/issues";
 import { dateOnlyToUTCDate } from "@multica/core/issues/date";
 import { cn } from "@multica/ui/lib/utils";
 import {
@@ -547,24 +548,12 @@ function GanttRow({
   );
 }
 
-export function IssueDateSchedule({ issues, serverQuery }: {
-  issues: Issue[];
+export function IssueDateSchedule({ serverQuery }: {
   serverQuery: IssueTableQuerySpec;
 }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const showCompleted = useViewStore((state) => state.ganttShowCompleted);
   const pages = useIssueTableFlatRowPages(wsId, serverQuery, 50);
-  // Keep the existing scheduled window while exposing editable rows from the
-  // paginated issue sheet, including tasks whose first date is being saved.
-  const rows = useMemo(() => {
-    const known = new Set(issues.map((issue) => issue.id));
-    const moreRows = pages.issues.filter((issue) =>
-      !known.has(issue.id) &&
-      (showCompleted || !issueBehavesAsAny(issue, ["done", "closed"])),
-    );
-    return [...issues, ...moreRows];
-  }, [issues, pages.issues, showCompleted]);
 
   let rowPagination: ReactNode;
   if (pages.isHeadError || pages.isTailError) {
@@ -578,7 +567,7 @@ export function IssueDateSchedule({ issues, serverQuery }: {
   } else if (pages.canLoadMore) {
     rowPagination = <Button size="sm" variant="outline" onClick={pages.handleLoadMore}>{t(($) => $.table.load_more)}</Button>;
   }
-  return <GanttView issues={rows} rowPagination={rowPagination} />;
+  return <GanttView issues={pages.issues} rowPagination={rowPagination} />;
 }
 
 export function GanttView({ issues, rowPagination }: { issues: Issue[]; rowPagination?: ReactNode }) {
@@ -602,6 +591,8 @@ export function GanttView({ issues, rowPagination }: { issues: Issue[]; rowPagin
 
   // Undated rows share the sheet, with an empty timeline until a date is set.
   const sortedRows = useMemo(() => {
+    // Custom property sorts are computed server-side; preserve server page order.
+    if (propertyIdFromViewKey(sortBy)) return issues;
     // "position" makes no sense on a gantt — default to start_date asc when
     // the user hasn't picked a more specific sort.
     const sortField = sortBy === "position" ? "start_date" : sortBy;

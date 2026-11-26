@@ -8,6 +8,7 @@ import type {
   IssueStatus,
   IssueTableFacetSpec,
   IssueTableFacetsResponse,
+  IssueTableFilterGroup,
   IssueTableGroupsRequest,
   IssueTableNegatableFilter,
   IssueTableQuerySpec,
@@ -18,7 +19,7 @@ import { workspaceWorkingAgentsOptions } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useColumnWorkflow, workflowColumns } from "../utils/workflow-columns";
-import { statusFilterColumns, visibleStatusKeys } from "@multica/core/issues";
+import { BUILT_IN_STATUS_ORDER, statusFilterColumns, visibleStatusKeys } from "@multica/core/issues";
 import { dateOnlyToLocalDate, todayDateOnly } from "@multica/core/issues/date";
 import { useIssueUnreadIds } from "@multica/core/issues/unread";
 import {
@@ -122,10 +123,7 @@ export interface IssueSurfaceController {
    *  not resolved yet; the chip renders an indeterminate state rather than a
    *  number it cannot stand behind. */
   workingAgents: WorkingAgentSummary[] | undefined;
-  filteredGanttIssues: Issue[];
-  retryGantt?: () => void;
   sort: IssueSortParam;
-  ganttIssues: Issue[];
   visibleStatuses: IssueStatus[];
   /** Columns the viewer can show or hide from Display, in column order. */
   columnStatuses: IssueStatus[];
@@ -238,6 +236,33 @@ function useStableByContent<T>(value: T): T {
   const contentKey = hashKey([value]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- identity follows the content hash, not the reference
   return useMemo(() => value, [contentKey]);
+}
+
+function excludeCompletedStatuses(
+  statuses: IssueStatus[],
+  negate: IssueTableNegatableFilter[],
+  advanced: IssueTableFilterGroup | undefined,
+  completed: IssueStatus[],
+) {
+  if (!completed.length) return { statuses, negate, advanced };
+  if (!statuses.length || negate.includes("statuses")) {
+    return {
+      statuses: [...new Set([...statuses, ...completed])],
+      negate: [...new Set<IssueTableNegatableFilter>([...negate, "statuses"])],
+      advanced,
+    };
+  }
+  const excluded = new Set(completed);
+  const remaining = statuses.filter((status) => !excluded.has(status));
+  if (remaining.length) return { statuses: remaining, negate, advanced };
+
+  // A positive status filter containing only completed statuses matches
+  // nothing. Keep the explicit statuses and negate the same set in one rule.
+  const noMatchingStatus: IssueTableFilterGroup = {
+    match: "all",
+    children: [{ field: "statuses", values: statuses, negate: true }],
+  };
+  return { statuses, negate, advanced: noMatchingStatus };
 }
 
 export function useIssueSurfaceController({
@@ -383,11 +408,15 @@ export function useIssueSurfaceController({
 
   const allowedModes = useMemo(() => new Set<IssueSurfaceMode>(modes), [modes]);
   const fallbackMode = modes[0] ?? "list";
-  const effectiveViewMode = allowedModes.has(viewMode as IssueSurfaceMode)
-    ? (viewMode as IssueSurfaceMode)
-    : fallbackMode;
+  const effectiveViewMode =
+    viewMode === "table" && allowedModes.has("grid")
+      ? "grid"
+      : allowedModes.has(viewMode as IssueSurfaceMode)
+        ? (viewMode as IssueSurfaceMode)
+        : fallbackMode;
 
   useEffect(() => {
+    if (viewMode === "table" && allowedModes.has("grid")) return;
     if (!allowedModes.has(viewMode as IssueSurfaceMode)) {
       setViewMode(fallbackMode);
     }
@@ -460,8 +489,9 @@ export function useIssueSurfaceController({
   const usesGallery = effectiveViewMode === "gallery";
   const usesCalendar = effectiveViewMode === "calendar";
   const usesForm = effectiveViewMode === "form";
-  const usesTableRows = usesTable || usesGrid || usesGallery || usesCalendar || usesOrgChart;
-  const activeSearch = usesTable ? tableSearch : search;
+  const usesTableRows =
+    usesTable || usesGrid || usesGallery || usesCalendar || usesOrgChart || usesGantt;
+  const activeSearch = usesTable || usesGrid ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
   const usesServerStatusSurface =
     effectiveViewMode === "list" ||
@@ -485,14 +515,33 @@ export function useIssueSurfaceController({
    * unresolved the visible column set falls back to ALL categories, so
    * fetching anyway would briefly show the UNFILTERED board to someone who
    * opened a saved `qa` view.
+   *
+   * Gantt date schedule with "show completed" off also needs the catalog so
+   * custom/archived done and closed statuses are excluded server-side.
    */
   const statusDependency = filterDependencyState(
     statusColumnsForFilters.state !== "resolved" ||
       usesServerStatusSurface ||
-      effectiveViewMode === "swimlane",
+      effectiveViewMode === "swimlane" ||
+      (usesGantt && !ganttShowCompleted),
     [statusCatalogSource(catalog)],
   );
   const statusFilterUnresolved = statusDependency.unresolved;
+  const completedStatusKeys = useMemo(() => {
+    const keys = new Set<string>(
+      BUILT_IN_STATUS_ORDER.filter((key) => {
+        const category = catalog.categoryOf(key);
+        return category === "done" || category === "closed";
+      }),
+    );
+    for (const entry of catalog.statuses) {
+      const category = catalog.categoryOf(entry.key);
+      if (category === "done" || category === "closed") {
+        keys.add(entry.key);
+      }
+    }
+    return [...keys];
+  }, [catalog]);
 
   // Display preferences hide individual columns; status filters independently
   // select exact keys. Selecting a key explicitly restores its hidden column.
@@ -561,9 +610,9 @@ export function useIssueSurfaceController({
       : undefined;
   const workingAgentsProjection = useQuery({
     ...workspaceWorkingAgentsOptions(wsId, "issue", workingAgentMineRelation),
-    // Ordinary surfaces get their chip count from the scoped facet. Only an
-    // active working filter or Gantt's canvas count consumes the issue ids.
-    enabled: usesGantt || agentRunningFilter,
+    // Every surface gets its chip count from the scoped facet. Only an active
+    // working filter needs the issue ids.
+    enabled: agentRunningFilter,
   });
   const workspaceWorkingAgents = workingAgentsProjection.data ?? EMPTY_LIST;
   const workingDependency = filterDependencyState(agentRunningFilter, [workingAgentsProjection]);
@@ -639,7 +688,7 @@ export function useIssueSurfaceController({
             end: dateParams.date_end,
           }
         : undefined;
-    const negate = negatedFilters
+    const baseNegate = negatedFilters
       .filter((dimension) =>
         // A project surface drops the project dimension; and on a "my"
         // surface the relation dimension (see `relationFilters`).
@@ -650,10 +699,19 @@ export function useIssueSurfaceController({
             : true,
       )
       .map((dimension) => TABLE_NEGATE_FIELD[dimension]);
+    const statusSelection = usesGantt && !ganttShowCompleted
+      ? excludeCompletedStatuses(statusFilters, baseNegate, advancedTableFilter, completedStatusKeys)
+      : { statuses: statusFilters, negate: baseNegate, advanced: advancedTableFilter };
+    const effectiveSortField =
+      usesGantt && (!sort.sort_by || sort.sort_by === "position")
+        ? "start_date"
+        : (sort.sort_by ?? "position");
     return {
       scope: queryScope,
       filters: {
-        ...(statusFilters.length > 0 ? { statuses: statusFilters } : {}),
+        ...(statusSelection.statuses.length > 0
+          ? { statuses: statusSelection.statuses }
+          : {}),
         ...(priorityFilters.length > 0 ? { priorities: priorityFilters } : {}),
         ...(assigneeFilters.length > 0 ? { assignees: assigneeFilters } : {}),
         ...(includeNoAssignee ? { include_no_assignee: true } : {}),
@@ -669,8 +727,12 @@ export function useIssueSurfaceController({
         ...(relationFilters.length > 0 ? { relations: relationFilters } : {}),
         ...(dueDateFilters.length > 0 ? { due_dates: dueDateFilters } : {}),
         ...(today ? { today } : {}),
-        ...(negate.length > 0 ? { negate } : {}),
-        ...(advancedTableFilter ? { advanced: advancedTableFilter } : {}),
+        ...(statusSelection.negate.length > 0
+          ? { negate: statusSelection.negate }
+          : {}),
+        ...(statusSelection.advanced
+          ? { advanced: statusSelection.advanced }
+          : {}),
         ...(Object.keys(effectivePropertyFilters).length > 0
           ? { properties: effectivePropertyFilters }
           : {}),
@@ -687,7 +749,7 @@ export function useIssueSurfaceController({
       },
       ...(debouncedActiveSearch ? { search: debouncedActiveSearch } : {}),
       sort: {
-        field: sort.sort_by ?? "position",
+        field: effectiveSortField,
         direction: sort.sort_direction ?? "asc",
       },
     };
@@ -695,11 +757,13 @@ export function useIssueSurfaceController({
     advancedTableFilter,
     agentRunningFilter,
     assigneeFilters,
+    completedStatusKeys,
     creatorFilters,
     dateParams,
     debouncedActiveSearch,
     dueDateFilters,
     effectivePropertyFilters,
+    ganttShowCompleted,
     includeNoAssignee,
     labelFilters,
     negatedFilters,
@@ -715,6 +779,7 @@ export function useIssueSurfaceController({
     unreadFilter,
     unreadFilterUnresolved,
     unreadIssueIDs,
+    usesGantt,
     viewIncludeNoProject,
     viewProjectFilters,
     workingFilterUnresolved,
@@ -790,15 +855,17 @@ export function useIssueSurfaceController({
   const workingAgentsFacetQuery = useQuery({
     ...issueTableFacetsOptions(wsId, workingAgentsFacetRequest),
     placeholderData: keepPreviousData,
-    // Gantt owns its own count: its canvas projection is client-side and not
-    // expressible as a Table query spec, so a facet answer would over-count.
+    // Gantt's goal-plan submode renders an independent goal DAG rather than
+    // table rows, so only date-schedule mode queries the working-agents facet.
     //
     // The actor panel (member / agent detail) renders no agents-working chip at
     // all, so nothing would read the answer; its filter menu toggles
     // `agentRunningFilter` through the issue ids above, not this count. Skip
     // the aggregation rather than pay for it on every panel mount. Adding the
     // chip to that header means dropping this clause.
-    enabled: effectiveViewMode !== "gantt" && scope.type !== "actor",
+    enabled:
+      (effectiveViewMode !== "gantt" || (usesGantt && !statusFilterUnresolved)) &&
+      scope.type !== "actor",
   });
   const facetWorkingAgents = useMemo<WorkingAgentSummary[] | undefined>(() => {
     const facet = workingAgentsFacetQuery.data?.facets.find(
@@ -939,14 +1006,11 @@ export function useIssueSurfaceController({
 
   const data = useIssueSurfaceData({
     wsId,
-    queryPlan,
     projectId,
-    usesGantt,
     usesForm,
     usesTable: usesTableRows,
     serverStatusBranches,
     serverGroupBranches,
-    ganttShowCompleted,
     statusFilters,
     hiddenStatusKeys,
     statusDependency,
@@ -972,7 +1036,7 @@ export function useIssueSurfaceController({
     unreadIssueIDs,
     showSubIssues,
     loadProjects:
-      // The client-side project-status predicate (Gantt / swimlane extras)
+      // The client-side project-status predicate (swimlane extras)
       // cannot be evaluated without the catalog, so the filter itself has to
       // pull it in.
       projectStatusFilters.length > 0 ||
@@ -987,28 +1051,7 @@ export function useIssueSurfaceController({
       (effectiveViewMode === "swimlane" && swimlaneGrouping === "project"),
   });
 
-  // Gantt draws a client-materialized canvas, so its chip counts the agents
-  // holding those canvas rows. Every other view mode takes the server facet.
-  const workingAgents = useMemo<WorkingAgentSummary[] | undefined>(() => {
-    if (!usesGantt) return facetWorkingAgents;
-    const rows = data.ganttWorkingScopeIssues;
-    if (!rows || workingAgentsProjection.data === undefined) return undefined;
-    const visible = new Set(rows.map((issue) => issue.id));
-    const summaries: WorkingAgentSummary[] = [];
-    for (const agent of workspaceWorkingAgents) {
-      const running = agent.issue_ids.filter((id) => visible.has(id)).length;
-      if (running > 0) {
-        summaries.push({ id: agent.id, running_task_count: running });
-      }
-    }
-    return summaries;
-  }, [
-    data.ganttWorkingScopeIssues,
-    facetWorkingAgents,
-    usesGantt,
-    workspaceWorkingAgents,
-    workingAgentsProjection.data,
-  ]);
+  const workingAgents = facetWorkingAgents;
 
   const exportTableIssues = useCallback(async () => {
     const issues: Issue[] = [];
@@ -1064,7 +1107,6 @@ export function useIssueSurfaceController({
   });
 
   const {
-    ganttWorkingScopeIssues: _ganttWorkingScope,
     projectCatalogDependency,
     relationDependency,
     ...surfaceData
@@ -1108,7 +1150,7 @@ export function useIssueSurfaceController({
       data.isEmpty &&
       !data.isRefreshing &&
       !usesForm &&
-      !(usesTable && (tableSearch.trim() || debouncedActiveSearch)),
+      !((usesTable || usesGrid) && (tableSearch.trim() || debouncedActiveSearch)),
     filterDependencyError: failedDependency
       ? { kind: failedDependency[0], retry: failedDependency[1].retry }
       : null,

@@ -54,18 +54,40 @@ describe("issueGridExportRow", () => {
       id: "uuid-1",
       title: "Ship grid export",
       issue_type_id: "type-1",
+      priority: "high",
+      start_date: "2026-11-26",
+      due_date: "2026-11-30",
       properties: { "prop-est": 5 },
     });
     const row = issueGridExportRow(
       issue,
-      ["title", "type", "status", "assignee", gridPropertyColumnId("prop-est")],
+      [
+        "title",
+        "type",
+        "status",
+        "assignee",
+        "priority",
+        "start_date",
+        "due_date",
+        gridPropertyColumnId("prop-est"),
+      ],
       {
         resolveStatusLabel: () => "Todo",
+        resolvePriorityLabel: (priority) => `P:${priority}`,
         issueTypeName: "Task",
         propertyById: new Map([[estimate.id, estimate]]),
         getActorName: () => "Alice",
       },
     );
-    expect(row).toEqual(["Ship grid export", "Task", "Todo", "Alice", "5"]);
+    expect(row).toEqual([
+      "Ship grid export",
+      "Task",
+      "Todo",
+      "Alice",
+      "P:high",
+      "2026-11-26",
+      "2026-11-30",
+      "5",
+    ]);
   });
 });

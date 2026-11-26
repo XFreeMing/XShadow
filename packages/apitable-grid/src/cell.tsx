@@ -182,7 +182,11 @@ export function GridCell({
     "data-collaborator": collaborator?.kind,
     "data-collaborator-name": collaborator?.label,
     title: conflict ?? cellError ?? undefined,
-    style: collaborator ? { boxShadow: `inset 0 0 0 2px ${collaborator.color}` } : undefined,
+    style: {
+      width: field.width,
+      flexBasis: field.width,
+      boxShadow: collaborator ? `inset 0 0 0 2px ${collaborator.color}` : undefined,
+    },
   };
 
   const customContent = renderCell?.({

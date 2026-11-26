@@ -328,7 +328,11 @@ export function ApitableGrid({
             {rowSelection ? <GridSelectAllHeader rowSelection={rowSelection} /> : null}
           </th>
           {fields.map((field) => (
-            <th className="apitable-grid__fieldHeader" key={field.id}>
+            <th
+              className="apitable-grid__fieldHeader"
+              key={field.id}
+              style={{ width: field.width, flexBasis: field.width }}
+            >
               <span className="apitable-grid__type" aria-hidden="true">{typeMark(field.kind)}</span>
               {onRenameField ? (
                 <input

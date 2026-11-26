@@ -60,6 +60,25 @@ afterEach(async () => {
 });
 
 describe("issue surface view store registry", () => {
+  it("projects saved Table columns over the unrelated grid preferences in old snapshots", () => {
+    const definition = {
+      viewMode: "table",
+      gridColumnOrder: ["title", "type", "status", "assignee"],
+      gridHiddenColumnIds: ["assignee"],
+      tableColumns: [
+        { key: "title" },
+        { key: "start_date", width: 182 },
+        { key: "due_date", width: 163 },
+      ],
+    };
+    seedIssueSurfaceViewState("view:legacy-table", definition);
+    const state = getIssueSurfaceViewStore("view:legacy-table").getState();
+    expect(state.viewMode).toBe("table");
+    expect(state.gridColumnOrder.filter((key) => !state.gridHiddenColumnIds.includes(key)))
+      .toEqual(["title", "start_date", "due_date"]);
+    expect(state.tableColumns).toEqual(definition.tableColumns);
+  });
+
   it("migrates legacy defaults without rewriting explicit preferences", async () => {
     localStorage.setItem(
       `${ISSUE_SURFACE_VIEW_STORAGE_KEY}:acme`,

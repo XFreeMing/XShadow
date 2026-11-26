@@ -7,9 +7,10 @@ import {
   gridPropertyColumnId,
   isGridColumnKey,
   isGridColumnVisible,
+  normalizeGridColumnOrder,
   type GridColumnKey,
 } from "@multica/core/issues/grid-columns";
-import { useViewStore } from "@multica/core/issues/stores/view-store-context";
+import { useViewStore, useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
 import { hashKey, useQueries, useQuery } from "@tanstack/react-query";
 import {
   ApitableGrid,
@@ -53,6 +54,7 @@ import type {
   Issue,
   IssueProperty,
   IssueTableQuerySpec,
+  Project,
   UpdateIssueRequest,
 } from "@multica/core/types";
 import { isActorPropertyType, isComputedPropertyType } from "@multica/core/types";
@@ -71,37 +73,112 @@ import {
 } from "./use-issue-table-flat-groups";
 import { useIssueTableHierarchyRows } from "./use-issue-table-hierarchy-rows";
 import type { HierarchyGridFooter } from "./issue-table-server-branches";
-import { useT } from "../../i18n";
+import { useLocale, useT } from "../../i18n";
 import { resolveClickIntent, useIntentNavigate } from "../../navigation";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { ProjectPicker } from "../../projects/components/project-picker";
 import { runConfirmIntent } from "../actions/run-confirm-gate";
 import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
 import { useIssuePeekClick } from "../surface/peek-context";
+import { priorityLabel } from "../utils/priority-label";
 import { useStatusLabel } from "../utils/status-label";
 import type { IssueCreateDefaults } from "../surface/types";
 import { BatchActionToolbar } from "./batch-action-toolbar";
-import { AssigneePicker, StatusPicker } from "./pickers";
+import type { ChildProgress } from "./list-row";
+import {
+  AssigneePicker,
+  DueDatePicker,
+  LabelPicker,
+  PriorityPicker,
+  StartDatePicker,
+  StatusPicker,
+} from "./pickers";
 import { CustomPropertyValueEditor } from "./pickers/custom-property-picker";
+import { ProgressRing } from "./progress-ring";
+import { TableIssueSearch } from "./table-view";
 
 const GRID_PAGE_LIMIT = 50;
 const INITIAL_CURSORS: Array<string | null> = [null];
 const PROPERTY_COLUMN_PREFIX = "property:";
 
+function GridLabelCell({ issue }: { issue: Issue }) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const labels = issue.labels ?? [];
+  if (open) {
+    return (
+      <LabelPicker
+        issueId={issue.id}
+        open
+        onOpenChange={(next) => {
+          if (!next) setOpen(false);
+        }}
+        triggerRender={<button type="button" className="flex max-w-full gap-1" />}
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="flex max-w-full items-center gap-1 overflow-hidden rounded-xs px-1 py-0.5 hover:bg-accent"
+      onClick={(event) => {
+        event.stopPropagation();
+        setOpen(true);
+      }}
+    >
+      {labels.length === 0 ? (
+        <span className="text-caption text-muted-foreground">
+          {t(($) => $.table.empty_value)}
+        </span>
+      ) : (
+        labels.slice(0, 3).map((label) => (
+          <span
+            key={label.id}
+            className="inline-flex max-w-24 items-center gap-1 truncate rounded-full bg-muted/60 px-1.5 py-0.5 text-micro text-foreground"
+          >
+            <span
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: label.color }}
+            />
+            <span className="truncate">{label.name}</span>
+          </span>
+        ))
+      )}
+    </button>
+  );
+}
+
 export interface MultidimensionalGridViewProps {
   serverQuery: IssueTableQuerySpec;
+  childProgressMap?: Map<string, ChildProgress>;
+  search?: string;
+  onSearchChange?: (query: string) => void;
   onCreateIssue: (defaults?: IssueCreateDefaults) => void;
   showBatchToolbar: boolean;
   exportIssues: () => Promise<Issue[]>;
+  resolveExportLookups?: (needs: {
+    projects: boolean;
+    childProgress: boolean;
+  }) => Promise<{
+    projectMap: Map<string, Project>;
+    childProgressMap: Map<string, ChildProgress>;
+  }>;
 }
 
 export function MultidimensionalGridView({
   serverQuery,
+  childProgressMap,
+  search = "",
+  onSearchChange,
   onCreateIssue,
   showBatchToolbar,
   exportIssues,
+  resolveExportLookups,
 }: MultidimensionalGridViewProps) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const { t } = useT("issues");
+  const locale = useLocale();
   const { getActorName } = useActorName();
   const paths = useWorkspacePaths();
   const intentNavigate = useIntentNavigate();
@@ -110,6 +187,11 @@ export function MultidimensionalGridView({
   const openModal = useModalStore((s) => s.open);
   const { entryOf } = useIssueStatuses(wsId);
   const resolveStatusLabel = useStatusLabel(wsId);
+  const resolvePriorityLabel = useCallback(
+    (priority: string) => priorityLabel(priority, t),
+    [t],
+  );
+  const storeApi = useViewStoreApi();
   const selection = useIssueSurfaceSelection();
   const selectionAnchorRef = useRef<string | null>(null);
   const [exporting, setExporting] = useState<"all" | "selected" | null>(null);
@@ -451,6 +533,8 @@ export function MultidimensionalGridView({
     [issueById, updateIssue],
   );
 
+  const viewMode = useViewStore((state) => state.viewMode);
+  const tableColumns = useViewStore((state) => state.tableColumns);
   const gridColumnOrder = useViewStore((state) => state.gridColumnOrder);
   const gridHiddenColumnIds = useViewStore((state) => state.gridHiddenColumnIds);
   const setGridColumnHidden = useViewStore((state) => state.setGridColumnHidden);
@@ -467,13 +551,59 @@ export function MultidimensionalGridView({
   );
 
   useEffect(() => {
-    if (!gridCatalogReady) return;
+    if (!gridCatalogReady || viewMode === "table") return;
     syncGridColumnCatalog(catalogOrder);
-  }, [catalogOrder, gridCatalogReady, syncGridColumnCatalog]);
+  }, [catalogOrder, gridCatalogReady, syncGridColumnCatalog, viewMode]);
 
-  const hiddenColumnIds = useMemo(
-    () => new Set(gridHiddenColumnIds),
-    [gridHiddenColumnIds],
+  const effectiveGridColumnOrder = useMemo(
+    () =>
+      gridCatalogReady
+        ? normalizeGridColumnOrder(catalogOrder, gridColumnOrder)
+        : gridColumnOrder,
+    [catalogOrder, gridCatalogReady, gridColumnOrder],
+  );
+
+  const hiddenColumnIds = useMemo(() => {
+    const hidden = new Set<GridColumnKey>(gridHiddenColumnIds);
+    if (viewMode === "table") {
+      const legacyVisibleKeys = new Set<string>(
+        tableColumns.map((column) => column.key),
+      );
+      for (const columnId of effectiveGridColumnOrder) {
+        if (
+          columnId.startsWith(PROPERTY_COLUMN_PREFIX) &&
+          !legacyVisibleKeys.has(columnId)
+        ) {
+          hidden.add(columnId);
+        }
+      }
+    }
+    return hidden;
+  }, [effectiveGridColumnOrder, gridHiddenColumnIds, tableColumns, viewMode]);
+
+  const ensureGridColumnStateSynced = useCallback(() => {
+    if (storeApi.getState().viewMode !== "table") return;
+    storeApi.setState({
+      viewMode: "grid",
+      gridColumnOrder: effectiveGridColumnOrder,
+      gridHiddenColumnIds: [...hiddenColumnIds],
+    });
+  }, [effectiveGridColumnOrder, hiddenColumnIds, storeApi]);
+
+  const handleToggleGridColumnHidden = useCallback(
+    (columnKey: GridColumnKey, hidden: boolean) => {
+      ensureGridColumnStateSynced();
+      setGridColumnHidden(columnKey, hidden);
+    },
+    [ensureGridColumnStateSynced, setGridColumnHidden],
+  );
+
+  const handleMoveGridColumn = useCallback(
+    (columnKey: GridColumnKey, direction: -1 | 1) => {
+      ensureGridColumnStateSynced();
+      moveGridColumn(columnKey, direction);
+    },
+    [ensureGridColumnStateSynced, moveGridColumn],
   );
 
   const fieldsById = useMemo(() => {
@@ -501,6 +631,56 @@ export function MultidimensionalGridView({
       name: t(($) => $.table.columns.assignee),
       kind: "text",
     });
+    byId.set("priority", {
+      id: "priority",
+      name: t(($) => $.table.columns.priority),
+      kind: "single_select",
+    });
+    byId.set("start_date", {
+      id: "start_date",
+      name: t(($) => $.table.columns.start_date),
+      kind: "text",
+    });
+    byId.set("due_date", {
+      id: "due_date",
+      name: t(($) => $.table.columns.due_date),
+      kind: "text",
+    });
+    byId.set("labels", {
+      id: "labels",
+      name: t(($) => $.table.columns.labels),
+      kind: "text",
+    });
+    byId.set("identifier", {
+      id: "identifier",
+      name: t(($) => $.table.columns.identifier),
+      kind: "text",
+    });
+    byId.set("project", {
+      id: "project",
+      name: t(($) => $.table.columns.project),
+      kind: "text",
+    });
+    byId.set("child_progress", {
+      id: "child_progress",
+      name: t(($) => $.table.columns.child_progress),
+      kind: "text",
+    });
+    byId.set("creator", {
+      id: "creator",
+      name: t(($) => $.table.columns.creator),
+      kind: "text",
+    });
+    byId.set("created_at", {
+      id: "created_at",
+      name: t(($) => $.table.columns.created_at),
+      kind: "text",
+    });
+    byId.set("updated_at", {
+      id: "updated_at",
+      name: t(($) => $.table.columns.updated_at),
+      kind: "text",
+    });
     for (const prop of workspaceProperties) {
       byId.set(gridPropertyColumnId(prop.id), {
         id: gridPropertyColumnId(prop.id),
@@ -508,24 +688,30 @@ export function MultidimensionalGridView({
         kind: "text",
       });
     }
+    for (const { key, width } of tableColumns) {
+      const field = byId.get(key);
+      if (field && width !== undefined && Number.isFinite(width) && width > 0) {
+        field.width = width;
+      }
+    }
     return byId;
-  }, [t, workspaceIssueTypes.length, workspaceProperties]);
+  }, [t, tableColumns, workspaceIssueTypes.length, workspaceProperties]);
 
   const menuFields = useMemo(
     () =>
-      gridColumnOrder
+      effectiveGridColumnOrder
         .map((columnId) => fieldsById.get(columnId))
         .filter((field): field is GridFieldView => Boolean(field)),
-    [fieldsById, gridColumnOrder],
+    [effectiveGridColumnOrder, fieldsById],
   );
 
   const visibleFields = useMemo(
     () =>
-      gridColumnOrder
+      effectiveGridColumnOrder
         .filter((columnId) => isGridColumnVisible(columnId, hiddenColumnIds))
         .map((columnId) => fieldsById.get(columnId))
         .filter((field): field is GridFieldView => Boolean(field)),
-    [fieldsById, gridColumnOrder, hiddenColumnIds],
+    [effectiveGridColumnOrder, fieldsById, hiddenColumnIds],
   );
 
   const exportColumnKeys = useMemo(
@@ -612,6 +798,7 @@ export function MultidimensionalGridView({
         });
         const needsActors =
           exportColumnKeysResolved.includes("assignee") ||
+          exportColumnKeysResolved.includes("creator") ||
           exportColumnKeysResolved.some((key) => {
             if (!key.startsWith(PROPERTY_COLUMN_PREFIX)) return false;
             const property = exportPropertyById.get(
@@ -619,6 +806,19 @@ export function MultidimensionalGridView({
             );
             return property ? isActorPropertyType(property.type) : false;
           });
+        const needsProjects = exportColumnKeysResolved.includes("project");
+        const needsChildProgress =
+          exportColumnKeysResolved.includes("child_progress");
+        const exportLookups =
+          (needsProjects || needsChildProgress) && resolveExportLookups
+            ? await resolveExportLookups({
+                projects: needsProjects,
+                childProgress: needsChildProgress,
+              })
+            : {
+                projectMap: groupProjectMap,
+                childProgressMap,
+              };
         const exportActorName: (type: string, id: string) => string = needsActors
           ? await Promise.all([
               queryClient.fetchQuery(memberListOptions(wsId)),
@@ -640,11 +840,14 @@ export function MultidimensionalGridView({
         const csvRows = rows.map((issue) =>
           issueGridExportRow(issue, exportColumnKeysResolved, {
             resolveStatusLabel,
+            resolvePriorityLabel,
             issueTypeName: issue.issue_type_id
               ? issueTypeById.get(issue.issue_type_id)?.name ?? null
               : null,
             propertyById: exportPropertyById,
             getActorName: exportActorName,
+            projectMap: exportLookups.projectMap,
+            childProgressMap: exportLookups.childProgressMap,
           }),
         );
         const csv = buildIssueTableCsv(headers, csvRows);
@@ -674,8 +877,12 @@ export function MultidimensionalGridView({
       exportIssues,
       fieldsById,
       getActorName,
+      groupProjectMap,
+      childProgressMap,
       issueTypeById,
       queryClient,
+      resolveExportLookups,
+      resolvePriorityLabel,
       resolveStatusLabel,
       selectedIssues,
       t,
@@ -693,6 +900,7 @@ export function MultidimensionalGridView({
       const typeName = issue.issue_type_id
         ? issueTypeById.get(issue.issue_type_id)?.name ?? null
         : null;
+      const progress = childProgressMap?.get(issue.id);
       const propValues: Record<string, GridCellValue> = {};
       for (const prop of workspaceProperties) {
         const val = issue.properties?.[prop.id];
@@ -709,17 +917,28 @@ export function MultidimensionalGridView({
         hierarchy,
         values: {
           title: issue.title,
+          identifier: issue.identifier,
           ...(workspaceIssueTypes.length > 0 ? { type: typeName } : {}),
           status: issue.status,
+          priority: issue.priority,
           assignee:
             issue.assignee_type && issue.assignee_id
               ? `${issue.assignee_type}:${issue.assignee_id}`
               : null,
+          labels:
+            (issue.labels ?? []).map((label) => label.name).join(", ") || null,
+          project: issue.project_id,
+          start_date: issue.start_date,
+          due_date: issue.due_date,
+          created_at: issue.created_at,
+          updated_at: issue.updated_at,
+          child_progress: progress ? `${progress.done}/${progress.total}` : null,
+          creator: `${issue.creator_type}:${issue.creator_id}`,
           ...propValues,
         },
       };
     },
-    [issueTypeById, workspaceIssueTypes.length, workspaceProperties],
+    [childProgressMap, issueTypeById, workspaceIssueTypes.length, workspaceProperties],
   );
 
   const hierarchyToggleLabel = t(($) => $.table.toggle_sub_issues);
@@ -917,6 +1136,16 @@ export function MultidimensionalGridView({
     ({ record, field, onActivate }: GridCellRenderContext) => {
       const issue = issueById.get(record.id);
       if (!issue) return undefined;
+      if (field.id === "identifier") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-2 text-caption text-muted-foreground tabular-nums"
+            onFocus={onActivate}
+          >
+            <span className="truncate">{issue.identifier}</span>
+          </div>
+        );
+      }
       if (field.id === "type") {
         const issueType = issue.issue_type_id
           ? issueTypeById.get(issue.issue_type_id)
@@ -952,6 +1181,20 @@ export function MultidimensionalGridView({
           </div>
         );
       }
+      if (field.id === "priority") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-1.5"
+            onFocus={onActivate}
+          >
+            <PriorityPicker
+              priority={issue.priority}
+              align="start"
+              onUpdate={(updates) => updateIssue(issue, updates)}
+            />
+          </div>
+        );
+      }
       if (field.id === "assignee") {
         return (
           <div
@@ -964,6 +1207,114 @@ export function MultidimensionalGridView({
               align="start"
               onUpdate={(updates) => updateIssue(issue, updates)}
             />
+          </div>
+        );
+      }
+      if (field.id === "labels") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-1.5"
+            onFocus={onActivate}
+          >
+            <GridLabelCell issue={issue} />
+          </div>
+        );
+      }
+      if (field.id === "project") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-1.5"
+            onFocus={onActivate}
+          >
+            <ProjectPicker
+              projectId={issue.project_id}
+              onUpdate={(updates) => updateIssue(issue, updates)}
+              triggerRender={
+                <button
+                  type="button"
+                  className="flex max-w-full items-center gap-1.5 rounded-xs px-1 py-0.5 hover:bg-accent"
+                />
+              }
+            />
+          </div>
+        );
+      }
+      if (field.id === "start_date") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-1.5"
+            onFocus={onActivate}
+          >
+            <StartDatePicker
+              startDate={issue.start_date}
+              onUpdate={(updates) => updateIssue(issue, updates)}
+            />
+          </div>
+        );
+      }
+      if (field.id === "due_date") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-1.5"
+            onFocus={onActivate}
+          >
+            <DueDatePicker
+              dueDate={issue.due_date}
+              onUpdate={(updates) => updateIssue(issue, updates)}
+            />
+          </div>
+        );
+      }
+      if (field.id === "created_at" || field.id === "updated_at") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-2 text-caption text-muted-foreground"
+            onFocus={onActivate}
+          >
+            <span className="truncate">
+              {new Intl.DateTimeFormat(locale, {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              }).format(new Date(issue[field.id]))}
+            </span>
+          </div>
+        );
+      }
+      if (field.id === "child_progress") {
+        const progress = childProgressMap?.get(issue.id);
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-2 text-caption text-muted-foreground"
+            onFocus={onActivate}
+          >
+            {progress ? (
+              <span className="inline-flex items-center gap-1.5">
+                <ProgressRing done={progress.done} total={progress.total} size={15} />
+                {progress.done}/{progress.total}
+              </span>
+            ) : (
+              <span>{t(($) => $.table.empty_value)}</span>
+            )}
+          </div>
+        );
+      }
+      if (field.id === "creator") {
+        return (
+          <div
+            className="flex h-full w-full min-w-0 items-center px-2 text-caption"
+            onFocus={onActivate}
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              <ActorAvatar
+                actorType={issue.creator_type}
+                actorId={issue.creator_id}
+                size="sm"
+              />
+              <span className="truncate">
+                {getActorName(issue.creator_type, issue.creator_id)}
+              </span>
+            </span>
           </div>
         );
       }
@@ -992,16 +1343,26 @@ export function MultidimensionalGridView({
       }
       return undefined;
     },
-    [issueById, issueTypeById, propertyById, t, updateIssue],
+    [childProgressMap, getActorName, issueById, issueTypeById, locale, propertyById, t, updateIssue],
   );
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border/60 px-4 py-2">
-        <span className="text-caption text-muted-foreground tabular-nums">
-          {issues.length}
-          {total > issues.length ? ` / ${total}` : ""}
-        </span>
+        <div className="flex items-center gap-3">
+          {onSearchChange && (
+            <TableIssueSearch
+              value={search}
+              onChange={onSearchChange}
+              placeholder={t(($) => $.table.search_placeholder)}
+              clearLabel={t(($) => $.table.search_clear)}
+            />
+          )}
+          <span className="text-caption text-muted-foreground tabular-nums">
+            {issues.length}
+            {total > issues.length ? ` / ${total}` : ""}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -1055,10 +1416,10 @@ export function MultidimensionalGridView({
                 )
                 .map((field) => {
                   const columnKey = field.id;
-                  const position = gridColumnOrder.indexOf(columnKey);
+                  const position = effectiveGridColumnOrder.indexOf(columnKey);
                   const moveUpDisabled = position <= 1;
                   const moveDownDisabled =
-                    position < 0 || position >= gridColumnOrder.length - 1;
+                    position < 0 || position >= effectiveGridColumnOrder.length - 1;
                   return (
                     <div
                       key={field.id}
@@ -1069,7 +1430,7 @@ export function MultidimensionalGridView({
                         className="min-w-0 flex-1"
                         checked={isGridColumnVisible(columnKey, hiddenColumnIds)}
                         onCheckedChange={(checked) =>
-                          setGridColumnHidden(columnKey, !checked)
+                          handleToggleGridColumnHidden(columnKey, !checked)
                         }
                       >
                         {field.name}
@@ -1080,7 +1441,7 @@ export function MultidimensionalGridView({
                         size="icon-sm"
                         label={t(($) => $.table.columns.move_up, { column: field.name })}
                         disabled={moveUpDisabled}
-                        onClick={() => moveGridColumn(columnKey, -1)}
+                        onClick={() => handleMoveGridColumn(columnKey, -1)}
                       >
                         <ArrowUp className="size-3.5" aria-hidden="true" />
                       </IconButton>
@@ -1090,7 +1451,7 @@ export function MultidimensionalGridView({
                         size="icon-sm"
                         label={t(($) => $.table.columns.move_down, { column: field.name })}
                         disabled={moveDownDisabled}
-                        onClick={() => moveGridColumn(columnKey, 1)}
+                        onClick={() => handleMoveGridColumn(columnKey, 1)}
                       >
                         <ArrowDown className="size-3.5" aria-hidden="true" />
                       </IconButton>
