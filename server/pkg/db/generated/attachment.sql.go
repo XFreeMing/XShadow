@@ -1056,6 +1056,74 @@ func (q *Queries) ListAttachmentsBySourceContext(ctx context.Context, arg ListAt
 	return items, nil
 }
 
+const listCommentAttachmentsForRustDelete = `-- name: ListCommentAttachmentsForRustDelete :many
+SELECT
+  a.id,
+  a.workspace_id,
+  a.issue_id,
+  a.comment_id,
+  a.url,
+  (a.workspace_id = $1
+    AND a.issue_id = $2
+    AND a.task_id IS NULL
+    AND a.chat_session_id IS NULL
+    AND a.chat_message_id IS NULL
+    AND a.source_context_id IS NULL) AS scoped_ordinary,
+  NOT EXISTS (
+    SELECT 1 FROM attachment other
+    WHERE other.url = a.url AND other.id <> a.id
+  ) AS unshared_url
+FROM attachment a
+WHERE a.comment_id = $3
+ORDER BY a.id ASC
+`
+
+type ListCommentAttachmentsForRustDeleteParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     pgtype.UUID `json:"issue_id"`
+	CommentID   pgtype.UUID `json:"comment_id"`
+}
+
+type ListCommentAttachmentsForRustDeleteRow struct {
+	ID             pgtype.UUID `json:"id"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	IssueID        pgtype.UUID `json:"issue_id"`
+	CommentID      pgtype.UUID `json:"comment_id"`
+	Url            string      `json:"url"`
+	ScopedOrdinary pgtype.Bool `json:"scoped_ordinary"`
+	UnsharedUrl    bool        `json:"unshared_url"`
+}
+
+// Every attachment row referencing a comment, annotated for native delete planning.
+// Object URLs are globally unique keys; unshared_url ignores workspace boundaries.
+func (q *Queries) ListCommentAttachmentsForRustDelete(ctx context.Context, arg ListCommentAttachmentsForRustDeleteParams) ([]ListCommentAttachmentsForRustDeleteRow, error) {
+	rows, err := q.db.Query(ctx, listCommentAttachmentsForRustDelete, arg.WorkspaceID, arg.IssueID, arg.CommentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCommentAttachmentsForRustDeleteRow{}
+	for rows.Next() {
+		var i ListCommentAttachmentsForRustDeleteRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.IssueID,
+			&i.CommentID,
+			&i.Url,
+			&i.ScopedOrdinary,
+			&i.UnsharedUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSourceContextAttachmentURLsByWorkspace = `-- name: ListSourceContextAttachmentURLsByWorkspace :many
 SELECT url FROM attachment
 WHERE workspace_id = $1

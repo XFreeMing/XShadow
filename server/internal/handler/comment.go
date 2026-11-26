@@ -3776,6 +3776,7 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 	var useRustTombstone bool
 	var useRustReply bool
 	var replyBranch commentDeleteReplyBranchScope
+	var attachmentPlan []rustIssueDeleteAttachmentPlanItem
 	var hasReplies bool
 	if pilotOn, pilotErr := h.commentDeletePilotEnabled(r.Context(), comment.WorkspaceID); pilotErr != nil {
 		slog.Warn("comment delete rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
@@ -3819,7 +3820,13 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 				useRustReply = useRustDelete
 			}
 		} else {
-			useRustDelete, pilotErr = h.commentDeleteUsesRust(r, issue, comment, actorType, actorID, hasReplies)
+			leafPlan, leafErr := h.planRustTopLevelCommentDelete(r, issue, comment, actorType, actorID, hasReplies)
+			if leafErr != nil {
+				pilotErr = leafErr
+			} else {
+				useRustDelete = leafPlan.UseRust
+				attachmentPlan = leafPlan.AttachmentPlan
+			}
 		}
 		if pilotErr != nil {
 			slog.Warn("comment delete rust plan failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
@@ -3835,7 +3842,7 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		} else if useRustReply {
 			route = rustCommentDeleteRouteReplyLeaf
 		}
-		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID, route, replyBranch)
+		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID, route, replyBranch, attachmentPlan)
 		return
 	}
 

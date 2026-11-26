@@ -18,15 +18,17 @@ import (
 )
 
 type rustCommentDeleteRequest struct {
-	GoMode string `json:"go_mode,omitempty"`
+	GoMode            string                                `json:"go_mode,omitempty"`
+	AttachmentCleanup []rustIssueDeleteAttachmentPlanItem   `json:"attachment_cleanup,omitempty"`
 }
 
 type rustCommentDeleteReceipt struct {
-	CommentID     string           `json:"comment_id"`
-	IssueID       string           `json:"issue_id"`
-	IssueRevision int64            `json:"issue_revision"`
-	Tombstone     *CommentResponse `json:"tombstone,omitempty"`
-	RemovedIDs    []string         `json:"removed_ids,omitempty"`
+	CommentID                  string           `json:"comment_id"`
+	IssueID                    string           `json:"issue_id"`
+	IssueRevision              int64            `json:"issue_revision"`
+	Tombstone                  *CommentResponse `json:"tombstone,omitempty"`
+	RemovedIDs                 []string         `json:"removed_ids,omitempty"`
+	ObjectCleanupAttachmentIDs []string         `json:"object_cleanup_attachment_ids,omitempty"`
 }
 
 type rustCommentDeleteRoute int
@@ -85,14 +87,20 @@ func (h *Handler) commentDeleteRustSharedEligible(
 	} else if bound {
 		return false, nil
 	}
-	if attached, err := h.Queries.CommentHasFileAttachments(r.Context(), db.CommentHasFileAttachmentsParams{
-		CommentID: existing.ID, WorkspaceID: existing.WorkspaceID,
-	}); err != nil {
-		return false, err
-	} else if attached {
-		return false, nil
-	}
 	return true, nil
+}
+
+func (h *Handler) commentDeleteRustWithoutFileAttachments(
+	ctx context.Context,
+	comment db.Comment,
+) (bool, error) {
+	attached, err := h.Queries.CommentHasFileAttachments(ctx, db.CommentHasFileAttachmentsParams{
+		CommentID: comment.ID, WorkspaceID: comment.WorkspaceID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return !attached, nil
 }
 
 func (h *Handler) commentDeleteRustEligible(
@@ -104,7 +112,11 @@ func (h *Handler) commentDeleteRustEligible(
 	if existing.ParentID.Valid {
 		return false, nil
 	}
-	return h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	shared, err := h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	if err != nil || !shared {
+		return false, err
+	}
+	return h.commentDeleteRustWithoutFileAttachments(r.Context(), existing)
 }
 
 func (h *Handler) commentDeleteRustReplyEligible(
@@ -116,7 +128,11 @@ func (h *Handler) commentDeleteRustReplyEligible(
 	if !existing.ParentID.Valid {
 		return false, nil
 	}
-	return h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	shared, err := h.commentDeleteRustSharedEligible(r, issue, existing, actorType, actorID)
+	if err != nil || !shared {
+		return false, err
+	}
+	return h.commentDeleteRustWithoutFileAttachments(r.Context(), existing)
 }
 
 func (h *Handler) commentDeleteUsesRust(
@@ -252,9 +268,11 @@ func (h *Handler) deleteCommentViaRust(
 	workspaceID, actorType, actorID string,
 	route rustCommentDeleteRoute,
 	replyBranch commentDeleteReplyBranchScope,
+	attachmentPlan []rustIssueDeleteAttachmentPlanItem,
 ) {
 	path := "/internal/comments/" + uuidToString(existing.ID)
 	var payload []byte
+	withAttachmentCleanup := len(attachmentPlan) > 0
 	switch route {
 	case rustCommentDeleteRouteTombstone:
 		var err error
@@ -269,6 +287,15 @@ func (h *Handler) deleteCommentViaRust(
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to encode comment delete")
 			return
+		}
+	case rustCommentDeleteRouteLeaf:
+		if withAttachmentCleanup {
+			var err error
+			payload, err = json.Marshal(rustCommentDeleteRequest{AttachmentCleanup: attachmentPlan})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to encode comment delete")
+				return
+			}
 		}
 	}
 	body, status, ok := h.readRustCommentDeleteResponse(w, r, path, workspaceID, actorID, payload)
@@ -340,7 +367,15 @@ func (h *Handler) deleteCommentViaRust(
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if !h.confirmRustCommentDeleteReceipt(r.Context(), existing, previousIssueRevision, receipt) {
+	if !h.confirmRustCommentDeleteReceipt(r.Context(), existing, previousIssueRevision, receipt, attachmentPlan) {
+		writeError(w, http.StatusBadGateway, "invalid rust comment delete response")
+		return
+	}
+	if withAttachmentCleanup {
+		if h.TaskService != nil {
+			_, _ = h.TaskService.TryDeliverIssueAttachmentObjectDeletes(r.Context(), planAttachmentIDs(attachmentPlan))
+		}
+	} else if len(receipt.ObjectCleanupAttachmentIDs) > 0 {
 		writeError(w, http.StatusBadGateway, "invalid rust comment delete response")
 		return
 	}
@@ -380,6 +415,9 @@ func (h *Handler) confirmRustCommentDeleteReplyReceipt(
 	branch commentDeleteReplyBranchScope,
 ) bool {
 	if receipt.Tombstone != nil {
+		return false
+	}
+	if len(receipt.ObjectCleanupAttachmentIDs) > 0 {
 		return false
 	}
 	if receipt.CommentID != uuidToString(scope.ID) || receipt.IssueID != uuidToString(scope.IssueID) {
@@ -457,14 +495,26 @@ func (h *Handler) confirmRustCommentDeleteReceipt(
 	scope db.Comment,
 	previousIssueRevision int64,
 	receipt rustCommentDeleteReceipt,
+	attachmentPlan []rustIssueDeleteAttachmentPlanItem,
 ) bool {
 	if receipt.Tombstone != nil {
+		return false
+	}
+	if len(receipt.RemovedIDs) > 0 {
 		return false
 	}
 	if receipt.CommentID != uuidToString(scope.ID) || receipt.IssueID != uuidToString(scope.IssueID) {
 		return false
 	}
 	if receipt.IssueRevision <= previousIssueRevision {
+		return false
+	}
+	withAttachmentCleanup := len(attachmentPlan) > 0
+	if withAttachmentCleanup {
+		if !rustIssueDeleteAttachmentIDsMatchPlan(attachmentPlan, receipt.ObjectCleanupAttachmentIDs) {
+			return false
+		}
+	} else if len(receipt.ObjectCleanupAttachmentIDs) > 0 {
 		return false
 	}
 	_, err := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
@@ -551,6 +601,9 @@ func (h *Handler) confirmRustCommentDeleteTombstoneReceipt(
 ) (db.Comment, bool) {
 	claim := receipt.Tombstone
 	if claim == nil {
+		return db.Comment{}, false
+	}
+	if len(receipt.ObjectCleanupAttachmentIDs) > 0 || len(receipt.RemovedIDs) > 0 {
 		return db.Comment{}, false
 	}
 	if receipt.CommentID != uuidToString(scope.ID) || receipt.IssueID != uuidToString(scope.IssueID) {

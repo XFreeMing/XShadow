@@ -11,6 +11,10 @@ use super::{
         IssueCommentRow, comment_has_active_trigger_task, lock_comment_write_member,
         lock_issue_for_comment, touch_issue_activity,
     },
+    delete_write::{
+        IssueDeleteAttachmentPlanItem, IssueDeleteWriteError, record_and_delete_direct_uploads,
+        scoped_storage_key_valid,
+    },
     is_uuid,
     ordinary::set_write_session,
     resolve_caller_access_on,
@@ -21,6 +25,8 @@ use super::{
 pub struct IssueCommentDeleteRequest {
     #[serde(default)]
     go_mode: CommentDeleteGoMode,
+    #[serde(default)]
+    attachment_cleanup: Vec<IssueDeleteAttachmentPlanItem>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -32,6 +38,8 @@ pub struct IssueCommentDeleteResult {
     pub tombstone: Option<IssueCommentRow>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub removed_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub object_cleanup_attachment_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -154,8 +162,7 @@ async fn lock_comment_delete_shape(
                     SELECT 1 FROM comment child WHERE child.parent_id = c.id
                 ) AS has_replies,
                 EXISTS(
-                    SELECT 1 FROM attachment a
-                    WHERE a.comment_id = c.id AND a.workspace_id = c.workspace_id
+                    SELECT 1 FROM attachment a WHERE a.comment_id = c.id
                 ) AS has_attachments
          FROM comment c
          JOIN issue i ON i.id = c.issue_id AND i.workspace_id = c.workspace_id
@@ -174,11 +181,80 @@ async fn lock_comment_delete_shape(
     map_delete_shape(&row).map_err(IssueCommentDeleteError::from)
 }
 
+fn map_attachment_delete_error(error: IssueDeleteWriteError) -> IssueCommentDeleteError {
+    match error {
+        IssueDeleteWriteError::Database(database) => IssueCommentDeleteError::Database(database),
+        _ => IssueCommentDeleteError::RouteChanged,
+    }
+}
+
+async fn ensure_comment_attachments_for_delete(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    issue_id: &str,
+    comment_id: &str,
+    plan: &[IssueDeleteAttachmentPlanItem],
+) -> Result<Vec<String>, IssueCommentDeleteError> {
+    let rows = sqlx::query(
+        "SELECT a.id::text,
+                a.url,
+                (a.workspace_id IS NOT DISTINCT FROM $2::uuid
+                 AND a.issue_id IS NOT DISTINCT FROM $3::uuid
+                 AND a.task_id IS NULL
+                 AND a.chat_session_id IS NULL
+                 AND a.chat_message_id IS NULL
+                 AND a.source_context_id IS NULL) AS scoped_ordinary,
+                NOT EXISTS (
+                    SELECT 1 FROM attachment other
+                    WHERE other.url = a.url AND other.id <> a.id
+                ) AS unshared_url
+           FROM attachment a
+          WHERE a.comment_id = $1::uuid
+          ORDER BY a.id
+          FOR UPDATE",
+    )
+    .bind(comment_id)
+    .bind(workspace_id)
+    .bind(issue_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if plan.is_empty() {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(IssueCommentDeleteError::RouteChanged);
+    }
+    if rows.len() != plan.len() {
+        return Err(IssueCommentDeleteError::RouteChanged);
+    }
+    let mut planned = plan.to_vec();
+    planned.sort_by(|a, b| a.attachment_id.cmp(&b.attachment_id));
+    for (row, planned) in rows.iter().zip(&planned) {
+        let id: String = row.try_get(0)?;
+        let url: String = row.try_get(1)?;
+        let scoped_ordinary: bool = row.try_get(2)?;
+        let unshared_url: bool = row.try_get(3)?;
+        if !scoped_ordinary
+            || !unshared_url
+            || id != planned.attachment_id
+            || url != planned.object_url
+            || !scoped_storage_key_valid(workspace_id, &planned.attachment_id, &planned.storage_key)
+        {
+            return Err(IssueCommentDeleteError::RouteChanged);
+        }
+    }
+    Ok(planned
+        .iter()
+        .map(|item| item.attachment_id.clone())
+        .collect())
+}
+
 fn validate_delete_shape(
     shape: &LockedDeleteShape,
     actor: &CallerActor,
     hidden_can_see: bool,
     mode: CommentDeleteGoMode,
+    attachment_plan_len: usize,
 ) -> Result<(), IssueCommentDeleteError> {
     let CallerActor::Member { user_id } = actor else {
         return Err(IssueCommentDeleteError::InvalidInput);
@@ -202,7 +278,6 @@ fn validate_delete_shape(
         || shape.has_plugin
         || shape.project_id.is_some()
         || shape.has_supplement
-        || shape.has_attachments
         || !comment_route_allowed(shape.assignee_type.as_deref())
     {
         return Err(IssueCommentDeleteError::RouteChanged);
@@ -212,14 +287,25 @@ fn validate_delete_shape(
             if shape.is_reply || shape.has_replies {
                 return Err(IssueCommentDeleteError::RouteChanged);
             }
+            match (shape.has_attachments, attachment_plan_len) {
+                (true, 0) => return Err(IssueCommentDeleteError::RouteChanged),
+                (false, n) if n > 0 => return Err(IssueCommentDeleteError::RouteChanged),
+                _ => {}
+            }
         }
         CommentDeleteGoMode::Tombstone => {
             if shape.is_reply || !shape.has_replies {
                 return Err(IssueCommentDeleteError::RouteChanged);
             }
+            if shape.has_attachments || attachment_plan_len > 0 {
+                return Err(IssueCommentDeleteError::RouteChanged);
+            }
         }
         CommentDeleteGoMode::ReplyLeaf => {
             if !shape.is_reply || shape.has_replies {
+                return Err(IssueCommentDeleteError::RouteChanged);
+            }
+            if shape.has_attachments || attachment_plan_len > 0 {
                 return Err(IssueCommentDeleteError::RouteChanged);
             }
         }
@@ -303,6 +389,10 @@ pub async fn delete_issue_comment(
         return Err(IssueCommentDeleteError::InvalidInput);
     }
     let mode = request.go_mode;
+    let attachment_plan = request.attachment_cleanup;
+    if !attachment_plan.is_empty() && mode != CommentDeleteGoMode::Leaf {
+        return Err(IssueCommentDeleteError::RouteChanged);
+    }
 
     let mut tx = pool.begin().await?;
     if !lock_comment_write_member(&mut tx, workspace_id, user_id).await? {
@@ -331,6 +421,7 @@ pub async fn delete_issue_comment(
         actor,
         hidden.can_see(shape.project_id.as_deref()),
         mode,
+        attachment_plan.len(),
     )?;
 
     if comment_has_active_trigger_task(&mut tx, comment_id, &issue_id).await? {
@@ -338,6 +429,20 @@ pub async fn delete_issue_comment(
     }
 
     set_write_session(&mut tx, actor, None, None).await?;
+
+    let object_cleanup_ids = ensure_comment_attachments_for_delete(
+        &mut tx,
+        workspace_id,
+        &issue_id,
+        comment_id,
+        &attachment_plan,
+    )
+    .await?;
+    if mode == CommentDeleteGoMode::Leaf && !attachment_plan.is_empty() {
+        record_and_delete_direct_uploads(&mut tx, workspace_id, &attachment_plan)
+            .await
+            .map_err(map_attachment_delete_error)?;
+    }
 
     sqlx::query(
         "DELETE FROM comment_reaction
@@ -348,16 +453,16 @@ pub async fn delete_issue_comment(
     .execute(&mut *tx)
     .await?;
 
-    let (comment_id_out, tombstone_row, removed_ids) = match mode {
+    let (comment_id_out, tombstone_row, removed_ids, cleanup_ids) = match mode {
         CommentDeleteGoMode::ReplyLeaf => {
             let (removed_ids, removed_id) =
                 delete_reply_leaf(&mut tx, comment_id, workspace_id, &issue_id).await?;
-            (removed_id, None, removed_ids)
+            (removed_id, None, removed_ids, Vec::new())
         }
         CommentDeleteGoMode::Leaf => {
             let (removed_id, _) =
                 delete_leaf_comment(&mut tx, comment_id, workspace_id, &issue_id).await?;
-            (removed_id, None, Vec::new())
+            (removed_id, None, Vec::new(), object_cleanup_ids)
         }
         CommentDeleteGoMode::Tombstone => {
             let tombstone_sql = format!(
@@ -383,7 +488,12 @@ pub async fn delete_issue_comment(
                 )));
             };
             let tombstone = map_comment_version(&row).map_err(IssueCommentDeleteError::from)?;
-            (tombstone.id.clone(), Some(tombstone), Vec::new())
+            (
+                tombstone.id.clone(),
+                Some(tombstone),
+                Vec::new(),
+                Vec::new(),
+            )
         }
     };
 
@@ -395,5 +505,6 @@ pub async fn delete_issue_comment(
         issue_revision,
         tombstone: tombstone_row,
         removed_ids,
+        object_cleanup_attachment_ids: cleanup_ids,
     })
 }

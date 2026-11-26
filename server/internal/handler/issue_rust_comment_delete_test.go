@@ -67,6 +67,16 @@ func TestIssueReadBridgeCommentDeletePilotEnv(t *testing.T) {
 	}
 }
 
+func TestIssueReadBridgeCommentDeleteUploadsPilotEnv(t *testing.T) {
+	t.Setenv("XSHADOW_ISSUES_RUST_COMMENT_DELETE_UPLOADS_PILOT", "comment-delete-uploads-pilot")
+	t.Setenv("XSHADOW_ISSUES_UPSTREAM", "http://127.0.0.1:7")
+	t.Setenv("XSHADOW_ISSUES_INTERNAL_TOKEN", "secret")
+	bridge := NewIssueReadBridgeFromEnv(nil)
+	if !reflect.DeepEqual(bridge.CommentDeleteUploadsPilotScopes, []string{"comment-delete-uploads-pilot"}) {
+		t.Fatalf("CommentDeleteUploadsPilotScopes = %v, want [comment-delete-uploads-pilot]", bridge.CommentDeleteUploadsPilotScopes)
+	}
+}
+
 func TestReplyRemovedIDsMatchPath(t *testing.T) {
 	t.Parallel()
 	path := []string{"leaf", "child", "root"}

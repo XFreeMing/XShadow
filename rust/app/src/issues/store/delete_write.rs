@@ -130,7 +130,7 @@ fn source_context_clone_storage_key_valid(workspace_id: &str, clone_id: &str, ke
     })
 }
 
-fn scoped_storage_key_valid(workspace_id: &str, attachment_id: &str, key: &str) -> bool {
+pub(super) fn scoped_storage_key_valid(workspace_id: &str, attachment_id: &str, key: &str) -> bool {
     if !is_uuid(workspace_id) || !is_uuid(attachment_id) {
         return false;
     }
@@ -504,7 +504,7 @@ async fn validate_delete_side_effects(
     }
 }
 
-async fn record_and_delete_direct_uploads(
+pub(super) async fn record_and_delete_direct_uploads(
     tx: &mut PgConnection,
     workspace_id: &str,
     direct_uploads: &[IssueDeleteAttachmentPlanItem],

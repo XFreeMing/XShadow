@@ -92,6 +92,29 @@ SELECT EXISTS (
     WHERE comment_id = @comment_id AND workspace_id = @workspace_id
 ) AS exists;
 
+-- name: ListCommentAttachmentsForRustDelete :many
+-- Every attachment row referencing a comment, annotated for native delete planning.
+-- Object URLs are globally unique keys; unshared_url ignores workspace boundaries.
+SELECT
+  a.id,
+  a.workspace_id,
+  a.issue_id,
+  a.comment_id,
+  a.url,
+  (a.workspace_id = sqlc.arg(workspace_id)
+    AND a.issue_id = sqlc.arg(issue_id)
+    AND a.task_id IS NULL
+    AND a.chat_session_id IS NULL
+    AND a.chat_message_id IS NULL
+    AND a.source_context_id IS NULL) AS scoped_ordinary,
+  NOT EXISTS (
+    SELECT 1 FROM attachment other
+    WHERE other.url = a.url AND other.id <> a.id
+  ) AS unshared_url
+FROM attachment a
+WHERE a.comment_id = sqlc.arg(comment_id)
+ORDER BY a.id ASC;
+
 -- name: DeleteCommentAttachments :many
 -- Part of the comment delete transaction: removes the deleted comment's
 -- attachments and returns their storage URLs for cleanup after commit.
