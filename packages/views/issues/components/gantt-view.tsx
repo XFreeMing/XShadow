@@ -93,6 +93,7 @@ const HEADER_HEIGHT = 56;
 const ISSUE_COLUMN_WIDTH = 260;
 const DATE_COLUMN_WIDTH = 108;
 const LEFT_COL_WIDTH = ISSUE_COLUMN_WIDTH + 2 * DATE_COLUMN_WIDTH;
+const DATE_CELL_TRIGGER = "inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded px-1 text-caption hover:bg-accent disabled:opacity-50";
 
 const DAY_PX_BY_ZOOM: Record<GanttZoom, number> = {
   day: 36,
@@ -460,7 +461,9 @@ function ScheduledRow({
           <div className="flex shrink-0 items-center border-r px-2" style={{ width: DATE_COLUMN_WIDTH }}>
             <StartDatePicker
               startDate={issue.start_date}
-              triggerRender={<button aria-label={t(($) => $.gantt.header_start_date)} disabled={updateIssue.isPending} />}
+              triggerRender={
+                <button className={DATE_CELL_TRIGGER} aria-label={t(($) => $.gantt.header_start_date)} disabled={updateIssue.isPending} />
+              }
               onUpdate={({ start_date }) => commitDates(computeStartDateEditPatch(
                 issue.start_date, issue.due_date, start_date ?? null,
               ))}
@@ -469,7 +472,9 @@ function ScheduledRow({
           <div className="flex shrink-0 items-center border-r px-2" style={{ width: DATE_COLUMN_WIDTH }}>
             <DueDatePicker
               dueDate={issue.due_date}
-              triggerRender={<button aria-label={t(($) => $.gantt.header_due_date)} disabled={updateIssue.isPending} />}
+              triggerRender={
+                <button className={DATE_CELL_TRIGGER} aria-label={t(($) => $.gantt.header_due_date)} disabled={updateIssue.isPending} />
+              }
               onUpdate={({ due_date }) => commitDates(computeDueDateEditPatch(
                 issue.start_date, issue.due_date, due_date ?? null,
               ))}
@@ -600,8 +605,9 @@ export function GanttView({ issues }: { issues: Issue[] }) {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || empty) return;
-    const target = Math.max(0, LEFT_COL_WIDTH + todayOffsetDays * dayPx - 240);
-    el.scrollLeft = target;
+    const timelineViewport = Math.max(0, el.clientWidth - LEFT_COL_WIDTH);
+    // The task sheet is sticky, so only the timeline viewport can show today.
+    el.scrollLeft = Math.max(0, todayOffsetDays * dayPx - Math.min(240, timelineViewport / 2));
   }, [todayOffsetDays, dayPx, empty]);
 
   const ganttBody = (
@@ -618,6 +624,7 @@ export function GanttView({ issues }: { issues: Issue[] }) {
               key={opt.value}
               size="sm"
               variant={zoom === opt.value ? "secondary" : "ghost"}
+              aria-pressed={zoom === opt.value}
               className={cn(
                 "h-6 px-2 text-caption",
                 zoom !== opt.value && "text-muted-foreground",
