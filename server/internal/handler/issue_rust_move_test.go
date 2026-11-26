@@ -43,6 +43,28 @@ func TestIssueMoveRustEligibleDetectsMixedFields(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "with project",
+			body: map[string]any{
+				"before_id": nil, "after_id": nil,
+				"project_id": "00000000-0000-4000-8000-000000000001",
+			},
+			want: true,
+		},
+		{
+			name: "clear project",
+			body: map[string]any{"before_id": nil, "after_id": nil, "project_id": nil},
+			want: true,
+		},
+		{
+			name: "parent and project together",
+			body: map[string]any{
+				"before_id": nil, "after_id": nil,
+				"parent_issue_id": "00000000-0000-4000-8000-000000000002",
+				"project_id":      "00000000-0000-4000-8000-000000000001",
+			},
+			want: false,
+		},
+		{
 			name: "status move",
 			body: map[string]any{"before_id": nil, "after_id": nil, "status": "in_progress"},
 			want: false,
@@ -53,11 +75,6 @@ func TestIssueMoveRustEligibleDetectsMixedFields(t *testing.T) {
 				"before_id": nil, "after_id": nil,
 				"assignee_type": "agent", "assignee_id": "00000000-0000-4000-8000-000000000003",
 			},
-			want: false,
-		},
-		{
-			name: "project move",
-			body: map[string]any{"before_id": nil, "after_id": nil, "project_id": "00000000-0000-4000-8000-000000000001"},
 			want: false,
 		},
 		{
@@ -80,6 +97,63 @@ func TestIssueMoveRustEligibleDetectsMixedFields(t *testing.T) {
 				t.Fatalf("issueMoveRustEligible = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDecodeIssueMoveProjectIntent(t *testing.T) {
+	unchanged, ok := decodeIssueMoveProjectIntent(httptest.NewRecorder(), map[string]json.RawMessage{})
+	if !ok || unchanged.touched {
+		t.Fatalf("missing project = %+v ok=%v", unchanged, ok)
+	}
+
+	clearFields := map[string]json.RawMessage{"project_id": json.RawMessage(`null`)}
+	clear, ok := decodeIssueMoveProjectIntent(httptest.NewRecorder(), clearFields)
+	if !ok || !clear.touched || !clear.clear {
+		t.Fatalf("clear project = %+v ok=%v", clear, ok)
+	}
+
+	setFields := map[string]json.RawMessage{
+		"project_id": json.RawMessage(`"cccccccc-cccc-4ccc-8ccc-cccccccccccc"`),
+	}
+	set, ok := decodeIssueMoveProjectIntent(httptest.NewRecorder(), setFields)
+	if !ok || !set.touched || set.clear {
+		t.Fatalf("set project = %+v ok=%v", set, ok)
+	}
+	want := util.MustParseUUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+	if set.project != want {
+		t.Fatalf("project = %v want %v", set.project, want)
+	}
+}
+
+func TestIssueMoveProjectRustAllowed(t *testing.T) {
+	if !issueMoveProjectRustAllowed(issueMoveProjectIntent{}, false) {
+		t.Fatal("untouched project should allow rust")
+	}
+	if !issueMoveProjectRustAllowed(issueMoveProjectIntent{touched: true, clear: true}, true) {
+		t.Fatal("clear should allow rust even if target metadata says named")
+	}
+	if issueMoveProjectRustAllowed(issueMoveProjectIntent{touched: true, project: util.MustParseUUID("00000000-0000-4000-8000-000000000001")}, true) {
+		t.Fatal("named workflow target should stay on Go")
+	}
+	if !issueMoveProjectRustAllowed(issueMoveProjectIntent{touched: true, project: util.MustParseUUID("00000000-0000-4000-8000-000000000001")}, false) {
+		t.Fatal("plain target should allow rust")
+	}
+}
+
+func TestEffectiveMoveProjectID(t *testing.T) {
+	current := util.MustParseUUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+	unchanged := effectiveMoveProjectID(issueMoveProjectIntent{}, current)
+	if unchanged != current {
+		t.Fatalf("unchanged = %v want %v", unchanged, current)
+	}
+	clear := effectiveMoveProjectID(issueMoveProjectIntent{touched: true, clear: true}, current)
+	if clear.Valid {
+		t.Fatal("clear should drop project")
+	}
+	target := util.MustParseUUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+	set := effectiveMoveProjectID(issueMoveProjectIntent{touched: true, project: target}, current)
+	if set != target {
+		t.Fatalf("set = %v want %v", set, target)
 	}
 }
 
@@ -159,14 +233,16 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 	issueID := util.MustParseUUID("00000000-0000-4000-8000-000000000010")
 	wsID := util.MustParseUUID("00000000-0000-4000-8000-000000000011")
 	parent := util.MustParseUUID("00000000-0000-4000-8000-000000000012")
-	emptyIntent := issueMoveParentIntent{}
+	project := util.MustParseUUID("00000000-0000-4000-8000-000000000013")
+	emptyParent := issueMoveParentIntent{}
+	emptyProject := issueMoveProjectIntent{}
 
 	changed := rustIssueRelativeMoveWrite{
 		Before:  ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 1, 10)},
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		Changed: true,
 	}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, changed) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, changed) {
 		t.Fatal("expected changed write to validate")
 	}
 
@@ -175,7 +251,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		Changed: false,
 	}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, noop) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, noop) {
 		t.Fatal("expected noop write to validate")
 	}
 	noopSignedZero := rustIssueRelativeMoveWrite{
@@ -183,11 +259,11 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 3, math.Copysign(0, -1))},
 		Changed: false,
 	}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, noopSignedZero) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, noopSignedZero) {
 		t.Fatal("expected ±0 noop to validate")
 	}
 
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, util.MustParseUUID("00000000-0000-4000-8000-000000000099"), wsID, changed) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, util.MustParseUUID("00000000-0000-4000-8000-000000000099"), wsID, changed) {
 		t.Fatal("wrong issue id accepted")
 	}
 	ambiguous := rustIssueRelativeMoveWrite{
@@ -195,7 +271,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 3, 15)},
 		Changed: true,
 	}
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, ambiguous) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, ambiguous) {
 		t.Fatal("revision jump accepted")
 	}
 	revisionOnly := rustIssueRelativeMoveWrite{
@@ -203,7 +279,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 10)},
 		Changed: false,
 	}
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, revisionOnly) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, revisionOnly) {
 		t.Fatal("changed flag disagreed with revision")
 	}
 	lyingNoop := rustIssueRelativeMoveWrite{
@@ -211,7 +287,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		Changed: false,
 	}
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, lyingNoop) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, lyingNoop) {
 		t.Fatal("noop flag with changed revision accepted")
 	}
 
@@ -224,11 +300,11 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 	parentMove := rustIssueRelativeMoveWrite{
 		Before: parentBefore, After: parentAfter, Changed: true,
 	}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, parentMove) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, emptyProject, issueID, wsID, parentMove) {
 		t.Fatal("expected parent-only revision bump to validate")
 	}
 	wrongParent := issueMoveParentIntent{touched: true, parent: util.MustParseUUID("00000000-0000-4000-8000-000000000099")}
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, wrongParent, issueID, wsID, parentMove) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, wrongParent, emptyProject, issueID, wsID, parentMove) {
 		t.Fatal("wrong parent id in receipt should fail")
 	}
 
@@ -239,7 +315,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 	clearMove := rustIssueRelativeMoveWrite{
 		Before: parentAfter, After: clearAfter, Changed: true,
 	}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, clearParent, issueID, wsID, clearMove) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, clearParent, emptyProject, issueID, wsID, clearMove) {
 		t.Fatal("expected parent clear receipt to validate")
 	}
 
@@ -252,23 +328,23 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 	}
 	combined.After.ParentIssueID = parent
 	combined.After.LastActivityAt = pgtype.Timestamptz{Valid: true}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, combined) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, emptyProject, issueID, wsID, combined) {
 		t.Fatal("expected combined parent+position write with +1 revision to validate")
 	}
 	combinedBadRev := combined
 	combinedBadRev.After.Revision = 5
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, combinedBadRev) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, emptyProject, issueID, wsID, combinedBadRev) {
 		t.Fatal("revision jump on combined move should fail")
 	}
 
 	corruptTitle := combined
 	corruptTitle.After.Title = "mutated"
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, corruptTitle) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, emptyProject, issueID, wsID, corruptTitle) {
 		t.Fatal("corrupt title should fail receipt validation")
 	}
 	missingActivity := parentMove
 	missingActivity.After.LastActivityAt = pgtype.Timestamptz{Valid: false}
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, missingActivity) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, emptyProject, issueID, wsID, missingActivity) {
 		t.Fatal("parent change without last_activity_at should fail")
 	}
 
@@ -276,16 +352,64 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 	unchangedParent := rustIssueRelativeMoveWrite{
 		Before: parentBefore, After: parentBefore, Changed: false,
 	}
-	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, unchangedParent) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, unchangedParent) {
 		t.Fatal("noop with omitted parent should keep parent stable")
 	}
 	parentDrift := unchangedParent
 	parentDrift.After.ParentIssueID = parent
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, parentDrift) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, parentDrift) {
 		t.Fatal("noop with parent drift should fail when parent omitted")
 	}
-	if rustIssueRelativeMoveWriteSnapshotsValid(nil, staleParentIntent, issueID, wsID, unchangedParent) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, staleParentIntent, emptyProject, issueID, wsID, unchangedParent) {
 		t.Fatal("set parent intent with unchanged row should fail receipt binding")
+	}
+
+	setProject := issueMoveProjectIntent{touched: true, project: project}
+	projectBefore := ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 7, 30)}
+	projectBefore.ProjectID = pgtype.UUID{Valid: false}
+	projectAfter := ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 8, 30)}
+	projectAfter.ProjectID = project
+	projectMove := rustIssueRelativeMoveWrite{
+		Before: projectBefore, After: projectAfter, Changed: true,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, setProject, issueID, wsID, projectMove) {
+		t.Fatal("expected project-only revision bump to validate")
+	}
+
+	clearProject := issueMoveProjectIntent{touched: true, clear: true}
+	clearProjectAfter := ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 9, 30)}
+	clearProjectAfter.ProjectID = pgtype.UUID{Valid: false}
+	clearProjectMove := rustIssueRelativeMoveWrite{
+		Before: projectAfter, After: clearProjectAfter, Changed: true,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, clearProject, issueID, wsID, clearProjectMove) {
+		t.Fatal("expected project clear receipt to validate")
+	}
+
+	unchangedProject := rustIssueRelativeMoveWrite{
+		Before: projectAfter, After: projectAfter, Changed: false,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, emptyProject, issueID, wsID, unchangedProject) {
+		t.Fatal("noop with omitted project should keep project stable")
+	}
+	staleProjectIntent := issueMoveProjectIntent{touched: true, project: project}
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, staleProjectIntent, issueID, wsID, unchangedProject) {
+		t.Fatal("set project intent with unchanged row should fail receipt binding")
+	}
+	wrongProject := issueMoveProjectIntent{touched: true, project: util.MustParseUUID("00000000-0000-4000-8000-000000000099")}
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, wrongProject, issueID, wsID, projectMove) {
+		t.Fatal("wrong project id in receipt should fail")
+	}
+	combinedProject := rustIssueRelativeMoveWrite{
+		Before: ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 4, 10)},
+		After: ordinaryIssueSnapshot{
+			Issue: dbIssue(issueID, wsID, 5, 25),
+		},
+		Changed: true,
+	}
+	combinedProject.After.ProjectID = project
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyParent, setProject, issueID, wsID, combinedProject) {
+		t.Fatal("expected combined project+position write with +1 revision to validate")
 	}
 }
 

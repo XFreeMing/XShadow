@@ -16,7 +16,7 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_BATCH_PILOT` 另覆盖 `POST /api/issues/batch-update` 中仅含 `parent_issue_id` 的批量父链改写（与普通标量批量编辑共用该开关）。Go 按可见行调用同一 Rust 父链命令；不可见、无效、未变或修订冲突的行跳过且不计入 `updated`；传输或回执异常时中止后续行。
 
-同一试点覆盖 `POST /api/issues/{id}/move` 中仅含 `before_id`、`after_id`、可选 `expected_revision` 以及可选 `parent_issue_id`（缺省不改、显式 `null` 解除、UUID 设置）的列内相对排序与组内/跨父级拖拽。Go 保留公开校验与混合字段的旧路径。Rust 在持锁后于同一事务内按确定性 UUID 顺序锁定邻接锚点、被移动任务及涉及父任务；父链改写另取工作区级 `pg_advisory_xact_lock` 与递归祖先防环（与 `PUT …/parent` 相同）。复核项目可见范围、修订、锚点顺序后由锚点推导规范位置并写入；失败时不留半次移动。位置与父级同时变化只递增一次 `revision`；空移动只读，`changed: false` 时不改写也不重复发事件。Go 校验回执快照后发布既有 `issue:updated`，并在父级实际变化时调用 `processChildEvents`（与 `UpdateIssue` 相同，不含 comment notification、squad 派工或状态自动推进）。
+同一试点覆盖 `POST /api/issues/{id}/move` 中仅含 `before_id`、`after_id`、可选 `expected_revision`、可选 `parent_issue_id`（缺省不改、显式 `null` 解除、UUID 设置）或可选 `project_id`（缺省保留、显式 `null` 移出、UUID 设入**无命名工作流**项目）的列内相对排序、组内/跨父级拖拽与项目归属改写；同一请求不可同时改写父级与项目，也不可把任务拖进 `workflow_id` 非空（命名工作流）项目。Go 对设入目标先查 `workflow_id IS NULL`，否则保守回落 `UpdateIssue` 以执行 `applyIssueWorkflow` 状态映射；清除项目与仅位置/父级不变时仍可走 Rust。Rust 锁序与 assign 一致：工作区 `FOR KEY SHARE` → 目标项目 `FOR SHARE`（设入时）→ 任务/锚点 `FOR UPDATE`，再在持锁后重读隐藏项目集并复核来源项目、锚点与目标项目可见性。锁后发现目标变为命名工作流返回 `409` 且不写入。私有目标仅据当前指派智能体/军团负责人的 `owner_id` 做项目访问核对（不要求在线、活跃或运行时）；公开目标与移出项目不做派工有效性检查。位置、父级与项目同时变化只递增一次 `revision`；空移动只读。Go 校验回执后发布 `issue:updated`/`project_changed`/`processChildEvents`（父级），不含工作流交接、派工或状态自动推进。
 
 **仍走 Go 的 move 组合（后续可拆切片）**
 
@@ -24,9 +24,11 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 | --- | --- | --- |
 | `status`（含内置/自定义/工作流/终态）± `stop_previous_assignee_runs` | Go `UpdateIssue` | `XSHADOW_ISSUES_RUST_STATUS_PILOT` / `TERMINAL_STATUS_PILOT` / `WORKFLOW_PILOT` 单任务 PUT；move 未接入 |
 | `assignee_type` + `assignee_id`（± `suppress_run`） | Go `UpdateIssue` | `XSHADOW_ISSUES_RUST_ASSIGN_PILOT` 单任务 assign 事务；move 未接入 |
-| `project_id` | Go `UpdateIssue` | 项目锁与可见性在 Go `updateIssueAtomically`；Rust 无 move+project 命令 |
-| 上述任一项与锚点/父级同包 | Go `UpdateIssue`（先解析锚点 position） | 全字段副作用：派工、`WillEnqueueRun`、`stopPreviousAssigneeRuns`、时间线、工作方法 |
-| 仅锚点 ± 父级 | Rust `POST /internal/issues/{id}/move`（本试点） | 单 revision；子任务规则经 `processChildEvents` |
+| `project_id` 设入无命名工作流项目（不含同包 `parent_issue_id`） | Rust `POST /internal/issues/{id}/move`（本试点） | 单 revision；`project_changed` 由 Go 发布；不改 `status` |
+| `project_id` 设入 `workflow_id` 非空项目或清除/改名工作流后的迟发写入 | Go `UpdateIssue`（先解析锚点 position） | 需要 `applyIssueWorkflow` 状态映射/校验 |
+| `parent_issue_id` 与 `project_id` 同包 | Go `UpdateIssue` | 组合父子与项目边界未切片 |
+| 上述任一项与 `status`/`assignee` 等同包 | Go `UpdateIssue`（先解析锚点 position） | 全字段副作用：派工、`WillEnqueueRun`、`stopPreviousAssigneeRuns`、时间线、工作方法 |
+| 仅锚点 ± 父级或 ± 项目 | Rust `POST /internal/issues/{id}/move`（本试点） | 单 revision；子任务规则经 `processChildEvents`（仅父级） |
 
 同一试点设置也覆盖 `PUT`、`DELETE /api/issues/{id}/properties/{propertyId}`。Go 规范化字段值并检查引用，Rust 通过任务行锁和属性定义的共享事务锁执行单字段更新。定义发生变化时，网关只在收到明确未写入的回执后重新读取定义并校验。清除必填字段的检查依据锁定后的任务类型。
 

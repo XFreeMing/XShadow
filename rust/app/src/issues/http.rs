@@ -1215,6 +1215,14 @@ async fn move_issue_relative_handler(
         Err(IssueRelativeMoveError::Parent(error)) => {
             issue_request_error(store::map_parent_link_access(error), "failed to move issue")
         }
+        Err(IssueRelativeMoveError::ProjectAccessBlocked) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "the agent's owner is not a member of this private project",
+                "reason_code": "project_access_blocked",
+            })),
+        )
+            .into_response(),
         Err(IssueRelativeMoveError::RevisionConflict(actual_revision)) => (
             StatusCode::CONFLICT,
             Json(json!({ "actual_revision": actual_revision })),

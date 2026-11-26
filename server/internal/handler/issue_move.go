@@ -118,6 +118,15 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	parentIntent, parentOK := decodeIssueMoveParentIntent(w, fields)
+	if !parentOK {
+		return
+	}
+	projectIntent, projectOK := decodeIssueMoveProjectIntent(w, fields)
+	if !projectOK {
+		return
+	}
+
 	if issueMoveRustEligible(fields) {
 		useRust, err := h.issueMoveUsesRust(r, current.WorkspaceID)
 		if err != nil {
@@ -126,16 +135,22 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		if useRust && projectIntent.touched && !projectIntent.clear {
+			named, err := h.issueMoveTargetProjectNamedWorkflow(r.Context(), current.WorkspaceID, projectIntent.project)
+			if err != nil {
+				writeIssueTableQueryFailure(w, r, "failed to validate move project workflow")
+				return
+			}
+			if !issueMoveProjectRustAllowed(projectIntent, named) {
+				useRust = false
+			}
+		}
 		if useRust {
 			userID, ok := requireUserID(w, r)
 			if !ok {
 				return
 			}
-			parentIntent, parentOK := decodeIssueMoveParentIntent(w, fields)
-			if !parentOK {
-				return
-			}
-			h.moveIssueViaRust(w, r, userID, current, parentIntent, beforeID, afterID, expectedRevision)
+			h.moveIssueViaRust(w, r, userID, current, parentIntent, projectIntent, beforeID, afterID, expectedRevision)
 			return
 		}
 	}

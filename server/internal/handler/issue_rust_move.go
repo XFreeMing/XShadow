@@ -2,10 +2,13 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/projectaccess"
@@ -20,6 +23,9 @@ type rustIssueRelativeMove struct {
 	ParentTouched    bool    `json:"parent_touched,omitempty"`
 	ParentClear      bool    `json:"parent_clear,omitempty"`
 	ParentIssueID    *string `json:"parent_issue_id,omitempty"`
+	ProjectTouched   bool    `json:"project_touched,omitempty"`
+	ProjectClear     bool    `json:"project_clear,omitempty"`
+	ProjectID        *string `json:"project_id,omitempty"`
 }
 
 type rustIssueRelativeMoveWrite struct {
@@ -28,13 +34,18 @@ type rustIssueRelativeMoveWrite struct {
 	Changed bool                  `json:"changed"`
 }
 
-// issueMoveRustEligible selects position and optional parent_issue_id moves on
-// the write pilot. Status, assignee, project, stop_previous_assignee_runs and
-// other columns stay on UpdateIssue (see rust/MAP.md).
+// issueMoveRustEligible selects position and optional parent_issue_id or
+// project_id moves on the write pilot, but not both parent and project in one
+// request until combined boundaries are verified (see rust/MAP.md).
 func issueMoveRustEligible(fields map[string]json.RawMessage) bool {
+	_, hasParent := fields["parent_issue_id"]
+	_, hasProject := fields["project_id"]
+	if hasParent && hasProject {
+		return false
+	}
 	for key := range fields {
 		switch key {
-		case "before_id", "after_id", "expected_revision", "parent_issue_id":
+		case "before_id", "after_id", "expected_revision", "parent_issue_id", "project_id":
 		default:
 			return false
 		}
@@ -46,6 +57,71 @@ type issueMoveParentIntent struct {
 	touched bool
 	clear   bool
 	parent  pgtype.UUID
+}
+
+type issueMoveProjectIntent struct {
+	touched bool
+	clear   bool
+	project pgtype.UUID
+}
+
+func decodeIssueMoveProjectIntent(w http.ResponseWriter, fields map[string]json.RawMessage) (issueMoveProjectIntent, bool) {
+	raw, ok := fields["project_id"]
+	if !ok {
+		return issueMoveProjectIntent{}, true
+	}
+	intent := issueMoveProjectIntent{touched: true}
+	if rawJSONNull(raw) {
+		intent.clear = true
+		return intent, true
+	}
+	projectID, ok := decodeIssueMoveAnchor(w, raw, "project_id")
+	if !ok {
+		return issueMoveProjectIntent{}, false
+	}
+	if projectID == nil {
+		intent.clear = true
+		return intent, true
+	}
+	intent.project = *projectID
+	return intent, true
+}
+
+// issueMoveProjectRustAllowed reports whether a project_id intent may use the
+// Rust move writer. Clearing the project or leaving it unchanged is allowed;
+// setting a project whose row carries a named workflow (non-null workflow_id)
+// must stay on Go so status can be remapped like applyIssueWorkflow.
+func issueMoveProjectRustAllowed(intent issueMoveProjectIntent, targetNamedWorkflow bool) bool {
+	if !intent.touched || intent.clear {
+		return true
+	}
+	return !targetNamedWorkflow
+}
+
+func (h *Handler) issueMoveTargetProjectNamedWorkflow(ctx context.Context, workspaceID, projectID pgtype.UUID) (bool, error) {
+	if !projectID.Valid {
+		return false, nil
+	}
+	var named bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT workflow_id IS NOT NULL
+		FROM project
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, projectID).Scan(&named)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return named, err
+}
+
+func effectiveMoveProjectID(intent issueMoveProjectIntent, current pgtype.UUID) pgtype.UUID {
+	if !intent.touched {
+		return current
+	}
+	if intent.clear {
+		return pgtype.UUID{Valid: false}
+	}
+	return intent.project
 }
 
 func decodeIssueMoveParentIntent(w http.ResponseWriter, fields map[string]json.RawMessage) (issueMoveParentIntent, bool) {
@@ -100,6 +176,7 @@ func parseMoveExpectedRevision(w http.ResponseWriter, fields map[string]json.Raw
 func (h *Handler) buildRustIssueRelativeMove(
 	r *http.Request,
 	parentIntent issueMoveParentIntent,
+	projectIntent issueMoveProjectIntent,
 	beforeID, afterID *pgtype.UUID,
 	expectedRevision *int64,
 ) rustIssueRelativeMove {
@@ -124,7 +201,26 @@ func (h *Handler) buildRustIssueRelativeMove(
 			request.ParentIssueID = &id
 		}
 	}
+	if projectIntent.touched {
+		request.ProjectTouched = true
+		if projectIntent.clear {
+			request.ProjectClear = true
+		} else {
+			id := uuidToString(projectIntent.project)
+			request.ProjectID = &id
+		}
+	}
 	return request
+}
+
+func moveProjectReceiptMatches(intent issueMoveProjectIntent, before, after db.Issue) bool {
+	if !intent.touched {
+		return before.ProjectID == after.ProjectID
+	}
+	if intent.clear {
+		return !after.ProjectID.Valid
+	}
+	return after.ProjectID == intent.project
 }
 
 func moveParentReceiptMatches(intent issueMoveParentIntent, before, after db.Issue) bool {
@@ -139,7 +235,8 @@ func moveParentReceiptMatches(intent issueMoveParentIntent, before, after db.Iss
 
 func rustIssueRelativeMoveWriteSnapshotsValid(
 	expectedRevision *int64,
-	intent issueMoveParentIntent,
+	parentIntent issueMoveParentIntent,
+	projectIntent issueMoveProjectIntent,
 	issueID, workspaceID pgtype.UUID,
 	write rustIssueRelativeMoveWrite,
 ) bool {
@@ -157,7 +254,8 @@ func rustIssueRelativeMoveWriteSnapshotsValid(
 	}
 	positionChanged := before.Position != after.Position
 	parentChanged := before.ParentIssueID != after.ParentIssueID
-	actualChange := positionChanged || parentChanged
+	projectChanged := before.ProjectID != after.ProjectID
+	actualChange := positionChanged || parentChanged || projectChanged
 	if write.Changed != actualChange {
 		return false
 	}
@@ -171,14 +269,16 @@ func rustIssueRelativeMoveWriteSnapshotsValid(
 	} else if after.Revision != before.Revision {
 		return false
 	}
-	// Guard against corrupt replays: only position and parent may differ.
+	// Guard against corrupt replays: only position, parent and project may differ.
 	if before.Title != after.Title || before.Status != after.Status ||
 		before.AssigneeType != after.AssigneeType || before.AssigneeID != after.AssigneeID ||
-		before.ProjectID != after.ProjectID || before.Stage != after.Stage ||
-		before.Priority != after.Priority {
+		before.Stage != after.Stage || before.Priority != after.Priority {
 		return false
 	}
-	if !moveParentReceiptMatches(intent, before, after) {
+	if !moveParentReceiptMatches(parentIntent, before, after) {
+		return false
+	}
+	if !moveProjectReceiptMatches(projectIntent, before, after) {
 		return false
 	}
 	return true
@@ -190,10 +290,17 @@ func (h *Handler) moveIssueViaRust(
 	userID string,
 	current db.Issue,
 	parentIntent issueMoveParentIntent,
+	projectIntent issueMoveProjectIntent,
 	beforeID, afterID *pgtype.UUID,
 	expectedRevision *int64,
 ) bool {
-	request := h.buildRustIssueRelativeMove(r, parentIntent, beforeID, afterID, expectedRevision)
+	if projectIntent.touched {
+		effective := effectiveMoveProjectID(projectIntent, current.ProjectID)
+		if !h.requireAssigneeCanAccessProject(w, r, current.WorkspaceID, current.AssigneeType, current.AssigneeID, effective) {
+			return false
+		}
+	}
+	request := h.buildRustIssueRelativeMove(r, parentIntent, projectIntent, beforeID, afterID, expectedRevision)
 	if expectedRevision != nil && current.Revision != *expectedRevision {
 		writeRevisionConflict(w, "issue", current.ID, *expectedRevision, current.Revision)
 		return false
@@ -232,15 +339,15 @@ func (h *Handler) moveIssueViaRust(
 	}
 	var write rustIssueRelativeMoveWrite
 	if json.Unmarshal(body, &write) != nil ||
-		!rustIssueRelativeMoveWriteSnapshotsValid(expectedRevision, parentIntent, current.ID, current.WorkspaceID, write) {
+		!rustIssueRelativeMoveWriteSnapshotsValid(expectedRevision, parentIntent, projectIntent, current.ID, current.WorkspaceID, write) {
 		writeError(w, http.StatusBadGateway, "invalid rust issue move response")
 		return false
 	}
-	h.writeIssueRelativeMove(w, r, userID, write)
+	h.writeIssueRelativeMove(w, r, userID, projectIntent, write)
 	return true
 }
 
-func (h *Handler) writeIssueRelativeMove(w http.ResponseWriter, r *http.Request, userID string, write rustIssueRelativeMoveWrite) {
+func (h *Handler) writeIssueRelativeMove(w http.ResponseWriter, r *http.Request, userID string, projectIntent issueMoveProjectIntent, write rustIssueRelativeMoveWrite) {
 	before := write.Before.issue()
 	after := write.After.issue()
 	workspaceID := uuidToString(after.WorkspaceID)
@@ -249,13 +356,14 @@ func (h *Handler) writeIssueRelativeMove(w http.ResponseWriter, r *http.Request,
 	resp := issueToResponse(after, prefix)
 	h.fillStatusCategory(r.Context(), after.WorkspaceID, projectaccess.Hidden{}, &resp)
 	parentChanged := before.ParentIssueID != after.ParentIssueID
+	projectChanged := projectIntent.touched && before.ProjectID != after.ProjectID
 	if write.Changed {
 		updatedPayload := map[string]any{
 			"issue":                      resp,
 			"assignee_changed":           false,
 			"status_changed":             false,
 			"priority_changed":           false,
-			"project_changed":            false,
+			"project_changed":            projectChanged,
 			"start_date_changed":         false,
 			"due_date_changed":           false,
 			"description_changed":        false,

@@ -4,11 +4,13 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use sqlx::{PgConnection, PgPool, Row};
 
+use super::status_dispatch::StatusPromotionError;
+
 use super::{
     CallerActor, HiddenProjects, IssueReadError, is_uuid,
     ordinary::{ISSUE_ROW_SNAPSHOT, set_write_actor},
     parent_link::{self, ParentLinkError},
-    resolve_caller_access_on,
+    resolve_caller_access_on, status_dispatch,
 };
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +25,11 @@ pub struct IssueRelativeMove {
     #[serde(default)]
     pub parent_clear: bool,
     pub parent_issue_id: Option<String>,
+    #[serde(default)]
+    pub project_touched: bool,
+    #[serde(default)]
+    pub project_clear: bool,
+    pub project_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -39,6 +46,7 @@ pub enum IssueRelativeMoveError {
     Conflict(&'static str),
     RevisionConflict(i64),
     Parent(ParentLinkError),
+    ProjectAccessBlocked,
     Database(sqlx::Error),
     Snapshot(serde_json::Error),
 }
@@ -71,6 +79,7 @@ fn require_canonical_uuid(
             "after_id" => "after_id must be a UUID or null",
             "source_task_id" => "invalid source_task_id",
             "parent_issue_id" => "parent_issue_id must be a UUID",
+            "project_id" => "project_id must be a UUID or null",
             _ => "invalid issue id",
         }));
     }
@@ -80,6 +89,7 @@ fn require_canonical_uuid(
             "after_id" => "invalid after_id",
             "source_task_id" => "invalid source_task_id",
             "parent_issue_id" => "invalid parent_issue_id",
+            "project_id" => "invalid project_id",
             _ => "issue not found",
         }));
     }
@@ -97,6 +107,31 @@ fn optional_canonical_uuid(
 }
 
 /// Parent tri-state: unchanged (`None`), clear (`Some(None)`), set (`Some(Some(canonical id))`).
+fn resolved_move_project(
+    request: &IssueRelativeMove,
+) -> Result<Option<Option<String>>, IssueRelativeMoveError> {
+    if !request.project_touched {
+        return Ok(None);
+    }
+    if request.project_clear {
+        if request.project_id.is_some() {
+            return Err(IssueRelativeMoveError::InvalidInput(
+                "project_id conflicts with project_clear",
+            ));
+        }
+        return Ok(Some(None));
+    }
+    match request.project_id.as_deref() {
+        None => Err(IssueRelativeMoveError::InvalidInput(
+            "project_id or project_clear is required when project is touched",
+        )),
+        Some(raw) => {
+            let id = require_canonical_uuid("project_id", raw)?;
+            Ok(Some(Some(id)))
+        }
+    }
+}
+
 fn resolved_move_parent(
     request: &IssueRelativeMove,
 ) -> Result<Option<Option<String>>, IssueRelativeMoveError> {
@@ -177,6 +212,8 @@ struct LockedIssueRow {
     project_id: Option<String>,
     revision: i64,
     parent_issue_id: Option<String>,
+    assignee_type: Option<String>,
+    assignee_id: Option<String>,
 }
 
 /// Locks every id in `all_ids` in one ordered pass; `required_ids` must all be present.
@@ -192,7 +229,8 @@ async fn lock_move_issue_rows(
         return Ok(BTreeMap::new());
     }
     let rows = sqlx::query(
-        "SELECT id::text, position, project_id::text, revision, parent_issue_id::text
+        "SELECT id::text, position, project_id::text, revision, parent_issue_id::text,
+                assignee_type::text, assignee_id::text
          FROM issue
          WHERE workspace_id = $1::uuid AND id = ANY($2::uuid[])
          ORDER BY id
@@ -212,6 +250,8 @@ async fn lock_move_issue_rows(
                 project_id: row.try_get(2)?,
                 revision: row.try_get(3)?,
                 parent_issue_id: row.try_get(4)?,
+                assignee_type: row.try_get(5)?,
+                assignee_id: row.try_get(6)?,
             },
         );
     }
@@ -255,6 +295,91 @@ fn ensure_visible(
             "issue not found",
         )))
     }
+}
+
+struct LockedMoveProject {
+    visibility: String,
+    has_named_workflow: bool,
+}
+
+async fn lock_move_target_project_row(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    project_id: &str,
+) -> Result<LockedMoveProject, IssueRelativeMoveError> {
+    let Some((visibility, has_named_workflow)) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT visibility, workflow_id IS NOT NULL
+         FROM project WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+    )
+    .bind(project_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Err(IssueRelativeMoveError::InvalidInput(
+            "project not found in this workspace",
+        ));
+    };
+    Ok(LockedMoveProject {
+        visibility,
+        has_named_workflow,
+    })
+}
+
+async fn resolve_assignee_agent_owner(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    moved: &LockedIssueRow,
+) -> Result<Option<String>, IssueRelativeMoveError> {
+    match (moved.assignee_type.as_deref(), moved.assignee_id.as_deref()) {
+        (Some("agent"), Some(assignee_id)) if is_uuid(assignee_id) => {
+            let owner = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT owner_id::text FROM agent
+                 WHERE id = $1::uuid AND workspace_id = $2::uuid FOR SHARE",
+            )
+            .bind(assignee_id)
+            .bind(workspace_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            Ok(owner.flatten())
+        }
+        (Some("squad"), Some(assignee_id)) if is_uuid(assignee_id) => {
+            let owner = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT a.owner_id::text FROM squad s
+                 JOIN agent a ON a.id = s.leader_id AND a.workspace_id = s.workspace_id
+                 WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid FOR SHARE",
+            )
+            .bind(assignee_id)
+            .bind(workspace_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            Ok(owner.flatten())
+        }
+        _ => Ok(None),
+    }
+}
+
+async fn validate_move_private_assignee_access(
+    tx: &mut PgConnection,
+    workspace_id: &str,
+    moved: &LockedIssueRow,
+    project_id: &str,
+) -> Result<(), IssueRelativeMoveError> {
+    let Some(owner) = resolve_assignee_agent_owner(tx, workspace_id, moved).await? else {
+        return Ok(());
+    };
+    status_dispatch::validate_agent_issue_project_access(
+        tx,
+        workspace_id,
+        Some(project_id),
+        vec![owner],
+    )
+    .await
+    .map_err(|error| match error {
+        StatusPromotionError::RouteChanged => IssueRelativeMoveError::ProjectAccessBlocked,
+        StatusPromotionError::Database(err) => IssueRelativeMoveError::Database(err),
+    })?;
+    Ok(())
 }
 
 fn collect_move_lock_ids(
@@ -330,17 +455,31 @@ pub async fn move_issue_relative(
         ));
     }
 
+    if request.parent_touched && request.project_touched {
+        return Err(IssueRelativeMoveError::InvalidInput(
+            "parent and project cannot be changed in the same move",
+        ));
+    }
     let parent_target = resolved_move_parent(&request)?;
+    let project_target = resolved_move_project(&request)?;
 
     let mut tx = pool.begin().await?;
 
-    if request.parent_touched {
+    if request.parent_touched || request.project_touched {
         sqlx::query("SELECT 1 FROM workspace WHERE id = $1::uuid FOR KEY SHARE")
             .bind(workspace_id)
             .execute(&mut *tx)
             .await?;
+    }
+    if request.parent_touched {
         parent_link::lock_workspace_parent_hierarchy(&mut tx, workspace_id).await?;
     }
+
+    let locked_target_project = if let Some(Some(project_id)) = project_target.as_ref() {
+        Some(lock_move_target_project_row(&mut tx, workspace_id, project_id).await?)
+    } else {
+        None
+    };
 
     let hidden = resolve_caller_access_on(&mut tx, workspace_id, actor)
         .await
@@ -402,7 +541,31 @@ pub async fn move_issue_relative(
         .get(issue_id)
         .expect("required issue row missing after lock");
 
+    // Hidden membership may change while the project row is locked (public→private).
+    let hidden = resolve_caller_access_on(&mut tx, workspace_id, actor)
+        .await
+        .map_err(IssueRelativeMoveError::Access)?;
+
     ensure_visible(&hidden, moved.project_id.as_deref())?;
+
+    if let (Some(Some(project_id)), Some(locked)) =
+        (project_target.as_ref(), locked_target_project.as_ref())
+    {
+        if !hidden.can_see(Some(project_id.as_str())) {
+            return Err(IssueRelativeMoveError::InvalidInput(
+                "project not found in this workspace",
+            ));
+        }
+        if locked.has_named_workflow {
+            return Err(IssueRelativeMoveError::Conflict(
+                "moving into a named project workflow requires a status update",
+            ));
+        }
+        if locked.visibility == "private" {
+            validate_move_private_assignee_access(&mut tx, workspace_id, moved, project_id).await?;
+        }
+    }
+
     if let Some(id) = before_id.as_ref() {
         let anchor = locked_rows
             .get(id)
@@ -437,6 +600,11 @@ pub async fn move_issue_relative(
     } else {
         false
     };
+    let project_changed = if let Some(ref next) = project_target {
+        moved.project_id.as_deref() != next.as_deref()
+    } else {
+        false
+    };
 
     if let Some(Some(parent_id)) = parent_target.as_ref() {
         parent_link::validate_parent_link(
@@ -460,7 +628,7 @@ pub async fn move_issue_relative(
     .await?;
 
     let before: Box<RawValue> = serde_json::from_str(&before_snapshot)?;
-    if !position_changed && !parent_changed {
+    if !position_changed && !parent_changed && !project_changed {
         return Ok(IssueRelativeMoveWrite {
             before: before.clone(),
             after: before,
@@ -475,27 +643,41 @@ pub async fn move_issue_relative(
         Some(None) => None,
         Some(Some(id)) => Some(id.as_str()),
     };
+    let next_project_bind: Option<&str> = match &project_target {
+        None => None,
+        Some(None) => None,
+        Some(Some(id)) => Some(id.as_str()),
+    };
 
     let saved = sqlx::query(&format!(
         "WITH next AS (
             SELECT $3::double precision AS position,
                    $4::uuid AS next_parent_issue_id,
-                   $5::boolean AS parent_touched
+                   $5::boolean AS parent_touched,
+                   $6::uuid AS next_project_id,
+                   $7::boolean AS project_touched
          ), changes AS (
             SELECT next.position,
                    next.next_parent_issue_id,
                    next.parent_touched,
+                   next.next_project_id,
+                   next.project_touched,
                    next.position IS DISTINCT FROM i.position AS position_changed,
                    CASE
                        WHEN next.parent_touched
                            THEN i.parent_issue_id IS DISTINCT FROM next.next_parent_issue_id
                        ELSE false
-                   END AS parent_changed
+                   END AS parent_changed,
+                   CASE
+                       WHEN next.project_touched
+                           THEN i.project_id IS DISTINCT FROM next.next_project_id
+                       ELSE false
+                   END AS project_changed
             FROM issue i CROSS JOIN next
             WHERE i.id = $1::uuid AND i.workspace_id = $2::uuid
          ), flags AS (
             SELECT changes.*,
-                   (changes.position_changed OR changes.parent_changed) AS any_changed
+                   (changes.position_changed OR changes.parent_changed OR changes.project_changed) AS any_changed
             FROM changes
          )
          UPDATE issue i
@@ -503,6 +685,10 @@ pub async fn move_issue_relative(
                 parent_issue_id = CASE
                     WHEN flags.parent_touched THEN flags.next_parent_issue_id
                     ELSE i.parent_issue_id
+                END,
+                project_id = CASE
+                    WHEN flags.project_touched THEN flags.next_project_id
+                    ELSE i.project_id
                 END,
                 revision = i.revision + flags.any_changed::int,
                 last_activity_at = CASE
@@ -520,6 +706,8 @@ pub async fn move_issue_relative(
     .bind(next_position)
     .bind(next_parent_bind)
     .bind(request.parent_touched)
+    .bind(next_project_bind)
+    .bind(request.project_touched)
     .fetch_one(&mut *tx)
     .await?;
     let changed: bool = saved.try_get(1)?;
@@ -534,7 +722,9 @@ pub async fn move_issue_relative(
 
 #[cfg(test)]
 mod tests {
-    use super::{IssueRelativeMove, issue_move_position, resolved_move_parent};
+    use super::{
+        IssueRelativeMove, issue_move_position, resolved_move_parent, resolved_move_project,
+    };
 
     #[test]
     fn uses_relative_anchors() {
@@ -561,6 +751,47 @@ mod tests {
     }
 
     #[test]
+    fn project_tri_state() {
+        let unchanged = IssueRelativeMove {
+            expected_revision: None,
+            before_id: None,
+            after_id: None,
+            source_task_id: None,
+            parent_touched: false,
+            parent_clear: false,
+            parent_issue_id: None,
+            project_touched: false,
+            project_clear: false,
+            project_id: None,
+        };
+        assert!(resolved_move_project(&unchanged).unwrap().is_none());
+
+        let clear = IssueRelativeMove {
+            project_touched: true,
+            project_clear: true,
+            ..unchanged
+        };
+        assert_eq!(resolved_move_project(&clear).unwrap(), Some(None));
+
+        let set = IssueRelativeMove {
+            expected_revision: None,
+            before_id: None,
+            after_id: None,
+            source_task_id: None,
+            parent_touched: false,
+            parent_clear: false,
+            parent_issue_id: None,
+            project_touched: true,
+            project_clear: false,
+            project_id: Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into()),
+        };
+        assert_eq!(
+            resolved_move_project(&set).unwrap(),
+            Some(Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned()))
+        );
+    }
+
+    #[test]
     fn parent_tri_state() {
         let unchanged = IssueRelativeMove {
             expected_revision: None,
@@ -570,6 +801,9 @@ mod tests {
             parent_touched: false,
             parent_clear: false,
             parent_issue_id: None,
+            project_touched: false,
+            project_clear: false,
+            project_id: None,
         };
         assert!(resolved_move_parent(&unchanged).unwrap().is_none());
 
@@ -581,13 +815,23 @@ mod tests {
             parent_touched: true,
             parent_clear: true,
             parent_issue_id: None,
+            project_touched: false,
+            project_clear: false,
+            project_id: None,
         };
         assert_eq!(resolved_move_parent(&clear).unwrap(), Some(None));
 
         let set = IssueRelativeMove {
+            expected_revision: None,
+            before_id: None,
+            after_id: None,
+            source_task_id: None,
             parent_touched: true,
+            parent_clear: false,
             parent_issue_id: Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into()),
-            ..unchanged
+            project_touched: false,
+            project_clear: false,
+            project_id: None,
         };
         assert_eq!(
             resolved_move_parent(&set).unwrap(),
