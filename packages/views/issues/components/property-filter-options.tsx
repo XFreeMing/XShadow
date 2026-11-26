@@ -6,6 +6,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { DropdownMenuCheckboxItem } from "@multica/ui/components/ui/dropdown-menu";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { isImeComposing } from "@multica/core/utils";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import {
@@ -26,6 +27,7 @@ import { FILTER_ITEM_CLASS, HoverCheck } from "../../common/hover-check";
 import { useT } from "../../i18n";
 import type { ActorFilterValue } from "@multica/core/issues/stores/view-store";
 import { NO_PROPERTY_VALUE } from "../utils/filter";
+import { useStatusLabel } from "../utils/status-label";
 
 /**
  * Names one property filter value the way chips and advanced conditions show
@@ -35,6 +37,7 @@ export function usePropertyValueName(
   actorName: (actor: ActorFilterValue) => string | undefined,
 ) {
   const { t } = useT("issues");
+  const statusLabel = useStatusLabel(useWorkspaceId());
   return (definition: IssueProperty, member: PropertyFilterValue): string | undefined => {
     if (member === NO_PROPERTY_VALUE) {
       return t(($) => $.pickers.custom_property.none);
@@ -63,6 +66,7 @@ export function usePropertyValueName(
         ? t(($) => $.pickers.custom_property.true_label)
         : t(($) => $.pickers.custom_property.false_label);
     }
+    if (definition.type === "status") return statusLabel(member);
     // Scalar and list properties have no option list — the filter value IS
     // the label (for lists it is one matched element).
     if (isScalarPropertyType(definition.type) || isListPropertyType(definition.type)) {
@@ -109,6 +113,9 @@ export function PropertyFilterOptions({
 }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const statusWorkspaceId = property.type === "status" ? wsId : "";
+  const { statuses, colorOf } = useIssueStatuses(statusWorkspaceId);
+  const statusLabel = useStatusLabel(statusWorkspaceId);
   const currentUserId = useAuthStore((s) => s.user?.id);
   const actorProperty = isActorPropertyType(property.type);
   // Scalar properties (text / number / date / url) have no option list — the
@@ -184,6 +191,13 @@ export function PropertyFilterOptions({
             { id: "true", name: t(($) => $.pickers.custom_property.true_label), color: undefined, actorType: undefined, actorId: undefined },
             { id: "false", name: t(($) => $.pickers.custom_property.false_label), color: undefined, actorType: undefined, actorId: undefined },
           ]
+        : property.type === "status" ? statuses.map(({ key }) => ({
+            id: key,
+            name: statusLabel(key),
+            color: colorOf(key) ?? undefined,
+            actorType: undefined,
+            actorId: undefined,
+          }))
         : (property.config.options ?? []).map((option) => ({
             id: option.id,
             name: option.name,

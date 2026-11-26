@@ -142,6 +142,14 @@ func (h *Handler) validateIssueTypeFields(
 			if err != nil {
 				return nil, http.StatusBadRequest, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, err.Error()), nil
 			}
+			if def.Type == "status" {
+				if err := issueproperty.ValidateStatusReference(r.Context(), q, wsUUID, validatedDefault, true); err != nil {
+					if errors.Is(err, issueproperty.ErrInactiveStatus) {
+						return nil, http.StatusBadRequest, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, err.Error()), nil
+					}
+					return nil, 0, "", err
+				}
+			}
 			if issueproperty.IsActor(def.Type) {
 				refs, err := issueproperty.ActorRefsInValue(def.Type, validatedDefault)
 				if err != nil {

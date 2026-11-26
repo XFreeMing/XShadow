@@ -16,6 +16,7 @@ export type IssuePropertyType =
   | "text"
   | "number"
   | "select"
+  | "status"
   | "multi_select"
   | "date"
   | "checkbox"
@@ -32,6 +33,7 @@ export const ISSUE_PROPERTY_TYPES: IssuePropertyType[] = [
   "text",
   "number",
   "select",
+  "status",
   "multi_select",
   "date",
   "checkbox",
@@ -97,6 +99,7 @@ export function isActorPropertyType(type: string): boolean {
 export function isFilterablePropertyType(type: string): boolean {
   return (
     type === "select" ||
+    type === "status" ||
     type === "multi_select" ||
     type === "checkbox" ||
     isScalarPropertyType(type) ||
@@ -311,6 +314,7 @@ export const PROPERTY_FILTER_OPS_BY_TYPE: Record<IssuePropertyType, readonly Pro
   text: ["contains"],
   number: ["gt", "gte", "lt", "lte"],
   select: [],
+  status: [],
   multi_select: [],
   date: ["before", "after"],
   checkbox: [],

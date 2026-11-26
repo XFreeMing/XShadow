@@ -717,6 +717,7 @@
     "limit_hint": "{{count}}/{{max}} active properties",
     "archived_badge": "Archived",
     "types": {
+      "status": "Status",
       "text": "Text",
       "number": "Number",
       "select": "Select",
@@ -739,6 +740,7 @@
       "unarchive": "Restore"
     },
     "editor": {
+      "status_catalog_hint": "Options come from the workspace status library.",
       "create_title": "New property",
       "edit_title": "Edit property",
       "admin_hint": "Only workspace owners and admins can manage property definitions.",

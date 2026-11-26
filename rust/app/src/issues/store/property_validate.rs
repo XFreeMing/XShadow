@@ -7,6 +7,28 @@ use super::is_uuid;
 
 const MAX_RECORD_RELATION_VALUES: usize = 50;
 
+pub(super) async fn is_active_status_value(
+    conn: &mut PgConnection,
+    workspace_id: &str,
+    value: &RawValue,
+) -> Result<bool, SqlxError> {
+    let Ok(key) = serde_json::from_str::<String>(value.get()) else {
+        return Ok(false);
+    };
+    sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1::uuid::text || ':issue_status', 0))")
+        .bind(workspace_id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM issue_status
+         WHERE workspace_id = $1::uuid AND key = $2 AND archived_at IS NULL)",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .fetch_one(conn)
+    .await
+}
+
 #[derive(Debug)]
 pub(super) enum RecordRelationError {
     Invalid,

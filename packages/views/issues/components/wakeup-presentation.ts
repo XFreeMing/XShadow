@@ -207,6 +207,7 @@ export function useWakeupText() {
   const propertyValue = (c: Extract<WakeupCondition, { field: "property" | "formula" }>) => {
     const property = names.property(c.property_id);
     const raw = c.value;
+    if (property?.type === "status" && typeof raw === "string") return names.status(raw);
     if (typeof raw === "boolean") return raw ? t(($) => $.wakeups.cond.checked) : t(($) => $.wakeups.cond.unchecked);
     const option = property?.config.options?.find((o) => o.id === raw);
     return option?.name ?? String(raw);

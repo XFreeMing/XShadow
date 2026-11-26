@@ -279,6 +279,12 @@ func ValidateValue(def db.IssueProperty, raw json.RawMessage) ([]byte, error) {
 			return nil, errors.New("value must be true or false")
 		}
 		return json.Marshal(value)
+	case "status":
+		key, ok := value.(string)
+		if !ok || key == "" || len(key) > 32 {
+			return nil, ErrInactiveStatus
+		}
+		return json.Marshal(key)
 	case "date":
 		text, ok := value.(string)
 		if !ok {

@@ -28,6 +28,7 @@ import { useComputedIssuePropertyValue } from "../computed-property-context";
 import { ComputedPropertyReadonlyDisplay } from "../computed-property-readonly-display";
 import { PropertyPicker, PickerItem, PickerEmpty } from "./property-picker";
 import { ActorPropertyPicker, ActorPropertyDisplay } from "./actor-property-picker";
+import { StatusPropertyDisplay, StatusPropertyPicker } from "./status-property-picker";
 import {
   RecordRelationPropertyDisplay,
   RecordRelationPropertyPicker,
@@ -35,6 +36,7 @@ import {
 
 const EDITABLE_PROPERTY_TYPES = [
   "select",
+  "status",
   "multi_select",
   "date",
   "checkbox",
@@ -239,6 +241,18 @@ export function CustomPropertyValueInput({
   }
 
   switch (property.type) {
+    case "status":
+      return (
+        <StatusPropertyPicker
+          open={open}
+          onOpenChange={setOpen}
+          value={typeof value === "string" ? value : undefined}
+          onSelect={commit}
+          trigger={valueTrigger}
+          triggerRender={triggerRender}
+          emptyRow={emptyRow}
+        />
+      );
     case "select": {
       return (
         <PropertyPicker
@@ -738,6 +752,8 @@ export function CustomPropertyValueDisplay({
 
   const options = property.config.options ?? [];
   switch (property.type) {
+    case "status":
+      return typeof displayValue === "string" ? <StatusPropertyDisplay statusKey={displayValue} /> : null;
     case "select": {
       const option = options.find((o) => o.id === displayValue);
       if (!option) {

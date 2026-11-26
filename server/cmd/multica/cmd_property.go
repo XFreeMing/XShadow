@@ -78,7 +78,7 @@ var propertyCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a property definition (workspace owner/admin only)",
 	Long: `Create a property definition. Types: text, number, select, multi_select,
-date, checkbox, url, actor, multi_actor, multi_text, multi_url. Select types
+date, checkbox, url, actor, multi_actor, multi_text, multi_url, status. Select types
 take repeatable --option flags:
   multica property create --name Severity --type select \
       --option "Critical:#ef4444" --option "Major:#f59e0b" --option "Minor:#6b7280"
@@ -178,7 +178,7 @@ func init() {
 	propertyGetCmd.Flags().String("output", "json", "Output format: table or json")
 	propertyCreateCmd.Flags().String("output", "table", "Output format: table or json")
 	propertyCreateCmd.Flags().String("name", "", "Property name (required)")
-	propertyCreateCmd.Flags().String("type", "", "Property type: text, number, select, multi_select, date, checkbox, url, actor, multi_actor, multi_text, multi_url (required)")
+	propertyCreateCmd.Flags().String("type", "", "Property type: text, number, select, multi_select, status, date, checkbox, url, actor, multi_actor, multi_text, multi_url (required)")
 	propertyCreateCmd.Flags().String("description", "", "Property description")
 	propertyCreateCmd.Flags().String("icon", "", "Property icon key from the Web picker (for example, flag, tag, or shield)")
 	propertyCreateCmd.Flags().StringArray("option", nil, `Select option as "Name" or "Name:#rrggbb" (repeatable; select types only)`)
@@ -533,6 +533,15 @@ func resolveSelectOptionRef(property propertyDTO, ref string) (string, error) {
 	return "", fmt.Errorf("option %q not found on property %q; valid options: %s", ref, property.Name, strings.Join(optionNames, ", "))
 }
 
+func resolveStatusPropertyRef(ctx context.Context, client *cli.APIClient, ref string, includeArchived bool) (string, error) {
+	statuses, err := fetchIssueStatuses(ctx, client, includeArchived)
+	if err != nil {
+		return "", err
+	}
+	status, err := resolveIssueStatusRef(statuses, ref)
+	return status.Key, err
+}
+
 // encodeIssuePropertyValue converts the CLI --value string into the typed
 // JSON the API expects, translating option names to ids for select types and
 // member names to actor references for actor types.
@@ -543,6 +552,12 @@ func encodeIssuePropertyValue(ctx context.Context, client *cli.APIClient, direct
 	}
 
 	switch property.Type {
+	case "status":
+		key, err := resolveStatusPropertyRef(ctx, client, raw, false)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(key)
 	case "select":
 		id, err := resolveSelectOptionRef(property, raw)
 		if err != nil {
@@ -1080,6 +1095,7 @@ var propertyFilterOperators = map[string]map[string]string{
 	"text":         {"~=": "contains"},
 	"url":          {"~=": "contains"},
 	"select":       {},
+	"status":       {},
 	"multi_select": {},
 	"checkbox":     {},
 	"actor":        {},
@@ -1264,6 +1280,8 @@ func resolvePropertyFilterValue(ctx context.Context, client *cli.APIClient, dire
 		return propertyNoValueSentinel, nil
 	}
 	switch property.Type {
+	case "status":
+		return resolveStatusPropertyRef(ctx, client, trimmed, true)
 	case "select", "multi_select":
 		return resolveSelectOptionRef(property, trimmed)
 	case "checkbox":

@@ -151,8 +151,12 @@ export function propertyDisplayValue(
   property: IssueProperty,
   value: IssuePropertyValue | undefined,
   getActorName?: (type: string, id: string) => string,
+  getStatusLabel?: (key: string) => string,
 ) {
   if (value === undefined) return "";
+  if (property.type === "status" && typeof value === "string") {
+    return getStatusLabel?.(value) ?? value;
+  }
   const options = property.config.options ?? [];
   if (property.type === "select") {
     return options.find((option) => option.id === value)?.name ?? "";

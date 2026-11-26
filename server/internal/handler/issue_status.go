@@ -468,6 +468,23 @@ func (h *Handler) ArchiveIssueStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	var templateName string
+	err = tx.QueryRow(r.Context(), `SELECT t.name FROM issue_type t
+		CROSS JOIN LATERAL jsonb_array_elements(t.fields) AS f(field)
+		JOIN issue_property p ON p.id::text = f.field->>'property_id' AND p.workspace_id = t.workspace_id
+		WHERE t.workspace_id = $1 AND t.archived_at IS NULL AND p.archived_at IS NULL
+		  AND p.type = 'status' AND f.field->>'default_value' = $2
+		ORDER BY t.name LIMIT 1`, wsUUID, entry.Key).Scan(&templateName)
+	if err == nil {
+		writeErrorCode(w, http.StatusConflict, "issue_status_is_template_default",
+			fmt.Sprintf("cannot archive status: work method %q uses it as a field default", templateName))
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		slog.Warn("ArchiveIssueStatus template check failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to check work method defaults")
+		return
+	}
 
 	archived, err := qtx.ArchiveIssueStatusEntry(r.Context(), db.ArchiveIssueStatusEntryParams{
 		ID:          entry.ID,

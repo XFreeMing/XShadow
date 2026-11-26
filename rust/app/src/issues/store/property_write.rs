@@ -162,6 +162,11 @@ pub async fn write_issue_property(
             if stored_type == "lookup" || stored_type == "formula" {
                 return Err(IssuePropertyWriteError::InvalidValue);
             }
+            if stored_type == "status"
+                && !property_validate::is_active_status_value(&mut tx, workspace_id, &value).await?
+            {
+                return Err(IssuePropertyWriteError::InvalidValue);
+            }
             if stored_type == "record_relation" {
                 property_validate::validate_record_relation_value(
                     &mut tx,

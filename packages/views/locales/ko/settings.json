@@ -708,6 +708,7 @@
     "limit_hint": "활성 속성 {{count}}/{{max}}",
     "archived_badge": "보관됨",
     "types": {
+      "status": "상태",
       "text": "텍스트",
       "number": "숫자",
       "select": "선택",
@@ -730,6 +731,7 @@
       "unarchive": "복원"
     },
     "editor": {
+      "status_catalog_hint": "선택지는 워크스페이스의 상태 라이브러리에서 가져옵니다.",
       "create_title": "새 속성",
       "edit_title": "속성 편집",
       "admin_hint": "워크스페이스 소유자와 관리자만 속성 정의를 관리할 수 있습니다.",

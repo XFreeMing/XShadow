@@ -708,6 +708,7 @@
     "limit_hint": "{{count}}/{{max}} 個の有効なプロパティ",
     "archived_badge": "アーカイブ済み",
     "types": {
+      "status": "ステータス",
       "text": "テキスト",
       "number": "数値",
       "select": "選択",
@@ -730,6 +731,7 @@
       "unarchive": "復元"
     },
     "editor": {
+      "status_catalog_hint": "選択肢はワークスペースのステータスライブラリから取得します。",
       "create_title": "新規プロパティ",
       "edit_title": "プロパティを編集",
       "admin_hint": "プロパティ定義を管理できるのはワークスペースのオーナーと管理者のみです。",

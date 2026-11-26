@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -169,16 +170,25 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 			if err != nil {
 				return nil, nil, err
 			}
-			ok, err := exists("SELECT 1 FROM issue_property WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL", ws, id)
+			q := db.New(tx)
+			def, err := q.GetIssueProperty(ctx, db.GetIssuePropertyParams{WorkspaceID: ws, ID: id})
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && def.ArchivedAt.Valid) {
+				return nil, nil, badCondition("unknown property")
+			}
 			if err != nil {
 				return nil, nil, err
-			}
-			if !ok {
-				return nil, nil, badCondition("unknown property")
 			}
 			value := canonicalWakeupPayload(c.Value)
 			if len(c.Value) == 0 || string(value) == "null" || len(value) > 1024 {
 				return nil, nil, badCondition("property value must be a JSON value within 1 KB")
+			}
+			if def.Type == "status" {
+				if err := issueproperty.ValidateStatusReference(ctx, q, ws, value, false); err != nil {
+					if errors.Is(err, issueproperty.ErrInactiveStatus) {
+						return nil, nil, badCondition(err.Error())
+					}
+					return nil, nil, err
+				}
 			}
 			out.PropertyID, out.Value = util.UUIDToString(id), value
 			events = []string{"issue.properties_changed"}

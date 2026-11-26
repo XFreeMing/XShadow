@@ -717,6 +717,7 @@
     "limit_hint": "{{count}}/{{max}} propiedades activas",
     "archived_badge": "Archivada",
     "types": {
+      "status": "Estado",
       "text": "Texto",
       "number": "Número",
       "select": "Selección",
@@ -739,6 +740,7 @@
       "unarchive": "Restaurar"
     },
     "editor": {
+      "status_catalog_hint": "Las opciones provienen de la biblioteca de estados del espacio de trabajo.",
       "create_title": "Nueva propiedad",
       "edit_title": "Editar propiedad",
       "admin_hint": "Solo los propietarios y administradores del espacio de trabajo pueden gestionar las definiciones de propiedades.",

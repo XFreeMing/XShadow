@@ -364,6 +364,17 @@ pub(super) async fn revalidate_type_and_properties(
             });
         }
         match kind.as_str() {
+            "status" => {
+                if !super::property_validate::is_active_status_value(conn, workspace_id, value)
+                    .await?
+                {
+                    return Err(IssueCreateError::InvalidIssueProperty {
+                        property_id: property_id.to_owned(),
+                        message: "value must refer to an active status in this workspace's status library"
+                            .to_owned(),
+                    });
+                }
+            }
             "actor" => {
                 let actor: String = serde_json::from_str(value.get())
                     .map_err(|_| IssueCreateError::InvalidInput)?;

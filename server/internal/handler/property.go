@@ -54,7 +54,7 @@ const (
 	maxPropertyActorValues = 20
 )
 
-var validPropertyTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", "multi_text", "multi_url", "record_relation", "lookup", "formula"}
+var validPropertyTypes = []string{"text", "number", "select", "status", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", "multi_text", "multi_url", "record_relation", "lookup", "formula"}
 
 // Property icons use stable catalog keys that the Web client maps to its
 // icon glyphs. Keeping this allowlist at the API boundary prevents arbitrary text
@@ -868,6 +868,14 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		value, err := validatePropertyValue(def, req.Value)
 		if err != nil {
 			return def, nil, fail(http.StatusBadRequest, err.Error())
+		}
+		if def.Type == "status" {
+			if err := issueproperty.ValidateStatusReference(r.Context(), q, issue.WorkspaceID, value, tx != nil); err != nil {
+				if errors.Is(err, issueproperty.ErrInactiveStatus) {
+					err = fail(http.StatusBadRequest, err.Error())
+				}
+				return def, nil, err
+			}
 		}
 		// Actor values point at another entity, so shape validation isn't
 		// enough: resolve each reference against this workspace before the

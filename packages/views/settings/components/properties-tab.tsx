@@ -366,6 +366,8 @@ export function PropertyTypeLabel({ type }: { type: string }) {
       return <>{t(($) => $.properties.types.number)}</>;
     case "select":
       return <>{t(($) => $.properties.types.select)}</>;
+    case "status":
+      return <>{t(($) => $.properties.types.status)}</>;
     case "multi_select":
       return <>{t(($) => $.properties.types.multi_select)}</>;
     case "date":
@@ -619,6 +621,9 @@ function PropertyEditorDialog({
                     ))}
                   </SelectContent>
                 </Select>
+              )}
+              {draft.type === "status" && (
+                <p className="text-caption text-muted-foreground">{t(($) => $.properties.editor.status_catalog_hint)}</p>
               )}
             </div>
           </div>

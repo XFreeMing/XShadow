@@ -32,6 +32,7 @@ export function issueGridExportRow(
         property,
         issue.properties[propertyId],
         ctx.getActorName,
+        ctx.resolveStatusLabel,
       );
     }
     return "";

@@ -845,6 +845,14 @@ func validateIssueCreateProperties(ctx context.Context, tx pgx.Tx, qtx *db.Queri
 		if err != nil {
 			return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
 		}
+		if definition.Type == "status" {
+			if err := issueproperty.ValidateStatusReference(ctx, qtx, workspaceID, value, true); err != nil {
+				if errors.Is(err, issueproperty.ErrInactiveStatus) {
+					return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+				}
+				return nil, fmt.Errorf("resolve issue property status: %w", err)
+			}
+		}
 		if issueproperty.IsActor(definition.Type) {
 			refs, err := issueproperty.ActorRefsInValue(definition.Type, value)
 			if err != nil {

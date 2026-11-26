@@ -717,6 +717,7 @@
     "limit_hint": "{{count}}/{{max}} propriétés actives",
     "archived_badge": "Archivée",
     "types": {
+      "status": "Statut",
       "text": "Texte",
       "number": "Nombre",
       "select": "Liste déroulante",
@@ -739,6 +740,7 @@
       "unarchive": "Restaurer"
     },
     "editor": {
+      "status_catalog_hint": "Les options proviennent de la bibliothèque des statuts de l’espace de travail.",
       "create_title": "Nouvelle propriété",
       "edit_title": "Modifier la propriété",
       "admin_hint": "Seuls les propriétaires et administrateurs de l'espace de travail peuvent gérer les définitions de propriétés.",

@@ -844,12 +844,14 @@ function FieldParams({
           onChange={(fieldTarget) => update({ fieldTarget, fieldValue: "" })}
         />
         {property &&
-          (property.type === "select" || property.type === "multi_select" ? (
+          (property.type === "select" || property.type === "multi_select" || property.type === "status" ? (
             <PillMenu
               label={property.name}
               placeholder={t(($) => $.wakeups.create.value_placeholder)}
               value={draft.fieldValue}
-              options={(property.config.options ?? []).map((o) => ({ value: o.id, label: o.name }))}
+              options={property.type === "status"
+                ? statuses.activeStatuses.map(({ key }) => ({ value: key, label: statusLabel(key) }))
+                : (property.config.options ?? []).map((o) => ({ value: o.id, label: o.name }))}
               onChange={(fieldValue) => update({ fieldValue })}
             />
           ) : property.type === "checkbox" || property.type === "formula" ? (

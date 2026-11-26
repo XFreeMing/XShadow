@@ -2331,6 +2331,7 @@ export function TableView({
                   property,
                   issue.properties[propertyId],
                   exportActorName,
+                  resolveStatusLabel,
                 )
               : "";
           }
