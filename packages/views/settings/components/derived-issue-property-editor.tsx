@@ -32,7 +32,9 @@ export function IssueLookupPropertyEditor({
   const { t } = useT("settings");
   const { data: properties = [] } = useQuery(propertyListOptions(wsId, true));
   const relationProperties = useMemo(
-    () => properties.filter((property: IssueProperty) => !property.archived && property.type === "record_relation"),
+    () => properties.filter((property: IssueProperty) =>
+      !property.archived && property.type === "record_relation" && property.config.target_table_id,
+    ),
     [properties],
   );
   const selectedRelation = relationProperties.find((property) => property.id === relationPropertyId);

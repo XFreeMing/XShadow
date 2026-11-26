@@ -742,6 +742,7 @@
       "name_placeholder": "例如 Severity",
       "type": "类型",
       "type_locked_hint": "创建后类型不可修改。",
+      "record_relation_native_tasks": "本任务表",
       "record_relation_table_required": "请选择该属性要关联的工作区数据表。",
       "record_relation_target_table": "目标表",
       "record_relation_select_target_table": "选择目标表",

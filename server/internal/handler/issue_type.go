@@ -169,7 +169,7 @@ func (h *Handler) validateIssueTypeFields(
 					return nil, http.StatusBadRequest, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, err.Error()), nil
 				}
 				if err := issueproperty.VerifyRecordRelationRefs(
-					r.Context(), h.DB, workspaceID, relCfg.TargetTableID, recordIDs, false,
+					r.Context(), h.DB, workspaceID, relCfg, "", recordIDs, false,
 				); err != nil {
 					if status, msg := recordRelationRefsHTTPError(err); status != 0 {
 						return nil, status, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, msg), nil

@@ -2109,3 +2109,227 @@ func TestSetIssuePropertyRecordRelation(t *testing.T) {
 		}
 	})
 }
+
+func TestIssueRelationRecordRelation(t *testing.T) {
+	ctx := context.Background()
+	tableID, _, _ := createGenericTableRecordFixture(t)
+
+	// Reject mutually exclusive or invalid target_kind configs on create.
+	for _, cfg := range []map[string]any{
+		{"target_table_id": tableID, "target_kind": "issues"},
+		{"target_kind": "projects"},
+		{},
+	} {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/properties", map[string]any{
+			"name":   "Bad relation " + uuid.NewString()[:8],
+			"type":   "record_relation",
+			"config": cfg,
+		})
+		testHandler.CreateProperty(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("create bad config %v: expected 400, got %d: %s", cfg, w.Code, w.Body.String())
+		}
+	}
+
+	issuesProp := createTestProperty(t, map[string]any{
+		"name":   "Related issues",
+		"type":   "record_relation",
+		"config": map[string]any{"target_kind": "issues"},
+	})
+	if issuesProp.Config.TargetKind != "issues" || issuesProp.Config.TargetTableID != "" {
+		t.Fatalf("unexpected issues relation config: %+v", issuesProp.Config)
+	}
+
+	tableProp := createTestProperty(t, map[string]any{
+		"name":   "Table relation",
+		"type":   "record_relation",
+		"config": map[string]any{"target_table_id": tableID},
+	})
+
+	// Immutable target after creation: cannot switch issues <-> table.
+	t.Run("target cannot switch after creation", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := newRequest("PATCH", "/api/properties/"+issuesProp.ID, map[string]any{
+			"config": map[string]any{"target_table_id": tableID},
+		})
+		req = withURLParam(req, "id", issuesProp.ID)
+		testHandler.UpdateProperty(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("switch issues->table: expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+
+		w = httptest.NewRecorder()
+		req = newRequest("PATCH", "/api/properties/"+tableProp.ID, map[string]any{
+			"config": map[string]any{"target_kind": "issues"},
+		})
+		req = withURLParam(req, "id", tableProp.ID)
+		testHandler.UpdateProperty(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("switch table->issues: expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Idempotent same-target update succeeds.
+		w = httptest.NewRecorder()
+		req = newRequest("PATCH", "/api/properties/"+issuesProp.ID, map[string]any{
+			"name":   "Related tasks",
+			"config": map[string]any{"target_kind": "issues"},
+		})
+		req = withURLParam(req, "id", issuesProp.ID)
+		testHandler.UpdateProperty(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("same-target update: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// Create workspace-visible project, private project, and issues in each plus no-project and foreign workspace.
+	var wsProjectID, privateProjectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, visibility)
+		VALUES ($1, 'WS visible proj', 'workspace')
+		RETURNING id::text
+	`, testWorkspaceID).Scan(&wsProjectID); err != nil {
+		t.Fatalf("create workspace project: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, wsProjectID) })
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, visibility)
+		VALUES ($1, 'Private proj', 'private')
+		RETURNING id::text
+	`, testWorkspaceID).Scan(&privateProjectID); err != nil {
+		t.Fatalf("create private project: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, privateProjectID) })
+
+	issueNoProjectA := createPropertyTestIssue(t, "issue rel A")
+	issueNoProjectB := createPropertyTestIssue(t, "issue rel B")
+	issueWSProj := createPropertyTestIssue(t, "issue rel ws proj")
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET project_id = $1::uuid WHERE id = $2::uuid`, wsProjectID, issueWSProj); err != nil {
+		t.Fatalf("assign ws project: %v", err)
+	}
+	issuePrivateProj := createPropertyTestIssue(t, "issue rel private proj")
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET project_id = $1::uuid WHERE id = $2::uuid`, privateProjectID, issuePrivateProj); err != nil {
+		t.Fatalf("assign private project: %v", err)
+	}
+
+	otherWorkspaceID := uuid.NewString()
+	var foreignIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number)
+		VALUES ($1::uuid, 'foreign issue', 'todo', 'none', 'member', $2::uuid, 1)
+		RETURNING id::text
+	`, otherWorkspaceID, testUserID).Scan(&foreignIssueID); err != nil {
+		t.Fatalf("create foreign issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1::uuid`, foreignIssueID) })
+
+	h := *testHandler
+	h.IssueReadBridge = nil
+	setFallback := func(issueID string, value any) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := newRequest("PUT", "/api/issues/"+issueID+"/properties/"+issuesProp.ID, map[string]any{"value": value})
+		req = withIssuePropertyParams(req, issueID, issuesProp.ID)
+		h.SetIssueProperty(w, req)
+		return w
+	}
+
+	t.Run("set order dedupe and directed cycle via fallback", func(t *testing.T) {
+		w := setFallback(issueNoProjectA, []string{issueWSProj, issueNoProjectB, issueWSProj})
+		if w.Code != http.StatusOK {
+			t.Fatalf("set A->[wsProj,B]: %d %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		stored := body["properties"].(map[string]any)[issuesProp.ID].([]any)
+		if len(stored) != 2 || stored[0].(string) != issueWSProj || stored[1].(string) != issueNoProjectB {
+			t.Fatalf("stored = %v", stored)
+		}
+
+		// Directed cycle B -> A is allowed.
+		w = setFallback(issueNoProjectB, []string{issueNoProjectA})
+		if w.Code != http.StatusOK {
+			t.Fatalf("cycle B->A: %d %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("reject self-reference, private project issue, and foreign workspace issue", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			target string
+		}{
+			{"self", issueNoProjectA},
+			{"private project", issuePrivateProj},
+			{"foreign workspace", foreignIssueID},
+		} {
+			w := setFallback(issueNoProjectA, []string{tc.target})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: expected 400, got %d: %s", tc.name, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("issue type default validation", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/issue-types", map[string]any{
+			"name": "RelType " + uuid.NewString()[:8],
+			"fields": []map[string]any{
+				{"property_id": issuesProp.ID, "default_value": []string{issueWSProj}},
+			},
+		})
+		testHandler.CreateIssueType(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("valid default: expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+		var createdType IssueTypeResponse
+		if err := json.NewDecoder(w.Body).Decode(&createdType); err == nil && createdType.ID != "" {
+			t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue_type WHERE id = $1`, createdType.ID) })
+		}
+
+		for _, badTarget := range []string{issuePrivateProj, foreignIssueID} {
+			w := httptest.NewRecorder()
+			req := newRequest("POST", "/api/issue-types", map[string]any{
+				"name": "BadRelType " + uuid.NewString()[:8],
+				"fields": []map[string]any{
+					{"property_id": issuesProp.ID, "default_value": []string{badTarget}},
+				},
+			})
+			testHandler.CreateIssueType(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("bad default %s: expected 400, got %d: %s", badTarget, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("create issue with issue relation property", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/issues", map[string]any{
+			"title":      "created with relation",
+			"properties": map[string]any{issuesProp.ID: []string{issueNoProjectA, issueWSProj}},
+		})
+		h.CreateIssue(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create valid: expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+		var created map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&created); err == nil {
+			if id, ok := created["id"].(string); ok && id != "" {
+				t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, id) })
+			}
+		}
+
+		for _, badTarget := range []string{issuePrivateProj, foreignIssueID} {
+			w := httptest.NewRecorder()
+			req := newRequest("POST", "/api/issues", map[string]any{
+				"title":      "created with bad relation",
+				"properties": map[string]any{issuesProp.ID: []string{badTarget}},
+			})
+			h.CreateIssue(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("create bad target %s: expected 400, got %d: %s", badTarget, w.Code, w.Body.String())
+			}
+		}
+	})
+}

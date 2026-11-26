@@ -95,8 +95,9 @@ type PropertyOption struct {
 
 type PropertyConfig struct {
 	Options []PropertyOption `json:"options,omitempty"`
-	// Target table for record_relation properties — mirrors generic-field relation config.
+	// Target table or kind for record_relation properties (mutually exclusive).
 	TargetTableID string `json:"target_table_id,omitempty"`
+	TargetKind    string `json:"target_kind,omitempty"`
 	// Lookup: record_relation property id and generic field id.
 	RelationPropertyID string `json:"relation_property_id,omitempty"`
 	TargetFieldID      string `json:"target_field_id,omitempty"`
@@ -321,6 +322,9 @@ func validatePropertyConfig(propType string, cfg *PropertyConfig) ([]byte, error
 		if cfg != nil && strings.TrimSpace(cfg.TargetTableID) != "" {
 			return nil, fmt.Errorf("type %q does not accept target_table_id", propType)
 		}
+		if cfg != nil && strings.TrimSpace(cfg.TargetKind) != "" {
+			return nil, fmt.Errorf("type %q does not accept target_kind", propType)
+		}
 		return []byte(`{}`), nil
 	}
 	if cfg == nil || len(cfg.Options) == 0 {
@@ -397,7 +401,9 @@ func actorRefsInValue(propType string, stored []byte) ([]actorRef, error) {
 
 func recordRelationRefsHTTPError(err error) (int, string) {
 	switch {
-	case errors.Is(err, issueproperty.ErrRecordRelationRecords):
+	case errors.Is(err, issueproperty.ErrRecordRelationRecords),
+		errors.Is(err, issueproperty.ErrRecordRelationIssues),
+		errors.Is(err, issueproperty.ErrRecordRelationSelfRef):
 		return http.StatusBadRequest, err.Error()
 	case err != nil:
 		return http.StatusInternalServerError, "failed to resolve record references"
@@ -607,9 +613,11 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if status, msg := h.ensureGenericTargetTable(r.Context(), workspaceID, relCfg.TargetTableID); status != 0 {
-			writeError(w, status, msg)
-			return
+		if !relCfg.IsIssuesTarget() {
+			if status, msg := h.ensureGenericTargetTable(r.Context(), workspaceID, relCfg.TargetTableID); status != 0 {
+				writeError(w, status, msg)
+				return
+			}
 		}
 	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
@@ -753,8 +761,8 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return fail(http.StatusBadRequest, err.Error())
 				}
-				if existingRel.TargetTableID != nextRel.TargetTableID {
-					return fail(http.StatusBadRequest, "target_table_id cannot be changed for record_relation properties")
+				if !existingRel.SameTarget(nextRel) {
+					return fail(http.StatusBadRequest, "target cannot be changed for record_relation properties")
 				}
 			}
 			if removed := removedOptionIDs(existing.Config, configJSON); len(removed) > 0 {
@@ -905,7 +913,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 				lockTarget = true
 			}
 			if err := issueproperty.VerifyRecordRelationRefs(
-				r.Context(), verifier, uuidToString(issue.WorkspaceID), relCfg.TargetTableID, recordIDs, lockTarget,
+				r.Context(), verifier, uuidToString(issue.WorkspaceID), relCfg, uuidToString(issue.ID), recordIDs, lockTarget,
 			); err != nil {
 				if status, msg := recordRelationRefsHTTPError(err); status != 0 {
 					return def, nil, fail(status, msg)

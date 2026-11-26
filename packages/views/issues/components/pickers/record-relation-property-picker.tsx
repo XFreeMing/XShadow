@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { api } from "@multica/core/api";
+import { issueKeys } from "@multica/core/issues/queries";
+import { projectListOptions } from "@multica/core/projects/queries";
 import type { IssueProperty, IssuePropertyValue } from "@multica/core/types";
 import { MAX_ISSUE_PROPERTY_SELECT_VALUES } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -11,8 +14,53 @@ import { useT } from "../../../i18n";
 import { PropertyPicker, PickerItem, PickerEmpty } from "./property-picker";
 import { nextRecordRelationAfterToggle, visibleRecordRelationLabels } from "./record-relation-selection";
 
+export const NATIVE_ISSUE_RELATION_TARGET = "issues";
+
 function recordIdsFromValue(value: IssuePropertyValue | undefined): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function useNativeIssueRelationOptions(
+  wsId: string,
+  ids: string[],
+  search: string,
+  enabled: boolean,
+  includeCandidates: boolean,
+) {
+  const queryIds = [...ids].sort();
+  const { data: projects, isError: projectsError, isPending: projectsPending, refetch: refetchProjects } = useQuery({
+    ...projectListOptions(wsId),
+    enabled,
+  });
+  const result = useQuery({
+    queryKey: [...issueKeys.list(wsId), "native-relation", queryIds, search, includeCandidates],
+    enabled,
+    queryFn: async ({ signal }) => {
+      const [selected, candidates] = await Promise.all([
+        queryIds.length ? api.listIssues({ ids: queryIds, limit: 50 }) : null,
+        !includeCandidates ? null : search
+          ? api.searchIssues({ q: search, limit: 30, include_closed: true, signal })
+          : api.listIssues({ limit: 30 }),
+      ]);
+      return [...new Map(
+        [...(selected?.issues ?? []), ...(candidates?.issues ?? [])].map((issue) => [issue.id, issue]),
+      ).values()];
+    },
+  });
+  const records = useMemo(() => {
+    const publicProjects = new Set(projects?.filter((project) => project.visibility !== "private").map((project) => project.id));
+    return (result.data ?? [])
+      .filter((issue) => !issue.project_id || publicProjects.has(issue.project_id))
+      .map((issue) => ({ id: issue.id, label: `${issue.identifier} · ${issue.title}` }));
+  }, [projects, result.data]);
+  return {
+    data: { records },
+    isFetching: result.isFetching,
+    isLoading: result.isLoading || (enabled && projectsPending),
+    isSuccess: result.isSuccess && !projectsPending && !projectsError,
+    isError: result.isError || projectsError,
+    refetch: () => Promise.all([result.refetch(), refetchProjects()]),
+  };
 }
 
 export function RecordRelationPropertyDisplay({
@@ -26,10 +74,13 @@ export function RecordRelationPropertyDisplay({
   const wsId = useWorkspaceId();
   const targetTableId = property.config.target_table_id ?? "";
   const ids = recordIdsFromValue(value);
-  const optionsQuery = useQuery({
+  const native = property.config.target_kind === NATIVE_ISSUE_RELATION_TARGET;
+  const genericOptions = useQuery({
     ...genericRecordOptionsQuery(wsId, targetTableId),
     enabled: Boolean(wsId && targetTableId && ids.length > 0),
   });
+  const nativeOptions = useNativeIssueRelationOptions(wsId, ids, "", Boolean(wsId && native && ids.length), false);
+  const optionsQuery = native ? nativeOptions : genericOptions;
   const labelById = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of optionsQuery.data?.records ?? []) {
@@ -72,6 +123,7 @@ export function RecordRelationPropertyPicker({
   value,
   onChange,
   required = false,
+  issueId,
   open,
   onOpenChange,
   trigger,
@@ -81,6 +133,7 @@ export function RecordRelationPropertyPicker({
   value: IssuePropertyValue | undefined;
   onChange: (value: IssuePropertyValue | undefined) => void | Promise<void>;
   required?: boolean;
+  issueId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   trigger: React.ReactNode;
@@ -89,31 +142,43 @@ export function RecordRelationPropertyPicker({
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const targetTableId = property.config.target_table_id ?? "";
+  const native = property.config.target_kind === NATIVE_ISSUE_RELATION_TARGET;
   const stored = recordIdsFromValue(value);
   const [search, setSearch] = useState("");
+  const [remoteSearch, setRemoteSearch] = useState("");
   const [pending, setPending] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const writePending = useRef(false);
-  const optionsQuery = useQuery({
+  useEffect(() => {
+    if (!open || !native) return;
+    const timer = setTimeout(() => setRemoteSearch(search.trim()), 180);
+    return () => clearTimeout(timer);
+  }, [native, open, search]);
+  const genericOptions = useQuery({
     ...genericRecordOptionsQuery(wsId, targetTableId),
     enabled: Boolean(wsId && targetTableId && open),
     refetchOnMount: "always",
   });
+  const nativeOptions = useNativeIssueRelationOptions(
+    wsId, stored, remoteSearch, Boolean(wsId && native && open), true,
+  );
+  const refetchGeneric = genericOptions.refetch;
   const { refetch, isFetching, isSuccess: optionsLoaded, isLoading, isError, data: optionData } =
-    optionsQuery;
+    native ? nativeOptions : genericOptions;
 
   useEffect(() => {
-    if (open && targetTableId) {
+    if (open && (native || targetTableId)) {
       setSearch("");
+      setRemoteSearch("");
       setToggleError(null);
-      void refetch();
+      if (!native) void refetchGeneric();
     }
-  }, [open, refetch, targetTableId]);
+  }, [native, open, refetchGeneric, targetTableId]);
 
   const availableIds = useMemo(() => {
     if (!optionsLoaded) return new Set<string>();
-    return new Set((optionData?.records ?? []).map((row) => row.id.toLowerCase()));
-  }, [optionData?.records, optionsLoaded]);
+    return new Set((optionData?.records ?? []).filter((row) => row.id !== issueId).map((row) => row.id.toLowerCase()));
+  }, [issueId, optionData?.records, optionsLoaded]);
 
   const draftSelected = useMemo(() => {
     if (!optionsLoaded) return stored;
@@ -122,10 +187,10 @@ export function RecordRelationPropertyPicker({
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    const rows = optionData?.records ?? [];
-    if (!needle) return rows;
+    const rows = (optionData?.records ?? []).filter((row) => row.id !== issueId);
+    if (!needle || native) return rows;
     return rows.filter((row) => row.label.toLowerCase().includes(needle));
-  }, [optionData?.records, search]);
+  }, [issueId, native, optionData?.records, search]);
 
   const commit = useCallback(
     async (next: string[], close = false) => {
@@ -189,7 +254,7 @@ export function RecordRelationPropertyPicker({
             {t(($) => $.pickers.custom_property.record_relation_retry)}
           </Button>
         </div>
-      ) : !targetTableId ? (
+      ) : !native && !targetTableId ? (
         <p className="px-2 py-1.5 text-caption text-muted-foreground">
           {t(($) => $.pickers.custom_property.record_relation_no_table)}
         </p>
@@ -243,17 +308,19 @@ export function RecordRelationTargetTableSelect({
         id="property-target-table"
         className="h-9 w-full rounded-md border border-surface-border bg-background px-3 text-body disabled:opacity-50"
         value={value}
-        disabled={disabled || isLoading}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         aria-label={tSettings(($) => $.properties.editor.record_relation_select_target_table)}
       >
         <option value="">{tSettings(($) => $.properties.editor.record_relation_select_target_table)}</option>
+        <option value={NATIVE_ISSUE_RELATION_TARGET}>{tSettings(($) => $.properties.editor.record_relation_native_tasks)}</option>
         {tables.map((table) => (
           <option key={table.id} value={table.id}>
             {table.name}
           </option>
         ))}
       </select>
+      {isLoading && <span role="status" className="text-caption text-muted-foreground">{tSettings(($) => $.properties.editor.record_relation_select_target_table)}</span>}
       {!value ? (
         <p className="text-caption text-muted-foreground">
           {tSettings(($) => $.properties.editor.record_relation_table_required)}

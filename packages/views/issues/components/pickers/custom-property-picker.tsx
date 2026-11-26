@@ -119,6 +119,7 @@ export function CustomPropertyValueEditor({
   return (
     <CustomPropertyValueInput
       key={`${issue.id}:${property.id}`}
+      issueId={issue.id}
       property={property}
       value={value}
       required={required}
@@ -158,6 +159,7 @@ export function CustomPropertyValueEditor({
  * optimistic mutations. List editors await onChange before clearing the draft.
  */
 export function CustomPropertyValueInput({
+  issueId,
   property,
   value,
   onChange,
@@ -168,6 +170,7 @@ export function CustomPropertyValueInput({
   trigger,
   triggerRender,
 }: {
+  issueId?: string;
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
   onChange: (value: IssuePropertyValue | undefined) => void | Promise<void>;
@@ -324,6 +327,7 @@ export function CustomPropertyValueInput({
     case "record_relation":
       return (
         <RecordRelationPropertyPicker
+          issueId={issueId}
           property={property}
           value={value}
           onChange={onChange}

@@ -751,6 +751,7 @@
       "name_placeholder": "e.g. Severity",
       "type": "Type",
       "type_locked_hint": "Type can't be changed after creation.",
+      "record_relation_native_tasks": "This task table",
       "record_relation_table_required": "Choose the workspace table this property links to.",
       "record_relation_target_table": "Target table",
       "record_relation_select_target_table": "Select target table",

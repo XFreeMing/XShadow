@@ -198,6 +198,8 @@ export interface IssuePropertyConfig {
   options?: IssuePropertyOption[];
   /** Target generic table for record_relation properties. */
   target_table_id?: string;
+  /** The native task table, exclusive with target_table_id. */
+  target_kind?: "issues";
   relation_property_id?: string;
   target_field_id?: string;
   expression?: string;

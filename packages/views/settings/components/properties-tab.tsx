@@ -24,6 +24,7 @@ import {
 } from "@multica/core/properties";
 import type {
   IssueProperty,
+  IssuePropertyConfig,
   IssuePropertyOption,
   IssuePropertyType,
 } from "@multica/core/types";
@@ -79,7 +80,10 @@ import {
 } from "../../common/property-icon";
 import { useLocale, useT } from "../../i18n";
 import { SettingsReadOnlyNotice, SettingsTab } from "./settings-layout";
-import { RecordRelationTargetTableSelect } from "../../issues/components/pickers/record-relation-property-picker";
+import {
+  NATIVE_ISSUE_RELATION_TARGET,
+  RecordRelationTargetTableSelect,
+} from "../../issues/components/pickers/record-relation-property-picker";
 import {
   IssueFormulaPropertyEditor,
   IssueLookupPropertyEditor,
@@ -427,7 +431,9 @@ function PropertyEditorDialog({
               name: option.name,
               color: option.color,
             })),
-            targetTableId: property.config.target_table_id ?? "",
+            targetTableId: property.config.target_kind === "issues"
+              ? NATIVE_ISSUE_RELATION_TARGET
+              : property.config.target_table_id ?? "",
             relationPropertyId: property.config.relation_property_id ?? "",
             targetFieldId: property.config.target_field_id ?? "",
             expression: property.config.expression ?? "",
@@ -456,7 +462,7 @@ function PropertyEditorDialog({
 
   const submit = () => {
     if (!canSubmit) return;
-    const config = showOptions
+    const config: IssuePropertyConfig | undefined = showOptions
       ? {
           options: validOptions.map((option) => ({
             id: option.id ?? "",
@@ -465,7 +471,9 @@ function PropertyEditorDialog({
           })),
         }
       : showTargetTable
-        ? { target_table_id: draft.targetTableId.trim() }
+        ? draft.targetTableId === NATIVE_ISSUE_RELATION_TARGET
+          ? { target_kind: NATIVE_ISSUE_RELATION_TARGET }
+          : { target_table_id: draft.targetTableId.trim() }
         : showLookup
           ? {
               relation_property_id: draft.relationPropertyId.trim(),

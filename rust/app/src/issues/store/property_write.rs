@@ -109,7 +109,7 @@ pub async fn write_issue_property(
 
     let locked = sqlx::query(
         "SELECT project_id::text, issue_type_id::text FROM issue
-         WHERE id = $1::uuid AND workspace_id = $2::uuid FOR UPDATE",
+         WHERE id = $1::uuid AND workspace_id = $2::uuid FOR NO KEY UPDATE",
     )
     .bind(issue_id)
     .bind(workspace_id)
@@ -173,10 +173,11 @@ pub async fn write_issue_property(
                     workspace_id,
                     definition.try_get(2)?,
                     &value,
+                    Some(issue_id),
                 )
                 .await
                 .map_err(|error| match error {
-                    property_validate::RecordRelationError::Invalid => {
+                    property_validate::RecordRelationError::Invalid(_) => {
                         IssuePropertyWriteError::InvalidValue
                     }
                     property_validate::RecordRelationError::Database(error) => {

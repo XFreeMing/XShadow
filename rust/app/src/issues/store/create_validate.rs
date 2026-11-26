@@ -393,15 +393,14 @@ pub(super) async fn revalidate_type_and_properties(
                     workspace_id,
                     &config,
                     value,
+                    None,
                 )
                 .await
                 .map_err(|error| match error {
-                    super::property_validate::RecordRelationError::Invalid => {
+                    super::property_validate::RecordRelationError::Invalid(message) => {
                         IssueCreateError::InvalidIssueProperty {
                             property_id: property_id.to_owned(),
-                            message:
-                                "one or more record ids are invalid for the configured target table"
-                                    .to_owned(),
+                            message: message.to_owned(),
                         }
                     }
                     super::property_validate::RecordRelationError::Database(error) => {

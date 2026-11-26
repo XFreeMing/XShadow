@@ -883,9 +883,11 @@ func validateIssueCreateProperties(ctx context.Context, tx pgx.Tx, qtx *db.Queri
 				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
 			}
 			if err := issueproperty.VerifyRecordRelationRefs(
-				ctx, tx, util.UUIDToString(workspaceID), relCfg.TargetTableID, recordIDs, true,
+				ctx, tx, util.UUIDToString(workspaceID), relCfg, "", recordIDs, true,
 			); err != nil {
-				if errors.Is(err, issueproperty.ErrRecordRelationRecords) {
+				if errors.Is(err, issueproperty.ErrRecordRelationRecords) ||
+					errors.Is(err, issueproperty.ErrRecordRelationIssues) ||
+					errors.Is(err, issueproperty.ErrRecordRelationSelfRef) {
 					return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
 				}
 				return nil, fmt.Errorf("resolve issue property records: %w", err)
