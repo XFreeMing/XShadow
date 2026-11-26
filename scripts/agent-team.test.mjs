@@ -356,6 +356,7 @@ test("portable template contains the current roster without machine identities o
   assert.equal(template.skills.length, 21);
   assert.deepEqual(personalTemplate.squads.map(({ key, leader }) => ({ key, leader })), [
     { key: "rework-analysis", leader: "chief" },
+    { key: "design-tdd", leader: "acceptance-automation" },
   ]);
   const serialized = JSON.stringify(personalTemplate);
   assert.doesNotMatch(serialized, /\/home\/ops396|dev-xshadow-623|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
@@ -449,6 +450,9 @@ test("story gate and acceptance automation initialize from the real template, re
     { member_id: ids.agents.effectiveness, role: "member" },
     { member_id: ids.agents.quality, role: "member" },
   ]);
+  const tddID = ids.squads["design-tdd"];
+  assert.equal(f.state.squads.find((s) => s.id === tddID).leader_id, automation.id);
+  assert.deepEqual(f.state.members[tddID].map((m) => m.member_id), [automation.id, ids.agents.architect, ids.agents.test]);
   const before = f.mutations().length;
   await initializeTeam(f.api, personalTemplate, options);
   assert.equal(f.mutations().length, before);
