@@ -68,7 +68,6 @@ export interface IssueDependencyChartProps {
   rows: readonly Issue[];
   edges: readonly IssueDependencyEdge[];
   emptyMessage?: string;
-  relationLabel?: string;
   className?: string;
 }
 
@@ -348,18 +347,14 @@ export function IssueDependencyChart({
   rows,
   edges,
   emptyMessage,
-  relationLabel,
   className,
 }: IssueDependencyChartProps) {
   const { t: issueText } = useT("issues");
   const { t: goalText } = useT("goals");
-  const kindLabel = (kind: IssueDependencyEdgeKind) => relationLabel ??
-    (kind === "conditional"
-      ? goalText(($) => $.plan.dependency_conditional)
-      : goalText(($) => $.plan.dependency_hard));
-  const noLinks = relationLabel
-    ? issueText(($) => $.org_chart.relation_no_edges)
-    : goalText(($) => $.plan.no_dependencies);
+  const kindLabel = (kind: IssueDependencyEdgeKind) => kind === "conditional"
+    ? goalText(($) => $.plan.dependency_conditional)
+    : goalText(($) => $.plan.dependency_hard);
+  const noLinks = goalText(($) => $.plan.no_dependencies);
   const arrowId = useId().replace(/:/g, "");
   const peekActions = useIssuePeekActions();
   const peekId = useIssuePeekId();
@@ -489,19 +484,17 @@ export function IssueDependencyChart({
             <span className="w-5 border-t border-foreground/70" aria-hidden="true" />
             {kindLabel("required")}
           </span>
-          {!relationLabel && (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-5 border-t border-dashed border-foreground/70" aria-hidden="true" />
-              {kindLabel("conditional")}
-            </span>
-          )}
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-5 border-t border-dashed border-foreground/70" aria-hidden="true" />
+            {kindLabel("conditional")}
+          </span>
           {layout.hasCycle && (
             <span
               role="status"
               className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-0.5 text-destructive"
             >
               <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-              {relationLabel ? issueText(($) => $.org_chart.relation_cycle) : goalText(($) => $.plan.validation_cycle)}
+              {goalText(($) => $.plan.validation_cycle)}
             </span>
           )}
         </div>

@@ -9,8 +9,8 @@ import type { ApiClient } from "@multica/core/api/client";
 import type { Goal, GoalPlan, Issue, IssueTableQuerySpec } from "@multica/core/types";
 import {
   buildGoalDependencyGraphData,
-  IssueArchitectureSources,
-} from "./issue-architecture-sources";
+  IssueGoalDependencyView,
+} from "./issue-goal-dependency-view";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -217,9 +217,8 @@ describe("buildGoalDependencyGraphData", () => {
   });
 });
 
-describe("IssueArchitectureSources", () => {
-  it("defaults to hierarchy children and switches to goal dependencies using filtered rows", async () => {
-    // When multiple goals exist or plan edges are empty, hierarchy remains default
+describe("IssueGoalDependencyView", () => {
+  it("opens goal dependencies directly and respects filtered project rows", async () => {
     const listGoals = vi.fn().mockResolvedValue({
       goals: [
         makeGoal("goal-no-project", "Workspace Goal", null),
@@ -248,19 +247,12 @@ describe("IssueArchitectureSources", () => {
 
     const { container } = render(
       <QueryClientProvider client={createQueryClient()}>
-        <IssueArchitectureSources
+        <IssueGoalDependencyView
           serverQuery={SERVER_QUERY}
           projectId="proj-1"
-          renderHierarchy={() => <div data-testid="org-chart-child">Original Org Chart</div>}
         />
       </QueryClientProvider>,
     );
-
-    // Default renders hierarchy children
-    expect(screen.getByTestId("org-chart-child")).toBeTruthy();
-
-    // Switch to Goal dependencies
-    fireEvent.click(screen.getByRole("button", { name: "Goal dependencies" }));
 
     await waitFor(() => {
       expect(screen.getByText("MUL-1")).toBeTruthy();
@@ -277,12 +269,11 @@ describe("IssueArchitectureSources", () => {
     expect(edges[0]?.getAttribute("data-from-id")).toBe("iss-1");
     expect(edges[0]?.getAttribute("data-to-id")).toBe("iss-2");
 
-    // Switching back restores original children
-    fireEvent.click(screen.getByRole("button", { name: "Hierarchy" }));
-    expect(screen.getByTestId("org-chart-child")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Hierarchy" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Linked field" })).toBeNull();
   });
 
-  it("automatically defaults to goal dependencies when visible tasks have no visible parent-child and unique goal has real edges", async () => {
+  it("draws the goal plan in the workspace even when the same tasks have parent links", async () => {
     const listGoals = vi.fn().mockResolvedValue({
       goals: [makeGoal("goal-1", "Launch Goal", "proj-1")],
       total: 1,
@@ -290,7 +281,7 @@ describe("IssueArchitectureSources", () => {
     const getGoalPlan = vi.fn().mockResolvedValue(makePlan("goal-1", "proj-1"));
     const listIssueTableRows = vi.fn().mockResolvedValue({
       rows: [
-        { issue: makeIssue("iss-1", "MUL-1", "First") },
+        { issue: { ...makeIssue("iss-1", "MUL-1", "First"), parent_issue_id: "iss-2" } },
         { issue: makeIssue("iss-2", "MUL-2", "Second") },
         { issue: makeIssue("iss-3", "MUL-3", "Task from another project", "proj-2") },
       ],
@@ -306,14 +297,12 @@ describe("IssueArchitectureSources", () => {
 
     const { container } = render(
       <QueryClientProvider client={createQueryClient()}>
-        <IssueArchitectureSources
+        <IssueGoalDependencyView
           serverQuery={{ ...SERVER_QUERY, scope: { kind: "workspace" } }}
-          renderHierarchy={() => <div data-testid="org-chart-child">Original Org Chart</div>}
         />
       </QueryClientProvider>,
     );
 
-    // Automatically selects goal dependencies
     await waitFor(() => {
       expect(screen.getByText("MUL-1")).toBeTruthy();
       expect(screen.getByText("MUL-2")).toBeTruthy();
@@ -324,9 +313,7 @@ describe("IssueArchitectureSources", () => {
     expect(edges[0]?.getAttribute("data-from-id")).toBe("iss-1");
     expect(edges[0]?.getAttribute("data-to-id")).toBe("iss-2");
 
-    // Manual selection has unconditional priority: switching to hierarchy works
-    fireEvent.click(screen.getByRole("button", { name: "Hierarchy" }));
-    expect(screen.getByTestId("org-chart-child")).toBeTruthy();
+    expect(screen.queryByText("Task from another project")).toBeNull();
   });
 
   it("allows retrying when loading goal plan fails", async () => {
@@ -355,15 +342,12 @@ describe("IssueArchitectureSources", () => {
 
     render(
       <QueryClientProvider client={createQueryClient()}>
-        <IssueArchitectureSources
+        <IssueGoalDependencyView
           serverQuery={SERVER_QUERY}
           projectId="proj-1"
-          renderHierarchy={() => <div data-testid="org-chart-child">Original Org Chart</div>}
         />
       </QueryClientProvider>,
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "Goal dependencies" }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toContain("Couldn't load the plan.");
