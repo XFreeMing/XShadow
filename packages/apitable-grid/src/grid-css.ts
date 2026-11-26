@@ -55,6 +55,9 @@ export const gridCss = `
   display: flex;
   min-width: max-content;
 }
+.apitable-grid--row-selection {
+  --row-head: 88px;
+}
 .apitable-grid__rowHead {
   flex: 0 0 var(--row-head);
   width: var(--row-head);
@@ -67,6 +70,28 @@ export const gridCss = `
   align-items: center;
   justify-content: center;
   font-size: 13px;
+}
+.apitable-grid__rowHeadInner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 4px;
+  box-sizing: border-box;
+}
+.apitable-grid__rowSelect {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--primaryColor);
+}
+.apitable-grid__rowIndex {
+  min-width: 1.25rem;
+  text-align: center;
 }
 .apitable-grid__rowOpen {
   width: 100%;

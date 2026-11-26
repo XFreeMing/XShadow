@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   catalogGridColumnOrder,
   gridPropertyColumnId,
@@ -17,16 +18,25 @@ import {
   type GridFieldView,
   type GridLabels,
   type GridRecordView,
+  type GridRowSelection,
 } from "@multica/apitable-grid";
-import { ArrowDown, ArrowUp, Loader2, Plus } from "@multica/ui/icons";
+import { ArrowDown, ArrowUp, ChevronDown, Download, Loader2, Plus } from "@multica/ui/icons";
 import { IconButton } from "@multica/ui/components/common/icon-button";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
+import { toast } from "sonner";
+import { buildActorNameResolver, useActorName } from "@multica/core/workspace/hooks";
+import {
+  agentListOptions,
+  memberListOptions,
+  squadListOptions,
+} from "@multica/core/workspace/queries";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -37,15 +47,26 @@ import { useModalStore } from "@multica/core/modals";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type {
   Issue,
+  IssueProperty,
   IssueTableQuerySpec,
   UpdateIssueRequest,
 } from "@multica/core/types";
+import { isActorPropertyType } from "@multica/core/types";
+import { useIssueSurfaceSelection } from "../surface/selection-context";
+import {
+  buildIssueTableCsv,
+  getIssueTableSelectionRange,
+  IssueTableExportIntegrityError,
+} from "./table-view-model";
+import { issueGridExportRow } from "./issue-grid-export";
 import { useT } from "../../i18n";
 import { resolveClickIntent, useIntentNavigate } from "../../navigation";
 import { runConfirmIntent } from "../actions/run-confirm-gate";
 import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
 import { useIssuePeekClick } from "../surface/peek-context";
+import { useStatusLabel } from "../utils/status-label";
 import type { IssueCreateDefaults } from "../surface/types";
+import { BatchActionToolbar } from "./batch-action-toolbar";
 import { AssigneePicker, StatusPicker } from "./pickers";
 import { CustomPropertyValueEditor } from "./pickers/custom-property-picker";
 
@@ -56,20 +77,30 @@ const PROPERTY_COLUMN_PREFIX = "property:";
 export interface MultidimensionalGridViewProps {
   serverQuery: IssueTableQuerySpec;
   onCreateIssue: (defaults?: IssueCreateDefaults) => void;
+  showBatchToolbar: boolean;
+  exportIssues: () => Promise<Issue[]>;
 }
 
 export function MultidimensionalGridView({
   serverQuery,
   onCreateIssue,
+  showBatchToolbar,
+  exportIssues,
 }: MultidimensionalGridViewProps) {
   const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
   const { t } = useT("issues");
+  const { getActorName } = useActorName();
   const paths = useWorkspacePaths();
   const intentNavigate = useIntentNavigate();
   const handlePeekClick = useIssuePeekClick();
   const actions = useIssueSurfaceActionsOptional();
   const openModal = useModalStore((s) => s.open);
   const { entryOf } = useIssueStatuses(wsId);
+  const resolveStatusLabel = useStatusLabel(wsId);
+  const selection = useIssueSurfaceSelection();
+  const selectionAnchorRef = useRef<string | null>(null);
+  const [exporting, setExporting] = useState<"all" | "selected" | null>(null);
   const issueTypesQuery = useQuery(issueTypeListOptions(wsId, true));
   const propertiesQuery = useQuery(propertyListOptions(wsId));
   const workspaceIssueTypes = issueTypesQuery.data ?? [];
@@ -370,6 +401,156 @@ export function MultidimensionalGridView({
     [fieldsById, gridColumnOrder, hiddenColumnIds],
   );
 
+  const exportColumnKeys = useMemo(
+    () =>
+      visibleFields
+        .map((field) => field.id)
+        .filter((id): id is GridColumnKey => isGridColumnKey(id)),
+    [visibleFields],
+  );
+
+  const recordIds = useMemo(() => issues.map((issue) => issue.id), [issues]);
+  const selectedIssues = useMemo(
+    () => issues.filter((issue) => selection.selectedIds.has(issue.id)),
+    [issues, selection.selectedIds],
+  );
+
+  const handleRecordSelection = useCallback(
+    (recordId: string, shiftKey: boolean) => {
+      const range = shiftKey
+        ? getIssueTableSelectionRange(
+            recordIds,
+            selectionAnchorRef.current,
+            recordId,
+          )
+        : null;
+      if (range) {
+        if (selection.selectedIds.has(recordId)) selection.deselect(range);
+        else selection.select(range);
+        return;
+      }
+      selection.toggle(recordId);
+      selectionAnchorRef.current = recordId;
+    },
+    [recordIds, selection],
+  );
+
+  useEffect(() => {
+    if (selection.selectedIds.size === 0) selectionAnchorRef.current = null;
+  }, [selection.selectedIds]);
+
+  const rowSelection = useMemo<GridRowSelection>(
+    () => ({
+      selectedRecordIds: selection.selectedIds,
+      recordIds,
+      selectAllLabel: t(($) => $.table.select_all),
+      selectRecordLabel: (recordId) => {
+        const issue = issueById.get(recordId);
+        return t(($) => $.table.select_issue, {
+          identifier: issue?.identifier ?? recordId,
+        });
+      },
+      onToggleRecord: handleRecordSelection,
+      onToggleAll: (select) => {
+        if (select) selection.select(recordIds);
+        else selection.deselect(recordIds);
+      },
+    }),
+    [handleRecordSelection, issueById, recordIds, selection, t],
+  );
+
+  const handleExport = useCallback(
+    async (mode: "all" | "selected") => {
+      setExporting(mode);
+      try {
+        const exportProperties = gridCatalogReady
+          ? workspaceProperties
+          : (await queryClient.fetchQuery(
+              propertyListOptions(wsId),
+            )) as unknown as IssueProperty[];
+        const exportPropertyById = new Map(
+          exportProperties.map((property) => [property.id, property]),
+        );
+        const exportColumnKeysResolved = exportColumnKeys.filter((key) => {
+          if (!key.startsWith(PROPERTY_COLUMN_PREFIX)) return true;
+          const propertyId = key.slice(PROPERTY_COLUMN_PREFIX.length);
+          return exportPropertyById.has(propertyId);
+        });
+        const needsActors =
+          exportColumnKeysResolved.includes("assignee") ||
+          exportColumnKeysResolved.some((key) => {
+            if (!key.startsWith(PROPERTY_COLUMN_PREFIX)) return false;
+            const property = exportPropertyById.get(
+              key.slice(PROPERTY_COLUMN_PREFIX.length),
+            );
+            return property ? isActorPropertyType(property.type) : false;
+          });
+        const exportActorName: (type: string, id: string) => string = needsActors
+          ? await Promise.all([
+              queryClient.fetchQuery(memberListOptions(wsId)),
+              queryClient.fetchQuery(agentListOptions(wsId)),
+              queryClient.fetchQuery(squadListOptions(wsId)),
+            ]).then(([members, agents, squads]) =>
+              buildActorNameResolver({ members, agents, squads }),
+            )
+          : getActorName;
+        const rows =
+          mode === "all" ? await exportIssues() : selectedIssues;
+        const headers = exportColumnKeysResolved.map((key) => {
+          if (isGridColumnKey(key)) {
+            const field = fieldsById.get(key);
+            if (field) return field.name;
+          }
+          return "";
+        });
+        const csvRows = rows.map((issue) =>
+          issueGridExportRow(issue, exportColumnKeysResolved, {
+            resolveStatusLabel,
+            issueTypeName: issue.issue_type_id
+              ? issueTypeById.get(issue.issue_type_id)?.name ?? null
+              : null,
+            propertyById: exportPropertyById,
+            getActorName: exportActorName,
+          }),
+        );
+        const csv = buildIssueTableCsv(headers, csvRows);
+        const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        const filenamePrefix = mode === "all" ? "issues" : "issues-selected";
+        anchor.download = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.csv`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+        toast.success(t(($) => $.table.export_success, { count: rows.length }));
+      } catch (error) {
+        toast.error(
+          error instanceof Error &&
+            !(error instanceof IssueTableExportIntegrityError) &&
+            error.message
+            ? error.message
+            : t(($) => $.table.export_failed),
+        );
+      } finally {
+        setExporting(null);
+      }
+    },
+    [
+      exportColumnKeys,
+      exportIssues,
+      fieldsById,
+      getActorName,
+      issueTypeById,
+      queryClient,
+      resolveStatusLabel,
+      selectedIssues,
+      t,
+      wsId,
+      gridCatalogReady,
+      workspaceProperties,
+    ],
+  );
+
   const records = useMemo<GridRecordView[]>(
     () =>
       issues.map((issue) => {
@@ -509,6 +690,41 @@ export function MultidimensionalGridView({
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger
+              render={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={exporting !== null}
+                />
+              }
+            >
+              {exporting ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Download className="size-3.5" aria-hidden="true" />
+              )}
+              {t(($) => $.table.export)}
+              <ChevronDown className="size-3" aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => void handleExport("all")}>
+                <Download className="size-3.5" aria-hidden="true" />
+                {t(($) => $.table.export_all)}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={selectedIssues.length === 0}
+                onClick={() => void handleExport("selected")}
+              >
+                <Download className="size-3.5" aria-hidden="true" />
+                {t(($) => $.table.export_selected, {
+                  count: selectedIssues.length,
+                })}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger
               render={<Button type="button" size="sm" variant="outline" />}
             >
               {t(($) => $.table.columns.section)}
@@ -605,6 +821,7 @@ export function MultidimensionalGridView({
             renderCell={renderCell}
             onCellCommit={handleCellCommit}
             onOpenRecord={handleOpenRecord}
+            rowSelection={rowSelection}
             stickyHeader
           />
 
@@ -635,6 +852,7 @@ export function MultidimensionalGridView({
           </div>
         </div>
       )}
+      {showBatchToolbar && <BatchActionToolbar issues={issues} />}
     </div>
   );
 }

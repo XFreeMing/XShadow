@@ -5,7 +5,13 @@ import type {
 } from "@multica/core/issues/stores/view-store";
 import type {
   Issue,
+  IssueProperty,
   IssuePropertyValue,
+} from "@multica/core/types";
+import {
+  actorRefsFromValue,
+  formatActorRef,
+  isActorPropertyType,
 } from "@multica/core/types";
 
 /** Export must fail closed when paged Table responses cannot prove that the
@@ -139,6 +145,34 @@ export function calculateIssueTableColumn(
   if (numbers.length === 0) return null;
   const sum = numbers.reduce((total, value) => total + value, 0);
   return calculation === "sum" ? sum : sum / numbers.length;
+}
+
+export function propertyDisplayValue(
+  property: IssueProperty,
+  value: IssuePropertyValue | undefined,
+  getActorName?: (type: string, id: string) => string,
+) {
+  if (value === undefined) return "";
+  const options = property.config.options ?? [];
+  if (property.type === "select") {
+    return options.find((option) => option.id === value)?.name ?? "";
+  }
+  if (property.type === "multi_select") {
+    const ids = Array.isArray(value) ? value : [];
+    return options
+      .filter((option) => ids.includes(option.id))
+      .map((option) => option.name)
+      .join(", ");
+  }
+  if (property.type === "multi_text" || property.type === "multi_url") {
+    return Array.isArray(value) ? value.join(", ") : String(value);
+  }
+  if (isActorPropertyType(property.type)) {
+    return actorRefsFromValue(value)
+      .map((ref) => (getActorName ? getActorName(ref.kind, ref.id) : formatActorRef(ref.kind, ref.id)))
+      .join(", ");
+  }
+  return String(value);
 }
 
 function escapeCsvCell(value: unknown) {

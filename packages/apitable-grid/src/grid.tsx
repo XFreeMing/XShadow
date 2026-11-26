@@ -1,11 +1,11 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Provider, useDispatch } from "react-redux";
 import { GRID_STYLE_ID, gridCss } from "./grid-css";
 import { GridCell } from "./cell";
 import { createGridStore, hostSnapshot, setPageDatasheet } from "./store";
-import type { GridActor, GridCellRenderer, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch } from "./types";
+import type { GridActor, GridCellRenderer, GridCellValue, GridCollaborator, GridConflictMark, GridFieldView, GridGroup, GridLabels, GridRecordOption, GridRecordView, GridRemotePatch, GridRowSelection } from "./types";
 import type { GridSnapshot } from "../third-party/state";
 
 const NO_CONFLICTS: readonly GridConflictMark[] = [];
@@ -51,6 +51,55 @@ function Hydrator({
   return null;
 }
 
+function GridSelectAllHeader({ rowSelection }: { rowSelection: GridRowSelection }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const selectedCount = rowSelection.recordIds.filter((id) =>
+    rowSelection.selectedRecordIds.has(id),
+  ).length;
+  const checked =
+    rowSelection.recordIds.length > 0 &&
+    selectedCount === rowSelection.recordIds.length;
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = selectedCount > 0 && !checked;
+    }
+  }, [checked, selectedCount]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="apitable-grid__rowSelect"
+      aria-label={rowSelection.selectAllLabel}
+      checked={checked}
+      onChange={() => rowSelection.onToggleAll(!checked)}
+    />
+  );
+}
+
+function GridRowCheckbox({
+  checked,
+  label,
+  onToggle,
+}: {
+  checked: boolean;
+  label: string;
+  onToggle: (shiftKey: boolean) => void;
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="apitable-grid__rowSelect"
+      aria-label={label}
+      checked={checked}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle(event.shiftKey);
+      }}
+      onChange={() => undefined}
+    />
+  );
+}
+
 function typeMark(kind: string): string {
   if (kind === "number") return "#";
   if (kind === "date") return "D";
@@ -82,6 +131,7 @@ export function ApitableGrid({
   onEditEnd,
   onToggleGroup,
   stickyHeader,
+  rowSelection,
 }: {
   datasheetId: string;
   fields: readonly GridFieldView[];
@@ -107,6 +157,7 @@ export function ApitableGrid({
   onEditEnd?: () => void;
   onToggleGroup?: (key: string) => void;
   stickyHeader?: boolean;
+  rowSelection?: GridRowSelection;
 }) {
   const [store] = useState(createGridStore);
   const shownRecords = remote?.records ?? records;
@@ -127,17 +178,28 @@ export function ApitableGrid({
   const renderRecord = (record: GridRecordView, rowIndex: number) => (
     <tr className="apitable-grid__row" data-record-id={record.id} key={record.id}>
       <th className="apitable-grid__rowHead" scope="row">
-        {onOpenRecord ? (
-          <button
-            type="button"
-            className="apitable-grid__rowOpen"
-            aria-label={`${labels.openRecord ?? "Open record"} ${rowIndex + 1}`}
-            title={labels.openRecord ?? "Open record"}
-            onClick={() => onOpenRecord(record.id)}
-          >
-            {rowIndex + 1}
-          </button>
-        ) : rowIndex + 1}
+        <div className="apitable-grid__rowHeadInner">
+          {rowSelection ? (
+            <GridRowCheckbox
+              checked={rowSelection.selectedRecordIds.has(record.id)}
+              label={rowSelection.selectRecordLabel(record.id)}
+              onToggle={(shiftKey) => rowSelection.onToggleRecord(record.id, shiftKey)}
+            />
+          ) : null}
+          {onOpenRecord ? (
+            <button
+              type="button"
+              className="apitable-grid__rowOpen"
+              aria-label={`${labels.openRecord ?? "Open record"} ${rowIndex + 1}`}
+              title={labels.openRecord ?? "Open record"}
+              onClick={() => onOpenRecord(record.id)}
+            >
+              {rowIndex + 1}
+            </button>
+          ) : (
+            <span className="apitable-grid__rowIndex">{rowIndex + 1}</span>
+          )}
+        </div>
       </th>
       {fields.map((field) => {
         const optionTableId = field.kind === "relation"
@@ -190,10 +252,23 @@ export function ApitableGrid({
           ))}
         </div>
       ) : null}
-      <table className={stickyHeader ? "apitable-grid apitable-grid--sticky-head" : "apitable-grid"} data-apitable-grid="">
+      <table
+        className={
+          stickyHeader
+            ? rowSelection
+              ? "apitable-grid apitable-grid--sticky-head apitable-grid--row-selection"
+              : "apitable-grid apitable-grid--sticky-head"
+            : rowSelection
+              ? "apitable-grid apitable-grid--row-selection"
+              : "apitable-grid"
+        }
+        data-apitable-grid=""
+      >
         <thead>
         <tr className="apitable-grid__row">
-          <th className="apitable-grid__rowHead" />
+          <th className="apitable-grid__rowHead">
+            {rowSelection ? <GridSelectAllHeader rowSelection={rowSelection} /> : null}
+          </th>
           {fields.map((field) => (
             <th className="apitable-grid__fieldHeader" key={field.id}>
               <span className="apitable-grid__type" aria-hidden="true">{typeMark(field.kind)}</span>

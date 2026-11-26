@@ -104,7 +104,6 @@ import {
 import type {
   Issue,
   IssueProperty,
-  IssuePropertyValue,
   IssueTableGroupDescriptor,
   IssueTableGroupSpec,
   IssueTableQuerySpec,
@@ -112,11 +111,7 @@ import type {
   Project,
   UpdateIssueRequest,
 } from "@multica/core/types";
-import {
-  actorRefsFromValue,
-  formatActorRef,
-  isActorPropertyType,
-} from "@multica/core/types";
+import { isActorPropertyType } from "@multica/core/types";
 import {
   useInfiniteQuery,
   useQueries,
@@ -159,6 +154,7 @@ import {
   buildIssueTableCsv,
   getIssueTableSelectionRange,
   IssueTableExportIntegrityError,
+  propertyDisplayValue,
   refreshFrozenTableRows,
   type IssueTableDisplayRow,
 } from "./table-view-model";
@@ -929,36 +925,6 @@ export function IssueTableGroupRow({
       </TableCell>
     </TableRow>
   );
-}
-
-function propertyDisplayValue(
-  property: IssueProperty,
-  value: IssuePropertyValue | undefined,
-  // Actor values are "<kind>:<uuid>" references; without a resolver they would
-  // export as raw ids, so callers that can export an actor column must pass one.
-  getActorName?: (type: string, id: string) => string,
-) {
-  if (value === undefined) return "";
-  const options = property.config.options ?? [];
-  if (property.type === "select") {
-    return options.find((option) => option.id === value)?.name ?? "";
-  }
-  if (property.type === "multi_select") {
-    const ids = Array.isArray(value) ? value : [];
-    return options
-      .filter((option) => ids.includes(option.id))
-      .map((option) => option.name)
-      .join(", ");
-  }
-  if (property.type === "multi_text" || property.type === "multi_url") {
-    return Array.isArray(value) ? value.join(", ") : String(value);
-  }
-  if (isActorPropertyType(property.type)) {
-    return actorRefsFromValue(value)
-      .map((ref) => (getActorName ? getActorName(ref.kind, ref.id) : formatActorRef(ref.kind, ref.id)))
-      .join(", ");
-  }
-  return String(value);
 }
 
 /**

@@ -69,6 +69,16 @@ export interface GridLabels {
   openRecord?: string;
 }
 
+/** Optional row checkboxes for host-driven multi-select (e.g. task batch actions). */
+export interface GridRowSelection {
+  selectedRecordIds: ReadonlySet<string>;
+  recordIds: readonly string[];
+  selectAllLabel: string;
+  selectRecordLabel: (recordId: string) => string;
+  onToggleRecord: (recordId: string, shiftKey: boolean) => void;
+  onToggleAll: (select: boolean) => void;
+}
+
 export interface GridCollaborator {
   actorId: string;
   label: string;

@@ -329,4 +329,41 @@ describe("ApitableGrid", () => {
     rerender(<ApitableGrid {...props} stickyHeader />);
     expect(container.querySelector("table")).toHaveClass("apitable-grid", "apitable-grid--sticky-head");
   });
+
+  it("renders optional row checkboxes without removing the row-number opener", async () => {
+    const user = userEvent.setup();
+    const onToggleRecord = vi.fn();
+  const onToggleAll = vi.fn();
+    render(
+      <ApitableGrid
+        datasheetId="dst"
+        fields={fields.slice(0, 1)}
+        records={[
+          { id: "rec1", revision: 1, values: { name: "One" } },
+          { id: "rec2", revision: 1, values: { name: "Two" } },
+        ]}
+        labels={{ ...labels, openRecord: "Open record" }}
+        onCellCommit={vi.fn()}
+        onOpenRecord={vi.fn()}
+        rowSelection={{
+          selectedRecordIds: new Set(["rec2"]),
+          recordIds: ["rec1", "rec2"],
+          selectAllLabel: "Select all rows",
+          selectRecordLabel: (id) => `Select ${id}`,
+          onToggleRecord,
+          onToggleAll,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("checkbox", { name: "Select all rows" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select rec2" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Open record 1" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "Select rec1" }));
+    expect(onToggleRecord).toHaveBeenCalledWith("rec1", false);
+
+    await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+    expect(onToggleAll).toHaveBeenCalledWith(true);
+  });
 });

@@ -1036,4 +1036,52 @@ describe("MultidimensionalGridView", () => {
     expect(grid.getByText(/example\.com\/paper/)).toBeInTheDocument();
     expect(grid.getAllByText("0").length).toBeGreaterThanOrEqual(2);
   });
+
+  it("selects loaded grid rows and scopes batch actions to the loaded native window", async () => {
+    const onPage = makeIssue({
+      id: "uuid-on-page",
+      identifier: "XSH-11",
+      title: "On page task",
+    });
+    const pageResponse: IssueTableRowsResponse = {
+      rows: [{ issue: onPage, direct_child_count: 0 }],
+      total: 1,
+      branch_total: 1,
+      next_cursor: null,
+      group_key: null,
+      parent_id: null,
+      query_fingerprint: "fp-select",
+    };
+    const listIssueTableRows = vi.fn().mockResolvedValue(pageResponse);
+    setupApi({ listIssueTableRows });
+
+    const surfaceKey = "workspace:grid-select";
+    getIssueSurfaceViewStore(surfaceKey).getState().setViewMode("grid");
+
+    const qc = createQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByDisplayValue("On page task");
+    const grid = within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    fireEvent.click(grid.getByRole("checkbox", { name: /Select XSH-11/i }));
+    expect(await screen.findByText("1 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeInTheDocument();
+
+    listIssueTableRows.mockResolvedValue({ ...pageResponse, rows: [], total: 0, branch_total: 0 });
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: issueKeys.tableAll("ws-1") });
+    });
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("On page task")).not.toBeInTheDocument();
+      expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
+    });
+  });
 });

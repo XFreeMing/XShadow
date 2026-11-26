@@ -276,7 +276,8 @@ function IssueSurfaceContent({
     batchToolbar !== "never" &&
     (batchToolbar === "always" ||
       controller.viewMode === "list" ||
-      controller.viewMode === "table");
+      controller.viewMode === "table" ||
+      controller.viewMode === "grid");
 
   const pending = controller.filterDependencyError ? (
     <FilterDependencyErrorState
@@ -396,6 +397,8 @@ function IssueSurfaceContent({
               <MultidimensionalGridView
                 serverQuery={controller.tableQuerySpec}
                 onCreateIssue={openCreateIssue}
+                showBatchToolbar={shouldShowBatchToolbar}
+                exportIssues={controller.exportTableIssues}
               />
             )}
             {controller.viewMode === "swimlane" && (
@@ -415,11 +418,9 @@ function IssueSurfaceContent({
           </div>
         )}
         </IssuePeekHost>
-        {shouldShowBatchToolbar && (
+        {shouldShowBatchToolbar && controller.viewMode !== "grid" && (
           <BatchActionToolbar
-            issues={
-              controller.viewMode === "table" ? tableLoadedIssues : issues
-            }
+            issues={controller.viewMode === "table" ? tableLoadedIssues : issues}
           />
         )}
       </ColumnStatusesProvider>
