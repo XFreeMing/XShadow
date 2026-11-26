@@ -101,3 +101,24 @@ make agent sync ARGS="--profile my-team --check"
 ```
 
 这些检查不启动真实模型任务。真实调用、工具授权及跨智能体交付需另行验收。
+
+## 任务表格协作模板
+
+[内置协作模板](collaboration-templates.json)定义了敏捷研发、七步问题解决、OKR 和返工归因的属性、公式与共享视图。需要工作区管理员在具有 Rust 任务表格能力的目标实例安装。先核对目标和改动，再执行安装。
+
+```bash
+node scripts/collaboration-templates.mjs check --profile my-team
+node scripts/collaboration-templates.mjs install --profile my-team
+```
+
+安装创建任务类型和工作区视图，并给现有敏捷研发、七步问题解决和 OKR 工作方法增加表格门槛。已开始的方法保留所采用的模板修订。安装过程不创建业务任务，也不会启动模型。重复安装读回现有配置，存在同名冲突时停止。
+
+在「工作」的共享视图打开表格。新建任务时选择对应的任务类型，填入用户成果并关联原目标。由目标计划生成的新任务按所选工作方法套用模板，并带入用户成果。配置了门槛的步骤在提交和批准时读取同一任务的公式结果。可操作原型、固定样本、同一候选版本的独立复验和 GitHub 回执继续按正式工作方法核对。重复返工由原有触发器生成带归因模板的子任务，交给原因分析小队。
+
+需要在资料齐备后通知指定智能体时，在任务的「唤醒」选择目标属性和布尔值，也可显式使用内置接续。
+
+```bash
+node scripts/collaboration-templates.mjs bind --profile my-team --issue ISSUE_ID --agent AGENT_ID --signal testReady
+```
+
+同一任务字段或状态变化会重新评估规则，重复的单次注册复用原规则。公式必须返回布尔值并且只依赖当前任务的属性。处于阻塞状态的任务不会被公式规则派工。方法审批、目标授权和 Git 交付仍读取各自的正式记录。

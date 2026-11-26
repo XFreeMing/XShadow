@@ -330,7 +330,7 @@ func (h *Handler) createIssueViaRust(
 		writeError(w, http.StatusInternalServerError, "failed to create issue")
 		return
 	}
-	workMethod, err := service.ReadyWorkMethodJSON(r.Context(), h.Queries, wsUUID, status, req.Title, ptrToTextOrEmpty(req.Description), "")
+	workMethod, err := service.ReadyWorkMethodJSON(r.Context(), h.Queries, wsUUID, issueTypeID, status, req.Title, ptrToTextOrEmpty(req.Description), "")
 	if err != nil {
 		slog.Warn("prepare create work method failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to create issue")

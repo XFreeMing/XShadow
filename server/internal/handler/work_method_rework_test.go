@@ -21,6 +21,10 @@ func TestRepeatedReworkCreatesOneAnalysisChild(t *testing.T) {
 	testHandler.ReworkAnalysisSquadID = util.MustParseUUID(squad)
 	t.Cleanup(func() { testHandler.ReworkAnalysisSquadID = prior })
 	project := deliveryProject(t, "Rework analysis project", chief)
+	evidenceProperty := createTestProperty(t, map[string]any{"name": "Rework evidence", "type": "text"})
+	analysisType := createTestIssueType(t, map[string]any{"name": "Rework analysis", "fields": []map[string]any{
+		{"property_id": evidenceProperty.ID},
+	}})
 	goal := createGoalViaAPI(t, testUserID, map[string]any{"title": "Reliable delivery", "project_id": project, "status": "in_progress"})
 	var original IssueResponse
 	testutil.Call(t, testHandler.CreateIssue, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID,
@@ -31,6 +35,7 @@ func TestRepeatedReworkCreatesOneAnalysisChild(t *testing.T) {
 	actor := &workmethod.Actor{Kind: "member", ID: testUserID}
 	run := workmethod.Run{Revision: 2, State: "review", CurrentActor: actor, Method: &workmethod.Template{
 		ID: "rework-test", Kind: "development", Name: "Development", Steps: []workmethod.Step{{Name: "Review coverage", Owner: actor, Reviewer: actor}},
+		ReworkTask: &workmethod.TableTask{IssueTypeID: analysisType.ID, SeedPropertyID: evidenceProperty.ID},
 	}, History: []workmethod.Event{{Action: "start"}, {Action: "advance", Actor: "member/" + testUserID}}}
 	data, err := json.Marshal(run)
 	if err != nil {
@@ -56,12 +61,13 @@ func TestRepeatedReworkCreatesOneAnalysisChild(t *testing.T) {
 	change("advance", "First retry", 3)
 	change("rework", "Still returning the wrong edition", 4)
 	count(1)
-	var child, description, assignee, linkedGoal string
-	if err := testPool.QueryRow(ctx, `SELECT i.id,i.description,i.assignee_id,g.goal_id FROM issue i
-		JOIN goal_issue g ON g.issue_id=i.id WHERE i.parent_issue_id=$1`, id).Scan(&child, &description, &assignee, &linkedGoal); err != nil {
+	var child, description, assignee, linkedGoal, issueType, evidence string
+	if err := testPool.QueryRow(ctx, `SELECT i.id,i.description,i.assignee_id,g.goal_id,i.issue_type_id,i.properties->>$2
+		FROM issue i JOIN goal_issue g ON g.issue_id=i.id WHERE i.parent_issue_id=$1`, id, evidenceProperty.ID).
+		Scan(&child, &description, &assignee, &linkedGoal, &issueType, &evidence); err != nil {
 		t.Fatal(err)
 	}
-	if assignee != squad || linkedGoal != goal.ID || !strings.Contains(description, "Wrong edition was returned") ||
+	if issueType != analysisType.ID || !strings.Contains(evidence, id) || assignee != squad || linkedGoal != goal.ID || !strings.Contains(description, "Wrong edition was returned") ||
 		!strings.Contains(description, "Still returning the wrong edition") || !strings.Contains(description, "先验证设计假设") {
 		t.Fatalf("unexpected analysis %s, squad %s, goal %s: %s", child, assignee, linkedGoal, description)
 	}

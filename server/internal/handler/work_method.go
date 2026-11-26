@@ -100,7 +100,7 @@ func (h *Handler) issueWorkMethod(ctx context.Context, issue db.Issue, methods [
 			}
 		}
 	}
-	return workmethod.Recommend(methods, issue.Title, issue.Description.String, goalText), delivery, nil
+	return workmethod.RecommendForIssueType(methods, uuidToString(issue.IssueTypeID), issue.Title, issue.Description.String, goalText), delivery, nil
 }
 
 func (h *Handler) resolveIssueWorkMethod(ctx context.Context, issue db.Issue) (workmethod.Run, error) {
@@ -253,6 +253,9 @@ func (h *Handler) ChangeIssueWorkMethod(w http.ResponseWriter, r *http.Request) 
 	var closeout *acceptance.Closeout
 	var candidateFailure *workmethod.CandidateFailure
 	if change.Action == "advance" || change.Action == "approve" {
+		if !h.requireWorkMethodTableGate(w, r, issue, run, userID) {
+			return
+		}
 		gate := run.EvidenceGate()
 		closing := change.Action == "approve" && run.State == "review" && run.Method != nil && run.Method.Kind == "development" && run.Step == len(run.Method.Steps)-1
 		if closing {

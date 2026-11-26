@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -51,7 +52,7 @@ func RefreshReadyWorkMethod(ctx context.Context, q *db.Queries, issue db.Issue, 
 			return issue, nil
 		}
 	}
-	raw, err := readyWorkMethodJSON(ctx, q, issue.WorkspaceID, issue.Status, issue.Title, issue.Description.String, goalText)
+	raw, err := readyWorkMethodJSON(ctx, q, issue.WorkspaceID, issue.IssueTypeID, issue.Status, issue.Title, issue.Description.String, goalText)
 	if err != nil {
 		return issue, err
 	}
@@ -71,11 +72,11 @@ func RefreshReadyWorkMethod(ctx context.Context, q *db.Queries, issue db.Issue, 
 }
 
 // ReadyWorkMethodJSON seeds a new issue's work_method_run from the workspace catalog.
-func ReadyWorkMethodJSON(ctx context.Context, q *db.Queries, ws pgtype.UUID, status, title, description, goalText string) ([]byte, error) {
-	return readyWorkMethodJSON(ctx, q, ws, status, title, description, goalText)
+func ReadyWorkMethodJSON(ctx context.Context, q *db.Queries, ws, issueTypeID pgtype.UUID, status, title, description, goalText string) ([]byte, error) {
+	return readyWorkMethodJSON(ctx, q, ws, issueTypeID, status, title, description, goalText)
 }
 
-func readyWorkMethodJSON(ctx context.Context, q *db.Queries, ws pgtype.UUID, status, title, description, goalText string) ([]byte, error) {
+func readyWorkMethodJSON(ctx context.Context, q *db.Queries, ws, issueTypeID pgtype.UUID, status, title, description, goalText string) ([]byte, error) {
 	category, err := issuestatus.CategoryWithError(ctx, q, ws, status)
 	if err != nil {
 		return nil, err
@@ -87,7 +88,7 @@ func readyWorkMethodJSON(ctx context.Context, q *db.Queries, ws pgtype.UUID, sta
 	if err != nil {
 		return nil, err
 	}
-	next := workmethod.Recommend(methods, title, description, goalText)
+	next := workmethod.RecommendForIssueType(methods, util.UUIDToString(issueTypeID), title, description, goalText)
 	if next.Method == nil {
 		return nil, nil
 	}
@@ -173,7 +174,7 @@ func UpdateIssueWithWorkMethod(ctx context.Context, q *db.Queries, ws pgtype.UUI
 			return db.UpdateIssueRow{}, err
 		}
 	}
-	p.ReadyMethod, err = readyWorkMethodJSON(ctx, q, ws, current.Status, title, description, goalText)
+	p.ReadyMethod, err = readyWorkMethodJSON(ctx, q, ws, current.IssueTypeID, current.Status, title, description, goalText)
 	if err != nil {
 		return db.UpdateIssueRow{}, err
 	}

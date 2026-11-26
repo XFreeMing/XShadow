@@ -794,7 +794,7 @@ function FieldParams({
   const statusLabel = useStatusLabel(workspaceId);
   const { data: labels = [] } = useQuery(labelListOptions(workspaceId));
   const { data: allProperties = [] } = useQuery(propertyListOptions(workspaceId));
-  const properties = allProperties.filter((p) => !p.archived);
+  const properties = allProperties.filter((p) => !p.archived && p.type !== "lookup");
   const property = properties.find((p) => p.id === draft.fieldTarget);
   const choose = (field: WakeupField) => update({ field, fieldTarget: "", fieldValue: "", assignee: null });
   const fieldMenu = (
@@ -852,7 +852,7 @@ function FieldParams({
               options={(property.config.options ?? []).map((o) => ({ value: o.id, label: o.name }))}
               onChange={(fieldValue) => update({ fieldValue })}
             />
-          ) : property.type === "checkbox" ? (
+          ) : property.type === "checkbox" || property.type === "formula" ? (
             <PillMenu
               label={property.name}
               placeholder={t(($) => $.wakeups.create.value_placeholder)}

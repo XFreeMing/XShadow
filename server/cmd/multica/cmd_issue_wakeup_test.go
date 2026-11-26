@@ -175,6 +175,7 @@ func TestIssueWakeupCLIConditionsAndManagement(t *testing.T) {
 		{[]string{"--until-status", "in_review"}, `{"field":"status","type":"issue_field","value":"in_review"}`},
 		{[]string{"--until-property", "p1=\"approved\""}, `{"field":"property","property_id":"p1","type":"issue_field","value":"approved"}`},
 		{[]string{"--until-property", "p1=approved"}, `{"field":"property","property_id":"p1","type":"issue_field","value":"approved"}`},
+		{[]string{"--until-formula", "p1"}, `{"field":"formula","property_id":"p1","type":"issue_field","value":true}`},
 		{[]string{"--until-children-done", "--stage", "2"}, `{"stage":2,"type":"children_done"}`},
 		{[]string{"--until-pr", "checks", "--mode", "continuous", "--max-fires", "5"}, `{"event":"checks_finished","type":"pull_request"}`},
 		{[]string{"--until-pr", "conflicts", "--mode", "continuous", "--max-fires", "5"}, `{"event":"conflicts","type":"pull_request"}`},

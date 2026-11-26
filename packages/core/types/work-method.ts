@@ -23,6 +23,7 @@ const step = z.object({
   require_preflight: z.boolean().optional(),
   self_claim: z.boolean().optional(),
   acceptance_gate: z.enum(["criteria", "coverage", "candidate", "delivery"]).optional(),
+  table_gate: z.object({ issue_type_id: nonEmpty, property_id: nonEmpty }).optional(),
   name: nonEmpty,
   output: nonEmpty,
   inputs: z.string().optional(),
@@ -33,6 +34,7 @@ const step = z.object({
 });
 export type WorkMethodHandler = z.infer<typeof handler>;
 export type WorkMethodStep = z.infer<typeof step>;
+const tableTask = z.object({ issue_type_id: nonEmpty, seed_property_id: nonEmpty });
 export const WorkMethodSchema = z
   .object({
     id: nonEmpty,
@@ -46,6 +48,8 @@ export const WorkMethodSchema = z
     steps: z.array(step).min(1),
     review: nonEmpty,
     rework_step: index,
+    plan_task: tableTask.optional(),
+    rework_task: tableTask.optional(),
     github_delivery: z.object({
       repository: z.string().regex(/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/),
       base_ref: nonEmpty,

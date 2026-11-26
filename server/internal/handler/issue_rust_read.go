@@ -504,23 +504,14 @@ func (h *Handler) requestRustIssueWithUnavailable(w http.ResponseWriter, r *http
 	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
-	target := h.IssueReadBridge.Upstream + path
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), method, target, bytes.NewReader(payload))
+	upstreamReq, err := h.IssueReadBridge.internalRequest(r.Context(), method, path, workspaceID, userID, actorType, actorID, payload)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid issue request")
 		return nil, false
 	}
-	if len(payload) != 0 {
-		upstreamReq.Header.Set("Content-Type", "application/json")
-	}
 	if requestID := r.Header.Get("X-Request-ID"); requestID != "" {
 		upstreamReq.Header.Set("X-Request-ID", requestID)
 	}
-	upstreamReq.Header.Set("X-XShadow-Internal-Token", h.IssueReadBridge.Token)
-	upstreamReq.Header.Set("X-XShadow-Workspace-Id", workspaceID)
-	upstreamReq.Header.Set("X-XShadow-Actor-Source", actorType)
-	upstreamReq.Header.Set("X-XShadow-Actor-Id", actorID)
-	upstreamReq.Header.Set("X-XShadow-User-Id", userID)
 	if actorType == "agent" {
 		if taskID := strings.TrimSpace(r.Header.Get("X-Task-ID")); taskID != "" {
 			upstreamReq.Header.Set("X-XShadow-Task-Id", taskID)
@@ -546,6 +537,22 @@ func (h *Handler) requestRustIssueWithUnavailable(w http.ResponseWriter, r *http
 		return nil, false
 	}
 	return resp, true
+}
+
+func (b *IssueReadBridge) internalRequest(ctx context.Context, method, path, workspaceID, userID, actorType, actorID string, payload []byte) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, b.Upstream+path, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) != 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-XShadow-Internal-Token", b.Token)
+	req.Header.Set("X-XShadow-Workspace-Id", workspaceID)
+	req.Header.Set("X-XShadow-Actor-Source", actorType)
+	req.Header.Set("X-XShadow-Actor-Id", actorID)
+	req.Header.Set("X-XShadow-User-Id", userID)
+	return req, nil
 }
 
 func writeRustIssueResponse(w http.ResponseWriter, resp *http.Response, body io.Reader) {

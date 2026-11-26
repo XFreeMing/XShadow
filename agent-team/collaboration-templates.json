@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "fields": {
+    "recipe": { "name": "协作模板", "type": "select", "description": "由任务类型带入，用于工作区视图。" },
+    "outcome": { "name": "用户成果", "type": "text", "description": "谁在什么场景完成什么动作，看到什么结果，如何证明支撑当前目标。" },
+    "facts": { "name": "现状与依据", "type": "text", "description": "记录当前版本、实际障碍、来源或可回放证据，注明尚待澄清的地方。" },
+    "contract": { "name": "实体与接口契约", "type": "text", "description": "领域实体、归属与生命周期，模块边界，字段类型、输入、输出、错误和权限。" },
+    "interaction": { "name": "涉及界面操作", "type": "checkbox", "description": "有交互选是，无交互选否。留空代表尚未判断。" },
+    "prototype": { "name": "可操作原型", "type": "text", "description": "填写入口和操作步骤，能更换输入、身份或版本，展示处理中、成功及权限或失败场景。" },
+    "samples": { "name": "固定样本与预期", "type": "text", "description": "优先用可公开真实样本或脱敏回放，记录来源、固定版本或哈希、生成脚本、输入和预期。写不出断言时回到需求讨论。" },
+    "verification": { "name": "测试与独立复验", "type": "text", "description": "记录红转绿、关键行为测试、同一候选 SHA、独立复验者、运行命令和回执。" },
+    "delivery": { "name": "交付物与入口", "type": "text", "description": "填写实际可用入口及版本、操作步骤和回执。使用 Git 交付时引用平台的 PR、合并和回收记录。" },
+    "tradeoffs": { "name": "选项与取舍", "type": "text", "description": "可选方案、权重、限制、依赖和目前最小可验证的一步。" },
+    "rootCause": { "name": "复盘根因", "type": "text", "description": "记录失败验收项、不同返工轮的证据及最早失效的设计或流程决策。" },
+    "prevention": { "name": "最小预防措施", "type": "text", "description": "将同一类错误变成契约、可失败的测试、公式规则或平台校验，附负责人和复验动作。" },
+    "replay": { "name": "回放与效率证据", "type": "text", "description": "引用同类事项的回放，比较等待时长、返工轮次、模型请求和已报告 token，写明统计范围。" }
+  },
+  "formulas": {
+    "designReady": {
+      "name": "设计证据齐备",
+      "description": "用户结果、现状、接口契约、交互范围已填。有界面时还需要可操作原型。",
+      "all": ["outcome", "facts", "contract"],
+      "interaction": { "flag": "interaction", "requiredWhenTrue": "prototype" }
+    },
+    "testReady": { "name": "测试准备齐备", "description": "设计证据、固定样本及可观察预期已填。", "all": ["designReady", "samples"] },
+    "deliveryReady": { "name": "交付证据齐备", "description": "测试准备、交付入口和独立复验证据已填。最终结项读取原生审核和 Git 回执。", "all": ["testReady", "delivery", "verification"] },
+    "decisionReady": { "name": "决策证据齐备", "description": "结果、现状、选项以及决策或测量入口已填。", "all": ["outcome", "facts", "tradeoffs", "delivery"] },
+    "learningReady": { "name": "复盘证据齐备", "description": "返工现场、根因、最小预防措施和同类复验已填。", "all": ["facts", "rootCause", "prevention", "replay"] }
+  },
+  "templates": {
+    "agile": {
+      "name": "敏捷研发 · 产品交付",
+      "method": "agile",
+      "reworkTemplate": "rework",
+      "required": ["outcome"],
+      "fields": ["outcome", "facts", "contract", "interaction", "prototype", "designReady", "samples", "testReady", "verification", "delivery", "deliveryReady", "replay"],
+      "gates": {
+        "定义增量与验收标准": "designReady",
+        "设计测试用例": "testReady",
+        "实现并验证候选提交": "testReady",
+        "演示与独立终验": "deliveryReady"
+      },
+      "handoffs": {
+        "designReady": "核对当前方法步骤。复核领域实体、字段、输入输出和界面原型，补齐可执行验收。结果写回原任务。",
+        "testReady": "核对当前方法步骤。复跑固定样本和预期，验证能区分错误实现。样本或断言不足时先回到需求澄清。",
+        "deliveryReady": "核对当前方法步骤。复验同一候选 SHA 及实际入口。独立验收通过后沿原流程读取 PR、合并到 dev、分支和 worktree 回收回执。"
+      }
+    },
+    "research": {
+      "name": "七步问题解决 · 调研决策",
+      "method": "seven-step",
+      "required": ["outcome"],
+      "fields": ["outcome", "facts", "samples", "tradeoffs", "delivery", "decisionReady"],
+      "gates": { "向决策者提出行动建议": "decisionReady" },
+      "handoffs": { "decisionReady": "在原任务复核问题定义、证据来源、选项与取舍，并给出最小验证动作。沿七步问题解决方法提交决策。" }
+    },
+    "okr": {
+      "name": "OKR · 目标规划",
+      "method": "okr",
+      "required": ["outcome"],
+      "fields": ["outcome", "facts", "tradeoffs", "delivery", "decisionReady"],
+      "gates": { "计分与复盘": "decisionReady" },
+      "handoffs": { "decisionReady": "在原任务复核目标贡献、关键结果口径、基线、验收证据、事项依赖和授权，按目标规划流程提交。" }
+    },
+    "rework": {
+      "name": "重复返工 · 原因分析",
+      "method": null,
+      "required": [],
+      "fields": ["outcome", "facts", "rootCause", "prevention", "replay", "learningReady"],
+      "handoffs": { "learningReady": "由幕僚长牵头复核返工证据和第一次出错的决策，验证最小预防措施，并用下一张同类故事比较等待、返工及 token。" }
+    }
+  },
+  "views": [
+    { "name": "研发设计与测试准备", "template": "agile", "fields": ["outcome", "facts", "contract", "interaction", "prototype", "designReady", "samples", "testReady"] },
+    { "name": "研发交付与收尾", "template": "agile", "fields": ["outcome", "verification", "delivery", "deliveryReady", "replay"] },
+    { "name": "调研与决策", "template": "research", "fields": ["outcome", "facts", "tradeoffs", "delivery", "decisionReady"] },
+    { "name": "OKR 与目标规划", "template": "okr", "fields": ["outcome", "facts", "tradeoffs", "delivery", "decisionReady"] },
+    { "name": "返工原因与改进", "template": "rework", "fields": ["facts", "rootCause", "prevention", "replay", "learningReady"] }
+  ]
+}

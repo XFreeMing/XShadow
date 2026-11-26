@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -44,6 +46,40 @@ type rustIssuePropertyCompileRequest struct {
 
 type rustIssuePropertyCompileResponse struct {
 	Config json.RawMessage `json:"config"`
+}
+
+func (b *IssueReadBridge) ProjectTaskFormula(ctx context.Context, workspaceID, memberID, issueID pgtype.UUID, propertyID string) (json.RawMessage, error) {
+	if !b.Enabled() {
+		return nil, errors.New("table engine unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	issue, member := uuidToString(issueID), uuidToString(memberID)
+	payload, err := json.Marshal(rustIssuePropertyProjectRequest{IssueIDs: []string{issue}})
+	if err != nil {
+		return nil, err
+	}
+	req, err := b.internalRequest(ctx, http.MethodPost, rustIssuePropertyProjectPath, uuidToString(workspaceID), member, "member", member, payload)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := rustIssueReadClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("task formula projection was rejected")
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRustIssueReadBody+1))
+	if err != nil {
+		return nil, err
+	}
+	var projection rustIssuePropertyProjectResponse
+	if len(body) > maxRustIssueReadBody || json.Unmarshal(body, &projection) != nil {
+		return nil, errors.New("invalid task formula projection")
+	}
+	return projection.Properties[issue][propertyID], nil
 }
 
 func (h *Handler) computedIssuePropertyIDs(ctx context.Context, wsUUID pgtype.UUID) (map[string]struct{}, error) {

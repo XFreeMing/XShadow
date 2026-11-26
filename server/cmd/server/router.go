@@ -2126,6 +2126,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Issues
 			h.IssueReadBridge = handler.NewIssueReadBridgeFromEnv(slog.Default())
+			h.TaskService.ProjectIssueFormula = h.IssueReadBridge.ProjectTaskFormula
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)
 				r.Post("/table/groups", h.ListIssueTableGroups)

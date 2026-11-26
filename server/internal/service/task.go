@@ -48,6 +48,8 @@ type TaskService struct {
 	Wakeup    TaskWakeupNotifier
 	// PRSnapshotsEnabled reports whether the server can refresh GitHub check snapshots.
 	PRSnapshotsEnabled bool
+	// ProjectIssueFormula reads the canonical, same-issue table projection.
+	ProjectIssueFormula func(context.Context, pgtype.UUID, pgtype.UUID, pgtype.UUID, string) (json.RawMessage, error)
 	// Entitlements supplies Cloud's workspace-scoped issue-count instruction.
 	// Nil keeps self-hosted and isolated test services unlimited.
 	Entitlements entitlement.Provider

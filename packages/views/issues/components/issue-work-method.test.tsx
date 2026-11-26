@@ -106,12 +106,14 @@ it("displays the GitHub pull request and keeps pending cleanup visible after app
 });
 
 it("submits coverage preflight receipts along with the coverage handoff", async () => {
+  const [design, synthesis] = method.steps;
+  assert(design && synthesis);
   const change = mount({
     state: "working",
     method: {
       ...method,
       kind: "development",
-      steps: [{ ...method.steps[0], require_preflight: true, acceptance_gate: "coverage" }, method.steps[1]],
+      steps: [{ ...design, require_preflight: true, acceptance_gate: "coverage" }, synthesis],
     },
   });
   const input = await screen.findByRole("textbox", { name: "Coverage receipts (JSON)" });

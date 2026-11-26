@@ -126,7 +126,7 @@ function MethodEditor({
 }) {
   const { t } = useT("issues");
   const qc = useQueryClient();
-  type DraftStep = Pick<WorkMethodStep, "acceptance_gate" | "self_claim"> & {
+  type DraftStep = Pick<WorkMethodStep, "acceptance_gate" | "self_claim" | "require_preflight" | "table_gate"> & {
     id: number;
     name: string;
     output: string;
@@ -151,6 +151,8 @@ function MethodEditor({
           id: i,
           acceptance_gate: step.acceptance_gate,
           self_claim: step.self_claim,
+          require_preflight: step.require_preflight,
+          table_gate: step.table_gate,
           name: step.name,
           output: step.output,
           inputs: step.inputs ?? "",
@@ -198,6 +200,8 @@ function MethodEditor({
     mutation.mutate({
       name: name.trim(),
       kind,
+      ...(original?.plan_task ? { plan_task: original.plan_task } : {}),
+      ...(original?.rework_task ? { rework_task: original.rework_task } : {}),
       keywords: [
         ...new Set(
           keywords
@@ -207,6 +211,10 @@ function MethodEditor({
         ),
       ],
       steps: steps.map((step) => ({
+        ...(step.table_gate ? { table_gate: step.table_gate } : {}),
+        ...(kind === "development" && step.acceptance_gate === "coverage" && step.require_preflight
+          ? { require_preflight: true }
+          : {}),
         ...(kind === "development" && step.acceptance_gate ? { acceptance_gate: step.acceptance_gate } : {}),
         ...(kind === "development" && step.acceptance_gate === "candidate" && step.owner?.kind === "squad" && step.self_claim
           ? { self_claim: true }

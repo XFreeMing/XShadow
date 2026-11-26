@@ -204,7 +204,7 @@ export function useWakeupText() {
       ? t(($) => $.wakeups.by_actor, { condition: label, agent: actor })
       : label;
   };
-  const propertyValue = (c: Extract<WakeupCondition, { field: "property" }>) => {
+  const propertyValue = (c: Extract<WakeupCondition, { field: "property" | "formula" }>) => {
     const property = names.property(c.property_id);
     const raw = c.value;
     if (typeof raw === "boolean") return raw ? t(($) => $.wakeups.cond.checked) : t(($) => $.wakeups.cond.unchecked);
@@ -224,6 +224,7 @@ export function useWakeupText() {
           case "label":
             return { key: "label" as const, values: { label: names.label(c.label_id) ?? t(($) => $.wakeups.cond.unknown_label) } };
           case "property":
+          case "formula":
             return {
               key: "property" as const,
               values: {

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
@@ -63,7 +64,30 @@ func (h *Handler) saveWorkMethodTemplate(w http.ResponseWriter, r *http.Request,
 		writeError(w, 400, err.Error())
 		return
 	}
+	for _, task := range []*workmethod.TableTask{m.PlanTask, m.ReworkTask} {
+		if task == nil {
+			continue
+		}
+		typeID, seedID := parseUUIDOrInvalid(task.IssueTypeID), parseUUIDOrInvalid(task.SeedPropertyID)
+		issueType, err := h.Queries.GetIssueType(r.Context(), db.GetIssueTypeParams{WorkspaceID: id, ID: typeID})
+		seed, seedErr := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{WorkspaceID: id, ID: seedID})
+		if err != nil || seedErr != nil || issueType.ArchivedAt.Valid || seed.ArchivedAt.Valid || seed.Type != "text" || !issueTypeHasProperty(issueType, seedID) {
+			writeError(w, 400, "任务模板须引用当前工作区活动任务类型中的文本属性")
+			return
+		}
+		task.IssueTypeID, task.SeedPropertyID = uuidToString(typeID), uuidToString(seedID)
+	}
 	for _, step := range m.Steps {
+		if gate := step.TableGate; gate != nil {
+			typeID, propertyID := parseUUIDOrInvalid(gate.IssueTypeID), parseUUIDOrInvalid(gate.PropertyID)
+			issueType, err := h.Queries.GetIssueType(r.Context(), db.GetIssueTypeParams{WorkspaceID: id, ID: typeID})
+			if err != nil || issueType.ArchivedAt.Valid || !issueTypeHasProperty(issueType, propertyID) ||
+				service.ValidateTaskReadinessFormula(r.Context(), h.Queries, id, propertyID) != nil {
+				writeError(w, 400, "流程门槛须引用当前工作区活动任务类型中的同记录公式")
+				return
+			}
+			gate.IssueTypeID, gate.PropertyID = uuidToString(typeID), uuidToString(propertyID)
+		}
 		if step.Owner == nil {
 			continue
 		}
@@ -113,6 +137,18 @@ func (h *Handler) saveWorkMethodTemplate(w http.ResponseWriter, r *http.Request,
 		if t.ID != m.ID && strings.EqualFold(m.Name, t.Name) {
 			writeError(w, 409, "method name already exists")
 			return
+		}
+		if t.ID != m.ID {
+			if m.PlanTask != nil && t.UsesIssueType(m.PlanTask.IssueTypeID) {
+				writeError(w, http.StatusConflict, "该任务类型已绑定另一工作方法")
+				return
+			}
+			for _, step := range m.Steps {
+				if step.TableGate != nil && t.UsesIssueType(step.TableGate.IssueTypeID) {
+					writeError(w, http.StatusConflict, "该任务类型已绑定另一工作方法")
+					return
+				}
+			}
 		}
 	}
 	if i := slices.IndexFunc(stored, func(t workmethod.Template) bool { return t.ID == m.ID }); i >= 0 {

@@ -34,7 +34,7 @@ const (
 type WakeupCondition struct {
 	// issue_field | children_done | pull_request | other_issue
 	Type string `json:"type"`
-	// issue_field: status | assignee | label | property
+	// issue_field: status | assignee | label | property | formula
 	Field        string          `json:"field,omitempty"`
 	Value        json.RawMessage `json:"value,omitempty"`
 	AssigneeType string          `json:"assignee_type,omitempty"`
@@ -66,10 +66,13 @@ var (
 	errPRNotLinked            = errors.New("No pull request is linked to this issue; link the PR to this issue (a parent issue's PR is not included), or wait for the linking webhook")
 	errPRSnapshotPending      = errors.New("PR check snapshot is not available yet; inspect this issue's pull-requests snapshot_available field and ask the server administrator to check snapshot refresh if it persists")
 	errPRConflictsUnsupported = errors.New("Merge conflicts can only be detected on GitHub pull requests; this issue links only self-hosted (Forgejo/Gitea/GitLab) pull requests")
+	errFormulaUnavailable     = errors.New("The task formula could not be evaluated by the table engine")
+	errFormulaDefinition      = errors.New("The workflow formula must use active fields on this task without cross-table lookups")
 )
 
 func conditionDiagnostic(err error) bool {
-	return errors.Is(err, errPRSnapshotsUnavailable) || errors.Is(err, errPRNotLinked) || errors.Is(err, errPRSnapshotPending) || errors.Is(err, errPRConflictsUnsupported)
+	return errors.Is(err, errPRSnapshotsUnavailable) || errors.Is(err, errPRNotLinked) || errors.Is(err, errPRSnapshotPending) || errors.Is(err, errPRConflictsUnsupported) ||
+		errors.Is(err, errFormulaUnavailable) || errors.Is(err, errFormulaDefinition)
 }
 
 func badCondition(msg string) error {
@@ -179,8 +182,25 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 			}
 			out.PropertyID, out.Value = util.UUIDToString(id), value
 			events = []string{"issue.properties_changed"}
+		case "formula":
+			id, err := uuidArg(c.PropertyID, "property_id")
+			if err != nil {
+				return nil, nil, err
+			}
+			value := canonicalWakeupPayload(c.Value)
+			if string(value) != "true" && string(value) != "false" {
+				return nil, nil, badCondition("formula value must be true or false")
+			}
+			if err := ValidateTaskReadinessFormula(ctx, db.New(tx), ws, id); err != nil {
+				if errors.Is(err, errFormulaDefinition) {
+					return nil, nil, badCondition(err.Error())
+				}
+				return nil, nil, err
+			}
+			out.PropertyID, out.Value = util.UUIDToString(id), value
+			events = []string{"issue.properties_changed", "issue.status_changed"}
 		default:
-			return nil, nil, badCondition("field must be status, assignee, label or property")
+			return nil, nil, badCondition("field must be status, assignee, label, property or formula")
 		}
 	case "children_done":
 		if c.EachStage {
@@ -238,6 +258,9 @@ func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx pgx.Tx, q
 	var c WakeupCondition
 	if err := json.Unmarshal(w.Condition, &c); err != nil {
 		return false, "", nil, err
+	}
+	if c.Type == "issue_field" && c.Field == "formula" {
+		return s.evaluateFormulaCondition(ctx, q, w, c)
 	}
 	switch c.Type {
 	case "issue_field":
@@ -503,6 +526,7 @@ func (s *IssueWakeupService) pollCondition(ctx context.Context, tx pgx.Tx, q *db
 	if err != nil && !conditionDiagnostic(err) {
 		return w.NextFireAt, err
 	}
+	formulaUnknown := errors.Is(err, errFormulaUnavailable) || errors.Is(err, errFormulaDefinition)
 	if err = saveConditionDiagnostic(ctx, q, w, err); err != nil {
 		return w.NextFireAt, err
 	}
@@ -516,7 +540,7 @@ func (s *IssueWakeupService) pollCondition(ctx context.Context, tx pgx.Tx, q *db
 			}
 		}
 		state = fingerprint
-	} else {
+	} else if !formulaUnknown {
 		state = ""
 	}
 	next := pgtype.Timestamptz{Time: now.Add(conditionPollInterval), Valid: true}

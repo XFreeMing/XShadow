@@ -99,6 +99,24 @@ func taskOutcome(body string) string {
 	return strings.Join(outcomes, "\n")
 }
 
+func RecommendForIssueType(methods []Template, issueTypeID, taskTitle, taskBody, goalText string) Run {
+	if issueTypeID != "" {
+		for _, method := range methods {
+			if method.UsesIssueType(issueTypeID) {
+				return Run{State: "ready", Source: "issue_type", Method: snapshot(method), History: []Event{},
+					Reason: "任务类型使用「" + method.Name + "」。"}
+			}
+		}
+	}
+	return Recommend(methods, taskTitle, taskBody, goalText)
+}
+
+func (m Template) UsesIssueType(id string) bool {
+	return (m.PlanTask != nil && m.PlanTask.IssueTypeID == id) || slices.ContainsFunc(m.Steps, func(step Step) bool {
+		return step.TableGate != nil && step.TableGate.IssueTypeID == id
+	})
+}
+
 func Recommend(methods []Template, taskTitle, taskBody, goalText string) Run {
 	ready := Run{State: "ready", History: []Event{}, Reason: "尚无明确的目标或交付物匹配，可手动选择工作方法。"}
 	// Avoid converting background examples, test logs and implementation notes

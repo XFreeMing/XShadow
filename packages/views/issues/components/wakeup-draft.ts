@@ -170,6 +170,10 @@ export function platformCondition(
       if (d.field === "status") return { condition: { type: "issue_field", field: "status", value: d.fieldTarget } };
       if (d.field === "label") return { condition: { type: "issue_field", field: "label", label_id: d.fieldTarget } };
       if (!d.fieldValue.trim()) return { error: "missing_value" };
+      if (propertyType === "formula") {
+        if (d.fieldValue !== "true" && d.fieldValue !== "false") return { error: "missing_value" };
+        return { condition: { type: "issue_field", field: "formula", property_id: d.fieldTarget, value: d.fieldValue === "true" } };
+      }
       return {
         condition: {
           type: "issue_field",

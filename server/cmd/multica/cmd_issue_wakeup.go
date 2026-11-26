@@ -21,7 +21,7 @@ func init() { issueCmd.AddCommand(newIssueWakeupCommand()) }
 func newIssueWakeupCommand() *cobra.Command {
 	wake := &cobra.Command{Use: "wakeup", Short: "Manage event and time wakeups that start ordinary runs"}
 	wake.AddCommand(&cobra.Command{Use: "events", Short: "List supported event types and filters", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		return cli.PrintJSON(os.Stdout, map[string]any{"event_types": eventcontract.WakeupTypes, "platform_only_event_types": eventcontract.LifecycleTypes, "platform_only_reason": "Creation precedes subscription; deletion withdraws the issue's wakeups. Cross-issue subscriptions are not supported.", "scope": "current issue", "filters": []string{"filter_agent_id (task events; legacy mutation alias)", "filter_task_id (task events only)", "filter_actor_type + filter_actor_id (member or agent; mutation events only)"}, "modes": []string{"once (default)", "continuous"}, "conditions": []string{"--until-status KEY", "--until-assignee member|agent|squad:ID", "--until-label LABEL_ID", "--until-property PROPERTY_ID=VALUE", "--until-children-done [--stage N]", "--until-pr checks|merged|conflicts", "--until-issue ISSUE [--until-issue-state done|ended|in_review|blocked]"}, "loop_protection": "Events from the registering run and runs started by the same rule are excluded when source identity is available. Repeating rules stop after --max-fires runs (default 20 for continuous event rules). A rule is paused when its trigger chain passes through it a third time without a person in between, or when it starts more than 12 runs in an hour."})
+		return cli.PrintJSON(os.Stdout, map[string]any{"event_types": eventcontract.WakeupTypes, "platform_only_event_types": eventcontract.LifecycleTypes, "platform_only_reason": "Creation precedes subscription; deletion withdraws the issue's wakeups. Cross-issue subscriptions are not supported.", "scope": "current issue", "filters": []string{"filter_agent_id (task events; legacy mutation alias)", "filter_task_id (task events only)", "filter_actor_type + filter_actor_id (member or agent; mutation events only)"}, "modes": []string{"once (default)", "continuous"}, "conditions": []string{"--until-status KEY", "--until-assignee member|agent|squad:ID", "--until-label LABEL_ID", "--until-property PROPERTY_ID=VALUE", "--until-formula PROPERTY_ID", "--until-children-done [--stage N]", "--until-pr checks|merged|conflicts", "--until-issue ISSUE [--until-issue-state done|ended|in_review|blocked]"}, "loop_protection": "Events from the registering run and runs started by the same rule are excluded when source identity is available. Repeating rules stop after --max-fires runs (default 20 for continuous event rules). A rule is paused when its trigger chain passes through it a third time without a person in between, or when it starts more than 12 runs in an hour."})
 	}})
 	for _, action := range []string{"list", "get", "disable", "create", "update", "trigger", "delete", "checkin", "runs"} {
 		action := action
@@ -79,6 +79,7 @@ func newIssueWakeupCommand() *cobra.Command {
 			c.Flags().String("until-assignee", "", "Condition: this issue is assigned to member|agent|squad:ID")
 			c.Flags().String("until-label", "", "Condition: this issue has the label LABEL_ID")
 			c.Flags().String("until-property", "", "Condition: property PROPERTY_ID equals VALUE (PROPERTY_ID=VALUE; VALUE may be JSON)")
+			c.Flags().String("until-formula", "", "Condition: the same-task formula property PROPERTY_ID evaluates to true")
 			c.Flags().Bool("until-children-done", false, "Condition: every sub-issue is closed (or those up to --stage)")
 			c.Flags().Int32("stage", 0, "With --until-children-done: wait for this stage and earlier ones")
 			c.Flags().String("until-pr", "", "Condition: a linked pull request's checks finish (checks), it merges (merged), or it has merge conflicts on its current head (conflicts; GitHub only)")
@@ -280,6 +281,9 @@ func wakeupConditionFromFlags(ctx context.Context, cmd *cobra.Command, client *c
 			value = json.RawMessage(raw)
 		}
 		conditions = append(conditions, map[string]any{"type": "issue_field", "field": "property", "property_id": id, "value": value})
+	}
+	if v, _ := cmd.Flags().GetString("until-formula"); v != "" {
+		conditions = append(conditions, map[string]any{"type": "issue_field", "field": "formula", "property_id": v, "value": true})
 	}
 	stage, _ := cmd.Flags().GetInt32("stage")
 	if done, _ := cmd.Flags().GetBool("until-children-done"); done {

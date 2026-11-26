@@ -301,7 +301,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
 
-	properties, err := resolveIssueCreateTypeAndProperties(ctx, tx, qtx, p.WorkspaceID, p.IssueTypeID, p.Properties)
+	properties, err := ResolveIssueCreateTypeAndProperties(ctx, tx, qtx, p.WorkspaceID, p.IssueTypeID, p.Properties)
 	if err != nil {
 		return IssueCreateResult{}, err
 	}
@@ -447,7 +447,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		return IssueCreateResult{}, fmt.Errorf("next top position: %w", err)
 	}
 
-	readyMethod, err := readyWorkMethodJSON(ctx, qtx, p.WorkspaceID, p.Status, p.Title, p.Description.String, "")
+	readyMethod, err := readyWorkMethodJSON(ctx, qtx, p.WorkspaceID, p.IssueTypeID, p.Status, p.Title, p.Description.String, "")
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("initialize work method: %w", err)
 	}
@@ -681,7 +681,7 @@ func (s *IssueService) PrepareCreateProperties(
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
-	encoded, err := resolveIssueCreateTypeAndProperties(ctx, tx, qtx, workspaceID, issueTypeID, values)
+	encoded, err := ResolveIssueCreateTypeAndProperties(ctx, tx, qtx, workspaceID, issueTypeID, values)
 	if err != nil {
 		return PreparedIssueCreateProperties{}, err
 	}
@@ -710,11 +710,11 @@ func (s *IssueService) PrepareCreateProperties(
 	return prepared, nil
 }
 
-// resolveIssueCreateTypeAndProperties validates the optional issue_type_id,
+// ResolveIssueCreateTypeAndProperties validates the optional issue_type_id,
 // merges any configured field defaults for fields not explicitly provided by
 // the caller, runs the canonical property validator on every resulting value,
 // and enforces the type's required fields inside the create transaction.
-func resolveIssueCreateTypeAndProperties(
+func ResolveIssueCreateTypeAndProperties(
 	ctx context.Context,
 	tx pgx.Tx,
 	qtx *db.Queries,

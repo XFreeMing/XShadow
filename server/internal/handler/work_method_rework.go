@@ -69,6 +69,13 @@ func (h *Handler) createReworkAnalysis(ctx context.Context, tx pgx.Tx, parent db
 		Title: fmt.Sprintf("重复返工归因 · %s", step), Description: pgtype.Text{String: description, Valid: true},
 		Status: status, Priority: parent.Priority, CreatorType: actorKind, CreatorID: actorID, Number: number, Position: position,
 	}
+	if run.Method.ReworkTask != nil {
+		evidence := fmt.Sprintf("原任务 %s · %s · %s\n两次退回的预期、实测与证据见本任务正文。", uuidToString(parent.ID), parent.Title, step)
+		params.IssueTypeID, params.Properties, err = tableTaskProperties(ctx, tx, q, parent.WorkspaceID, *run.Method.ReworkTask, evidence)
+		if err != nil {
+			return emptyIssue, emptyTask, err
+		}
+	}
 	if permission == nil {
 		params.AssigneeType = pgtype.Text{String: "squad", Valid: true}
 		params.AssigneeID = squad.ID
@@ -89,8 +96,12 @@ func (h *Handler) createReworkAnalysis(ctx context.Context, tx pgx.Tx, parent db
 		return emptyIssue, emptyTask, err
 	}
 	defer dispatch.Rollback(ctx)
+	note := "请原因分析小队队长接手本子任务，按正文核查原事项和两次退回依据，并留下可复验的预防方案。"
+	if run.Method.ReworkTask != nil {
+		note += "将根因、预防办法和下一张同类任务的复验与效率证据填入本任务表格对应属性。"
+	}
 	task, err := h.TaskService.CreateWorkMethodHandoff(ctx, h.Queries.WithTx(dispatch), issue, squad.LeaderID, squad.ID, 0,
-		"请原因分析小队队长接手本子任务，按正文核查原事项和两次退回依据，并留下可复验的预防方案。", requester, source, pgtype.UUID{})
+		note, requester, source, pgtype.UUID{})
 	if err != nil {
 		slog.Warn("rework analysis awaiting assignment", "issue_id", uuidToString(issue.ID), "error", err)
 		return issue, emptyTask, nil

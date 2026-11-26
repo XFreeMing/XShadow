@@ -102,6 +102,7 @@ describe("platform conditions", () => {
   it("types a property value the way the property stores it", () => {
     const property = (fieldValue: string, type: string) =>
       input({ condition: "field", field: "property", fieldTarget: "p", fieldValue }, type);
+    expect(property("false", "formula")).toMatchObject({ input: { condition: { field: "formula", property_id: "p", value: false } } });
     expect(property("opt-1", "select")).toMatchObject({ input: { condition: { property_id: "p", value: "opt-1" } } });
     expect(property("false", "checkbox")).toMatchObject({ input: { condition: { value: false } } });
     expect(property("3", "number")).toMatchObject({ input: { condition: { value: 3 } } });

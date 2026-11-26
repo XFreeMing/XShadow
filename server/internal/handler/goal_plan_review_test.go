@@ -9,11 +9,28 @@ import (
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
+	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
 func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.T) {
 	ctx := context.Background()
 	seedTestCatalog(t)
+	outcome := createTestProperty(t, map[string]any{"name": "Planned user result", "type": "text"})
+	taskType := createTestIssueType(t, map[string]any{"name": "Planned delivery", "fields": []map[string]any{
+		{"property_id": outcome.ID, "required": true},
+	}})
+	agile := workmethod.Builtins()[0]
+	agile.PlanTask = &workmethod.TableTask{IssueTypeID: taskType.ID, SeedPropertyID: outcome.ID}
+	var previousMethods []byte
+	dbfx.QueryRow(t, "SELECT work_method_templates FROM workspace WHERE id=$1", testWorkspaceID).Scan(&previousMethods)
+	methodRequest := withURLParam(newRequest("PUT", "/api/work-methods/agile", struct {
+		workmethod.Template
+		BaseRevision int `json:"base_revision"`
+	}{agile, agile.Revision}), "id", agile.ID)
+	testutil.Call(t, testHandler.UpdateWorkMethod, methodRequest).Want(200)
+	t.Cleanup(func() {
+		dbfx.Exec(t, "UPDATE workspace SET work_method_templates=$2 WHERE id=$1", testWorkspaceID, previousMethods)
+	})
 	runtime := dbfx.Runtime(t, "Continuous review runtime")
 	reviewer := dbfx.Agent(t, "Independent goal reviewer", runtime)
 	project := deliveryProject(t, "Reviewed goal project", reviewer)
@@ -149,6 +166,10 @@ func TestContinuousGoalReviewSeparatesExecutionIssuesAndPlanningGaps(t *testing.
 		if err != nil || node.Binding.IssueID == nil || *node.Binding.IssueID != uuidToString(id) ||
 			card.Status != "backlog" || card.AssigneeID.Valid || card.FirstExecutedAt.Valid {
 			t.Fatalf("expected an unassigned backlog card for %s: %v %v", node.ID, card, err)
+		}
+		var properties map[string]string
+		if err := json.Unmarshal(card.Properties, &properties); err != nil || uuidToString(card.IssueTypeID) != taskType.ID || properties[outcome.ID] != node.Outcome {
+			t.Fatalf("prepared card did not inherit type and user outcome: %s %v", card.Properties, err)
 		}
 		contract, err := testHandler.issuePlanDelivery(ctx, card, goal.ID)
 		if err != nil || contract == nil || contract.Delivery.MethodID != "agile" || len(contract.Delivery.Criteria) != 1 {

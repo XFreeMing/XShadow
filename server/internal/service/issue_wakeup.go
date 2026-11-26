@@ -608,6 +608,26 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 			return out, err
 		}
 	}
+	// The issue lock serializes duplicate one-time formula registrations, even
+	// when the caller retries after its first request committed.
+	if !existingID.Valid && in.Mode == "once" && hasFormulaCondition(condition) && !expiresAt.Valid {
+		var prior pgtype.UUID
+		err = tx.QueryRow(ctx, `SELECT id FROM issue_wakeup
+			WHERE issue_id=$1 AND condition=$2::jsonb AND agent_id=$3 AND created_by=$4
+			  AND instruction=$5 AND mode='once' AND disabled_at IS NULL AND expires_at IS NULL
+			  AND source_task_id IS NOT DISTINCT FROM $6 AND parent_comment_id IS NOT DISTINCT FROM $7
+			ORDER BY created_at LIMIT 1`, issueID, condition, agent.ID, member, in.Instruction, source, parent).Scan(&prior)
+		if err == nil {
+			out, err = q.LockIssueWakeup(ctx, prior)
+			if err != nil {
+				return out, err
+			}
+			return out, tx.Commit(ctx)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return out, err
+		}
+	}
 	var target db.AgentTaskQueue
 	if filterTask.Valid {
 		target, err = q.LockWakeupSourceTask(ctx, db.LockWakeupSourceTaskParams{ID: filterTask, IssueID: issueID})
@@ -1558,6 +1578,15 @@ func (s *IssueWakeupService) CheckClaim(ctx context.Context, task db.AgentTaskQu
 	}
 	if w.DisabledAt.Valid || w.Revision != source.Revision || w.IssueID != task.IssueID || w.AgentID != task.AgentID || w.CreatedBy != task.OriginatorUserID {
 		return ErrWakeupForbidden
+	}
+	if hasFormulaCondition(w.Condition) {
+		active, err := formulaIssueReady(ctx, s.Tasks.Queries, w)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
+			return ErrWakeupForbidden
+		}
+		if err != nil {
+			return err
+		}
 	}
 	agent, err := s.Tasks.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: w.AgentID, WorkspaceID: w.WorkspaceID})
 	if errors.Is(err, pgx.ErrNoRows) {

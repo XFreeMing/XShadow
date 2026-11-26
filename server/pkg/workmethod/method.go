@@ -23,6 +23,13 @@ type Template struct {
 	Review         string          `json:"review"`
 	ReworkStep     int             `json:"rework_step"`
 	GitHubDelivery *GitHubDelivery `json:"github_delivery,omitempty"`
+	PlanTask       *TableTask      `json:"plan_task,omitempty"`
+	ReworkTask     *TableTask      `json:"rework_task,omitempty"`
+}
+
+type TableTask struct {
+	IssueTypeID    string `json:"issue_type_id"`
+	SeedPropertyID string `json:"seed_property_id"`
 }
 
 type GitHubDelivery struct {
@@ -41,16 +48,23 @@ type Actor struct {
 }
 
 type Step struct {
-	RequirePreflight bool     `json:"require_preflight,omitempty"`
-	SelfClaim        bool     `json:"self_claim,omitempty"`
-	Gate             string   `json:"acceptance_gate,omitempty"`
-	Name             string   `json:"name"`
-	Output           string   `json:"output"`
-	Instructions     string   `json:"instructions,omitempty"`
-	Inputs           string   `json:"inputs,omitempty"`
-	Checks           []string `json:"checks,omitempty"`
-	Owner            *Actor   `json:"owner,omitempty"`
-	Reviewer         *Actor   `json:"reviewer,omitempty"`
+	RequirePreflight bool       `json:"require_preflight,omitempty"`
+	SelfClaim        bool       `json:"self_claim,omitempty"`
+	Gate             string     `json:"acceptance_gate,omitempty"`
+	TableGate        *TableGate `json:"table_gate,omitempty"`
+	Name             string     `json:"name"`
+	Output           string     `json:"output"`
+	Instructions     string     `json:"instructions,omitempty"`
+	Inputs           string     `json:"inputs,omitempty"`
+	Checks           []string   `json:"checks,omitempty"`
+	Owner            *Actor     `json:"owner,omitempty"`
+	Reviewer         *Actor     `json:"reviewer,omitempty"`
+}
+
+// TableGate scopes a readiness formula to tasks using a particular issue type.
+type TableGate struct {
+	IssueTypeID string `json:"issue_type_id"`
+	PropertyID  string `json:"property_id"`
 }
 
 type Run struct {
@@ -142,6 +156,11 @@ func Validate(m Template) error {
 	if target := m.GitHubDelivery; target != nil && (m.Kind != "development" || !target.Valid()) {
 		return errors.New("GitHub 交付须配置研发仓库和目标分支")
 	}
+	for _, task := range []*TableTask{m.PlanTask, m.ReworkTask} {
+		if task != nil && (uuid.Validate(task.IssueTypeID) != nil || uuid.Validate(task.SeedPropertyID) != nil) {
+			return errors.New("任务模板须引用有效的任务类型和文本属性")
+		}
+	}
 	if len(m.Keywords) > 60 {
 		return errors.New("匹配词最多 60 个")
 	}
@@ -154,6 +173,11 @@ func Validate(m Template) error {
 		return errors.New("方法须包含 1 到 32 个交付步骤")
 	}
 	for i, step := range m.Steps {
+		if gate := step.TableGate; gate != nil {
+			if uuid.Validate(gate.IssueTypeID) != nil || uuid.Validate(gate.PropertyID) != nil {
+				return fmt.Errorf("第 %d 步须引用有效的任务类型和公式属性", i+1)
+			}
+		}
 		if step.RequirePreflight && step.Gate != "coverage" {
 			return errors.New("覆盖预检只能用于测试用例设计步骤")
 		}
@@ -198,6 +222,14 @@ func Validate(m Template) error {
 }
 
 func snapshot(m Template) *Template {
+	if m.PlanTask != nil {
+		task := *m.PlanTask
+		m.PlanTask = &task
+	}
+	if m.ReworkTask != nil {
+		task := *m.ReworkTask
+		m.ReworkTask = &task
+	}
 	if m.GitHubDelivery != nil {
 		target := *m.GitHubDelivery
 		m.GitHubDelivery = &target
@@ -206,6 +238,10 @@ func snapshot(m Template) *Template {
 	for i := range m.Steps {
 		step := &m.Steps[i]
 		step.Checks = slices.Clone(step.Checks)
+		if step.TableGate != nil {
+			gate := *step.TableGate
+			step.TableGate = &gate
+		}
 		if step.Owner != nil {
 			a := *step.Owner
 			step.Owner = &a

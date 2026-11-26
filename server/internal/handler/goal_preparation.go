@@ -149,11 +149,27 @@ func (h *Handler) createGoalPreparationIssue(ctx context.Context, goal db.Goal, 
 		return empty, err
 	}
 	description := fmt.Sprintf("## 目标\n%s\n\n## 用户成果\n%s\n\n## 验收条件\n%s", locked.Title, item.Outcome, item.AcceptanceCriteria)
+	methods, err := service.WorkMethodCatalog(ctx, q, goal.WorkspaceID)
+	if err != nil {
+		return empty, err
+	}
+	var issueTypeID pgtype.UUID
+	var properties []byte
+	for _, method := range methods {
+		if method.ID == item.Delivery.MethodID && method.PlanTask != nil {
+			issueTypeID, properties, err = tableTaskProperties(ctx, tx, q, goal.WorkspaceID, *method.PlanTask, item.Outcome)
+			if err != nil {
+				return empty, err
+			}
+			break
+		}
+	}
 	issue, err := q.CreateIssue(ctx, db.CreateIssueParams{
 		ID: id, WorkspaceID: goal.WorkspaceID, ProjectID: goal.ProjectID, Number: number,
 		Title: item.Title, Description: pgtype.Text{String: description, Valid: true},
 		Status: issuestatus.Backlog, Priority: "none", Position: position,
 		CreatorType: "member", CreatorID: owner,
+		IssueTypeID: issueTypeID, Properties: properties,
 	})
 	if err != nil {
 		return empty, err

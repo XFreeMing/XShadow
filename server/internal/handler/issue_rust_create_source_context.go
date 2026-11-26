@@ -314,7 +314,7 @@ func (h *Handler) createManualCommentSubIssueViaRust(
 		writeError(w, http.StatusInternalServerError, "failed to create issue")
 		return errSourceContextResponseWritten
 	}
-	workMethod, err := service.ReadyWorkMethodJSON(r.Context(), h.Queries, wsUUID, status, input.Title, ptrToTextOrEmpty(input.Description), "")
+	workMethod, err := service.ReadyWorkMethodJSON(r.Context(), h.Queries, wsUUID, issueTypeID, status, input.Title, ptrToTextOrEmpty(input.Description), "")
 	if err != nil {
 		slog.Warn("prepare source context create work method failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to create issue")
