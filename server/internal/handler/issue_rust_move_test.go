@@ -2,17 +2,18 @@ package handler
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestIssueMovePositionOnlyDetectsMixedFields(t *testing.T) {
+func TestIssueMoveRustEligibleDetectsMixedFields(t *testing.T) {
 	tests := []struct {
 		name string
 		body map[string]any
@@ -29,13 +30,39 @@ func TestIssueMovePositionOnlyDetectsMixedFields(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "with parent",
+			body: map[string]any{
+				"before_id": nil, "after_id": nil,
+				"parent_issue_id": "00000000-0000-4000-8000-000000000002",
+			},
+			want: true,
+		},
+		{
+			name: "clear parent",
+			body: map[string]any{"before_id": nil, "after_id": nil, "parent_issue_id": nil},
+			want: true,
+		},
+		{
 			name: "status move",
 			body: map[string]any{"before_id": nil, "after_id": nil, "status": "in_progress"},
 			want: false,
 		},
 		{
+			name: "assignee move",
+			body: map[string]any{
+				"before_id": nil, "after_id": nil,
+				"assignee_type": "agent", "assignee_id": "00000000-0000-4000-8000-000000000003",
+			},
+			want: false,
+		},
+		{
 			name: "project move",
 			body: map[string]any{"before_id": nil, "after_id": nil, "project_id": "00000000-0000-4000-8000-000000000001"},
+			want: false,
+		},
+		{
+			name: "stop previous runs",
+			body: map[string]any{"before_id": nil, "after_id": nil, "stop_previous_assignee_runs": true},
 			want: false,
 		},
 	}
@@ -49,10 +76,25 @@ func TestIssueMovePositionOnlyDetectsMixedFields(t *testing.T) {
 			if err := json.Unmarshal(raw, &fields); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if got := issueMovePositionOnly(fields); got != tc.want {
-				t.Fatalf("issueMovePositionOnly = %v, want %v", got, tc.want)
+			if got := issueMoveRustEligible(fields); got != tc.want {
+				t.Fatalf("issueMoveRustEligible = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDecodeIssueMoveParentIntentCanonicalizesUUID(t *testing.T) {
+	fields := map[string]json.RawMessage{
+		"parent_issue_id": json.RawMessage(`"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"`),
+	}
+	w := httptest.NewRecorder()
+	intent, ok := decodeIssueMoveParentIntent(w, fields)
+	if !ok || !intent.touched || intent.clear {
+		t.Fatalf("intent = %+v ok=%v", intent, ok)
+	}
+	want := util.MustParseUUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	if intent.parent != want {
+		t.Fatalf("parent = %v want %v", intent.parent, want)
 	}
 }
 
@@ -116,23 +158,36 @@ func TestIssueMoveUsesRustRequiresWritePilot(t *testing.T) {
 func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 	issueID := util.MustParseUUID("00000000-0000-4000-8000-000000000010")
 	wsID := util.MustParseUUID("00000000-0000-4000-8000-000000000011")
+	parent := util.MustParseUUID("00000000-0000-4000-8000-000000000012")
+	emptyIntent := issueMoveParentIntent{}
+
 	changed := rustIssueRelativeMoveWrite{
 		Before:  ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 1, 10)},
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		Changed: true,
 	}
-	if !rustIssueRelativeMoveWriteValid(issueID, wsID, changed) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, changed) {
 		t.Fatal("expected changed write to validate")
 	}
+
 	noop := rustIssueRelativeMoveWrite{
 		Before:  ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		Changed: false,
 	}
-	if !rustIssueRelativeMoveWriteValid(issueID, wsID, noop) {
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, noop) {
 		t.Fatal("expected noop write to validate")
 	}
-	if rustIssueRelativeMoveWriteValid(util.MustParseUUID("00000000-0000-4000-8000-000000000099"), wsID, changed) {
+	noopSignedZero := rustIssueRelativeMoveWrite{
+		Before:  ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 3, 0)},
+		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 3, math.Copysign(0, -1))},
+		Changed: false,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, noopSignedZero) {
+		t.Fatal("expected ±0 noop to validate")
+	}
+
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, util.MustParseUUID("00000000-0000-4000-8000-000000000099"), wsID, changed) {
 		t.Fatal("wrong issue id accepted")
 	}
 	ambiguous := rustIssueRelativeMoveWrite{
@@ -140,7 +195,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 3, 15)},
 		Changed: true,
 	}
-	if rustIssueRelativeMoveWriteValid(issueID, wsID, ambiguous) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, ambiguous) {
 		t.Fatal("revision jump accepted")
 	}
 	revisionOnly := rustIssueRelativeMoveWrite{
@@ -148,7 +203,7 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 10)},
 		Changed: false,
 	}
-	if rustIssueRelativeMoveWriteValid(issueID, wsID, revisionOnly) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, revisionOnly) {
 		t.Fatal("changed flag disagreed with revision")
 	}
 	lyingNoop := rustIssueRelativeMoveWrite{
@@ -156,8 +211,81 @@ func TestRustIssueRelativeMoveWriteValid(t *testing.T) {
 		After:   ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 15)},
 		Changed: false,
 	}
-	if rustIssueRelativeMoveWriteValid(issueID, wsID, lyingNoop) {
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, lyingNoop) {
 		t.Fatal("noop flag with changed revision accepted")
+	}
+
+	setParent := issueMoveParentIntent{touched: true, parent: parent}
+	parentBefore := ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 4, 20)}
+	parentBefore.ParentIssueID = pgtype.UUID{Valid: false}
+	parentAfter := ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 5, 20)}
+	parentAfter.ParentIssueID = parent
+	parentAfter.LastActivityAt = pgtype.Timestamptz{Valid: true}
+	parentMove := rustIssueRelativeMoveWrite{
+		Before: parentBefore, After: parentAfter, Changed: true,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, parentMove) {
+		t.Fatal("expected parent-only revision bump to validate")
+	}
+	wrongParent := issueMoveParentIntent{touched: true, parent: util.MustParseUUID("00000000-0000-4000-8000-000000000099")}
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, wrongParent, issueID, wsID, parentMove) {
+		t.Fatal("wrong parent id in receipt should fail")
+	}
+
+	clearParent := issueMoveParentIntent{touched: true, clear: true}
+	clearAfter := ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 6, 20)}
+	clearAfter.ParentIssueID = pgtype.UUID{Valid: false}
+	clearAfter.LastActivityAt = pgtype.Timestamptz{Valid: true}
+	clearMove := rustIssueRelativeMoveWrite{
+		Before: parentAfter, After: clearAfter, Changed: true,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, clearParent, issueID, wsID, clearMove) {
+		t.Fatal("expected parent clear receipt to validate")
+	}
+
+	combined := rustIssueRelativeMoveWrite{
+		Before: ordinaryIssueSnapshot{Issue: dbIssue(issueID, wsID, 2, 10)},
+		After: ordinaryIssueSnapshot{
+			Issue: dbIssue(issueID, wsID, 3, 25),
+		},
+		Changed: true,
+	}
+	combined.After.ParentIssueID = parent
+	combined.After.LastActivityAt = pgtype.Timestamptz{Valid: true}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, combined) {
+		t.Fatal("expected combined parent+position write with +1 revision to validate")
+	}
+	combinedBadRev := combined
+	combinedBadRev.After.Revision = 5
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, combinedBadRev) {
+		t.Fatal("revision jump on combined move should fail")
+	}
+
+	corruptTitle := combined
+	corruptTitle.After.Title = "mutated"
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, corruptTitle) {
+		t.Fatal("corrupt title should fail receipt validation")
+	}
+	missingActivity := parentMove
+	missingActivity.After.LastActivityAt = pgtype.Timestamptz{Valid: false}
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, setParent, issueID, wsID, missingActivity) {
+		t.Fatal("parent change without last_activity_at should fail")
+	}
+
+	staleParentIntent := issueMoveParentIntent{touched: true, parent: parent}
+	unchangedParent := rustIssueRelativeMoveWrite{
+		Before: parentBefore, After: parentBefore, Changed: false,
+	}
+	if !rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, unchangedParent) {
+		t.Fatal("noop with omitted parent should keep parent stable")
+	}
+	parentDrift := unchangedParent
+	parentDrift.After.ParentIssueID = parent
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, emptyIntent, issueID, wsID, parentDrift) {
+		t.Fatal("noop with parent drift should fail when parent omitted")
+	}
+	if rustIssueRelativeMoveWriteSnapshotsValid(nil, staleParentIntent, issueID, wsID, unchangedParent) {
+		t.Fatal("set parent intent with unchanged row should fail receipt binding")
 	}
 }
 

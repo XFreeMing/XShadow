@@ -122,6 +122,27 @@ pub async fn validate_parent_link(
     Ok(())
 }
 
+/// Issue row ids to lock for a parent change: the child, and distinct old/new parents.
+pub fn parent_lock_ids(
+    issue_id: &str,
+    prev_parent: Option<&str>,
+    next_parent: Option<&str>,
+) -> Vec<String> {
+    let mut ids = vec![issue_id.to_owned()];
+    if let Some(parent) = prev_parent
+        && parent != issue_id
+    {
+        ids.push(parent.to_owned());
+    }
+    if let Some(parent) = next_parent
+        && parent != issue_id
+        && ids.iter().all(|id| id != parent)
+    {
+        ids.push(parent.to_owned());
+    }
+    ids
+}
+
 pub fn map_parent_link_access(error: ParentLinkError) -> IssueReadError {
     match error {
         ParentLinkError::Invisible | ParentLinkError::ParentNotFound => {

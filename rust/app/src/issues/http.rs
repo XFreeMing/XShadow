@@ -1212,6 +1212,9 @@ async fn move_issue_relative_handler(
         Err(IssueRelativeMoveError::Conflict(message)) => {
             error_response(StatusCode::CONFLICT, message)
         }
+        Err(IssueRelativeMoveError::Parent(error)) => {
+            issue_request_error(store::map_parent_link_access(error), "failed to move issue")
+        }
         Err(IssueRelativeMoveError::RevisionConflict(actual_revision)) => (
             StatusCode::CONFLICT,
             Json(json!({ "actual_revision": actual_revision })),

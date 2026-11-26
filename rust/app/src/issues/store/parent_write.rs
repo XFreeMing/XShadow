@@ -86,26 +86,6 @@ fn resolved_parent_target(
     }
 }
 
-fn parent_lock_ids(
-    issue_id: &str,
-    prev_parent: Option<&str>,
-    next_parent: Option<&str>,
-) -> Vec<String> {
-    let mut ids = vec![issue_id.to_owned()];
-    if let Some(parent) = prev_parent
-        && parent != issue_id
-    {
-        ids.push(parent.to_owned());
-    }
-    if let Some(parent) = next_parent
-        && parent != issue_id
-        && ids.iter().all(|id| id != parent)
-    {
-        ids.push(parent.to_owned());
-    }
-    ids
-}
-
 pub async fn update_issue_parent(
     pool: &PgPool,
     workspace_id: &str,
@@ -158,7 +138,7 @@ pub async fn update_issue_parent(
         )));
     }
 
-    let lock_ids = parent_lock_ids(issue_id, prev_parent.as_deref(), next_parent.flatten());
+    let lock_ids = parent_link::parent_lock_ids(issue_id, prev_parent.as_deref(), next_parent.flatten());
     parent_link::lock_issue_rows_ordered(&mut tx, workspace_id, lock_ids).await?;
 
     let locked = sqlx::query(&format!(
@@ -278,7 +258,7 @@ mod tests {
 
     #[test]
     fn parent_lock_ids_include_child_old_and_new_parents() {
-        let ids = parent_lock_ids(
+        let ids = parent_link::parent_lock_ids(
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
             Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),

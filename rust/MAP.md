@@ -16,7 +16,17 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_BATCH_PILOT` 另覆盖 `POST /api/issues/batch-update` 中仅含 `parent_issue_id` 的批量父链改写（与普通标量批量编辑共用该开关）。Go 按可见行调用同一 Rust 父链命令；不可见、无效、未变或修订冲突的行跳过且不计入 `updated`；传输或回执异常时中止后续行。
 
-同一试点覆盖 `POST /api/issues/{id}/move` 中仅含 `before_id`、`after_id` 与可选 `expected_revision` 的列内相对排序。Go 保留公开校验与混合字段的旧路径。Rust 在同一事务中按确定性顺序锁定邻接锚点与被移动任务，复核可见范围与修订，由锚点推导规范位置并写入；锚点缺失、越权、乱序、精度耗尽或修订不符时不写入。位置未变时不推进修订也不重复发事件。含状态、指派、父任务、项目或其他列变更的请求仍经 Go 解析锚点后走 `UpdateIssue`。
+同一试点覆盖 `POST /api/issues/{id}/move` 中仅含 `before_id`、`after_id`、可选 `expected_revision` 以及可选 `parent_issue_id`（缺省不改、显式 `null` 解除、UUID 设置）的列内相对排序与组内/跨父级拖拽。Go 保留公开校验与混合字段的旧路径。Rust 在持锁后于同一事务内按确定性 UUID 顺序锁定邻接锚点、被移动任务及涉及父任务；父链改写另取工作区级 `pg_advisory_xact_lock` 与递归祖先防环（与 `PUT …/parent` 相同）。复核项目可见范围、修订、锚点顺序后由锚点推导规范位置并写入；失败时不留半次移动。位置与父级同时变化只递增一次 `revision`；空移动只读，`changed: false` 时不改写也不重复发事件。Go 校验回执快照后发布既有 `issue:updated`，并在父级实际变化时调用 `processChildEvents`（与 `UpdateIssue` 相同，不含 comment notification、squad 派工或状态自动推进）。
+
+**仍走 Go 的 move 组合（后续可拆切片）**
+
+| 请求字段组合 | 现有处理方 | 事务与副作用边界 |
+| --- | --- | --- |
+| `status`（含内置/自定义/工作流/终态）± `stop_previous_assignee_runs` | Go `UpdateIssue` | `XSHADOW_ISSUES_RUST_STATUS_PILOT` / `TERMINAL_STATUS_PILOT` / `WORKFLOW_PILOT` 单任务 PUT；move 未接入 |
+| `assignee_type` + `assignee_id`（± `suppress_run`） | Go `UpdateIssue` | `XSHADOW_ISSUES_RUST_ASSIGN_PILOT` 单任务 assign 事务；move 未接入 |
+| `project_id` | Go `UpdateIssue` | 项目锁与可见性在 Go `updateIssueAtomically`；Rust 无 move+project 命令 |
+| 上述任一项与锚点/父级同包 | Go `UpdateIssue`（先解析锚点 position） | 全字段副作用：派工、`WillEnqueueRun`、`stopPreviousAssigneeRuns`、时间线、工作方法 |
+| 仅锚点 ± 父级 | Rust `POST /internal/issues/{id}/move`（本试点） | 单 revision；子任务规则经 `processChildEvents` |
 
 同一试点设置也覆盖 `PUT`、`DELETE /api/issues/{id}/properties/{propertyId}`。Go 规范化字段值并检查引用，Rust 通过任务行锁和属性定义的共享事务锁执行单字段更新。定义发生变化时，网关只在收到明确未写入的回执后重新读取定义并校验。清除必填字段的检查依据锁定后的任务类型。
 

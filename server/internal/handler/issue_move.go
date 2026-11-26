@@ -118,7 +118,7 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if issueMovePositionOnly(fields) {
+	if issueMoveRustEligible(fields) {
 		useRust, err := h.issueMoveUsesRust(r, current.WorkspaceID)
 		if err != nil {
 			if !writeQueryCancellation(w, r, err) {
@@ -131,7 +131,11 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			h.moveIssuePositionOnlyViaRust(w, r, userID, current, beforeID, afterID, expectedRevision)
+			parentIntent, parentOK := decodeIssueMoveParentIntent(w, fields)
+			if !parentOK {
+				return
+			}
+			h.moveIssueViaRust(w, r, userID, current, parentIntent, beforeID, afterID, expectedRevision)
 			return
 		}
 	}
