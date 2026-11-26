@@ -13,6 +13,8 @@ pub use list::{
 mod ordinary;
 pub use ordinary::{OrdinaryIssueEdit, OrdinaryIssueEditError, update_ordinary_issue};
 mod move_write;
+mod parent_link;
+mod parent_write;
 pub use move_write::{IssueRelativeMove, IssueRelativeMoveError, move_issue_relative};
 mod metadata_write;
 pub use metadata_write::{IssueMetadataWrite, IssueMetadataWriteError, write_issue_metadata};
@@ -57,6 +59,8 @@ mod status_write;
 mod terminal_wakeup;
 mod workflow_squad_write;
 pub use assign_write::{IssueAssignEdit, IssueAssignEditError, update_issue_assign};
+pub use parent_link::map_parent_link_access;
+pub use parent_write::{IssueParentEdit, IssueParentEditError, update_issue_parent};
 pub use batch_delete_write::{IssueBatchDeleteWrite, batch_delete_issues};
 pub use comment_delete_write::{
     IssueCommentDeleteError, IssueCommentDeleteRequest, delete_issue_comment,

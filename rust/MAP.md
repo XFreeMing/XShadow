@@ -12,7 +12,9 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 `XSHADOW_ISSUES_RUST_TABLE_PILOT` 独立指定表格行、分组标题和筛选统计的试点工作区。Go 校验公开请求、解析目录与智能体可见范围，并负责编码游标和分组描述。Rust 在每个请求的只读快照内检查项目可见范围并查询行、子任务、分组和各筛选项的计数。筛选统计按需忽略该项自身的平铺条件，保留高级筛选。清空试点设置后，三个入口回到 Go。
 
-`XSHADOW_ISSUES_RUST_WRITE_PILOT` 独立指定普通编辑试点工作区，支持 `PUT /api/issues/{id}` 的标题、描述、附件关联、优先级、排序位置、开始日期和截止日期。Go 验证公开请求并发布原任务事件。Rust 在锁定任务的事务内检查项目可见范围、核对修订、合并渠道媒体、计算待开始的工作方法推荐并写入。混合其他字段的请求继续由 Go 执行。试点上游不可用时，已选中的写入返回 `503`。清空设置后，普通编辑由 Go 执行。
+`XSHADOW_ISSUES_RUST_WRITE_PILOT` 独立指定普通编辑试点工作区，支持 `PUT /api/issues/{id}` 的标题、描述、附件关联、优先级、排序位置、开始日期和截止日期。同一试点还覆盖仅修改 `parent_issue_id` 的父任务链改写（可附带 `expected_revision`）：Rust 与 Go 在同事务内先获取工作区级 `pg_advisory_xact_lock(hashtextextended(workspace||':issue_parent_hierarchy'))`，再按 UUID 顺序锁定涉及任务行，用递归祖先遍历（非 10 跳限制）校验自引用与成环，并在写入前复核。Go 原生路径经 `updateIssueAtomically`/`updateIssueWithStatusGuard` 与创建事务共用该边界。Go 验证回执快照后发布既有 `issue:updated` 与子任务规则处理。混合其他字段的请求继续由 Go。试点上游不可用时，已选中的写入返回 `503`。清空设置后，普通编辑与父链改写由 Go 执行。
+
+`XSHADOW_ISSUES_RUST_BATCH_PILOT` 另覆盖 `POST /api/issues/batch-update` 中仅含 `parent_issue_id` 的批量父链改写（与普通标量批量编辑共用该开关）。Go 按可见行调用同一 Rust 父链命令；不可见、无效、未变或修订冲突的行跳过且不计入 `updated`；传输或回执异常时中止后续行。
 
 同一试点覆盖 `POST /api/issues/{id}/move` 中仅含 `before_id`、`after_id` 与可选 `expected_revision` 的列内相对排序。Go 保留公开校验与混合字段的旧路径。Rust 在同一事务中按确定性顺序锁定邻接锚点与被移动任务，复核可见范围与修订，由锚点推导规范位置并写入；锚点缺失、越权、乱序、精度耗尽或修订不符时不写入。位置未变时不推进修订也不重复发事件。含状态、指派、父任务、项目或其他列变更的请求仍经 Go 解析锚点后走 `UpdateIssue`。
 

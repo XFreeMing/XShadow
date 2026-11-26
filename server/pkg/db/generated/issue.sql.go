@@ -1987,6 +1987,17 @@ func (q *Queries) LockIssueForDescriptionUpdate(ctx context.Context, arg LockIss
 	return i, err
 }
 
+const lockIssueParentHierarchy = `-- name: LockIssueParentHierarchy :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text || ':issue_parent_hierarchy', 0))
+`
+
+// Serializes every parent_issue_id mutation in a workspace. Rust parent pilot
+// and Go create/update paths take this before row locks or ancestry checks.
+func (q *Queries) LockIssueParentHierarchy(ctx context.Context, dollar_1 pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockIssueParentHierarchy, dollar_1)
+	return err
+}
+
 const lockIssuesForDuplicateMark = `-- name: LockIssuesForDuplicateMark :many
 SELECT i.id,
        (i.status = 'cancelled' AND EXISTS (
@@ -2034,6 +2045,24 @@ func (q *Queries) LockIssuesForDuplicateMark(ctx context.Context, arg LockIssues
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockIssuesForParentWrite = `-- name: LockIssuesForParentWrite :exec
+SELECT 1 FROM issue
+WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+ORDER BY id
+FOR UPDATE
+`
+
+type LockIssuesForParentWriteParams struct {
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	Column2     []pgtype.UUID `json:"column_2"`
+}
+
+// Deterministic issue row locks for parent link writers in the same workspace.
+func (q *Queries) LockIssuesForParentWrite(ctx context.Context, arg LockIssuesForParentWriteParams) error {
+	_, err := q.db.Exec(ctx, lockIssuesForParentWrite, arg.WorkspaceID, arg.Column2)
+	return err
 }
 
 const markIssueFirstExecuted = `-- name: MarkIssueFirstExecuted :one
@@ -2632,4 +2661,51 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.IssueTypeID,
 	)
 	return i, err
+}
+
+const walkIssueParentAncestors = `-- name: WalkIssueParentAncestors :many
+WITH RECURSIVE walk AS (
+  SELECT i.id, i.parent_issue_id, ARRAY[i.id]::uuid[] AS visited, false AS cycle
+  FROM issue i
+  WHERE i.workspace_id = $1 AND i.id = $2
+  UNION ALL
+  SELECT p.id, p.parent_issue_id, walk.visited || p.id, p.id = ANY(walk.visited)
+  FROM walk
+  JOIN issue p ON p.id = walk.parent_issue_id AND p.workspace_id = $1
+  WHERE walk.parent_issue_id IS NOT NULL AND NOT walk.cycle
+)
+SELECT walk.id, walk.cycle
+FROM walk
+`
+
+type WalkIssueParentAncestorsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+type WalkIssueParentAncestorsRow struct {
+	ID    pgtype.UUID `json:"id"`
+	Cycle bool        `json:"cycle"`
+}
+
+// Upward parent chain from parent_id inside a workspace. cycle is true when
+// stored parent links already form a loop.
+func (q *Queries) WalkIssueParentAncestors(ctx context.Context, arg WalkIssueParentAncestorsParams) ([]WalkIssueParentAncestorsRow, error) {
+	rows, err := q.db.Query(ctx, walkIssueParentAncestors, arg.WorkspaceID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WalkIssueParentAncestorsRow{}
+	for rows.Next() {
+		var i WalkIssueParentAncestorsRow
+		if err := rows.Scan(&i.ID, &i.Cycle); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

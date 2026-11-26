@@ -25,6 +25,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueguard"
+	"github.com/multica-ai/multica/server/internal/issueparentlink"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -286,10 +287,13 @@ func (h *Handler) runWithIssueStatusGuard(ctx context.Context, workspaceID pgtyp
 }
 
 // updateIssueWithStatusGuard writes params under the status-archive guard.
-func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pgtype.UUID, statusKey string, params db.UpdateIssueParams) (db.Issue, error) {
+func (h *Handler) updateIssueWithStatusGuard(ctx context.Context, workspaceID pgtype.UUID, statusKey string, params db.UpdateIssueParams, parentTouched bool) (db.Issue, error) {
 	var issue db.Issue
 	var cancelledWakeups []db.AgentTaskQueue
 	err := h.runWithIssueStatusGuard(ctx, workspaceID, statusKey, func(q *db.Queries) error {
+		if err := issueparentlink.GuardUpdate(ctx, q, workspaceID, params.ID, params.ParentIssueID, parentTouched); err != nil {
+			return err
+		}
 		if params.DuplicateOfIssueID.Valid {
 			if err := lockAndCheckDuplicateMark(ctx, q, workspaceID, params.ID, params.DuplicateOfIssueID); err != nil {
 				return err
@@ -3846,6 +3850,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
 		return
 	}
+	if errors.Is(err, service.ErrCircularParent) {
+		writeError(w, http.StatusBadRequest, "circular parent relationship detected")
+		return
+	}
 	if errors.Is(err, service.ErrProjectNotFound) {
 		writeError(w, http.StatusBadRequest, "project not found in this workspace")
 		return
@@ -4051,6 +4059,11 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 	// must precede both attachment and issue row locks everywhere. (MUL-6243)
 	if err := assertIssueStatusStillActive(ctx, qtx, workspaceID, statusKey); err != nil {
 		return db.Issue{}, db.Issue{}, false, err
+	}
+	if _, parentTouched := rawFields["parent_issue_id"]; parentTouched {
+		if err := issueparentlink.GuardUpdate(ctx, qtx, workspaceID, params.ID, params.ParentIssueID, true); err != nil {
+			return db.Issue{}, db.Issue{}, false, err
+		}
 	}
 	if len(attachmentIDs) > 0 {
 		if _, err := qtx.LockAttachmentsForIssueLink(ctx, db.LockAttachmentsForIssueLinkParams{
@@ -4311,19 +4324,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			if !h.requireProjectVisible(w, r, uuidToString(prevIssue.WorkspaceID), newParent.ProjectID, http.StatusBadRequest, "parent issue not found in this workspace") {
 				return
 			}
-			// Cycle detection: walk up from the new parent to ensure we don't reach this issue.
-			cursor := newParentID
-			for depth := 0; depth < 10; depth++ {
-				ancestor, err := h.Queries.GetIssue(r.Context(), cursor)
-				if err != nil || !ancestor.ParentIssueID.Valid {
-					break
-				}
-				if ancestor.ParentIssueID == prevIssue.ID {
-					writeError(w, http.StatusBadRequest, "circular parent relationship detected")
-					return
-				}
-				cursor = ancestor.ParentIssueID
-			}
 			params.ParentIssueID = newParentID
 		} else {
 			params.ParentIssueID = pgtype.UUID{Valid: false} // explicit null = remove parent
@@ -4463,6 +4463,17 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	rustParent := false
+	if !rustTerminal && !rustStatus && !rustAssign {
+		rustParent, err = h.parentIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, handoff)
+		if err != nil {
+			if !writeQueryCancellation(w, r, err) {
+				slog.Warn("resolve rust issue parent pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+				writeError(w, http.StatusInternalServerError, "failed to resolve issue parent route")
+			}
+			return
+		}
+	}
 	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params, attachmentIDs)
 	if err != nil {
 		if !writeQueryCancellation(w, r, err) {
@@ -4592,10 +4603,25 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+	} else if rustParent {
+		issue, prevIssue, ok = h.updateIssueParentViaRust(
+			w, r, userID, prevIssue, params, req, rawFields,
+		)
+		if !ok {
+			return
+		}
 	} else if rustEdit {
 		issue, prevIssue, attachmentsChanged, ok = h.updateOrdinaryIssueViaRust(w, r, userID, prevIssue, params, req, rawFields, attachmentIDs)
 		if !ok {
 			return
+		}
+	} else if parentIssueUpdateOnly(rawFields, attachmentIDs) {
+		var lockedPrev db.Issue
+		issue, lockedPrev, _, err = h.updateIssueAtomically(
+			writeCtx, prevIssue.WorkspaceID, params, rawFields, nil, nil, attachmentIDs, statusKeyForGuard, handoff != nil,
+		)
+		if lockedPrev.ID.Valid {
+			prevIssue = lockedPrev
 		}
 	} else if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
 		var lockedPrev db.Issue
@@ -4606,13 +4632,17 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			prevIssue = lockedPrev
 		}
 	} else {
-		issue, err = h.updateIssueWithStatusGuard(writeCtx, prevIssue.WorkspaceID, statusKeyForGuard, params)
+		_, parentTouched := rawFields["parent_issue_id"]
+		issue, err = h.updateIssueWithStatusGuard(writeCtx, prevIssue.WorkspaceID, statusKeyForGuard, params, parentTouched)
 	}
 	if err != nil {
 		if writeIssueStatusRaceError(w, err) {
 			return
 		}
 		if writeDuplicateMarkError(w, err) {
+			return
+		}
+		if writeIssueParentLinkError(w, err) {
 			return
 		}
 		if errors.Is(err, errIssueFieldConflict) {
@@ -5369,6 +5399,14 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	batchParentPilot, err := h.batchParentIssueEditUsesRust(r, wsUUID, rawUpdates)
+	if err != nil {
+		if !writeQueryCancellation(w, r, err) {
+			slog.Warn("resolve rust batch parent edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
+			writeError(w, http.StatusInternalServerError, "failed to resolve issue parent route")
+		}
+		return
+	}
 
 	rustBatch, err := h.batchOrdinaryIssueEditUsesRust(r, wsUUID, rawUpdates)
 	if err != nil {
@@ -5504,23 +5542,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				if err != nil || !hidden.CanSeeProject(newParent.ProjectID) {
 					continue
 				}
-				// Cycle detection: walk up from the new parent to ensure we don't reach this issue.
-				cycleDetected := false
-				cursor := newParentID
-				for depth := 0; depth < 10; depth++ {
-					ancestor, err := h.Queries.GetIssue(r.Context(), cursor)
-					if err != nil || !ancestor.ParentIssueID.Valid {
-						break
-					}
-					if ancestor.ParentIssueID == prevIssue.ID {
-						cycleDetected = true
-						break
-					}
-					cursor = ancestor.ParentIssueID
-				}
-				if cycleDetected {
-					continue
-				}
 				params.ParentIssueID = newParentID
 			} else {
 				params.ParentIssueID = pgtype.UUID{Valid: false}
@@ -5575,7 +5596,22 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		var nativeAssignment rustAssignWriteResult
 		var nativeStatus rustStatusWriteResult
 		var nativeWorkflow rustWorkflowWriteResult
-		if batchAssignPilot && handoff == nil &&
+		var nativeParent rustParentWriteResult
+		if batchParentPilot {
+			outcome, result := h.tryBatchUpdateIssueParentViaRust(
+				w, r, userID, prevIssue, params, rawUpdates,
+			)
+			switch outcome {
+			case batchParentRustAbort:
+				return
+			case batchParentRustSkipRow:
+				continue
+			case batchParentRustDone:
+				nativeParent = result
+				prevIssue, issue = result.before, result.after
+			}
+		}
+		if !nativeParent.after.ID.Valid && batchAssignPilot && handoff == nil &&
 			h.batchAssignIssueUsesOwnedNative(r.Context(), userID, prevIssue, params) {
 			actorType, actorID := h.resolveActor(r, userID, workspaceID)
 			outcome, result := h.tryBatchUpdateIssueAssignViaRust(
@@ -5630,7 +5666,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid && !nativeWorkflow.after.ID.Valid {
+		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid && !nativeWorkflow.after.ID.Valid && !nativeParent.after.ID.Valid {
 			writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 			if req.Updates.Description != nil {
 				// One batch-level base cannot describe multiple issue documents.
@@ -5644,7 +5680,8 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 					prevIssue = lockedPrev
 				}
 			} else {
-				issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params)
+				_, parentTouched := rawUpdates["parent_issue_id"]
+				issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params, parentTouched)
 			}
 		}
 
@@ -5654,6 +5691,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			// same way. Abort with 409 instead of reporting a partial update.
 			if writeIssueStatusRaceError(w, err) {
 				return
+			}
+			if isIssueParentLinkRejection(err) {
+				continue
 			}
 			slog.Warn("batch update issue failed", "issue_id", issueID, "error", err)
 			continue

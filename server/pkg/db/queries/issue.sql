@@ -838,3 +838,31 @@ UPDATE issue SET acceptance_criteria = sqlc.arg('trace')::jsonb,
 WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
   AND revision = sqlc.arg('issue_revision')
 RETURNING *;
+
+-- name: LockIssueParentHierarchy :exec
+-- Serializes every parent_issue_id mutation in a workspace. Rust parent pilot
+-- and Go create/update paths take this before row locks or ancestry checks.
+SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text || ':issue_parent_hierarchy', 0));
+
+-- name: LockIssuesForParentWrite :exec
+-- Deterministic issue row locks for parent link writers in the same workspace.
+SELECT 1 FROM issue
+WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+ORDER BY id
+FOR UPDATE;
+
+-- name: WalkIssueParentAncestors :many
+-- Upward parent chain from parent_id inside a workspace. cycle is true when
+-- stored parent links already form a loop.
+WITH RECURSIVE walk AS (
+  SELECT i.id, i.parent_issue_id, ARRAY[i.id]::uuid[] AS visited, false AS cycle
+  FROM issue i
+  WHERE i.workspace_id = $1 AND i.id = $2
+  UNION ALL
+  SELECT p.id, p.parent_issue_id, walk.visited || p.id, p.id = ANY(walk.visited)
+  FROM walk
+  JOIN issue p ON p.id = walk.parent_issue_id AND p.workspace_id = $1
+  WHERE walk.parent_issue_id IS NOT NULL AND NOT walk.cycle
+)
+SELECT walk.id, walk.cycle
+FROM walk;

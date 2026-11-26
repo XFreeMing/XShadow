@@ -27,7 +27,8 @@ use super::store::{
     IssueCommentEdit, IssueCommentEditError, IssueCreateError, IssueCreateRequest,
     IssueMethodAdoptWrite, IssueMethodAdoptWriteError, IssueReactionWrite, IssueReactionWriteError,
     IssueStatusEdit, IssueStatusEditError, IssueWorkflowSquadEdit, IssueWorkflowSquadEditError,
-    IssueRelativeMove, IssueRelativeMoveError, OrdinaryIssueEdit, OrdinaryIssueEditError,
+    IssueRelativeMove, IssueRelativeMoveError, IssueParentEdit, IssueParentEditError,
+    OrdinaryIssueEdit, OrdinaryIssueEditError,
 };
 use super::store::{IssueLabelWrite, IssueLabelWriteError};
 use super::store::{IssueMetadataWrite, IssueMetadataWriteError};
@@ -216,6 +217,7 @@ pub fn router(pool: PgPool, token: String) -> Router {
             put(update_issue_workflow_squad_handoff),
         )
         .route("/internal/issues/{id}/assign", put(update_issue_assign))
+        .route("/internal/issues/{id}/parent", put(update_issue_parent))
         .route("/internal/issues/{id}/move", post(move_issue_relative_handler))
         .route(
             "/internal/issues/{id}/comments",
@@ -470,6 +472,42 @@ async fn write_issue_property(
         Err(IssuePropertyWriteError::Json(error)) => {
             eprintln!("rust issue property write returned invalid JSON: {error}");
             error_response(StatusCode::INTERNAL_SERVER_ERROR, failure)
+        }
+    }
+}
+
+async fn update_issue_parent(
+    State(app): State<Arc<Issues>>,
+    Extension(ctx): Extension<TrustedContext>,
+    Path(id): Path<String>,
+    Json(edit): Json<IssueParentEdit>,
+) -> Response {
+    if !is_uuid(&id) {
+        return error_response(StatusCode::NOT_FOUND, "issue not found");
+    }
+    match store::update_issue_parent(&app.pool, &ctx.workspace_id, &ctx.actor, &id, edit).await {
+        Ok(write) => Json(write).into_response(),
+        Err(IssueParentEditError::Access(error)) => {
+            issue_request_error(error, "failed to update issue")
+        }
+        Err(IssueParentEditError::InvalidInput(message)) => {
+            error_response(StatusCode::BAD_REQUEST, message)
+        }
+        Err(IssueParentEditError::Parent(error)) => {
+            issue_request_error(store::map_parent_link_access(error), "failed to update issue")
+        }
+        Err(IssueParentEditError::RevisionConflict(actual_revision)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "actual_revision": actual_revision })),
+        )
+            .into_response(),
+        Err(IssueParentEditError::Database(error)) => {
+            eprintln!("rust issue parent write failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
+        }
+        Err(IssueParentEditError::Snapshot(error)) => {
+            eprintln!("rust issue parent write snapshot failed: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to update issue")
         }
     }
 }

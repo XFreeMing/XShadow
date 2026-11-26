@@ -21,6 +21,7 @@ use super::create_validate::{
     validate_labels_before_number,
 };
 use super::ordinary::set_write_actor;
+use super::parent_link;
 use super::status_dispatch::{
     self, PreparedStatusEnqueue, PromotionEnqueueOutcome, StatusPromotionError,
 };
@@ -513,6 +514,10 @@ async fn create_issue_attempt(
         ));
     }
     revalidate_type_and_properties(&mut tx, workspace_id, request).await?;
+    if request.parent_issue_id.is_some() {
+        crate::issues::store::parent_link::lock_workspace_parent_hierarchy(&mut tx, workspace_id)
+            .await?;
+    }
     let effective_project =
         match guard_parent_projects_and_assignee(&mut tx, workspace_id, member_id, request).await {
             Err(IssueCreateError::ParentNotFound | IssueCreateError::ProjectNotFound)
@@ -751,6 +756,28 @@ async fn create_issue_attempt(
     } else {
         (None, None, None)
     };
+
+    if let Some(parent) = request.parent_issue_id.as_deref() {
+        parent_link::lock_issue_rows_ordered(
+            &mut tx,
+            workspace_id,
+            [request.id.clone(), parent.to_string()],
+        )
+        .await?;
+        if let Err(err) = parent_link::validate_parent_link(
+            &mut tx,
+            workspace_id,
+            &request.id,
+            Some(parent),
+            &super::HiddenProjects::default(),
+        )
+        .await
+        {
+            return Err(IssueCreateError::Access(
+                parent_link::map_parent_link_access(err),
+            ));
+        }
+    }
 
     let inserted = sqlx::query(
         "INSERT INTO issue (

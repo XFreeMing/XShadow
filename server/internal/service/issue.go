@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueguard"
+	"github.com/multica-ai/multica/server/internal/issueparentlink"
 	"github.com/multica-ai/multica/server/internal/issueposition"
 	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -157,6 +158,10 @@ var ErrActiveDuplicate = errors.New("active duplicate issue exists")
 // orphaned or cross-workspace child issues; callers translate this into
 // their transport's 400 / Lark card error.
 var ErrParentIssueNotFound = errors.New("parent issue not found in this workspace")
+
+// ErrCircularParent signals that assigning the requested parent would close a
+// parent/child loop inside the workspace.
+var ErrCircularParent = errors.New("circular parent relationship detected")
 
 // ErrProjectNotFound signals that the supplied ProjectID does not exist
 // in the issue's workspace. Cross-workspace project IDs are rejected
@@ -400,6 +405,20 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		return IssueCreateResult{}, err
 	}
 
+	issueID := dbid.NewV7()
+	if p.ParentIssueID.Valid {
+		if err := issueparentlink.GuardCreate(ctx, qtx, p.WorkspaceID, issueID, p.ParentIssueID); err != nil {
+			switch {
+			case errors.Is(err, issueparentlink.ErrParentNotFound):
+				return IssueCreateResult{}, ErrParentIssueNotFound
+			case errors.Is(err, issueparentlink.ErrSelfParent), errors.Is(err, issueparentlink.ErrCircular):
+				return IssueCreateResult{}, ErrCircularParent
+			default:
+				return IssueCreateResult{}, fmt.Errorf("guard parent link for create: %w", err)
+			}
+		}
+	}
+
 	duplicate, found, err := issueguard.LockAndFindActiveDuplicate(ctx, qtx, p.WorkspaceID, projectID, p.ParentIssueID, p.Title, p.AllowDuplicate)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("duplicate guard: %w", err)
@@ -445,7 +464,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 			}
 		}
 		issue, err = qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
-			ID:              dbid.NewV7(),
+			ID:              issueID,
 			WorkspaceID:     p.WorkspaceID,
 			Title:           p.Title,
 			Description:     p.Description,
@@ -471,7 +490,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
-			ID:            dbid.NewV7(),
+			ID:            issueID,
 			WorkspaceID:   p.WorkspaceID,
 			Title:         p.Title,
 			Description:   p.Description,
