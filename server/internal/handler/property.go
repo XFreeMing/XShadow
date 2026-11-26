@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,7 +54,7 @@ const (
 	maxPropertyActorValues = 20
 )
 
-var validPropertyTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", "multi_text", "multi_url"}
+var validPropertyTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", "multi_text", "multi_url", "record_relation"}
 
 // Property icons use stable catalog keys that the Web client maps to its
 // icon glyphs. Keeping this allowlist at the API boundary prevents arbitrary text
@@ -94,6 +95,8 @@ type PropertyOption struct {
 
 type PropertyConfig struct {
 	Options []PropertyOption `json:"options,omitempty"`
+	// Target table for record_relation properties — mirrors generic-field relation config.
+	TargetTableID string `json:"target_table_id,omitempty"`
 }
 
 type PropertyResponse struct {
@@ -234,15 +237,39 @@ func propertyTypeHasOptions(t string) bool {
 	return t == "select" || t == "multi_select"
 }
 
+func propertyTypeIsRecordRelation(t string) bool {
+	return issueproperty.IsRecordRelation(t)
+}
+
 // validatePropertyConfig canonicalizes the config for storage. Select-type
 // properties require 1..200 options; each option gets a stable server-assigned
 // UUID if the caller didn't provide one (values reference option IDs, so
 // option renames never touch issue rows). Non-select types must not carry
 // options and are stored as {}.
 func validatePropertyConfig(propType string, cfg *PropertyConfig) ([]byte, error) {
+	if propertyTypeIsRecordRelation(propType) {
+		if cfg != nil && len(cfg.Options) > 0 {
+			return nil, fmt.Errorf("type %q does not accept options", propType)
+		}
+		raw, err := json.Marshal(cfg)
+		if cfg == nil {
+			raw = []byte(`{}`)
+		}
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := issueproperty.ParseRecordRelationConfig(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(parsed)
+	}
 	if !propertyTypeHasOptions(propType) {
 		if cfg != nil && len(cfg.Options) > 0 {
 			return nil, fmt.Errorf("type %q does not accept options", propType)
+		}
+		if cfg != nil && strings.TrimSpace(cfg.TargetTableID) != "" {
+			return nil, fmt.Errorf("type %q does not accept target_table_id", propType)
 		}
 		return []byte(`{}`), nil
 	}
@@ -316,6 +343,40 @@ func parseActorRefList(items []any) ([]actorRef, error) {
 }
 func actorRefsInValue(propType string, stored []byte) ([]actorRef, error) {
 	return issueproperty.ActorRefsInValue(propType, stored)
+}
+
+func recordRelationRefsHTTPError(err error) (int, string) {
+	switch {
+	case errors.Is(err, issueproperty.ErrRecordRelationRecords):
+		return http.StatusBadRequest, err.Error()
+	case err != nil:
+		return http.StatusInternalServerError, "failed to resolve record references"
+	default:
+		return 0, ""
+	}
+}
+
+func (h *Handler) ensureGenericTargetTable(ctx context.Context, workspaceID, tableID string) (int, string) {
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return http.StatusBadRequest, "invalid workspace_id"
+	}
+	tableUUID, err := util.ParseUUID(tableID)
+	if err != nil {
+		return http.StatusBadRequest, "target_table_id must be a UUID"
+	}
+	var found bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM generic_table WHERE id = $1 AND workspace_id = $2
+		)
+	`, tableUUID, wsUUID).Scan(&found); err != nil {
+		return http.StatusInternalServerError, "failed to resolve target table"
+	}
+	if !found {
+		return http.StatusBadRequest, "target_table_id does not refer to a table in this workspace"
+	}
+	return 0, ""
 }
 
 // resolveActorRefs checks that every reference points at a real member of this
@@ -490,6 +551,17 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if propertyTypeIsRecordRelation(req.Type) {
+		relCfg, err := issueproperty.ParseRecordRelationConfig(configJSON)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if status, msg := h.ensureGenericTargetTable(r.Context(), workspaceID, relCfg.TargetTableID); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+	}
 
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
@@ -497,7 +569,7 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 	}
 	var property db.IssueProperty
 	var capErr error
-	err = h.withPropertyLock(r, []string{"props:" + workspaceID}, func(q *db.Queries) error {
+	err = h.withPropertyLock(r, []string{"props:" + workspaceID}, func(_ pgx.Tx, q *db.Queries) error {
 		active, err := q.CountActiveIssueProperties(r.Context(), wsUUID)
 		if err != nil {
 			return err
@@ -566,7 +638,7 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
 	}
-	err := h.withPropertyLock(r, []string{"props:" + workspaceID, "prop:" + uuidToString(idUUID)}, func(q *db.Queries) error {
+	err := h.withPropertyLock(r, []string{"props:" + workspaceID, "prop:" + uuidToString(idUUID)}, func(_ pgx.Tx, q *db.Queries) error {
 		existing, err := q.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: idUUID, WorkspaceID: wsUUID})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -600,6 +672,19 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 			configJSON, err := validatePropertyConfig(existing.Type, req.Config)
 			if err != nil {
 				return fail(http.StatusBadRequest, err.Error())
+			}
+			if propertyTypeIsRecordRelation(existing.Type) {
+				existingRel, err := issueproperty.ParseRecordRelationConfig(existing.Config)
+				if err != nil {
+					return fail(http.StatusBadRequest, err.Error())
+				}
+				nextRel, err := issueproperty.ParseRecordRelationConfig(configJSON)
+				if err != nil {
+					return fail(http.StatusBadRequest, err.Error())
+				}
+				if existingRel.TargetTableID != nextRel.TargetTableID {
+					return fail(http.StatusBadRequest, "target_table_id cannot be changed for record_relation properties")
+				}
 			}
 			if removed := removedOptionIDs(existing.Config, configJSON); len(removed) > 0 {
 				rows, err := q.CountIssuesUsingPropertyOptions(r.Context(), db.CountIssuesUsingPropertyOptionsParams{
@@ -692,7 +777,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
 	}
-	validate := func(q *db.Queries) (db.IssueProperty, json.RawMessage, error) {
+	validate := func(q *db.Queries, tx pgx.Tx) (db.IssueProperty, json.RawMessage, error) {
 		def, err := q.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: propertyID, WorkspaceID: issue.WorkspaceID})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -719,6 +804,29 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 				return def, nil, fail(status, msg)
 			}
 		}
+		if propertyTypeIsRecordRelation(def.Type) {
+			relCfg, err := issueproperty.ParseRecordRelationConfig(def.Config)
+			if err != nil {
+				return def, nil, fail(http.StatusBadRequest, err.Error())
+			}
+			recordIDs, err := issueproperty.RecordIDsInValue(value)
+			if err != nil {
+				return def, nil, fail(http.StatusBadRequest, err.Error())
+			}
+			var verifier issueproperty.DBTX = h.DB
+			lockTarget := false
+			if tx != nil {
+				verifier = tx
+				lockTarget = true
+			}
+			if err := issueproperty.VerifyRecordRelationRefs(
+				r.Context(), verifier, uuidToString(issue.WorkspaceID), relCfg.TargetTableID, recordIDs, lockTarget,
+			); err != nil {
+				if status, msg := recordRelationRefsHTTPError(err); status != 0 {
+					return def, nil, fail(status, msg)
+				}
+			}
+		}
 		return def, value, nil
 	}
 	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
@@ -730,7 +838,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		for range 3 {
 			var def db.IssueProperty
 			var value json.RawMessage
-			def, value, err = validate(h.Queries)
+			def, value, err = validate(h.Queries, nil)
 			if err != nil {
 				break
 			}
@@ -751,8 +859,8 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Validation and write share the advisory lock across both backends.
 		// Rust checks that the validated config is still current under that lock.
-		err = h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(q *db.Queries) error {
-			def, value, err := validate(q)
+		err = h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(tx pgx.Tx, q *db.Queries) error {
+			def, value, err := validate(q, tx)
 			if err != nil {
 				return err
 			}
@@ -883,7 +991,7 @@ func (h *Handler) writeIssuePropertyChange(w http.ResponseWriter, r *http.Reques
 // otherwise interleave into a permanently orphaned option reference) and
 // definition creates/unarchives against each other (the 20-active cap and
 // MAX(position)+1 are read-then-write). Locks are transaction-scoped.
-func (h *Handler) withPropertyLock(r *http.Request, lockKeys []string, fn func(q *db.Queries) error) error {
+func (h *Handler) withPropertyLock(r *http.Request, lockKeys []string, fn func(tx pgx.Tx, q *db.Queries) error) error {
 	tx, err := h.beginWakeupWrite(r.Context())
 	if err != nil {
 		return err
@@ -896,7 +1004,7 @@ func (h *Handler) withPropertyLock(r *http.Request, lockKeys []string, fn func(q
 			return err
 		}
 	}
-	if err := fn(h.Queries.WithTx(tx)); err != nil {
+	if err := fn(tx, h.Queries.WithTx(tx)); err != nil {
 		return err
 	}
 	return tx.Commit(r.Context())

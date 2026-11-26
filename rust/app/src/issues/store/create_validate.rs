@@ -344,15 +344,16 @@ pub(super) async fn revalidate_type_and_properties(
         let value = properties
             .get(property_id)
             .ok_or(IssueCreateError::InvalidInput)?;
-        let (version, kind, archived) = sqlx::query_as::<_, (String, String, bool)>(
-            "SELECT xmin::text, type, archived_at IS NOT NULL
+        let (version, kind, archived, config) =
+            sqlx::query_as::<_, (String, String, bool, String)>(
+                "SELECT xmin::text, type, archived_at IS NOT NULL, config::text
              FROM issue_property WHERE id = $1::uuid AND workspace_id = $2::uuid",
-        )
-        .bind(property_id)
-        .bind(workspace_id)
-        .fetch_optional(&mut *conn)
-        .await?
-        .ok_or(IssueCreateError::ConfigurationChanged)?;
+            )
+            .bind(property_id)
+            .bind(workspace_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .ok_or(IssueCreateError::ConfigurationChanged)?;
         if archived || version != *expected_version {
             return Err(IssueCreateError::ConfigurationChanged);
         }
@@ -368,6 +369,28 @@ pub(super) async fn revalidate_type_and_properties(
                 for actor in actors {
                     validate_actor(conn, workspace_id, property_id, &actor).await?;
                 }
+            }
+            "record_relation" => {
+                super::property_validate::validate_record_relation_value(
+                    &mut *conn,
+                    workspace_id,
+                    &config,
+                    value,
+                )
+                .await
+                .map_err(|error| match error {
+                    super::property_validate::RecordRelationError::Invalid => {
+                        IssueCreateError::InvalidIssueProperty {
+                            property_id: property_id.to_owned(),
+                            message:
+                                "one or more record ids are invalid for the configured target table"
+                                    .to_owned(),
+                        }
+                    }
+                    super::property_validate::RecordRelationError::Database(error) => {
+                        IssueCreateError::Database(error)
+                    }
+                })?;
             }
             _ => {}
         }

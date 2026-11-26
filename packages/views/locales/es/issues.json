@@ -1136,6 +1136,11 @@
       "archived_hint": "Propiedad archivada; el valor es de solo lectura",
       "unknown_value": "No disponible",
       "unknown_value_hint": "Este valor lo estableció una versión más reciente de BaiShadow y no se puede editar aquí; actualiza la app o bórralo",
+      "record_relation_stale": "No disponible",
+      "record_relation_no_table": "A la propiedad le falta una tabla de destino",
+      "record_relation_loading": "Cargando registros…",
+      "record_relation_load_failed": "No se pudieron cargar los registros vinculados.",
+      "record_relation_retry": "Reintentar",
       "url_scheme_required": "La URL debe empezar por http:// o https://.",
       "remove_item": "Quitar {{value}}"
     },

@@ -742,7 +742,8 @@
       "actor": "Участник",
       "multi_actor": "Участники",
       "multi_text": "Список текстовых значений",
-      "multi_url": "Список URL"
+      "multi_url": "Список URL",
+      "record_relation": "Связь с записью"
     },
     "actions": {
       "open": "Действия для {{name}}",
@@ -761,6 +762,7 @@
       "name_placeholder": "например, Серьёзность",
       "type": "Тип",
       "type_locked_hint": "Тип нельзя изменить после создания.",
+      "record_relation_table_required": "Выберите таблицу рабочей области для этой связи.",
       "description": "Описание",
       "description_placeholder": "Что означает это свойство и когда его устанавливать",
       "options": "Варианты",

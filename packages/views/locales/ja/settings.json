@@ -718,7 +718,8 @@
       "actor": "メンバー",
       "multi_actor": "メンバー（複数選択）",
       "multi_text": "テキストリスト",
-      "multi_url": "URLリスト"
+      "multi_url": "URLリスト",
+      "record_relation": "レコードリンク"
     },
     "actions": {
       "open": "{{name}} の操作",
@@ -737,6 +738,7 @@
       "name_placeholder": "例: Severity",
       "type": "タイプ",
       "type_locked_hint": "作成後にタイプは変更できません。",
+      "record_relation_table_required": "このプロパティがリンクするワークスペースのテーブルを選択してください。",
       "description": "説明",
       "description_placeholder": "このプロパティの意味と設定するタイミング",
       "options": "オプション",

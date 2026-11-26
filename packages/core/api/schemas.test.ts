@@ -495,6 +495,21 @@ describe("IssuePropertySchema (via ListPropertiesResponseSchema)", () => {
     expect(parsed.properties[0]?.type).toBe("relation");
   });
 
+  it("preserves readable property definitions when a relation target is malformed", () => {
+    const targetId = "44444444-4444-4444-4444-444444444444";
+    const parsed = ListPropertiesResponseSchema.parse({
+      properties: [
+        baseProperty,
+        { ...baseProperty, type: "record_relation", config: { target_table_id: targetId } },
+        { ...baseProperty, type: "record_relation", config: { target_table_id: 42 } },
+      ],
+      total: 3,
+    });
+    expect(parsed.properties[0]?.config.options?.[0]?.id).toBe("opt-1");
+    expect(parsed.properties[1]?.config.target_table_id).toBe(targetId);
+    expect(parsed.properties[2]?.config.target_table_id).toBeUndefined();
+  });
+
   it("defaults config when the server sends none", () => {
     const { config: _omit, ...withoutConfig } = baseProperty;
     const parsed = ListPropertiesResponseSchema.parse({ properties: [withoutConfig], total: 1 });

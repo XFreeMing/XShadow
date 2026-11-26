@@ -80,6 +80,7 @@ import {
 import { useLocale, useT } from "../../i18n";
 import { SettingsReadOnlyNotice, SettingsTab } from "./settings-layout";
 import { IssueTypesSection } from "./issue-types-section";
+import { RecordRelationTargetTableSelect } from "../../issues/components/pickers/record-relation-property-picker";
 
 const MAX_ACTIVE_PROPERTIES = 20;
 
@@ -95,6 +96,7 @@ interface PropertyDraft {
   description: string;
   icon: string;
   options: OptionDraft[];
+  targetTableId: string;
 }
 
 const EMPTY_DRAFT: PropertyDraft = {
@@ -103,10 +105,15 @@ const EMPTY_DRAFT: PropertyDraft = {
   description: "",
   icon: "",
   options: [{ name: "", color: COLOR_PICKER_PRESETS[6] }],
+  targetTableId: "",
 };
 
 function typeHasOptions(type: string): boolean {
   return type === "select" || type === "multi_select";
+}
+
+function typeIsRecordRelation(type: string): boolean {
+  return type === "record_relation";
 }
 
 export function PropertiesTab() {
@@ -364,6 +371,8 @@ export function PropertyTypeLabel({ type }: { type: string }) {
       return <>{t(($) => $.properties.types.multi_text)}</>;
     case "multi_url":
       return <>{t(($) => $.properties.types.multi_url)}</>;
+    case "record_relation":
+      return <>{t(($) => $.properties.types.record_relation)}</>;
     default:
       // Forward compat: newer servers may ship types this build doesn't know.
       return <>{type}</>;
@@ -400,19 +409,23 @@ function PropertyEditorDialog({
               name: option.name,
               color: option.color,
             })),
+            targetTableId: property.config.target_table_id ?? "",
           }
         : EMPTY_DRAFT,
     );
   }, [property, open]);
 
   const showOptions = typeHasOptions(draft.type);
+  const showTargetTable = typeIsRecordRelation(draft.type);
   const validOptions = draft.options.filter((option) => option.name.trim());
   const propertyTypeItems = ISSUE_PROPERTY_TYPES.map((type) => ({
     value: type,
     label: <PropertyTypeLabel type={type} />,
   }));
   const canSubmit =
-    draft.name.trim().length > 0 && (!showOptions || validOptions.length > 0);
+    draft.name.trim().length > 0 &&
+    (!showOptions || validOptions.length > 0) &&
+    (!showTargetTable || property != null || draft.targetTableId.trim().length > 0);
 
   const submit = () => {
     if (!canSubmit) return;
@@ -424,7 +437,9 @@ function PropertyEditorDialog({
             color: option.color,
           })),
         }
-      : undefined;
+      : showTargetTable
+        ? { target_table_id: draft.targetTableId.trim() }
+        : undefined;
     const onError = (error: unknown) =>
       toast.error(
         error instanceof Error ? error.message : t(($) => $.properties.save_failed),
@@ -556,6 +571,7 @@ function PropertyEditorDialog({
                         typeHasOptions(value) && current.options.length === 0
                           ? [{ name: "", color: COLOR_PICKER_PRESETS[6] }]
                           : current.options,
+                      targetTableId: typeIsRecordRelation(value) ? current.targetTableId : "",
                     }))
                   }
                 >
@@ -587,6 +603,15 @@ function PropertyEditorDialog({
               placeholder={t(($) => $.properties.editor.description_placeholder)}
             />
           </div>
+          {showTargetTable && (
+            <RecordRelationTargetTableSelect
+              value={draft.targetTableId}
+              disabled={Boolean(property)}
+              onChange={(tableId) =>
+                setDraft((current) => ({ ...current, targetTableId: tableId }))
+              }
+            />
+          )}
           {showOptions && (
             <div className="space-y-2">
               <FieldLabel>{t(($) => $.properties.editor.options)}</FieldLabel>

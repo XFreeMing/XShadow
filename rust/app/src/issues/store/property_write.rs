@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sqlx::{PgPool, Row};
 
-use super::{CallerActor, IssueReadError, ordinary::set_write_actor, resolve_caller_access_on};
+use super::{
+    CallerActor, IssueReadError, ordinary::set_write_actor, property_validate,
+    resolve_caller_access_on,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct IssuePropertyWrite {
@@ -41,6 +44,7 @@ pub enum IssuePropertyWriteError {
     Archived(String),
     Required(String),
     DefinitionChanged,
+    InvalidValue,
     SizeLimit,
     Database(sqlx::Error),
     Json(serde_json::Error),
@@ -153,6 +157,24 @@ pub async fn write_issue_property(
             .await?
             {
                 return Err(IssuePropertyWriteError::DefinitionChanged);
+            }
+            let stored_type: String = definition.try_get(1)?;
+            if stored_type == "record_relation" {
+                property_validate::validate_record_relation_value(
+                    &mut tx,
+                    workspace_id,
+                    definition.try_get(2)?,
+                    &value,
+                )
+                .await
+                .map_err(|error| match error {
+                    property_validate::RecordRelationError::Invalid => {
+                        IssuePropertyWriteError::InvalidValue
+                    }
+                    property_validate::RecordRelationError::Database(error) => {
+                        IssuePropertyWriteError::Database(error)
+                    }
+                })?;
             }
             Some(value)
         }

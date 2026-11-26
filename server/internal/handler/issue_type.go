@@ -148,6 +148,23 @@ func (h *Handler) validateIssueTypeFields(
 					return nil, status, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, msg), nil
 				}
 			}
+			if issueproperty.IsRecordRelation(def.Type) {
+				relCfg, err := issueproperty.ParseRecordRelationConfig(def.Config)
+				if err != nil {
+					return nil, http.StatusBadRequest, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, err.Error()), nil
+				}
+				recordIDs, err := issueproperty.RecordIDsInValue(validatedDefault)
+				if err != nil {
+					return nil, http.StatusBadRequest, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, err.Error()), nil
+				}
+				if err := issueproperty.VerifyRecordRelationRefs(
+					r.Context(), h.DB, workspaceID, relCfg.TargetTableID, recordIDs, false,
+				); err != nil {
+					if status, msg := recordRelationRefsHTTPError(err); status != 0 {
+						return nil, status, fmt.Sprintf("invalid default_value for property %q: %s", def.Name, msg), nil
+					}
+				}
+			}
 			entry.DefaultValue = validatedDefault
 		}
 		canonical = append(canonical, entry)
@@ -255,7 +272,7 @@ func (h *Handler) CreateIssueType(w http.ResponseWriter, r *http.Request) {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
 	}
-	err = h.withPropertyLock(r, issueTypeLockKeys(workspaceID, req.Fields), func(q *db.Queries) error {
+	err = h.withPropertyLock(r, issueTypeLockKeys(workspaceID, req.Fields), func(_ pgx.Tx, q *db.Queries) error {
 		if _, err := q.LockWorkspaceForIssueTypeCreate(r.Context(), wsUUID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fail(http.StatusNotFound, "workspace not found")
@@ -334,7 +351,7 @@ func (h *Handler) UpdateIssueType(w http.ResponseWriter, r *http.Request) {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
 	}
-	err := h.withPropertyLock(r, issueTypeLockKeys(workspaceID, lockFields), func(q *db.Queries) error {
+	err := h.withPropertyLock(r, issueTypeLockKeys(workspaceID, lockFields), func(_ pgx.Tx, q *db.Queries) error {
 		existing, err := q.GetIssueType(r.Context(), db.GetIssueTypeParams{
 			ID:          idUUID,
 			WorkspaceID: wsUUID,

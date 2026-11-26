@@ -445,6 +445,10 @@ async fn write_issue_property(
             Json(json!({ "code": "definition_changed" })),
         )
             .into_response(),
+        Err(IssuePropertyWriteError::InvalidValue) => error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid property value for record_relation",
+        ),
         Err(IssuePropertyWriteError::SizeLimit) => error_response(
             StatusCode::BAD_REQUEST,
             "issue properties exceed the 16KB size limit",

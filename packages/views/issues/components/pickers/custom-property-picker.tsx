@@ -26,6 +26,10 @@ import { useLocale, useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
 import { PropertyPicker, PickerItem, PickerEmpty } from "./property-picker";
 import { ActorPropertyPicker, ActorPropertyDisplay } from "./actor-property-picker";
+import {
+  RecordRelationPropertyDisplay,
+  RecordRelationPropertyPicker,
+} from "./record-relation-property-picker";
 
 const EDITABLE_PROPERTY_TYPES = [
   "select",
@@ -39,6 +43,7 @@ const EDITABLE_PROPERTY_TYPES = [
   "multi_actor",
   "multi_text",
   "multi_url",
+  "record_relation",
 ];
 
 /**
@@ -112,7 +117,10 @@ export function CustomPropertyValueEditor({
       onOpenChange={onOpenChange}
       onChange={(next) => {
         // List editors await the write and show failures beside the draft.
-        if (isListPropertyType(property.type) && !isCustomPropertyReadOnly(property, value)) {
+        if (
+          (isListPropertyType(property.type) || property.type === "record_relation") &&
+          !isCustomPropertyReadOnly(property, value)
+        ) {
           const variables = { issueId: issue.id, propertyId: property.id };
           return (next === undefined
             ? unsetProperty.mutateAsync(variables)
@@ -291,6 +299,19 @@ export function CustomPropertyValueInput({
         </PropertyPicker>
       );
     }
+    case "record_relation":
+      return (
+        <RecordRelationPropertyPicker
+          property={property}
+          value={value}
+          onChange={onChange}
+          required={required}
+          open={open}
+          onOpenChange={setOpen}
+          trigger={valueTrigger}
+          triggerRender={triggerRender}
+        />
+      );
     case "actor":
     case "multi_actor":
       return (
@@ -735,6 +756,8 @@ export function CustomPropertyValueDisplay({
         </span>
       );
     }
+    case "record_relation":
+      return <RecordRelationPropertyDisplay property={property} value={value} />;
     case "actor":
     case "multi_actor":
       return (

@@ -718,7 +718,8 @@
       "actor": "成員",
       "multi_actor": "成員（多選）",
       "multi_text": "文字列表",
-      "multi_url": "連結列表"
+      "multi_url": "連結列表",
+      "record_relation": "記錄關聯"
     },
     "actions": {
       "open": "{{name}} 的操作",
@@ -737,6 +738,7 @@
       "name_placeholder": "例如 Severity",
       "type": "型別",
       "type_locked_hint": "建立後型別不可修改。",
+      "record_relation_table_required": "請選擇此屬性要關聯的工作區資料表。",
       "description": "描述",
       "description_placeholder": "這個屬性的含義以及何時設定",
       "options": "選項",

@@ -727,7 +727,8 @@
       "actor": "Miembro",
       "multi_actor": "Miembros",
       "multi_text": "Lista de texto",
-      "multi_url": "Lista de URL"
+      "multi_url": "Lista de URL",
+      "record_relation": "Enlace a registro"
     },
     "actions": {
       "open": "Acciones de {{name}}",
@@ -746,6 +747,7 @@
       "name_placeholder": "p. ej. Severidad",
       "type": "Tipo",
       "type_locked_hint": "El tipo no se puede cambiar después de la creación.",
+      "record_relation_table_required": "Elige la tabla del workspace que vinculará esta propiedad.",
       "description": "Descripción",
       "description_placeholder": "Qué significa esta propiedad y cuándo establecerla",
       "options": "Opciones",

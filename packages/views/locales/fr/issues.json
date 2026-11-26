@@ -1223,7 +1223,12 @@
       "remove_item": "Retirer {{value}}",
       "archived_hint": "Propriété archivée — la valeur est en lecture seule",
       "unknown_value": "Indisponible",
-      "unknown_value_hint": "Cette valeur a été définie par une version plus récente de BaiShadow et ne peut pas être modifiée ici — mettez l'application à jour, ou effacez-la"
+      "unknown_value_hint": "Cette valeur a été définie par une version plus récente de BaiShadow et ne peut pas être modifiée ici — mettez l'application à jour, ou effacez-la",
+      "record_relation_stale": "Indisponible",
+      "record_relation_no_table": "La propriété n'a pas de table cible",
+      "record_relation_loading": "Chargement des enregistrements…",
+      "record_relation_load_failed": "Impossible de charger les enregistrements liés.",
+      "record_relation_retry": "Réessayer"
     },
     "filter_options_aria": "Options de filtrage",
     "no_results": "Aucun résultat",

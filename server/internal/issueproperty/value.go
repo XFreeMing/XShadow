@@ -348,6 +348,16 @@ func ValidateValue(def db.IssueProperty, raw json.RawMessage) ([]byte, error) {
 			out[index] = ref.String()
 		}
 		return json.Marshal(out)
+	case "record_relation":
+		items, ok := value.([]any)
+		if !ok {
+			return nil, errors.New("value must be a non-empty array of record id strings")
+		}
+		ids, err := ParseRecordIDList(items)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(ids)
 	default:
 		return nil, fmt.Errorf("unsupported property type %q", def.Type)
 	}

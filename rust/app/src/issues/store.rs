@@ -16,6 +16,7 @@ mod metadata_write;
 pub use metadata_write::{IssueMetadataWrite, IssueMetadataWriteError, write_issue_metadata};
 mod property_write;
 pub use property_write::{IssuePropertyWrite, IssuePropertyWriteError, write_issue_property};
+mod property_validate;
 mod label_write;
 pub use label_write::{IssueLabelWrite, IssueLabelWriteError, write_issue_label};
 mod acceptance_write;

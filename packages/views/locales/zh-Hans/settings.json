@@ -718,7 +718,8 @@
       "actor": "成员",
       "multi_actor": "成员（多选）",
       "multi_text": "文本列表",
-      "multi_url": "链接列表"
+      "multi_url": "链接列表",
+      "record_relation": "记录关联"
     },
     "actions": {
       "open": "{{name}} 的操作",
@@ -737,6 +738,7 @@
       "name_placeholder": "例如 Severity",
       "type": "类型",
       "type_locked_hint": "创建后类型不可修改。",
+      "record_relation_table_required": "请选择该属性要关联的工作区数据表。",
       "description": "描述",
       "description_placeholder": "这个属性的含义以及何时设置",
       "options": "选项",

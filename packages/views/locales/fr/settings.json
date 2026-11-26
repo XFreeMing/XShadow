@@ -727,7 +727,8 @@
       "actor": "Membre",
       "multi_actor": "Membres",
       "multi_text": "Liste de textes",
-      "multi_url": "Liste d'URL"
+      "multi_url": "Liste d'URL",
+      "record_relation": "Lien d'enregistrement"
     },
     "actions": {
       "open": "Actions pour {{name}}",
@@ -746,6 +747,7 @@
       "name_placeholder": "ex. Gravité",
       "type": "Type",
       "type_locked_hint": "Le type ne peut pas être modifié après création.",
+      "record_relation_table_required": "Choisissez la table de l'espace de travail à lier.",
       "description": "Description",
       "description_placeholder": "Ce que signifie cette propriété et quand la renseigner",
       "options": "Options",

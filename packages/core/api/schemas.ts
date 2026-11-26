@@ -887,6 +887,7 @@ export const IssuePropertySchema = z.object({
   description: z.string().optional().default(""),
   icon: z.string().optional().default(""),
   config: z.object({
+    target_table_id: z.string().optional().catch(undefined),
     options: z.array(z.object({
       id: z.string(),
       name: z.string(),

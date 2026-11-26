@@ -1198,7 +1198,12 @@
       "op_contains": "包含",
       "op_before": "早于",
       "op_after": "晚于",
-      "operator_label": "筛选运算符"
+      "operator_label": "筛选运算符",
+      "record_relation_stale": "不可用",
+      "record_relation_no_table": "属性缺少目标表",
+      "record_relation_loading": "正在加载记录…",
+      "record_relation_load_failed": "无法加载关联记录。",
+      "record_relation_retry": "重试"
     },
     "filter_options_aria": "筛选选项",
     "no_results": "无结果",

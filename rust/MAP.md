@@ -18,6 +18,8 @@ Rust 候选位于 [app/](app/)。它独立处理 `/health`、`/readyz` 和 `/hea
 
 任务元数据的 `PUT`、`DELETE /api/issues/{id}/metadata/{key}` 复用该试点。Rust 在任务锁内执行 50 键上限检查，沿用 8KB 存储上限和数字原值。真正发生变化时才增加修订并发出原任务事件。Go 继续校验公开请求、记录指标并发布实时事件。
 
+任务关联属性 `record_relation` 依赖迁移 731。字段定义固定目标通用表，任务内保存有序记录 ID。任务创建及属性写入沿用相应的 Rust 试点，Go 回退采用同一工作区和目标表校验。写入事务对引用记录持锁。移除目标记录后，任务编辑器仍可保留有效链接并重新选取。工作区仍有此类型的字段定义时，迁移 731 会拒绝回退，保留原数据。
+
 `POST /api/issues/{id}/labels` 与 `DELETE /api/issues/{id}/labels/{labelId}` 纳入 `XSHADOW_ISSUES_RUST_WRITE_PILOT`。Go 校验公开请求。Go 和 Rust 都按标签目录行、任务行、关联表的顺序写入。标签目录删除在同一事务里先删除目录行，再清理关联。Rust 持锁复核任务可见范围并记录唤醒事件的来源。实际增删才推进 `revision` 和 `last_activity_at`，重复操作仍返回 200 且省略修订。
 
 `XSHADOW_ISSUES_RUST_ACCEPTANCE_PILOT` 为 `POST /api/issues/{id}/acceptance` 的普通验收记录写入指定试点工作区。Go 继续校验公开请求、计算验收记录、处理工作方法重开和派工，并发布 WebSocket 事件。Rust 在任务行锁内复核项目可见范围和任务修订，写入验收记录，返回提交后的任务快照。Go 验证回执的任务修订和验收记录再发事件。试点上游不可用返回 `503`，回执格式错误返回 `502`。

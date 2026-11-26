@@ -718,7 +718,8 @@
       "actor": "멤버",
       "multi_actor": "멤버(다중 선택)",
       "multi_text": "텍스트 목록",
-      "multi_url": "URL 목록"
+      "multi_url": "URL 목록",
+      "record_relation": "레코드 연결"
     },
     "actions": {
       "open": "{{name}} 작업",
@@ -737,6 +738,7 @@
       "name_placeholder": "예: Severity",
       "type": "유형",
       "type_locked_hint": "생성 후에는 유형을 변경할 수 없습니다.",
+      "record_relation_table_required": "이 속성에 연결할 워크스페이스 표를 선택하세요.",
       "description": "설명",
       "description_placeholder": "이 속성의 의미와 설정 시점",
       "options": "옵션",

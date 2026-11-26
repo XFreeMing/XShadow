@@ -2010,3 +2010,102 @@ func TestPropertyContainsPrefilterKeepsResultsExact(t *testing.T) {
 		})
 	}
 }
+
+func createGenericTableRecordFixture(t *testing.T) (tableID, recordID, foreignRecordID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO generic_table (workspace_id, name)
+		VALUES ($1, 'Property relation target')
+		RETURNING id::text
+	`, testWorkspaceID).Scan(&tableID); err != nil {
+		t.Fatalf("create generic_table: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM generic_record WHERE table_id = $1`, tableID) })
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM generic_table WHERE id = $1`, tableID) })
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO generic_record (workspace_id, table_id)
+		VALUES ($1, $2::uuid)
+		RETURNING id::text
+	`, testWorkspaceID, tableID).Scan(&recordID); err != nil {
+		t.Fatalf("create generic_record: %v", err)
+	}
+	otherWorkspace := uuid.NewString()
+	foreignTableID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO generic_table (id, workspace_id, name)
+		VALUES ($1::uuid, $2::uuid, 'Foreign table')
+	`, foreignTableID, otherWorkspace); err != nil {
+		t.Fatalf("foreign table: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM generic_record WHERE table_id = $1::uuid`, foreignTableID)
+	})
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM generic_table WHERE id = $1::uuid`, foreignTableID) })
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO generic_record (workspace_id, table_id)
+		VALUES ($1::uuid, $2::uuid)
+		RETURNING id::text
+	`, otherWorkspace, foreignTableID).Scan(&foreignRecordID); err != nil {
+		t.Fatalf("foreign record: %v", err)
+	}
+	return tableID, recordID, foreignRecordID
+}
+
+func TestSetIssuePropertyRecordRelation(t *testing.T) {
+	tableID, recordID, foreignRecordID := createGenericTableRecordFixture(t)
+	prop := createTestProperty(t, map[string]any{
+		"name":   "Linked row",
+		"type":   "record_relation",
+		"config": map[string]any{"target_table_id": tableID},
+	})
+	issueID := createPropertyTestIssue(t, "record relation host")
+
+	t.Run("set replace and clear via fallback", func(t *testing.T) {
+		h := *testHandler
+		h.IssueReadBridge = nil
+		w := httptest.NewRecorder()
+		req := newRequest("PUT", "/api/issues/"+issueID+"/properties/"+prop.ID, map[string]any{
+			"value": []string{recordID},
+		})
+		req = withIssuePropertyParams(req, issueID, prop.ID)
+		h.SetIssueProperty(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("set: %d %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		props := body["properties"].(map[string]any)
+		stored := props[prop.ID].([]any)
+		if len(stored) != 1 || stored[0].(string) != recordID {
+			t.Fatalf("stored = %v", stored)
+		}
+
+		w = httptest.NewRecorder()
+		req = newRequest("PUT", "/api/issues/"+issueID+"/properties/"+prop.ID, map[string]any{
+			"value": []string{recordID},
+		})
+		req = withIssuePropertyParams(req, issueID, prop.ID)
+		h.SetIssueProperty(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("idempotent set: %d %s", w.Code, w.Body.String())
+		}
+
+		w = httptest.NewRecorder()
+		req = newRequest("DELETE", "/api/issues/"+issueID+"/properties/"+prop.ID, nil)
+		req = withIssuePropertyParams(req, issueID, prop.ID)
+		h.DeleteIssueProperty(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("unset: %d %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("reject foreign workspace record", func(t *testing.T) {
+		w := setIssuePropertyRaw(t, issueID, prop.ID, []string{foreignRecordID})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("foreign record: expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}

@@ -21,7 +21,8 @@ export type IssuePropertyType =
   | "actor"
   | "multi_actor"
   | "multi_text"
-  | "multi_url";
+  | "multi_url"
+  | "record_relation";
 
 export const ISSUE_PROPERTY_TYPES: IssuePropertyType[] = [
   "text",
@@ -35,6 +36,7 @@ export const ISSUE_PROPERTY_TYPES: IssuePropertyType[] = [
   "multi_actor",
   "multi_text",
   "multi_url",
+  "record_relation",
 ];
 
 export function isKnownPropertyType(type: string): type is IssuePropertyType {
@@ -181,6 +183,8 @@ export interface IssuePropertyOption {
 
 export interface IssuePropertyConfig {
   options?: IssuePropertyOption[];
+  /** Target generic table for record_relation properties. */
+  target_table_id?: string;
 }
 
 export interface IssueProperty {
@@ -294,6 +298,7 @@ export const PROPERTY_FILTER_OPS_BY_TYPE: Record<IssuePropertyType, readonly Pro
   multi_actor: [],
   multi_text: [],
   multi_url: [],
+  record_relation: [],
 };
 
 export interface CreatePropertyRequest {

@@ -1247,7 +1247,12 @@
       "remove_item": "Remove {{value}}",
       "archived_hint": "Archived property — value is read-only",
       "unknown_value": "Unavailable",
-      "unknown_value_hint": "This value was set by a newer version of BaiShadow and can't be edited here — update the app, or clear it"
+      "unknown_value_hint": "This value was set by a newer version of BaiShadow and can't be edited here — update the app, or clear it",
+      "record_relation_stale": "Unavailable",
+      "record_relation_no_table": "Property is missing a target table",
+      "record_relation_loading": "Loading records…",
+      "record_relation_load_failed": "Could not load linked records.",
+      "record_relation_retry": "Retry"
     },
     "filter_options_aria": "Filter options",
     "no_results": "No results",

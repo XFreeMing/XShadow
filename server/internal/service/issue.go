@@ -846,6 +846,24 @@ func validateIssueCreateProperties(ctx context.Context, tx pgx.Tx, qtx *db.Queri
 				}
 			}
 		}
+		if issueproperty.IsRecordRelation(definition.Type) {
+			relCfg, err := issueproperty.ParseRecordRelationConfig(definition.Config)
+			if err != nil {
+				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+			}
+			recordIDs, err := issueproperty.RecordIDsInValue(value)
+			if err != nil {
+				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+			}
+			if err := issueproperty.VerifyRecordRelationRefs(
+				ctx, tx, util.UUIDToString(workspaceID), relCfg.TargetTableID, recordIDs, true,
+			); err != nil {
+				if errors.Is(err, issueproperty.ErrRecordRelationRecords) {
+					return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+				}
+				return nil, fmt.Errorf("resolve issue property records: %w", err)
+			}
+		}
 		canonical[propertyID] = value
 	}
 	encoded, err := json.Marshal(canonical)

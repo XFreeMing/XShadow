@@ -1174,7 +1174,12 @@
       "remove_item": "{{value}} を削除",
       "archived_hint": "アーカイブ済みプロパティ — 値は読み取り専用です",
       "unknown_value": "表示できません",
-      "unknown_value_hint": "この値は新しいバージョンの BaiShadow で設定されており、ここでは編集できません。アプリを更新するか、値をクリアしてください"
+      "unknown_value_hint": "この値は新しいバージョンの BaiShadow で設定されており、ここでは編集できません。アプリを更新するか、値をクリアしてください",
+      "record_relation_stale": "利用不可",
+      "record_relation_no_table": "プロパティに対象テーブルがありません",
+      "record_relation_loading": "レコードを読み込み中…",
+      "record_relation_load_failed": "リンク先レコードを読み込めませんでした。",
+      "record_relation_retry": "再試行"
     },
     "filter_options_aria": "フィルターオプション",
     "no_results": "結果なし",
