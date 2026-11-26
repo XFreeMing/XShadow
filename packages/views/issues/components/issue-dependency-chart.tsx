@@ -1,11 +1,19 @@
 "use client";
 
-import { useEffect, useId, useMemo } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "@multica/ui/icons";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import { issueStatusCategory } from "@multica/core/issues";
+import { projectListOptions } from "@multica/core/projects/queries";
 import type { Issue } from "@multica/core/types";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { graphCardClassName } from "../../common/graph-visuals";
+import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
+import { StatusIcon } from "./status-icon";
 import {
   PEEK_TARGET_ATTR,
   useIssuePeekActions,
@@ -65,7 +73,7 @@ export interface IssueDependencyChartProps {
 }
 
 const NODE_WIDTH = 236;
-const NODE_HEIGHT = 76;
+const NODE_HEIGHT = 88;
 const COL_GAP = 64;
 const ROW_GAP = 16;
 const PAD_X = 24;
@@ -355,11 +363,18 @@ export function IssueDependencyChart({
   const arrowId = useId().replace(/:/g, "");
   const peekActions = useIssuePeekActions();
   const peekId = useIssuePeekId();
+  const [hoveredIssueId, setHoveredIssueId] = useState<string | null>(null);
+  const [focusedIssueId, setFocusedIssueId] = useState<string | null>(null);
+
+  const wsId = useWorkspaceId();
+  const { colorOf, iconOf } = useIssueStatuses(wsId);
+  const { data: projects } = useQuery(projectListOptions(wsId));
+  const projectById = useMemo(
+    () => new Map(projects?.map((project) => [project.id, project])),
+    [projects],
+  );
 
   const layout = useMemo(() => buildDependencyChartLayout(rows, edges), [rows, edges]);
-
-  const activeIssueId = peekId && layout.nodeById.has(peekId) ? peekId : null;
-  const activeNode = activeIssueId ? layout.nodeById.get(activeIssueId) ?? null : null;
 
   // Publish visible issue ids to peek navigation in layout order (connected nodes first, then unrelated)
   const visibleOrderIds = useMemo(() => {
@@ -375,25 +390,88 @@ export function IssueDependencyChart({
 
   useEffect(() => () => peekActions?.publishColumns(null), [peekActions]);
 
-  const { upstreamEdges, downstreamEdges, highlightedIssueIds } = useMemo(() => {
-    if (!activeIssueId) {
-      return {
-        upstreamEdges: [] as NormalizedDependencyEdge[],
-        downstreamEdges: [] as NormalizedDependencyEdge[],
-        highlightedIssueIds: new Set<string>(),
-      };
+  const focusIssueId = [peekId, hoveredIssueId, focusedIssueId].find(
+    (id) => id !== null && visibleOrderIds.includes(id),
+  );
+  const highlightedIssueIds = useMemo(() => {
+    if (!focusIssueId) return null;
+    const ids = new Set([focusIssueId]);
+    for (const edge of layout.edges) {
+      if (edge.fromId === focusIssueId) ids.add(edge.toId);
+      if (edge.toId === focusIssueId) ids.add(edge.fromId);
     }
-    const upstream = layout.edges.filter((edge) => edge.toId === activeIssueId);
-    const downstream = layout.edges.filter((edge) => edge.fromId === activeIssueId);
-    const ids = new Set<string>([activeIssueId]);
-    for (const edge of upstream) ids.add(edge.fromId);
-    for (const edge of downstream) ids.add(edge.toId);
-    return {
-      upstreamEdges: upstream,
-      downstreamEdges: downstream,
-      highlightedIssueIds: ids,
-    };
-  }, [activeIssueId, layout.edges]);
+    return ids;
+  }, [focusIssueId, layout.edges]);
+
+  const renderCard = (issue: Issue, node?: DependencyNodePosition) => {
+    const statusCategory = issueStatusCategory(issue);
+    const project = issue.project_id ? projectById.get(issue.project_id) : undefined;
+
+    return (
+      <button
+        key={issue.id}
+        type="button"
+        aria-pressed={peekId === issue.id}
+        {...{ [PEEK_TARGET_ATTR]: issue.id }}
+        data-testid={node ? "dependency-chart-card" : "dependency-chart-unrelated-card"}
+        data-issue-id={issue.id}
+        style={node
+          ? { left: node.x, top: node.y, width: node.width, height: node.height }
+          : { width: NODE_WIDTH, height: NODE_HEIGHT }}
+        onClick={() => peekActions?.open(issue.id)}
+        onMouseEnter={() => setHoveredIssueId(issue.id)}
+        onMouseLeave={() => setHoveredIssueId(null)}
+        onFocus={() => setFocusedIssueId(issue.id)}
+        onBlur={() => setFocusedIssueId(null)}
+        className={graphCardClassName(
+          {
+            tone: statusCategory === "done" ? "done" : undefined,
+            isSelected: focusIssueId === issue.id,
+            isDimmed: highlightedIssueIds !== null && !highlightedIssueIds.has(issue.id),
+          },
+          cn(
+            "text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            node && "absolute",
+            node?.inCycle && "border-destructive/60",
+          ),
+        )}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <StatusIcon
+            status={issue.status}
+            color={colorOf(issue.status)}
+            icon={iconOf(issue.status)}
+            category={statusCategory ?? undefined}
+            className="size-3.5 shrink-0"
+          />
+          <span className="shrink-0 text-caption tabular-nums text-muted-foreground">
+            {issue.identifier}
+          </span>
+        </span>
+        <span className="line-clamp-2 text-caption font-medium text-foreground">
+          {issue.title}
+        </span>
+        <span className="flex min-h-4 items-center gap-1.5 text-micro text-muted-foreground">
+          {project && (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <ProjectIcon project={project} size="sm" />
+              <span className="truncate">{project.title}</span>
+            </span>
+          )}
+          {issue.assignee_type && issue.assignee_id && (
+            <span className="ml-auto shrink-0">
+              <ActorAvatar
+                actorType={issue.assignee_type}
+                actorId={issue.assignee_id}
+                size="sm"
+                profileLink={false}
+              />
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
 
   if (layout.nodes.length === 0 && layout.unrelatedRows.length === 0) {
     return (
@@ -466,10 +544,8 @@ export function IssueDependencyChart({
                 const to = layout.nodeById.get(edge.toId);
                 if (!from || !to) return null;
                 const path = buildEdgePath(from, to, edge.isBackEdge);
-                const isHighlighted =
-                  activeIssueId !== null &&
-                  (edge.fromId === activeIssueId || edge.toId === activeIssueId);
-                const isDimmed = activeIssueId !== null && !isHighlighted;
+                const isHighlighted = edge.fromId === focusIssueId || edge.toId === focusIssueId;
+                const isDimmed = focusIssueId !== undefined && !isHighlighted;
                 const tooltip = `${from.issue.identifier} → ${to.issue.identifier} (${kindLabel(edge.kind)})${edge.reason ? `: ${edge.reason}` : ""}`;
 
                 return (
@@ -489,7 +565,7 @@ export function IssueDependencyChart({
                       strokeDasharray={edge.kind === "conditional" ? "6 4" : undefined}
                       markerEnd={`url(#dep-arrow-${arrowId})`}
                       className={cn(
-                        "transition-opacity",
+                        "[pointer-events:stroke] transition-opacity",
                         isHighlighted
                           ? "text-brand"
                           : edge.isBackEdge
@@ -505,46 +581,7 @@ export function IssueDependencyChart({
               })}
             </svg>
 
-            {layout.nodes.map((node) => {
-              const isSelected = activeIssueId === node.issue.id;
-              const isHighlighted = highlightedIssueIds.has(node.issue.id);
-              const isDimmed = activeIssueId !== null && !isHighlighted;
-              return (
-                <button
-                  key={node.issue.id}
-                  type="button"
-                  aria-pressed={isSelected}
-                  {...{ [PEEK_TARGET_ATTR]: node.issue.id }}
-                  data-testid="dependency-chart-card"
-                  data-issue-id={node.issue.id}
-                  style={{
-                    left: node.x,
-                    top: node.y,
-                    width: node.width,
-                    height: node.height,
-                  }}
-                  onClick={() => peekActions?.open(node.issue.id)}
-                  className={cn(
-                    "absolute flex cursor-pointer flex-col justify-between rounded-lg border bg-card px-3 py-2 text-left shadow-2xs transition-all",
-                    isSelected
-                      ? "border-brand ring-2 ring-brand/40"
-                      : isHighlighted
-                        ? "border-brand/60 bg-brand/[0.03]"
-                        : node.inCycle
-                          ? "border-destructive/60"
-                          : "border-border hover:border-foreground/30",
-                    isDimmed && "opacity-35",
-                  )}
-                >
-                  <span className="truncate font-mono text-caption text-muted-foreground">
-                    {node.issue.identifier}
-                  </span>
-                  <span className="line-clamp-2 text-body font-medium text-foreground">
-                    {node.issue.title}
-                  </span>
-                </button>
-              );
-            })}
+            {layout.nodes.map((node) => renderCard(node.issue, node))}
           </div>
         )}
 
@@ -557,154 +594,11 @@ export function IssueDependencyChart({
               {noLinks}
             </h3>
             <div className="flex flex-wrap gap-3">
-              {layout.unrelatedRows.map((issue) => (
-                <button
-                  key={issue.id}
-                  type="button"
-                  aria-pressed={peekId === issue.id}
-                  {...{ [PEEK_TARGET_ATTR]: issue.id }}
-                  data-testid="dependency-chart-unrelated-card"
-                  data-issue-id={issue.id}
-                  style={{ width: NODE_WIDTH }}
-                  onClick={() => peekActions?.open(issue.id)}
-                  className={cn(
-                    "flex cursor-pointer flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-2xs transition-all text-left",
-                    peekId === issue.id
-                      ? "border-brand ring-2 ring-brand/40"
-                      : "border-border hover:border-foreground/30",
-                  )}
-                >
-                  <span className="truncate font-mono text-caption text-muted-foreground">
-                    {issue.identifier}
-                  </span>
-                  <span className="line-clamp-2 text-body font-medium text-foreground">
-                    {issue.title}
-                  </span>
-                </button>
-              ))}
+              {layout.unrelatedRows.map((issue) => renderCard(issue))}
             </div>
           </section>
         )}
       </div>
-
-      {activeNode && (
-        <div
-          className="shrink-0 border-t bg-muted/30 px-4 py-3 text-body"
-          data-testid="dependency-edge-inspector"
-        >
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="shrink-0 font-mono text-caption text-muted-foreground">
-                {activeNode.issue.identifier}
-              </span>
-              <span className="truncate font-medium text-foreground">
-                {activeNode.issue.title}
-              </span>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => peekActions?.close()}
-            >
-              {goalText(($) => $.map.close_inspector)}
-            </Button>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <p className="mb-1 text-caption font-medium text-muted-foreground">
-                {relationLabel ? issueText(($) => $.org_chart.relation_to) : goalText(($) => $.map.upstream)}
-              </p>
-              {upstreamEdges.length === 0 ? (
-                <p className="text-caption text-muted-foreground">
-                  {noLinks}
-                </p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {upstreamEdges.map((edge) => {
-                    const prereq = layout.nodeById.get(edge.fromId)?.issue;
-                    if (!prereq) return null;
-                    return (
-                      <li key={edge.id} className="rounded border bg-background px-2.5 py-1.5 text-caption">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => peekActions?.open(prereq.id)}
-                            className="font-mono text-muted-foreground hover:underline"
-                          >
-                            {prereq.identifier}
-                          </button>
-                          <span className="font-medium text-foreground">{prereq.title}</span>
-                          <span
-                            className={cn(
-                              "rounded px-1.5 py-0.5 text-[11px]",
-                              edge.kind === "conditional"
-                                ? "border border-dashed border-border text-muted-foreground"
-                                : "bg-secondary text-secondary-foreground",
-                            )}
-                          >
-                            {kindLabel(edge.kind)}
-                          </span>
-                        </div>
-                        {edge.reason && (
-                          <p className="mt-1 text-muted-foreground">
-                            {goalText(($) => $.plan.dependency_reason)}: {edge.reason}
-                          </p>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-            <div>
-              <p className="mb-1 text-caption font-medium text-muted-foreground">
-                {relationLabel ? issueText(($) => $.org_chart.relation_from) : goalText(($) => $.map.downstream)}
-              </p>
-              {downstreamEdges.length === 0 ? (
-                <p className="text-caption text-muted-foreground">
-                  {noLinks}
-                </p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {downstreamEdges.map((edge) => {
-                    const dep = layout.nodeById.get(edge.toId)?.issue;
-                    if (!dep) return null;
-                    return (
-                      <li key={edge.id} className="rounded border bg-background px-2.5 py-1.5 text-caption">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => peekActions?.open(dep.id)}
-                            className="font-mono text-muted-foreground hover:underline"
-                          >
-                            {dep.identifier}
-                          </button>
-                          <span className="font-medium text-foreground">{dep.title}</span>
-                          <span
-                            className={cn(
-                              "rounded px-1.5 py-0.5 text-[11px]",
-                              edge.kind === "conditional"
-                                ? "border border-dashed border-border text-muted-foreground"
-                                : "bg-secondary text-secondary-foreground",
-                            )}
-                          >
-                            {kindLabel(edge.kind)}
-                          </span>
-                        </div>
-                        {edge.reason && (
-                          <p className="mt-1 text-muted-foreground">
-                            {goalText(($) => $.plan.dependency_reason)}: {edge.reason}
-                          </p>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -3,17 +3,30 @@
 import { useId, type ComponentProps } from "react";
 import { cn } from "@multica/ui/lib/utils";
 
-interface GraphCardFrameProps extends ComponentProps<"div"> {
+interface GraphCardStyleOptions {
   tone?: "current" | "waiting" | "done";
   isSelected?: boolean;
   isDimmed?: boolean;
 }
+
+interface GraphCardFrameProps extends ComponentProps<"div">, GraphCardStyleOptions {}
 
 const cardTones = {
   current: "border-brand/70 bg-brand/[0.04]",
   waiting: "border-warning/60",
   done: "border-success/40",
 };
+
+export function graphCardClassName(options: GraphCardStyleOptions, extra?: string) {
+  const { tone, isSelected, isDimmed } = options;
+  return cn(
+    "relative flex flex-col justify-between rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs transition-all",
+    tone ? cardTones[tone] : "hover:border-foreground/30",
+    isDimmed && "opacity-35",
+    extra,
+    isSelected && "border-brand ring-2 ring-brand/45",
+  );
+}
 
 export function GraphCardFrame({
   className,
@@ -25,13 +38,7 @@ export function GraphCardFrame({
   return (
     <div
       {...props}
-      className={cn(
-        "relative flex flex-col justify-between rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs transition-all",
-        tone ? cardTones[tone] : "hover:border-foreground/30",
-        isDimmed && "opacity-35",
-        className,
-        isSelected && "border-brand ring-2 ring-brand/45",
-      )}
+      className={graphCardClassName({ tone, isSelected, isDimmed }, className)}
     />
   );
 }

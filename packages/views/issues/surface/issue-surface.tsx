@@ -311,7 +311,7 @@ function IssueSurfaceContent({
         {/* Every view opens the side peek on Shift+Click. The host wraps the
             loading and empty states too, so a view switch that briefly shows
             a skeleton keeps the peek open. */}
-        <IssuePeekHost>
+        <IssuePeekHost layout={controller.viewMode === "org_chart" ? "drawer" : "floating"}>
         {/* A failed filter dependency precedes loading/empty/content on
             purpose. Row fetching is suspended while it is down, so every
             branch below would render an unexplained empty surface with no way

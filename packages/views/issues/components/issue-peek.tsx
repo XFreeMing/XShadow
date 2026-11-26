@@ -44,6 +44,7 @@ const PREV_KEY = createShortcutChord("K");
 const CLOSE_KEY = createShortcutChord("Escape");
 
 type Step = "prevId" | "nextId" | "leftId" | "rightId";
+type IssuePeekLayout = "floating" | "drawer";
 // Vim keys work wherever focus is not in a text field; the arrows mirror them
 // unless the panel is being read (see IssuePeekFollow).
 const LETTER_STEPS: Record<string, Step> = { K: "prevId", J: "nextId", H: "leftId", L: "rightId" };
@@ -66,7 +67,13 @@ const ARROW_STEPS: Record<string, Step> = {
  * Besides a focused card's own Space (see DraggableBoardCard), Space peeks the
  * issue under the pointer, so mouse users need not Tab to it first.
  */
-export function IssuePeekHost({ children }: { children: ReactNode }) {
+export function IssuePeekHost({
+  children,
+  layout = "floating",
+}: {
+  children: ReactNode;
+  layout?: IssuePeekLayout;
+}) {
   const [peekId, setPeekId] = useState<string | null>(null);
   const [columns, setColumns] = useState<IssuePeekColumns | null>(null);
 
@@ -108,7 +115,10 @@ export function IssuePeekHost({ children }: { children: ReactNode }) {
         <IssuePeekPositionContext.Provider value={position}>
           <div
             data-peek-open={openId ? "" : undefined}
-            className="group/peek relative flex min-h-0 flex-1 flex-col [--issue-peek-width:520px]"
+            className={cn(
+              "group/peek relative flex min-h-0 flex-1 flex-col",
+              layout === "drawer" ? "[--issue-peek-width:70%]" : "[--issue-peek-width:520px]",
+            )}
             onPointerOver={(event) => {
               hoveredCardRef.current =
                 (event.target as Element).closest(`[${PEEK_TARGET_ATTR}]`)?.getAttribute(PEEK_TARGET_ATTR) ||
@@ -123,7 +133,7 @@ export function IssuePeekHost({ children }: { children: ReactNode }) {
                 (J / K is keyboard navigation — it must not animate); only
                 opening and closing the panel does. */}
             <AnimatePresence initial={false}>
-              {openId && <IssuePeekPanel key="issue-peek" issueId={openId} />}
+              {openId && <IssuePeekPanel key="issue-peek" issueId={openId} layout={layout} />}
             </AnimatePresence>
           </div>
         </IssuePeekPositionContext.Provider>
@@ -135,7 +145,13 @@ export function IssuePeekHost({ children }: { children: ReactNode }) {
 // Memoized, and blind to the column order: the host re-renders on every board
 // reorder (a drag publishes columns on each hover), and none of that may reach
 // IssueDetail. What does follow the order lives in IssuePeekFollow.
-const IssuePeekPanel = memo(function IssuePeekPanel({ issueId }: { issueId: string }) {
+const IssuePeekPanel = memo(function IssuePeekPanel({
+  issueId,
+  layout,
+}: {
+  issueId: string;
+  layout: IssuePeekLayout;
+}) {
   const { t } = useT("issues");
   const actions = useIssuePeekActions()!;
   const panelRef = useRef<HTMLElement>(null);
@@ -150,11 +166,10 @@ const IssuePeekPanel = memo(function IssuePeekPanel({ issueId }: { issueId: stri
       aria-label={t(($) => $.peek.panel_label)}
       data-issue-peek=""
       className={cn(
-        "absolute right-2 top-2 z-30 flex w-[min(var(--issue-peek-width),calc(100%-1rem))] flex-col overflow-hidden",
-        "rounded-xl bg-background shadow-[var(--floating-shadow)] ring-1 ring-floating-border",
-        // Stops above the chat launcher, which owns the dashboard's
-        // bottom-right corner — the panel's composer would sit under it.
-        "above-chat-launcher",
+        "absolute z-30 flex min-h-0 flex-col overflow-hidden bg-background shadow-[var(--floating-shadow)]",
+        layout === "drawer"
+          ? "inset-y-0 right-0 w-(--issue-peek-width) border-l border-border pb-chat-launcher"
+          : "above-chat-launcher right-2 top-2 w-[min(var(--issue-peek-width),calc(100%-1rem))] rounded-xl ring-1 ring-floating-border",
         // Floats over the top of the page, which may be the window's drag
         // region (the Desktop issue window); without this, its header's
         // controls would move the window instead of taking the click.

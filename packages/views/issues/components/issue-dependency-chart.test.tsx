@@ -12,6 +12,35 @@ import {
   type IssueDependencyEdge,
 } from "./issue-dependency-chart";
 
+vi.mock(import("@tanstack/react-query"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    useQuery: vi.fn(() => ({
+      data: [{ id: "proj-1", identifier: "PRJ", title: "Core App" }],
+    })),
+  };
+});
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("@multica/core/issue-statuses/hooks", () => ({
+  useIssueStatuses: () => ({
+    colorOf: () => "#10b981",
+    iconOf: () => null,
+  }),
+}));
+
+vi.mock("../../projects/components/project-icon", () => ({
+  ProjectIcon: () => <span data-testid="project-icon" />,
+}));
+
+vi.mock("./status-icon", () => ({
+  StatusIcon: () => <span data-testid="status-icon" />,
+}));
+
 vi.mock("../../i18n", () => ({
   useT: (ns: string) => ({
     t: (selector: (root: Record<string, Record<string, string>>) => string) => {
@@ -40,8 +69,14 @@ vi.mock("../../i18n", () => ({
   }),
 }));
 
-function TestPeekHost({ children }: { children: ReactNode }) {
-  const [issueId, setIssueId] = useState<string | null>(null);
+function TestPeekHost({
+  children,
+  initialId = null,
+}: {
+  children: ReactNode;
+  initialId?: string | null;
+}) {
+  const [issueId, setIssueId] = useState<string | null>(initialId);
   return (
     <IssuePeekActionsContext.Provider value={{
       open: setIssueId,
@@ -56,17 +91,23 @@ function TestPeekHost({ children }: { children: ReactNode }) {
   );
 }
 
-function makeIssue(id: string, identifier: string, title: string): Issue {
+function makeIssue(
+  id: string,
+  identifier: string,
+  title: string,
+  status: string = "todo",
+  projectId: string | null = "proj-1",
+): Issue {
   return {
     id,
     workspace_id: "ws-1",
-    project_id: "proj-1",
+    project_id: projectId,
     number: 1,
     identifier,
     title,
     description: null,
-    status: "todo",
-    status_category: "unstarted",
+    status,
+    status_category: status === "done" ? "done" : "unstarted",
     priority: "medium",
     assignee_type: null,
     assignee_id: null,
@@ -135,11 +176,11 @@ describe("buildDependencyChartLayout", () => {
 });
 
 describe("IssueDependencyChart", () => {
-  it("reveals dependency reasons for the previewed card and switches previews from the inspector", () => {
-    const a = makeIssue("a", "MUL-1", "API schema");
+  it("renders compact cards with status icon, identifier, title, and project", () => {
+    const a = makeIssue("a", "MUL-1", "API schema", "done", "proj-1");
     const b = makeIssue("b", "MUL-2", "Feature flag");
     const c = makeIssue("c", "MUL-3", "UI client");
-    const solo = makeIssue("solo", "MUL-4", "Release notes");
+    const solo = makeIssue("solo", "MUL-4", "Release notes", "todo", "proj-1");
 
     const { container } = render(
       <TestPeekHost>
@@ -153,11 +194,16 @@ describe("IssueDependencyChart", () => {
       </TestPeekHost>,
     );
 
-    // Card identifiers and titles rendered in card frame
+    // Card identifiers, titles, and projects rendered
     expect(screen.getByText("MUL-3")).toBeTruthy();
     expect(screen.getByText("UI client")).toBeTruthy();
+    expect(screen.getAllByText("Core App").length).toBeGreaterThan(0);
 
-    // Required vs conditional SVG edges with direction prerequisite -> dependent
+    // Done card has green border tone
+    const cardA = container.querySelector('[data-testid="dependency-chart-card"][data-issue-id="a"]')!;
+    expect(cardA.className).toContain("border-success/40");
+
+    // Required vs conditional SVG edges with direction prerequisite -> dependent and title tooltips
     const requiredEdge = container.querySelector('[data-from-id="a"][data-to-id="c"] path');
     const conditionalEdge = container.querySelector('[data-from-id="b"][data-to-id="c"] path');
     expect(requiredEdge?.getAttribute("stroke-dasharray")).toBeNull();
@@ -165,21 +211,75 @@ describe("IssueDependencyChart", () => {
     expect(requiredEdge?.querySelector("title")?.textContent).toContain("Needs endpoint types");
     expect(conditionalEdge?.querySelector("title")?.textContent).toContain("Only when flag enabled");
 
-    // Unrelated row rendered separately without fake edges
-    expect(screen.getByTestId("dependency-chart-unrelated-card").getAttribute("data-issue-id")).toBe("solo");
+    // Unrelated card rendered with the same compact card style
+    const unrelatedCard = screen.getByTestId("dependency-chart-unrelated-card");
+    expect(unrelatedCard.getAttribute("data-issue-id")).toBe("solo");
+    expect(unrelatedCard.textContent).toContain("MUL-4");
+    expect(unrelatedCard.textContent).toContain("Release notes");
+    expect(unrelatedCard.textContent).toContain("Core App");
 
-    // Selecting card reveals upstream/downstream reasons in read-only inspector
+    // Edge inspector is removed
+    expect(screen.queryByTestId("dependency-edge-inspector")).toBeNull();
+
+    // Clicking card opens peek and sets aria-pressed & selection ring
     const cardC = container.querySelector('[data-testid="dependency-chart-card"][data-issue-id="c"]')!;
     fireEvent.click(cardC);
-    const inspector = screen.getByTestId("dependency-edge-inspector");
-    expect(inspector.textContent).toContain("Needs endpoint types");
-    expect(inspector.textContent).toContain("Only when flag enabled");
+    expect(cardC.getAttribute("aria-pressed")).toBe("true");
+    expect(cardC.className).toContain("ring-brand");
 
-    // Clicking task in inspector switches selected task
-    fireEvent.click(screen.getByRole("button", { name: "MUL-1", exact: true }));
-    expect(cardC.getAttribute("aria-pressed")).toBe("false");
+    // Upstream node 'a' is highlighted
+    expect(cardA.className).not.toContain("opacity-35");
+  });
+
+  it("supports hover focusing when peek drawer is not open", () => {
+    const a = makeIssue("a", "MUL-1", "Task A");
+    const b = makeIssue("b", "MUL-2", "Task B");
+    const c = makeIssue("c", "MUL-3", "Task C");
+
+    const { container } = render(
+      <TestPeekHost>
+        <IssueDependencyChart
+          rows={[a, b, c]}
+          edges={[{ fromId: "a", toId: "b", kind: "required" }]}
+        />
+      </TestPeekHost>,
+    );
+
     const cardA = container.querySelector('[data-testid="dependency-chart-card"][data-issue-id="a"]')!;
+    const cardC = screen.getByTestId("dependency-chart-unrelated-card");
+
+    // Hover over node A
+    fireEvent.mouseEnter(cardA);
+    // Node C should be dimmed because it's not connected
+    expect(cardC.className).toContain("opacity-35");
+
+    // Mouse leave restores
+    fireEvent.mouseLeave(cardA);
+    expect(cardC.className).not.toContain("opacity-35");
+  });
+
+  it("prioritizes peek selection over hover when peek drawer is open", () => {
+    const a = makeIssue("a", "MUL-1", "Task A");
+    const b = makeIssue("b", "MUL-2", "Task B");
+
+    const { container } = render(
+      <TestPeekHost initialId="a">
+        <IssueDependencyChart
+          rows={[a, b]}
+          edges={[{ fromId: "a", toId: "b", kind: "required" }]}
+        />
+      </TestPeekHost>,
+    );
+
+    const cardA = container.querySelector('[data-testid="dependency-chart-card"][data-issue-id="a"]')!;
+    const cardB = container.querySelector('[data-testid="dependency-chart-card"][data-issue-id="b"]')!;
+
     expect(cardA.getAttribute("aria-pressed")).toBe("true");
+
+    // Hover over B should not overwrite active selection of A
+    fireEvent.mouseEnter(cardB);
+    expect(cardA.getAttribute("aria-pressed")).toBe("true");
+    expect(cardA.className).toContain("ring-brand");
   });
 
   it("renders empty state when there are no visible rows", () => {
