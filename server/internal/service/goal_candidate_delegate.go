@@ -18,6 +18,15 @@ import (
 )
 
 var ErrGoalCandidateConflict = errors.New("the current candidate already has an implementation run or the method has changed")
+var ErrSquadContextChanged = errors.New("交接后验收标准、用例或样本发生变更，请退回对应步骤重新评审，再发出交接")
+
+func checkCandidateSquadContext(issue db.Issue, run workmethod.Run) error {
+	handoff := run.CurrentSquadHandoff()
+	if handoff != nil && handoff.ContextBrief != nil && !handoff.ContextBrief.MatchesAcceptance(issue.AcceptanceCriteria) {
+		return ErrSquadContextChanged
+	}
+	return nil
+}
 
 func GoalCandidateWorker(ctx context.Context, q *db.Queries, issue db.Issue, run workmethod.Run, executionID pgtype.UUID) (db.AgentTaskQueue, error) {
 	return q.GetGoalCandidateWorker(ctx, db.GetGoalCandidateWorkerParams{
@@ -113,6 +122,9 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 	if err := CheckGoalExecutionRecipient(ctx, q, issue, workerID, execution.By); err != nil {
 		return empty, err
 	}
+	if err := checkCandidateSquadContext(issue, run); err != nil {
+		return empty, err
+	}
 	if action == workmethod.OfferCandidate {
 		offer, err := q.GetGoalCandidateOffer(ctx, db.GetGoalCandidateOfferParams{
 			IssueID: issue.ID, SquadID: source.SquadID, AgentID: workerID,
@@ -185,6 +197,9 @@ func (s *TaskService) DispatchGoalCandidate(ctx context.Context, issue db.Issue,
 	case workmethod.ClaimCandidate:
 		summary = "Self-claimed candidate implementation"
 		note = "You claimed this implementation. Read the original issue and the assessment run linked to this implementation for context.\n\n" + note
+	}
+	if handoff := run.CurrentSquadHandoff(); handoff != nil && handoff.ContextBrief != nil {
+		note = handoff.Brief() + "\n\n" + note
 	}
 	var checkout *protocol.CandidateCheckout
 	if action != workmethod.OfferCandidate {

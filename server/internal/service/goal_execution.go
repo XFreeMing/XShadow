@@ -313,6 +313,11 @@ func CheckGoalExecutionTask(ctx context.Context, q *db.Queries, issue db.Issue, 
 	if err := CheckGoalExecutionRecipient(ctx, q, issue, task.AgentID, execution.By); err != nil {
 		return GoalExecution{}, err
 	}
+	if task.SquadID.Valid && !task.IsLeaderTask && run.CanDelegateCandidate() {
+		if err := checkCandidateSquadContext(issue, run); err != nil {
+			return GoalExecution{}, err
+		}
+	}
 	return execution, nil
 }
 

@@ -75,16 +75,27 @@ it("preserves a squad handoff receipt without requiring it in older runs", async
     to_step: 1,
     run_revision: 3,
   };
+  const brief = {
+    objective: "Reopen the exact passage from a saved citation",
+    method_revision: 2,
+    acceptance_revision: 5,
+    contract_digest: "a".repeat(64),
+    criteria: [{ id: "AC1", version: 2, cases: [{ id: "B01", version: 3 }] }],
+  };
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({
     method, step: 0, state: "review", revision: 3,
     history: [
       { action: "advance", step: 0, actor: "agent/A", at: "today" },
       { action: "approve", step: 0, actor: "member/B", at: "today", squad_handoff: handoff },
       { action: "approve", step: 0, actor: "member/B", at: "today", squad_handoff: { ...handoff, task_id: "invalid" } },
+      { action: "approve", step: 0, actor: "member/B", at: "today", squad_handoff: { ...handoff, context_brief: brief } },
+      { action: "approve", step: 0, actor: "member/B", at: "today", squad_handoff: { ...handoff, context_brief: { ...brief, contract_digest: "invalid" } } },
     ],
   })));
   const { history } = await new ApiClient("https://example.test").getIssueWorkMethod("DEV-1");
-  expect(history.map((event) => event.squad_handoff)).toEqual([undefined, handoff, undefined]);
+  expect(history.map((event) => event.squad_handoff)).toEqual([
+    undefined, handoff, undefined, { ...handoff, context_brief: brief }, handoff,
+  ]);
 });
 
 it("preserves a squad candidate's self-claim setting and rejects a non-boolean setting", async () => {

@@ -347,6 +347,16 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 		}
 		taskID := dbid.NewV7()
 		if squadHandoff = run.RecordSquadHandoff(before, uuidToString(taskID)); squadHandoff != nil {
+			ledger := trace
+			if ledger == nil {
+				ledger = issue.AcceptanceCriteria
+			}
+			acceptanceTrace, err := acceptance.Decode(ledger)
+			if err != nil {
+				writeError(w, http.StatusConflict, "验收记录无法读取，请修复后重新交接")
+				return db.Issue{}, false
+			}
+			squadHandoff.ContextBrief = run.SquadContextBrief(issue.Title, acceptanceTrace)
 			receivingTaskID = taskID
 		}
 	}

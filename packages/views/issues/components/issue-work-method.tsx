@@ -9,6 +9,7 @@ import {
 } from "@multica/core/issue-workflows/queries";
 import {
   CoveragePreflightSchema,
+  type SquadContextBrief,
   type WorkMethodAction,
   type WorkMethodRun,
 } from "@multica/core/types/work-method";
@@ -33,6 +34,63 @@ function parsePreflight(text: string) {
   } catch {
     return null;
   }
+}
+
+function SquadContextBriefDetails({ brief }: { brief: SquadContextBrief }) {
+  const { t } = useT("issues");
+  return (
+    <details className="rounded-md bg-muted/35 px-2.5 py-1.5 text-caption">
+      <summary className="cursor-pointer font-medium">
+        {t(($) => $.method.squad_context_brief)}
+      </summary>
+      <p className="mt-2 break-words">{brief.objective}</p>
+      <p className="text-muted-foreground" title={brief.contract_digest}>
+        {t(($) => $.method.squad_context_versions, {
+          method: brief.method_revision,
+          acceptance: brief.acceptance_revision,
+        })}
+      </p>
+      {brief.candidate_commit && (
+        <p className="mt-1 break-all">
+          {t(($) => $.acceptance.implementation)} · <code>{brief.candidate_commit}</code>
+        </p>
+      )}
+      {brief.criteria.length > 0 && (
+        <ul className="mt-2 space-y-1.5">
+          {brief.criteria.map((criterion) => (
+            <li key={criterion.id}>
+              <span className="font-medium">{criterion.id} v{criterion.version}</span>
+              <ul className="ml-3 space-y-1">
+                {criterion.cases.map((testCase) => (
+                  <li key={testCase.id} className="break-words">
+                    <span>{testCase.id} v{testCase.version}</span>
+                    {testCase.command && <code className="block whitespace-pre-wrap">{testCase.command}</code>}
+                    {testCase.artifact_sha256 && (
+                      <p className="break-all text-muted-foreground">
+                        {t(($) => $.method.squad_sample_digest)} · <code>{testCase.artifact_sha256}</code>
+                      </p>
+                    )}
+                    {testCase.baseline_commit && (
+                      <p className="break-all text-muted-foreground">
+                        {t(($) => $.method.squad_preflight)} ·{" "}
+                        <code>{testCase.baseline_commit}</code>
+                        {testCase.reference_commit && <> → <code>{testCase.reference_commit}</code></>}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+      {brief.open_questions && (
+        <p className="mt-2 whitespace-pre-wrap break-words">
+          {t(($) => $.method.squad_open_questions)} · {brief.open_questions}
+        </p>
+      )}
+    </details>
+  );
 }
 
 export function IssueWorkMethod({
@@ -585,6 +643,9 @@ function MethodCard({
                             to: getActorName("squad", entry.squad_handoff.to_squad_id),
                           })}
                         </p>
+                      )}
+                      {entry.squad_handoff?.context_brief && (
+                        <SquadContextBriefDetails brief={entry.squad_handoff.context_brief} />
                       )}
                       {entry.checked_items && (
                         <ul className="space-y-1 text-caption">

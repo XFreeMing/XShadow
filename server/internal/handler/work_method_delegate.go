@@ -70,6 +70,8 @@ func (h *Handler) dispatchGoalCandidate(w http.ResponseWriter, r *http.Request, 
 	switch {
 	case errors.Is(err, service.ErrWakeupForbidden):
 		writeErrorCode(w, http.StatusForbidden, "goal_execution_forbidden", "current goal authorization does not permit this candidate action")
+	case errors.Is(err, service.ErrSquadContextChanged):
+		writeErrorCode(w, http.StatusConflict, "squad_context_changed", err.Error())
 	case errors.Is(err, service.ErrGoalCandidateConflict):
 		writeError(w, http.StatusConflict, err.Error())
 	case err != nil:

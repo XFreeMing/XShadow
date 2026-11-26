@@ -81,7 +81,8 @@ function mount(patch: Partial<WorkMethodRun> = {}) {
   return change;
 }
 
-it("shows the delivering squad, receiving squad, and receiving run in the method history", async () => {
+it("shows the original handoff brief alongside the squad receipt", async () => {
+  const sampleDigest = "d".repeat(64);
   mount({ history: [{
     action: "approve",
     step: 0,
@@ -95,11 +96,26 @@ it("shows the delivering squad, receiving squad, and receiving run in the method
       from_step: 0,
       to_step: 1,
       run_revision: 3,
+      context_brief: {
+        objective: "Reopen the exact passage from a saved citation",
+        method_revision: 2,
+        acceptance_revision: 5,
+        contract_digest: "a".repeat(64),
+        criteria: [{ id: "AC1", version: 2, cases: [{
+          id: "B01", version: 3, artifact_sha256: sampleDigest, command: "./test B01",
+        }] }],
+      },
     },
   }] });
   const receipt = await screen.findByText("Squad handoff · Design and TDD → General development");
   expect(receipt).toHaveAttribute("title", "receiving-run");
   expect(screen.getByText("Independently verified the fixture")).toBeInTheDocument();
+  expect(screen.getByText("Handoff brief")).toBeInTheDocument();
+  expect(screen.getByText("Reopen the exact passage from a saved citation")).toBeInTheDocument();
+  expect(screen.getByText("Work method v2 · Acceptance r5")).toBeInTheDocument();
+  expect(screen.getByText("B01 v3")).toBeInTheDocument();
+  expect(screen.getByText("./test B01")).toBeInTheDocument();
+  expect(screen.getByText(sampleDigest)).toBeInTheDocument();
 });
 
 it("displays the GitHub pull request and keeps pending cleanup visible after approval", async () => {

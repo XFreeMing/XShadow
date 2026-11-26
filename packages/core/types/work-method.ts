@@ -87,6 +87,28 @@ const deliveryReceipt = z.discriminatedUnion("state", [
   z.object({ state: z.enum(["waiting_actions", "merge_blocked"]), pull_request: pullRequest, base: sha }),
   z.object({ state: z.enum(["cleanup_pending", "reclaimed"]), pull_request: pullRequest, merge: sha }),
 ]);
+const squadContextBrief = z.object({
+  objective: nonEmpty,
+  method_revision: z.number().int().positive(),
+  acceptance_revision: index,
+  contract_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  criteria: z.array(z.object({
+    id: nonEmpty,
+    version: z.number().int().positive(),
+    cases: z.array(z.object({
+      id: nonEmpty,
+      version: z.number().int().positive(),
+      artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+      command: nonEmpty.optional(),
+      baseline_commit: sha.optional(),
+      reference_commit: sha.optional(),
+    })),
+  })),
+  candidate_commit: sha.optional(),
+  open_questions: nonEmpty.optional(),
+});
+export type SquadContextBrief = z.infer<typeof squadContextBrief>;
+
 export const WorkMethodRunSchema = z
   .object({
     revision: index,
@@ -119,6 +141,7 @@ export const WorkMethodRunSchema = z
             from_step: index,
             to_step: index,
             run_revision: z.number().int().positive(),
+            context_brief: squadContextBrief.optional().catch(undefined),
           }).optional().catch(undefined),
           step: index,
           from_step: index.optional(),

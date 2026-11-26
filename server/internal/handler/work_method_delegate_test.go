@@ -31,6 +31,10 @@ func TestGoalCandidateSelfClaimRequiresTheCandidatesOwnDecision(t *testing.T) {
 	testGoalCandidateHandoff(t, candidateHandoffScenario{selfClaim: true})
 }
 
+func TestGoalCandidateRejectsChangedSquadHandoffBeforeClaimAndStart(t *testing.T) {
+	testGoalCandidateHandoff(t, candidateHandoffScenario{selfClaim: true, briefFence: true})
+}
+
 func TestGoalCandidateFailureReachesIndependentReviewerAfterResumption(t *testing.T) {
 	testGoalCandidateHandoff(t, candidateHandoffScenario{selfClaim: true, candidateFails: true})
 }
@@ -77,6 +81,7 @@ type candidateHandoffScenario struct {
 	selfClaim       bool
 	candidateFails  bool
 	checkoutFailure bool
+	briefFence      bool
 }
 
 func testGoalCandidateHandoff(t *testing.T, scenario candidateHandoffScenario) {
@@ -214,6 +219,42 @@ func testGoalCandidateHandoff(t *testing.T, scenario candidateHandoffScenario) {
 		"action": "start", "base_revision": 0, "method_id": template.ID,
 	}, http.StatusOK, nil)
 	finish(coordinator)
+	var originalLedger, editedLedger []byte
+	var brief *workmethod.SquadContextBrief
+	if scenario.briefFence {
+		card, err := testHandler.Queries.GetIssue(ctx, util.MustParseUUID(issue))
+		if err != nil {
+			t.Fatal(err)
+		}
+		trace, err := acceptance.Decode(card.AcceptanceCriteria)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trace.Criteria[0].Cases = []acceptance.TestCase{{
+			ID: "T1", Specification: "Open the fixed report", ArtifactSHA256: strings.Repeat("a", 64),
+		}}
+		trace.Revision++
+		originalLedger, err = json.Marshal(trace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := readDeliveryMethod(t, issue)
+		brief = run.SquadContextBrief(card.Title, trace)
+		run.History[len(run.History)-1].SquadHandoff = &workmethod.SquadHandoff{
+			TaskID: uuidToString(latest(lead).ID), ToSquadID: squad, ToStep: run.Step, RunRevision: run.Revision, ContextBrief: brief,
+		}
+		rawRun, err := json.Marshal(run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dbfx.Exec(t, "UPDATE issue SET work_method_run=$2, acceptance_criteria=$3 WHERE id=$1", issue, rawRun, originalLedger)
+		trace.Criteria[0].Cases[0].ArtifactSHA256 = strings.Repeat("b", 64)
+		trace.Revision++
+		editedLedger, err = json.Marshal(trace)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	leader := start(latest(lead))
 	leaderToken := tokenFor(leader)
 	var comment CommentResponse
@@ -242,6 +283,22 @@ func testGoalCandidateHandoff(t *testing.T, scenario candidateHandoffScenario) {
 		if !service.IsGoalCandidateOffer(first) || !service.IsGoalCandidateOffer(second) ||
 			taskCountFor(t, issue, worker) != 1 || taskCountFor(t, issue, alternate) != 1 {
 			t.Fatal("inviting agents should only create assessment runs")
+		}
+		if scenario.briefFence {
+			if !strings.Contains(first.HandoffNote.String, brief.ContractDigest) {
+				t.Fatalf("assessment did not receive the original brief: %q", first.HandoffNote.String)
+			}
+			// Keep the method slot fixed to exercise the defensive data check
+			// even if a contract edit bypasses the normal return to review.
+			dbfx.Exec(t, "UPDATE issue SET acceptance_criteria=$2, revision=revision+1 WHERE id=$1", issue, editedLedger)
+			var rejected map[string]string
+			post(issue, "work-method", tokenFor(first), map[string]any{
+				"action": "claim_candidate", "base_revision": 1, "evidence": "I read the old brief",
+			}, http.StatusConflict, &rejected)
+			if rejected["code"] != "squad_context_changed" || taskCountFor(t, issue, worker) != 1 {
+				t.Fatalf("stale assessment must not create a worker: %v", rejected)
+			}
+			dbfx.Exec(t, "UPDATE issue SET acceptance_criteria=$2, revision=revision+1 WHERE id=$1", issue, originalLedger)
 		}
 		dispatch("claim_candidate", issue, leaderToken, "", 1, http.StatusForbidden)
 		dispatch("claim_candidate", issue, tokenFor(first), alternate, 1, http.StatusBadRequest)
@@ -295,6 +352,21 @@ func testGoalCandidateHandoff(t *testing.T, scenario candidateHandoffScenario) {
 	if taskCountFor(t, issue, worker) != priorWorkerTasks+1 || implementer.IsLeaderTask || implementer.OriginatorUserID.Valid ||
 		implementer.DelegatedFromTaskID != parentID || service.ReadGoalExecutionTask(implementer).Revision != 1 {
 		t.Fatalf("unexpected worker binding: %s", uuidToString(implementer.ID))
+	}
+	if scenario.briefFence {
+		if !strings.Contains(implementer.HandoffNote.String, brief.ContractDigest) {
+			t.Fatalf("implementation did not receive the original brief: %q", implementer.HandoffNote.String)
+		}
+		dbfx.Exec(t, "UPDATE issue SET acceptance_criteria=$2, revision=revision+1 WHERE id=$1", issue, editedLedger)
+		check := service.IssueWakeupService{Tasks: testHandler.TaskService}
+		if err := check.CheckClaim(ctx, implementer); !errors.Is(err, service.ErrSquadContextChanged) {
+			t.Fatalf("the queued implementation accepted stale context: %v", err)
+		}
+		dbfx.Exec(t, "UPDATE agent_task_queue SET status='dispatched',dispatched_at=now() WHERE id=$1", implementer.ID)
+		if _, err := testHandler.TaskService.StartTask(ctx, implementer.ID); !errors.Is(err, service.ErrSquadContextChanged) {
+			t.Fatalf("the prepared implementation launched with stale context: %v", err)
+		}
+		return
 	}
 	finish(leader)
 	tick()

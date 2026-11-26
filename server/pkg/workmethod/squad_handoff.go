@@ -3,12 +3,13 @@ package workmethod
 import "fmt"
 
 type SquadHandoff struct {
-	TaskID      string `json:"task_id"`
-	FromSquadID string `json:"from_squad_id"`
-	ToSquadID   string `json:"to_squad_id"`
-	FromStep    int    `json:"from_step"`
-	ToStep      int    `json:"to_step"`
-	RunRevision int    `json:"run_revision"`
+	TaskID       string             `json:"task_id"`
+	FromSquadID  string             `json:"from_squad_id"`
+	ToSquadID    string             `json:"to_squad_id"`
+	FromStep     int                `json:"from_step"`
+	ToStep       int                `json:"to_step"`
+	RunRevision  int                `json:"run_revision"`
+	ContextBrief *SquadContextBrief `json:"context_brief,omitempty"`
 }
 
 // RecordSquadHandoff links the method decision to the receiving squad's
@@ -43,6 +44,10 @@ func (r *Run) RecordSquadHandoff(before Run, taskID string) *SquadHandoff {
 }
 
 func (h SquadHandoff) Brief() string {
-	return fmt.Sprintf("Squad handoff event for task %s: squad %s, step %d → squad %s, step %d (run revision %d). Read this issue's method history for the verified deliverable and review evidence.",
+	note := fmt.Sprintf("Squad handoff event for task %s: squad %s, step %d → squad %s, step %d (run revision %d). Read this issue's method history for the deliverable, source evidence, and review decisions.",
 		h.TaskID, h.FromSquadID, h.FromStep+1, h.ToSquadID, h.ToStep+1, h.RunRevision)
+	if h.ContextBrief != nil {
+		note += "\n" + h.ContextBrief.note()
+	}
+	return note
 }

@@ -89,7 +89,18 @@ func (h *Handler) ChangeIssueAcceptance(w http.ResponseWriter, r *http.Request) 
 					break
 				}
 			}
-			if step, ok := agileReworkStep(run, change.Action, changed); ok {
+			step, needsReview := agileReworkStep(run, change.Action, changed)
+			if !needsReview && run.EvidenceGate() == "candidate" {
+				handoff := run.CurrentSquadHandoff()
+				if handoff != nil && handoff.ContextBrief != nil && !handoff.ContextBrief.MatchesAcceptance(raw) {
+					if handoff.FromStep >= run.Step {
+						writeErrorCode(w, http.StatusConflict, "squad_context_changed", "当前实现步骤已有交接简报，请先将事项退回测试设计再修改验收记录")
+						return
+					}
+					step, needsReview = handoff.FromStep, true
+				}
+			}
+			if needsReview {
 				from := run.Step
 				run.State, run.Step = "working", step
 				run.Revision++
@@ -156,10 +167,10 @@ func agileReworkStep(run workmethod.Run, action string, criterion acceptance.Cri
 	switch action {
 	case "criterion":
 		targetGate = "criteria"
-	case "case", "case_revision":
+	case "case", "case_revision", "case_retire":
 		targetGate = "coverage"
 	case "implementation":
-	case "run", "case_retire":
+	case "run":
 		impact := criterion.Impact()
 		if impact.CurrentImplementation && !impact.Uncovered && len(impact.Retest)+len(impact.Failed)+len(impact.Unrun) == 0 {
 			return 0, false

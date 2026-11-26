@@ -300,6 +300,9 @@ ORDER BY created_at DESC, id DESC LIMIT 1`,
 				}
 			}
 		}
+		if handoff := method.CurrentSquadHandoff(); handoff != nil && handoff.ContextBrief != nil && handoff.ToSquadID == util.UUIDToString(target.SquadID) {
+			note += "\n" + handoff.Brief()
+		}
 	}
 	if startGoal {
 		note = fmt.Sprintf("目标已授权启动本卡的正式工作方法。用 \"$MULTICA_CLI_PATH\" issue method <本事项编号> 读取当前步骤，再用同一命令加 --change-stdin 提交 action=start、method_id=%q、当前 base_revision。平台将自动交给方法指定角色。", execution.Progress.MethodID)

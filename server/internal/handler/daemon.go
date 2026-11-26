@@ -2845,6 +2845,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp = taskToResponse(*task, runtimeWorkspaceID)
 	if err := (&service.IssueWakeupService{Tasks: h.TaskService}).CheckClaim(r.Context(), *task); err != nil {
+		if errors.Is(err, service.ErrSquadContextChanged) {
+			return resp, nil, nil, 0, 0, h.failClaimedTaskBeforeLaunch(r.Context(), task, err.Error(), taskfailure.ReasonInvalidTaskIdentity, "squad_context_changed", http.StatusConflict, err.Error())
+		}
 		if !errors.Is(err, service.ErrWakeupForbidden) {
 			return resp, nil, nil, 0, 0, h.rejectClaimSourceLoad(r.Context(), task, err, "wakeup", resp.WakeupID)
 		}
@@ -4845,7 +4848,10 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Warn("start task failed", "task_id", taskID, "error", err)
-		if errors.Is(err, service.ErrWakeupForbidden) {
+		if errors.Is(err, service.ErrSquadContextChanged) {
+			h.failClaimedTaskBeforeLaunch(r.Context(), &startTask, err.Error(), taskfailure.ReasonInvalidTaskIdentity, "squad_context_changed", http.StatusConflict, err.Error())
+			writeErrorCode(w, http.StatusConflict, "squad_context_changed", err.Error())
+		} else if errors.Is(err, service.ErrWakeupForbidden) {
 			h.failClaimedTaskBeforeLaunch(r.Context(), &startTask, "The goal execution approval or current step changed.", taskfailure.ReasonInvalidTaskIdentity, "goal_execution_unavailable", http.StatusConflict, "goal execution unavailable")
 			writeErrorCode(w, http.StatusConflict, "goal_execution_unavailable", "goal execution unavailable")
 		} else if errors.Is(err, pgx.ErrNoRows) {

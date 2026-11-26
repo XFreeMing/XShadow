@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/acceptance"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/workmethod"
@@ -153,6 +155,16 @@ func TestApprovedSquadDeliveryCreatesOneBoundHandoffToTheNextSquad(t *testing.T)
 	var saved workmethod.Template
 	testutil.Call(t, testHandler.CreateWorkMethod, newRequest("POST", "/api/work-methods?workspace_id="+testWorkspaceID, method)).Want(201).JSON(&saved)
 	issue := dbfx.Issue(t, "Prepare and consume the same fixture", testutil.Cols{"status": "todo"})
+	sampleHash := strings.Repeat("a", 64)
+	trace := acceptance.Trace{Revision: 2, Criteria: []acceptance.Criterion{{
+		ID: "AC1", Versions: []string{"A citation opens its exact source paragraph"},
+		Cases: []acceptance.TestCase{{ID: "B01", Specification: "Open the second edition", ArtifactSHA256: sampleHash}},
+	}}}
+	rawTrace, err := json.Marshal(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbfx.Exec(t, "UPDATE issue SET acceptance_criteria=$2 WHERE id=$1", issue, rawTrace)
 	change := func(agentID, taskID string, body map[string]any, want int) workmethod.Run {
 		t.Helper()
 		req := goalRequest("POST", "/api/issues/"+issue+"/work-method", testUserID, body, map[string]string{"id": issue})
@@ -186,7 +198,17 @@ func TestApprovedSquadDeliveryCreatesOneBoundHandoffToTheNextSquad(t *testing.T)
 		TaskID: uuidToString(queued.ID), FromSquadID: design, ToSquadID: build, FromStep: 0, ToStep: 1, RunRevision: 3,
 	}
 	event := run.History[2]
-	if event.SquadHandoff == nil || *event.SquadHandoff != want || event.Actor != "member/"+testUserID {
+	if event.SquadHandoff == nil || event.SquadHandoff.ContextBrief == nil {
+		t.Fatal("handoff did not include the reviewed input references")
+	}
+	brief := event.SquadHandoff.ContextBrief
+	if brief.Objective != "Prepare and consume the same fixture" || brief.MethodRevision != saved.Revision ||
+		brief.AcceptanceRevision != trace.Revision || !brief.MatchesAcceptance(rawTrace) ||
+		len(brief.Criteria) != 1 || len(brief.Criteria[0].Cases) != 1 || brief.Criteria[0].Cases[0].ArtifactSHA256 != sampleHash {
+		t.Fatalf("unexpected frozen brief: %+v", brief)
+	}
+	want.ContextBrief = brief
+	if !reflect.DeepEqual(*event.SquadHandoff, want) || event.Actor != "member/"+testUserID {
 		t.Fatalf("handoff %+v, want %+v with independent reviewer", event, want)
 	}
 	if !queued.IsLeaderTask || uuidToString(queued.SquadID) != build || uuidToString(queued.AgentID) != buildLead ||
@@ -197,7 +219,7 @@ func TestApprovedSquadDeliveryCreatesOneBoundHandoffToTheNextSquad(t *testing.T)
 	if taskCountFor(t, issue, buildLead) != 1 {
 		t.Fatal("replaying the transition created another receiving run")
 	}
-	if persisted := readDeliveryMethod(t, issue).History[2].SquadHandoff; persisted == nil || *persisted != want {
+	if persisted := readDeliveryMethod(t, issue).History[2].SquadHandoff; persisted == nil || !reflect.DeepEqual(*persisted, want) {
 		t.Fatalf("persisted handoff %+v, want %+v", persisted, want)
 	}
 	continued := change(buildLead, uuidToString(queued.ID), map[string]any{
