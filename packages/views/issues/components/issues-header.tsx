@@ -2215,7 +2215,7 @@ export function IssueDisplayControls({
                   </Select>
                 </div>
               )}
-              {viewMode === "table" && (
+              {(viewMode === "table" || viewMode === "grid") && (
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-caption font-medium text-muted-foreground">
                     {t(($) => $.display.grouping_section)}

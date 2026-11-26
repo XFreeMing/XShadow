@@ -156,6 +156,9 @@ function makeGroupBranches(
     enabled: true,
     descriptors,
     issues,
+    issuesByKey: Object.fromEntries(
+      descriptors.map((descriptor) => [descriptor.key, issues]),
+    ),
     pagination: {},
     total: issues.length,
     isLoading: false,

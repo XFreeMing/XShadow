@@ -15,6 +15,7 @@ import { useModalStore } from "@multica/core/modals";
 import type {
   Agent,
   Issue,
+  IssueTableGroupsResponse,
   IssueTableRowsRequest,
   IssueTableRowsResponse,
   ListPropertiesResponse,
@@ -1035,6 +1036,151 @@ describe("MultidimensionalGridView", () => {
     expect(grid.getByText("Research")).toBeInTheDocument();
     expect(grid.getByText(/example\.com\/paper/)).toBeInTheDocument();
     expect(grid.getAllByText("0").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("pages native status groups, collapses branches, and prunes live selection", async () => {
+    const todoIssue = makeIssue({
+      id: "todo-1",
+      identifier: "XSH-T1",
+      title: "Todo task",
+      status: "todo",
+    });
+    const doneIssue = makeIssue({
+      id: "done-1",
+      identifier: "XSH-D1",
+      title: "Done task",
+      status: "done",
+    });
+    const listIssueTableGroups = vi.fn(
+      async (): Promise<IssueTableGroupsResponse> => ({
+        query_fingerprint: "fp-group",
+        total: 3,
+        groups: [
+          {
+            key: "status:todo",
+            value: { kind: "status", status: "todo" },
+            count: 2,
+          },
+          {
+            key: "status:done",
+            value: { kind: "status", status: "done" },
+            count: 1,
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    let failContinuation = true;
+    const listIssueTableRows = vi.fn(
+      async (req: IssueTableRowsRequest): Promise<IssueTableRowsResponse> => {
+        if (req.group_key === "status:todo") {
+          const continuation = req.page?.cursor === "todo-next";
+          if (continuation && failContinuation) {
+            failContinuation = false;
+            throw new Error("native branch unavailable");
+          }
+          return {
+            rows: continuation
+              ? [
+                  {
+                    issue: {
+                      ...todoIssue,
+                      id: "todo-2",
+                      identifier: "XSH-T2",
+                      title: "Todo page two",
+                    },
+                    direct_child_count: 0,
+                  },
+                ]
+              : [{ issue: todoIssue, direct_child_count: 0 }],
+            total: 2,
+            branch_total: 2,
+            next_cursor: continuation ? null : "todo-next",
+            group_key: req.group_key,
+            parent_id: null,
+            query_fingerprint: "fp-group",
+          };
+        }
+        if (req.group_key === "status:done") {
+          return {
+            rows: [{ issue: doneIssue, direct_child_count: 0 }],
+            total: 1,
+            branch_total: 1,
+            next_cursor: null,
+            group_key: req.group_key,
+            parent_id: null,
+            query_fingerprint: "fp-group",
+          };
+        }
+        return {
+          rows: [],
+          total: 0,
+          branch_total: 0,
+          next_cursor: null,
+          group_key: req.group_key,
+          parent_id: null,
+          query_fingerprint: "fp-group",
+        };
+      },
+    );
+    setupApi({
+      listIssueTableGroups,
+      listIssueTableRows,
+      listIssueTypes: vi.fn().mockRejectedValue(new Error("task type catalog unavailable")),
+    });
+
+    const surfaceKey = "workspace:grid-group-status";
+    const store = getIssueSurfaceViewStore(surfaceKey);
+    store.getState().setViewMode("grid");
+    store.getState().setTableGrouping("status");
+
+    const qc = createQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          surfaceKey={surfaceKey}
+          scope={{ type: "workspace", actorKind: "all" }}
+          modes={["board", "list", "table", "grid"]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("2 / 3");
+    const grid = within(document.querySelector("[data-apitable-grid]") as HTMLElement);
+    await grid.findByDisplayValue("Todo task");
+    await grid.findByDisplayValue("Done task");
+    expect(
+      grid.getByRole("button", { name: /– Todo \(2\)/i }),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        grid.getByRole("checkbox", { name: /Select XSH-T1/i }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(grid.getByRole("checkbox", { name: /Select XSH-T1/i }));
+    expect(await screen.findByText("1 selected")).toBeInTheDocument();
+
+    fireEvent.click(grid.getByRole("button", { name: /– Todo \(2\)/i }));
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("Todo task")).not.toBeInTheDocument();
+      expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(grid.getByRole("button", { name: /\+ Todo \(2\)/i }));
+    await screen.findByDisplayValue("Todo task");
+
+    const loadMoreButtons = await grid.findAllByRole("button", {
+      name: /Load more/i,
+    });
+    fireEvent.click(loadMoreButtons[0]!);
+    fireEvent.click(await grid.findByRole("button", { name: /retry/i }));
+    await screen.findByDisplayValue("Todo page two");
+    expect(listIssueTableRows).toHaveBeenCalledWith(
+      expect.objectContaining({
+        group_key: "status:todo",
+        page: expect.objectContaining({ cursor: "todo-next" }),
+      }),
+    );
   });
 
   it("selects loaded grid rows and scopes batch actions to the loaded native window", async () => {

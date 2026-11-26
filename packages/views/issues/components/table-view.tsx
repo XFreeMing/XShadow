@@ -105,7 +105,6 @@ import type {
   Issue,
   IssueProperty,
   IssueTableGroupDescriptor,
-  IssueTableGroupSpec,
   IssueTableQuerySpec,
   IssueTableRowsResponse,
   Project,
@@ -158,6 +157,7 @@ import {
   refreshFrozenTableRows,
   type IssueTableDisplayRow,
 } from "./table-view-model";
+import { issueTableGroupLabel, tableGroupSpec } from "./issue-table-grouping";
 import type { ChildProgress } from "./list-row";
 import { ListLoadMoreFooter } from "./list-load-more-footer";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
@@ -273,14 +273,6 @@ function rebaseServerBranchState(
   return { identity, structureIdentity, branches };
 }
 
-function tableGroupSpec(grouping: string): IssueTableGroupSpec {
-  if (grouping === "status") return { kind: "status" };
-  if (grouping === "assignee") return { kind: "assignee" };
-  if (grouping === "project") return { kind: "project" };
-  const propertyId = propertyIdFromViewKey(grouping);
-  if (propertyId) return { kind: "property", property_id: propertyId };
-  return { kind: "none" };
-}
 
 type ColumnLabelKey =
   | "title"
@@ -1789,52 +1781,23 @@ export function TableView({
   );
 
   const serverGroupLabel = useCallback(
-    (descriptor: IssueTableGroupDescriptor) => {
-      const value = descriptor.value;
-      if (value.kind === "status") {
-        // A group is one status KEY, so it shows that status's own name — a
-        // custom status must not read as its category. `resolveStatusLabel`
-        // falls back to the raw key, which is also what keeps a status
-        // introduced by a NEWER backend usable on an installed client instead
-        // of collapsing to the schema fallback or an empty label. (MUL-6243)
-        return resolveStatusLabel(value.status);
-      }
-      if (value.kind === "assignee") {
-        return value.actor
-          ? getActorName(value.actor.type, value.actor.id)
-          : t(($) => $.table.unassigned);
-      }
-      if (value.kind === "project") {
-        if (!value.project_id) return t(($) => $.swimlane.no_project);
-        // A project the query cannot resolve (deleted, or not visible to this
-        // member) reads as unavailable — never as its raw id.
-        return (
-          groupProjectMap.get(value.project_id)?.title ??
-          t(($) => $.table.value_unavailable)
-        );
-      }
-      if (value.kind === "parent") {
-        if (value.value_state === "unset") {
-          return t(($) => $.swimlane.no_parent);
-        }
-        return value.parent?.title ?? t(($) => $.table.value_unavailable);
-      }
-      if (value.value_state === "unset") return t(($) => $.table.no_value);
-      if (value.value_state === "unavailable") {
-        return t(($) => $.table.value_unavailable);
-      }
-      const property = propertyById.get(value.property_id);
-      if (typeof value.value === "boolean") {
-        return value.value
-          ? t(($) => $.pickers.custom_property.true_label)
-          : t(($) => $.pickers.custom_property.false_label);
-      }
-      return (
-        property?.config.options?.find((option) => option.id === value.value)
-          ?.name ?? String(value.value ?? "")
-      );
-    },
-    [getActorName, groupProjectMap, propertyById, t],
+    (descriptor: IssueTableGroupDescriptor) =>
+      issueTableGroupLabel(descriptor, {
+        resolveStatusLabel,
+        getActorName,
+        groupProjectMap,
+        propertyById,
+        translate: {
+          unassigned: t(($) => $.table.unassigned),
+          noProject: t(($) => $.swimlane.no_project),
+          noParent: t(($) => $.swimlane.no_parent),
+          noValue: t(($) => $.table.no_value),
+          valueUnavailable: t(($) => $.table.value_unavailable),
+          customPropertyTrue: t(($) => $.pickers.custom_property.true_label),
+          customPropertyFalse: t(($) => $.pickers.custom_property.false_label),
+        },
+      }),
+    [getActorName, groupProjectMap, propertyById, resolveStatusLabel, t],
   );
 
   const serverDisplayRows = useMemo<IssueTableDisplayRow[]>(() => {

@@ -67,6 +67,9 @@ export interface GridLabels {
   addLink?: string;
   readonly?: string;
   openRecord?: string;
+  loadMore?: string;
+  loadingBranch?: string;
+  retryBranch?: string;
 }
 
 /** Optional row checkboxes for host-driven multi-select (e.g. task batch actions). */
@@ -100,6 +103,11 @@ export interface GridGroup {
   count: number;
   collapsed: boolean;
   records: readonly GridRecordView[];
+  /** Native branch still has additional rows beyond `records`. */
+  branchHasMore?: boolean;
+  branchLoading?: boolean;
+  branchError?: boolean;
+  onLoadMore?: () => void;
 }
 
 export interface GridCellRenderContext {

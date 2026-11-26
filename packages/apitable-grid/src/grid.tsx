@@ -319,7 +319,30 @@ export function ApitableGrid({
           );
           if (group.collapsed) return [header];
           const start = visibleRecords.findIndex((record) => record.id === group.records[0]?.id);
-          return [header, ...group.records.map((record, index) => renderRecord(record, start + index))];
+          const rows = group.records.map((record, index) =>
+            renderRecord(record, start + index),
+          );
+          const branchTail =
+            group.branchError || (group.branchHasMore && group.records.length > 0)
+              ? [
+                  <tr className="apitable-grid__groupBranch" data-group={group.key} key={`group-more:${group.key}`}>
+                    <td colSpan={fields.length + 1}>
+                      <button
+                        type="button"
+                        disabled={group.branchLoading}
+                        onClick={() => group.onLoadMore?.()}
+                      >
+                        {group.branchLoading
+                          ? (labels.loadingBranch ?? "…")
+                          : group.branchError
+                            ? (labels.retryBranch ?? "Retry")
+                            : (labels.loadMore ?? "Load more")}
+                      </button>
+                    </td>
+                  </tr>,
+                ]
+              : [];
+          return [header, ...rows, ...branchTail];
         }) : visibleRecords.map((record, rowIndex) => renderRecord(record, rowIndex))}
         </tbody>
       </table>

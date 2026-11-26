@@ -16,6 +16,7 @@ import {
   type GridCellRenderContext,
   type GridCellValue,
   type GridFieldView,
+  type GridGroup,
   type GridLabels,
   type GridRecordView,
   type GridRowSelection,
@@ -42,7 +43,9 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { issueTypeListOptions } from "@multica/core/issue-types";
 import { propertyListOptions } from "@multica/core/properties";
+import { propertyIdFromViewKey } from "@multica/core/issues/stores/view-store";
 import { issueTableRowPageOptions } from "@multica/core/issues/queries";
+import { projectListOptions } from "@multica/core/projects/queries";
 import { useModalStore } from "@multica/core/modals";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type {
@@ -59,6 +62,11 @@ import {
   IssueTableExportIntegrityError,
 } from "./table-view-model";
 import { issueGridExportRow } from "./issue-grid-export";
+import { issueTableGroupLabel } from "./issue-table-grouping";
+import {
+  useIssueTableFlatGroups,
+  visibleTableGroupIssues,
+} from "./use-issue-table-flat-groups";
 import { useT } from "../../i18n";
 import { resolveClickIntent, useIntentNavigate } from "../../navigation";
 import { runConfirmIntent } from "../actions/run-confirm-gate";
@@ -130,28 +138,86 @@ export function MultidimensionalGridView({
       ? cursorState.cursors
       : INITIAL_CURSORS;
 
+  const tableGrouping = useViewStore((state) => state.tableGrouping);
+  const setTableGrouping = useViewStore((state) => state.setTableGrouping);
+  const tableCollapsedGroups = useViewStore((state) => state.tableCollapsedGroups);
+  const toggleTableGroupCollapsed = useViewStore(
+    (state) => state.toggleTableGroupCollapsed,
+  );
+  const groupablePropertyIds = useMemo(
+    () =>
+      new Set(
+        workspaceProperties
+          .filter((property) =>
+            ["select", "checkbox"].includes(property.type),
+          )
+          .map((property) => property.id),
+      ),
+    [workspaceProperties],
+  );
+  const groupingPropertyId = propertyIdFromViewKey(tableGrouping);
+  const effectiveTableGrouping =
+    groupingPropertyId && !groupablePropertyIds.has(groupingPropertyId)
+      ? "none"
+      : tableGrouping;
+  useEffect(() => {
+    if (
+      !groupingPropertyId ||
+      !propertiesQuery.isSuccess ||
+      groupablePropertyIds.has(groupingPropertyId)
+    ) {
+      return;
+    }
+    setTableGrouping("none");
+    toast.info(t(($) => $.table.group_property_unavailable));
+  }, [
+    groupingPropertyId,
+    groupablePropertyIds,
+    propertiesQuery.isSuccess,
+    setTableGrouping,
+    t,
+  ]);
+
+  const usesServerGrouping = effectiveTableGrouping !== "none";
+  const groupBranches = useIssueTableFlatGroups({
+    wsId,
+    serverQuery,
+    tableGrouping: effectiveTableGrouping,
+    collapsedGroupKeys: tableCollapsedGroups,
+  });
+  const collapsedGroupSet = useMemo(
+    () => new Set(tableCollapsedGroups),
+    [tableCollapsedGroups],
+  );
+  const groupProjectsQuery = useQuery({
+    ...projectListOptions(wsId),
+    enabled: usesServerGrouping && effectiveTableGrouping === "project",
+  });
+  const groupProjectMap = useMemo(
+    () =>
+      new Map(
+        (groupProjectsQuery.data ?? []).map((project) => [project.id, project]),
+      ),
+    [groupProjectsQuery.data],
+  );
+
   const pageQueries = useQueries({
-    queries: cursors.map((cursor) => ({
-      ...issueTableRowPageOptions(wsId, {
-        query: serverQuery,
-        group: { kind: "none" },
-        group_key: null,
-        hierarchy: { enabled: false },
-        parent_id: null,
-        page: { limit: GRID_PAGE_LIMIT, cursor },
-      }),
-      // Do not carry placeholder rows across query or scope transitions.
-      placeholderData: undefined,
-    })),
+    queries: usesServerGrouping
+      ? []
+      : cursors.map((cursor) => ({
+          ...issueTableRowPageOptions(wsId, {
+            query: serverQuery,
+            group: { kind: "none" },
+            group_key: null,
+            hierarchy: { enabled: false },
+            parent_id: null,
+            page: { limit: GRID_PAGE_LIMIT, cursor },
+          }),
+          placeholderData: undefined,
+        })),
   });
 
-  const {
-    issues,
-    total,
-    nextCursor,
-    validPrefixLength,
-    activeTailQuery,
-  } = useMemo(() => {
+  const flatPageState = useMemo(() => {
     const deduped: Issue[] = [];
     const seen = new Set<string>();
     let resolvedTotal = 0;
@@ -189,6 +255,16 @@ export function MultidimensionalGridView({
     };
   }, [cursors, pageQueries]);
 
+  const issues = usesServerGrouping
+    ? visibleTableGroupIssues(groupBranches, collapsedGroupSet)
+    : flatPageState.issues;
+  const total = usesServerGrouping
+    ? groupBranches.total
+    : flatPageState.total;
+  const nextCursor = flatPageState.nextCursor;
+  const validPrefixLength = flatPageState.validPrefixLength;
+  const activeTailQuery = flatPageState.activeTailQuery;
+
   const hasStaleTail = validPrefixLength < cursors.length;
   useEffect(() => {
     if (!hasStaleTail) return;
@@ -212,8 +288,14 @@ export function MultidimensionalGridView({
   );
 
   const headQuery = pageQueries[0];
-  const isHeadLoading = Boolean(headQuery && headQuery.isPending && !headQuery.data);
-  const isHeadError = Boolean(headQuery && headQuery.isError && !headQuery.data);
+  const isHeadLoading = usesServerGrouping
+    ? groupBranches.enabled &&
+      groupBranches.isLoading &&
+      groupBranches.descriptors.length === 0
+    : Boolean(headQuery && headQuery.isPending && !headQuery.data);
+  const isHeadError = usesServerGrouping
+    ? groupBranches.isError && groupBranches.descriptors.length === 0
+    : Boolean(headQuery && headQuery.isError && !headQuery.data);
   const isTailLoading = Boolean(
     activeTailQuery &&
       (activeTailQuery.isPending || activeTailQuery.isFetching) &&
@@ -223,7 +305,7 @@ export function MultidimensionalGridView({
     activeTailQuery && activeTailQuery.isError && !activeTailQuery.data,
   );
   const validCursors = cursors.slice(0, validPrefixLength);
-  const canLoadMore = Boolean(
+  const canLoadMore = !usesServerGrouping && Boolean(
     nextCursor &&
       !validCursors.includes(nextCursor) &&
       !isTailLoading &&
@@ -410,6 +492,13 @@ export function MultidimensionalGridView({
   );
 
   const recordIds = useMemo(() => issues.map((issue) => issue.id), [issues]);
+
+  useEffect(() => {
+    const visibleIds = new Set(recordIds);
+    const stale = [...selection.selectedIds].filter((id) => !visibleIds.has(id));
+    if (stale.length > 0) selection.deselect(stale);
+  }, [recordIds, selection]);
+
   const selectedIssues = useMemo(
     () => issues.filter((issue) => selection.selectedIds.has(issue.id)),
     [issues, selection.selectedIds],
@@ -585,6 +674,61 @@ export function MultidimensionalGridView({
     [issues, issueTypeById, workspaceIssueTypes.length, workspaceProperties],
   );
 
+  const recordById = useMemo(
+    () => new Map(records.map((record) => [record.id, record])),
+    [records],
+  );
+
+  const groupLabelContext = useMemo(
+    () => ({
+      resolveStatusLabel,
+      getActorName,
+      groupProjectMap,
+      propertyById,
+      translate: {
+        unassigned: t(($) => $.table.unassigned),
+        noProject: t(($) => $.swimlane.no_project),
+        noParent: t(($) => $.swimlane.no_parent),
+        noValue: t(($) => $.table.no_value),
+        valueUnavailable: t(($) => $.table.value_unavailable),
+        customPropertyTrue: t(($) => $.pickers.custom_property.true_label),
+        customPropertyFalse: t(($) => $.pickers.custom_property.false_label),
+      },
+    }),
+    [getActorName, groupProjectMap, propertyById, resolveStatusLabel, t],
+  );
+
+  const gridGroups = useMemo<GridGroup[] | null>(() => {
+    if (!usesServerGrouping || groupBranches.descriptors.length === 0) {
+      return null;
+    }
+    return groupBranches.descriptors.map((descriptor) => {
+      const branchIssues = groupBranches.issuesByKey[descriptor.key] ?? [];
+      const page = groupBranches.pagination[descriptor.key];
+      return {
+        key: descriptor.key,
+        label: issueTableGroupLabel(descriptor, groupLabelContext),
+        count: descriptor.count,
+        collapsed: collapsedGroupSet.has(descriptor.key),
+        records: branchIssues
+          .map((issue) => recordById.get(issue.id))
+          .filter((record): record is GridRecordView => Boolean(record)),
+        branchHasMore: page?.hasMore,
+        branchLoading: page?.isLoading || page?.isFetching,
+        branchError: page?.isError,
+        onLoadMore: page?.isError ? page.retry : page?.loadMore,
+      };
+    });
+  }, [
+    collapsedGroupSet,
+    groupBranches.descriptors,
+    groupBranches.issuesByKey,
+    groupBranches.pagination,
+    groupLabelContext,
+    recordById,
+    usesServerGrouping,
+  ]);
+
   const labels = useMemo<GridLabels>(
     () => ({
       rename: t(($) => $.table.rename_title),
@@ -594,6 +738,9 @@ export function MultidimensionalGridView({
       checked: "true",
       unchecked: "false",
       openRecord: t(($) => $.member_answer.open_issue),
+      loadMore: t(($) => $.table.load_more),
+      retryBranch: t(($) => $.table.load_more_failed_retry),
+      loadingBranch: t(($) => $.table.loading_branch),
     }),
     [t],
   );
@@ -806,7 +953,13 @@ export function MultidimensionalGridView({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => void headQuery?.refetch()}
+            onClick={() =>
+              void (
+                usesServerGrouping
+                  ? groupBranches.retryGroups()
+                  : headQuery?.refetch()
+              )
+            }
           >
             {t(($) => $.table.load_failed_retry)}
           </Button>
@@ -814,19 +967,33 @@ export function MultidimensionalGridView({
       ) : (
         <div className="flex-1 min-h-0 overflow-auto">
           <ApitableGrid
-            datasheetId={`issues:${wsId}:${queryIdentity}`}
+            datasheetId={`issues:${wsId}:${queryIdentity}:${effectiveTableGrouping}`}
             fields={visibleFields}
             records={records}
+            groups={gridGroups}
             labels={labels}
             renderCell={renderCell}
             onCellCommit={handleCellCommit}
             onOpenRecord={handleOpenRecord}
+            onToggleGroup={toggleTableGroupCollapsed}
             rowSelection={rowSelection}
             stickyHeader
           />
 
           <div className="flex items-center justify-center px-4 py-3">
-            {isTailError ? (
+            {usesServerGrouping && groupBranches.hasMoreGroups ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={groupBranches.isLoadingMoreGroups}
+                onClick={() => groupBranches.loadMoreGroups()}
+              >
+                {groupBranches.isLoadingMoreGroups ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                ) : null}
+                {t(($) => $.table.load_more)}
+              </Button>
+            ) : isTailError ? (
               <Button
                 size="sm"
                 variant="ghost"

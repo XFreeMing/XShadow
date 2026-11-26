@@ -340,6 +340,14 @@ function makeServerBranches(
     enabled: true,
     descriptors,
     issues,
+    issuesByKey: Object.fromEntries(
+      descriptors.flatMap((descriptor) =>
+        (descriptor.secondary_groups ?? [descriptor]).map((cell) => [
+          cell.key,
+          issues,
+        ]),
+      ),
+    ),
     pagination,
     total: issues.length,
     isLoading: false,

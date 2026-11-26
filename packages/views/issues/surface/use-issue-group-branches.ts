@@ -42,6 +42,7 @@ export interface IssueGroupBranches {
   enabled: boolean;
   descriptors: IssueTableGroupDescriptor[];
   issues: Issue[];
+  issuesByKey: Record<string, Issue[]>;
   pagination: Record<string, IssueGroupPageState>;
   total: number;
   isLoading: boolean;
@@ -143,6 +144,8 @@ export function useIssueGroupBranches({
   group,
   secondaryValues,
   observeEmptyBranches = false,
+  activateHeadOnMount = false,
+  collapsedBranchKeys,
   enabled,
 }: {
   wsId: string;
@@ -155,6 +158,9 @@ export function useIssueGroupBranches({
    * Activate those when their mounted sentinel becomes visible so drag
    * targets have live heads. */
   observeEmptyBranches?: boolean;
+  /** Install a `[null]` cursor for each non-collapsed branch with rows. */
+  activateHeadOnMount?: boolean;
+  collapsedBranchKeys?: ReadonlySet<string>;
   enabled: boolean;
 }): IssueGroupBranches {
   const queryClient = useQueryClient();
@@ -265,6 +271,32 @@ export function useIssueGroupBranches({
     () => new Map(branches.map((descriptor) => [descriptor.key, descriptor])),
     [branches],
   );
+  useEffect(() => {
+    if (!enabled || !activateHeadOnMount) return;
+    setCursorState((previous) => {
+      if (previous.identity !== identity) {
+        return { identity, cursors: {} };
+      }
+      const cursors = { ...previous.cursors };
+      let changed = false;
+      for (const key of branchKeys) {
+        if (collapsedBranchKeys?.has(key)) continue;
+        const descriptor = descriptorByKey.get(key);
+        if (!descriptor || descriptor.count === 0) continue;
+        if ((cursors[key]?.length ?? 0) > 0) continue;
+        cursors[key] = [null];
+        changed = true;
+      }
+      return changed ? { ...previous, cursors } : previous;
+    });
+  }, [
+    activateHeadOnMount,
+    branchKeys,
+    collapsedBranchKeys,
+    descriptorByKey,
+    enabled,
+    identity,
+  ]);
   const branchData = useMemo(() => {
     const result = new Map<string, BranchData>();
     for (const key of branchKeys) {
@@ -415,6 +447,7 @@ export function useIssueGroupBranches({
         ),
         exact: false,
         type: "active",
+        predicate: (page) => page.state.status === "error",
       });
     },
     [group, query, queryClient, wsId],
@@ -455,9 +488,16 @@ export function useIssueGroupBranches({
       retry,
     ],
   );
-  const issues = useMemo(
-    () => branchKeys.flatMap((key) => branchData.get(key)?.rows ?? []),
+  const issuesByKey = useMemo(
+    () =>
+      Object.fromEntries<Issue[]>(
+        branchKeys.map((key) => [key, branchData.get(key)?.rows ?? []]),
+      ),
     [branchData, branchKeys],
+  );
+  const issues = useMemo(
+    () => branchKeys.flatMap((key) => issuesByKey[key] ?? []),
+    [branchKeys, issuesByKey],
   );
   const rowsPending = branchKeys.some(
     (key) => branchData.get(key)?.isLoading,
@@ -486,6 +526,7 @@ export function useIssueGroupBranches({
     enabled,
     descriptors,
     issues,
+    issuesByKey,
     pagination,
     // `/groups` owns the exact query-wide visible total. Deriving it from
     // loaded descriptors made a hidden-only first group page look globally
