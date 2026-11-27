@@ -81,7 +81,6 @@ func (h *Handler) createGoalPreparationIssue(ctx context.Context, goal db.Goal, 
 	if _, err := h.Queries.GetIssue(ctx, id); !errors.Is(err, pgx.ErrNoRows) {
 		return empty, err
 	}
-	policy := service.ResolveIssueCountPolicy(ctx, h.Entitlements, goal.WorkspaceID)
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return empty, err
@@ -141,7 +140,7 @@ func (h *Handler) createGoalPreparationIssue(ctx context.Context, goal db.Goal, 
 	if err := issueworkflow.CheckStatus(workflow, issuestatus.Backlog); err != nil {
 		return empty, err
 	}
-	number, err := service.AllocateIssueNumber(ctx, q, goal.WorkspaceID, policy)
+	number, err := service.AllocateIssueNumber(ctx, q, goal.WorkspaceID)
 	if err != nil {
 		return empty, err
 	}

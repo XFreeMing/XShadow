@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/dispatch"
-	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/inbox"
 	"github.com/multica-ai/multica/server/internal/issueguard"
@@ -35,12 +35,79 @@ type TxStarter interface {
 }
 
 type AutopilotService struct {
-	Queries      *db.Queries
-	TxStarter    TxStarter
-	Bus          *events.Bus
-	TaskSvc      *TaskService
-	Entitlements entitlement.Provider
-	QuotaMetrics AutopilotQuotaMetrics
+	Queries   *db.Queries
+	TxStarter TxStarter
+	Bus       *events.Bus
+	TaskSvc   *TaskService
+}
+
+// NewRequestIdempotencyKey generates a single-request idempotency key when an
+// HTTP caller omits one.
+func NewRequestIdempotencyKey() string { return newAutopilotIdempotencyKey() }
+
+func newAutopilotIdempotencyKey() string { return uuid.NewString() }
+
+type autopilotRunCompletion struct {
+	ID     pgtype.UUID
+	Result []byte
+}
+
+type autopilotRunFailure struct {
+	ID            pgtype.UUID
+	FailureReason pgtype.Text
+	ReasonCode    pgtype.Text
+}
+
+func (s *AutopilotService) completeAutopilotRun(ctx context.Context, params autopilotRunCompletion) (db.AutopilotRun, error) {
+	row, err := s.Queries.UpdateAutopilotRunTerminalWithQuota(ctx, db.UpdateAutopilotRunTerminalWithQuotaParams{
+		TerminalStatus: "completed",
+		Result:         params.Result,
+		RunID:          params.ID,
+		Consume:        true,
+	})
+	return autopilotRunFromTerminalRow(row), err
+}
+
+func (s *AutopilotService) failAutopilotRun(ctx context.Context, params autopilotRunFailure) (db.AutopilotRun, error) {
+	row, err := s.Queries.UpdateAutopilotRunTerminalWithQuota(ctx, db.UpdateAutopilotRunTerminalWithQuotaParams{
+		TerminalStatus: "failed",
+		FailureReason:  params.FailureReason,
+		ReasonCode:     params.ReasonCode,
+		RunID:          params.ID,
+	})
+	return autopilotRunFromTerminalRow(row), err
+}
+
+func (s *AutopilotService) skipAutopilotRun(ctx context.Context, params db.UpdateAutopilotRunSkippedParams) (db.AutopilotRun, error) {
+	row, err := s.Queries.UpdateAutopilotRunTerminalWithQuota(ctx, db.UpdateAutopilotRunTerminalWithQuotaParams{
+		TerminalStatus: "skipped",
+		FailureReason:  params.FailureReason,
+		ReasonCode:     params.ReasonCode,
+		RunID:          params.ID,
+	})
+	return autopilotRunFromTerminalRow(row), err
+}
+
+func autopilotRunFromTerminalRow(row db.UpdateAutopilotRunTerminalWithQuotaRow) db.AutopilotRun {
+	return db.AutopilotRun{
+		ID: row.ID, AutopilotID: row.AutopilotID, TriggerID: row.TriggerID,
+		Source: row.Source, Status: row.Status, IssueID: row.IssueID, TaskID: row.TaskID,
+		TriggeredAt: row.TriggeredAt, CompletedAt: row.CompletedAt,
+		FailureReason: row.FailureReason, TriggerPayload: row.TriggerPayload,
+		Result: row.Result, CreatedAt: row.CreatedAt, SquadID: row.SquadID,
+		PlannedAt: row.PlannedAt, WebhookDeliveryID: row.WebhookDeliveryID,
+		QuotaReservationID: row.QuotaReservationID, ReasonCode: row.ReasonCode,
+	}
+}
+
+func (s *AutopilotService) recoverPartialAutopilotRun(ctx context.Context, run db.AutopilotRun) (bool, error) {
+	rows, err := s.Queries.RecoverPartialAutopilotRun(ctx, run.ID)
+	return rows > 0, err
+}
+
+func (s *AutopilotService) FailAutopilotRunsByIssue(ctx context.Context, issueID pgtype.UUID) error {
+	_, err := s.Queries.FailAutopilotRunsByIssue(ctx, issueID)
+	return err
 }
 
 // DefaultAutopilotTriggerTimezone is the timezone used to render Autopilot
@@ -231,7 +298,7 @@ func (s *AutopilotService) AdmitAutopilotWebhookDelivery(
 	if autopilot.ExecutionMode == "run_only" {
 		initialStatus = "running"
 	}
-	run, _, err := s.createAutopilotRunWithQuota(ctx, autopilot.WorkspaceID, "webhook", "webhook:"+util.UUIDToString(deliveryID), db.CreateAutopilotRunParams{
+	run, err := s.Queries.CreateAutopilotRun(ctx, db.CreateAutopilotRunParams{
 		ID:                dbid.NewV7(),
 		AutopilotID:       autopilot.ID,
 		TriggerID:         triggerID,
@@ -578,7 +645,7 @@ func (s *AutopilotService) dispatchAutopilot(
 		initialStatus = "running"
 	}
 
-	run, reused, err := s.createAutopilotRunWithQuota(ctx, autopilot.WorkspaceID, source, idempotencyKey, db.CreateAutopilotRunParams{
+	run, err := s.Queries.CreateAutopilotRun(ctx, db.CreateAutopilotRunParams{
 		ID:                dbid.NewV7(),
 		AutopilotID:       autopilot.ID,
 		TriggerID:         triggerID,
@@ -590,15 +657,7 @@ func (s *AutopilotService) dispatchAutopilot(
 		WebhookDeliveryID: webhookDeliveryID,
 	})
 	if err != nil {
-		var quotaErr *AutopilotQuotaExceededError
-		if errors.As(err, &quotaErr) && source == "schedule" {
-			skipped, skipErr := s.recordSkippedRun(ctx, autopilot, triggerID, source, payload, plannedAt, webhookDeliveryID, quotaErr.Error(), dispatch.ReasonQuotaExceeded)
-			return skipped, dispatch.ReasonQuotaExceeded, skipErr
-		}
 		return nil, dispatch.ReasonInternalError, fmt.Errorf("create run: %w", err)
-	}
-	if reused {
-		return &run, dispatch.ReasonCode(run.ReasonCode.String), nil
 	}
 	s.captureAutopilotRunStarted(autopilot, run, source)
 	return s.dispatchAutopilotRun(ctx, autopilot, triggerID, source, &run, actorUserID)
@@ -743,7 +802,6 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	if err != nil {
 		return fmt.Errorf("resolve leader: %w", err)
 	}
-	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, ap.WorkspaceID)
 
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -775,15 +833,8 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		return &errDispatchSkipped{reason: "recent duplicate autopilot issue: " + util.UUIDToString(duplicate.ID), code: dispatch.ReasonAlreadyActive}
 	}
 
-	issueNumber, err := AllocateIssueNumber(ctx, qtx, ap.WorkspaceID, issueCountPolicy)
+	issueNumber, err := AllocateIssueNumber(ctx, qtx, ap.WorkspaceID)
 	if err != nil {
-		var limitErr *IssueLimitReachedError
-		if errors.As(err, &limitErr) {
-			return &errDispatchSkipped{
-				reason: "workspace has reached its issue limit",
-				code:   dispatch.ReasonIssueLimitReached,
-			}
-		}
 		return fmt.Errorf("allocate issue number: %w", err)
 	}
 
@@ -852,9 +903,6 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		return fmt.Errorf("link run to issue: %w", err)
 	}
 	*run = updatedRun
-	if _, err := settleAutopilotQuota(ctx, qtx, run.QuotaReservationID, true); err != nil {
-		return fmt.Errorf("consume quota reservation: %w", err)
-	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit tx: %w", err)

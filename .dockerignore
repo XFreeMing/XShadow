@@ -46,5 +46,4 @@ coverage
 
 # Repository-only tooling
 /.github/
-/deploy/
 /scripts/

@@ -20,25 +20,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
-	"github.com/multica-ai/multica/server/internal/cloudruntime"
-	"github.com/multica-ai/multica/server/internal/connectedapps"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/dbreader"
-	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
-	composio "github.com/multica-ai/multica/server/internal/integrations/composio"
 	"github.com/multica-ai/multica/server/internal/integrations/dingtalk"
 	"github.com/multica-ai/multica/server/internal/integrations/ghsnapshot"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
-	"github.com/multica-ai/multica/server/internal/integrations/slack"
-	"github.com/multica-ai/multica/server/internal/integrations/telegram"
-	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
-	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/themestore"
@@ -174,11 +166,6 @@ type Config struct {
 	GitExtraCACerts []byte
 }
 
-type cloudRuntimeProxy interface {
-	Enabled() bool
-	Do(ctx context.Context, req cloudruntime.Request) (*cloudruntime.Response, error)
-}
-
 type RuntimeProfileRefreshNotifier interface {
 	NotifyRuntimeProfilesChanged(workspaceID, profileID string)
 }
@@ -230,17 +217,9 @@ type Handler struct {
 	Bus                    *events.Bus
 	TaskService            *service.TaskService
 	PluginService          *service.PluginService
-	IssueService           *service.IssueService
-	AutopilotService       *service.AutopilotService
-	// Entitlements supplies workspace-scoped commercial gates. A nil provider
-	// preserves self-hosted behavior without extra reads.
-	Entitlements          entitlement.Provider
+	IssueService          *service.IssueService
+	AutopilotService      *service.AutopilotService
 	ReworkAnalysisSquadID pgtype.UUID
-	// SeatCapacity executes Cloud's pre-purchased human-seat protocol. Nil or
-	// disabled preserves self-hosted behavior.
-	SeatCapacity          seatcapacity.Executor
-	SeatCapacityLocker    seatcapacity.WorkspaceLocker
-	SeatCapacityWorker    *seatcapacity.Worker
 	EmailService          *service.EmailService
 	UpdateStore           UpdateStore
 	ModelListStore        ModelListStore
@@ -286,7 +265,6 @@ type Handler struct {
 	WebhookAbsoluteIPRateLimiter WebhookRateLimiter
 	InvitationRateLimiters       InvitationRateLimiters
 	WebhookDeliveryWorker        *WebhookDeliveryWorker
-	CloudRuntime                 cloudRuntimeProxy
 	// Test-only HTTP override; nil uses the default client in production.
 	googleOAuthHTTPClient *http.Client
 	// Lark integration. All three are nil when the Lark master key
@@ -311,13 +289,6 @@ type Handler struct {
 	// UI consults IsConfigured() to decide whether to surface install
 	// entry points.
 	LarkAPIClient lark.APIClient
-	// Composio integration (MUL-3720). Nil when COMPOSIO_API_KEY is unset;
-	// the composio HTTP handlers return 403 in that case. Wired in
-	// cmd/server/router.go after handler.New.
-	Composio *composio.Service
-	// ConnectedApps serves agents' app calls through the MCP gateway (MUL-8516).
-	// Wired together with Composio; nil when Composio is.
-	ConnectedApps *connectedapps.Service
 	// ChannelSupervisor owns the per-installation supervisor goroutines
 	// that hold the §4.4 WS lease and drive each channel.Channel
 	// (MUL-3620 generalized the Feishu-only Hub into this channel-agnostic
@@ -345,63 +316,14 @@ type Handler struct {
 	ChannelMediaReconciler *service.ChannelMediaReconciler
 	// LarkTyping owns the durable reaction cleanup worker, started under sweepCtx.
 	LarkTyping *lark.TypingIndicatorManager
-	// SlackInstall owns the bring-your-own-app Slack install lifecycle (register
-	// pasted tokens / list / revoke) and the at-rest encryption of each app's bot
-	// + app tokens (MUL-3666). Nil unless MULTICA_SLACK_SECRET_KEY is set.
-	SlackInstall *slack.InstallService
-	// SlackBindingTokens mints/redeems the user-binding tokens behind the
-	// "link your Slack account" prompt (MUL-3666). Nil unless Slack is
-	// configured (MULTICA_SLACK_SECRET_KEY set).
-	SlackBindingTokens *slack.BindingTokenService
 	// DingTalkInstall owns the bring-your-own-app DingTalk lifecycle. It is nil
 	// unless MULTICA_DINGTALK_SECRET_KEY is configured.
 	DingTalkInstall *dingtalk.InstallService
 	// DingTalkBindingTokens mints and redeems the single-use account-link tokens.
 	DingTalkBindingTokens *dingtalk.BindingTokenService
-	// SlackHistory backs the agent-facing `multica chat history` command: it
-	// reads a chat session's bound Slack conversation on demand (MUL-3871). Nil
-	// unless Slack is configured; GetChatChannelHistory then reports "no channel
-	// integration". A future platform satisfies the same reader interface.
+	// SlackHistory backs the agent-facing `multica chat history` reader interface
+	// when a channel history reader is wired.
 	SlackHistory ChatChannelHistoryReader
-	// WecomStore is the read/write handle over channel_installation rows scoped
-	// to channel_type='wecom'. Nil disables the wecom Web-UI endpoints (they
-	// return 403) and prevents boot from wiring the smart-bot supervisor.
-	WecomStore *wecom.Store
-	// WecomCredentials unseals a wecom installation's smart-bot secret for the
-	// WebSocket subscribe frame. Nil disables the wecom integration.
-	WecomCredentials wecom.CredentialsResolver
-	// WecomInstall drives the scan-code install sessions (QR generate + poll).
-	// Nil unless MULTICA_WECOM_SECRET_KEY is set; Configured() is additionally
-	// false without a QR provider, in which case the endpoints return 503 but
-	// in-flight sessions still terminate cleanly.
-	WecomInstall *wecom.InstallService
-	// WecomInstallWorker drives those sessions. Built in cmd/server/router.go;
-	// main.go starts it as an independent worker.
-	WecomInstallWorker *wecom.InstallWorker
-	// WecomBindingTokens mints/redeems the user-binding tokens behind the
-	// "link your Multica account" prompt sent to first-time WeCom users
-	// (their aibot userid is a "T"-prefixed anonymized id with no relation
-	// to their real userid or email, so an explicit binding is required —
-	// see wecom/binding.go). Nil disables the redeem endpoint (returns 403)
-	// and the OutboundReplier's binding-prompt path.
-	WecomBindingTokens WecomBindingRedeemer
-
-	// WecomCredentialProbe overrides the install-time control check. Nil in
-	// production, which gets the real handshake probe; tests inject a fake so
-	// the install path runs without a socket.
-	WecomCredentialProbe wecom.CredentialProbe
-
-	// TelegramInstall owns the Telegram bot install lifecycle (register a
-	// pasted BotFather token / list / revoke) and the at-rest encryption of
-	// each bot's token. Nil unless MULTICA_TELEGRAM_SECRET_KEY is set.
-	TelegramInstall *telegram.InstallService
-	// TelegramBindingTokens mints/redeems the user-binding tokens behind the
-	// "link your Telegram account" prompt. Nil unless Telegram is configured.
-	TelegramBindingTokens *telegram.BindingTokenService
-	// TelegramOutbound owns the asynchronous terminal-delivery worker pool.
-	// The process owner starts and joins it; the synchronous event bus only
-	// enqueues EventChatDone work.
-	TelegramOutbound *telegram.Outbound
 
 	// channelFileDelivery names the channel types that can, IN THIS
 	// DEPLOYMENT, carry a file the agent produced the last hop into the
@@ -546,12 +468,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		WebhookIPRateLimiter:         NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
 		WebhookAbsoluteIPRateLimiter: NewMemoryWebhookAbsoluteIPRateLimiter(DefaultWebhookAbsoluteIPRateLimit()),
 		InvitationRateLimiters:       NewMemoryInvitationRateLimiters(DefaultInvitationRateLimits()),
-		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
-			BaseURL: cfg.CloudURL,
-			Timeout: cfg.CloudTimeout,
-		}),
-		LLM: llmClient,
-		cfg: cfg,
+		LLM:                          llmClient,
+		cfg:                          cfg,
 	}
 	h.WebhookDeliveryWorker = NewWebhookDeliveryWorker(h)
 	// The default passthrough scheduler reports sweeper-race recoveries so the

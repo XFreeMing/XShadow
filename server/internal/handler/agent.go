@@ -1294,20 +1294,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		if actorType == "agent" || alwaysRedact || !canViewAgentSecrets(a, userID, member.Role) {
 			redactMcpConfig(&resp)
 		}
-		// composio_toolkit_allowlist is owner-only — not because the slugs
-		// are secret but because surfacing "what {owner} has opted into"
-		// across the workspace leaks the owner's integration footprint and
-		// confuses non-owners who cannot actually edit it. Workspace
-		// owner/admin do NOT bypass this gate (unlike mcp_config): the overlay
-		// uses the OWNER's connection and follows invocation permission
-		// (MUL-3963), so surfacing the slugs to admins gives them nothing
-		// actionable. Agent actors are also redacted (same A2A
-		// lateral-movement reasoning as mcp_config).
-		if !h.composioMCPAppsEnabled(r.Context()) {
-			suppressComposioToolkitAllowlist(&resp)
-		} else if actorType == "agent" || uuidToString(a.OwnerID) != userID {
-			redactComposioToolkitAllowlist(&resp)
-		}
+		suppressComposioToolkitAllowlist(&resp)
 		visible = append(visible, resp)
 	}
 
@@ -1373,13 +1360,7 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 			redactMcpConfig(&resp)
 		}
 	}
-	// composio_toolkit_allowlist visibility is strictly owner-only (see
-	// ListAgents for the rationale). No workspace owner/admin bypass.
-	if !h.composioMCPAppsEnabled(r.Context()) {
-		suppressComposioToolkitAllowlist(&resp)
-	} else if actorType == "agent" || uuidToString(agent.OwnerID) != userID {
-		redactComposioToolkitAllowlist(&resp)
-	}
+	suppressComposioToolkitAllowlist(&resp)
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1636,17 +1617,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
-	// composio_toolkit_allowlist: the JSON field is a list-of-slugs that gets
-	// stored as TEXT[]. We normalise here (lowercase + trim + dedupe) so the
-	// dispatch path can compare against per-user connection rows with a
-	// straight equality. A nil slice (or absent JSON key) maps to a NULL
-	// column on insert. An explicitly empty list (`[]`) is preserved as an
-	// empty TEXT[] (the dispatch path treats NULL and `{}` identically).
-	allowlist := normaliseComposioToolkitAllowlist(req.ComposioToolkitAllowlist)
-	if !h.composioMCPAppsEnabled(r.Context()) {
-		allowlist = nil
-	}
-
 	skillUUIDs, ok := parseUUIDSliceOrBadRequest(w, req.SkillIDs, "skill_ids")
 	if !ok {
 		return
@@ -1715,7 +1685,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		ThinkingLevel:            pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
 		ServiceTier:              pgtype.Text{String: req.ServiceTier, Valid: req.ServiceTier != ""},
 		ConversationStarters:     sp,
-		ComposioToolkitAllowlist: allowlist,
+		ComposioToolkitAllowlist: nil,
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -1732,12 +1702,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if err := replaceInvocationTargetsWithQueries(r.Context(), qtx, created.ID, parseUUID(ownerID), perm.targets); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save agent access")
 		return
-	}
-	if len(allowlist) > 0 {
-		if err := syncAgentAppsFromAllowlist(r.Context(), qtx, created, allowlist, parseUUID(ownerID)); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to save agent apps")
-			return
-		}
 	}
 	for _, skillID := range skillUUIDs {
 		if err := qtx.AddAgentSkill(r.Context(), db.AddAgentSkillParams{
@@ -1780,9 +1744,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	))
 
 	redactAgentResponseForActor(&resp, actorType)
-	if !h.composioMCPAppsEnabled(r.Context()) {
-		suppressComposioToolkitAllowlist(&resp)
-	}
+	suppressComposioToolkitAllowlist(&resp)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -2412,36 +2374,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	// Owner-only WRITE. The caller is already past canManageAgent, which lets
 	// workspace owner/admins through alongside the agent owner — but the
 	// Composio overlay uses the agent OWNER's connection (MUL-3963), so an
-	// admin editing someone else's allowlist would silently reshape what the
-	// OWNER exposes through their own connected apps, confusing the owner
-	// about what their agent surfaces. Keep it owner-only.
-	// Drop the field with a debug log instead of erroring so an over-eager
-	// UI that sends the whole agent payload back on every save (PATCH-as-PUT)
-	// keeps working — same "silent ignore" stance the issue calls out, and
-	// the same one mcp_config takes for the broader admin pattern.
-	shouldClearComposioAllowlist := false
-	if _, hasAllowlist := rawFields["composio_toolkit_allowlist"]; hasAllowlist {
-		isAgentOwner := uuidToString(existing.OwnerID) == requestUserID(r)
-		if !h.composioMCPAppsEnabled(r.Context()) {
-			slog.Debug("update agent: composio_toolkit_allowlist write dropped because feature flag is disabled",
-				append(logger.RequestAttrs(r), "agent_id", id)...)
-		} else if !isAgentOwner {
-			slog.Debug("update agent: composio_toolkit_allowlist write by non-owner silently dropped",
-				append(logger.RequestAttrs(r), "agent_id", id)...)
-		} else if req.ComposioToolkitAllowlist == nil {
-			// JSON null → explicit clear via the dedicated query.
-			shouldClearComposioAllowlist = true
-		} else {
-			// Normalise (trim/lowercase/dedupe). Empty slice is preserved as
-			// an empty TEXT[] so the persisted value distinguishes "owner
-			// cleared every toolkit" from "owner has never opened the
-			// integration" (the dispatch path treats both as "no overlay"
-			// either way, but the column tells UX whether to show a primed
-			// vs empty picker).
-			params.ComposioToolkitAllowlist = normaliseComposioToolkitAllowlist(*req.ComposioToolkitAllowlist)
-		}
-	}
-
 	// Only binding writes need this transaction. Hold the same runtime lock as
 	// revocation until the new binding commits; a preflight-only check is stale
 	// as soon as a public runtime becomes private.
@@ -2569,21 +2501,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if shouldClearComposioAllowlist {
-		updated, err = h.Queries.ClearAgentComposioToolkitAllowlist(r.Context(), updated.ID)
-		if err != nil {
-			slog.Warn("clear agent composio_toolkit_allowlist failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
-			writeError(w, http.StatusInternalServerError, "failed to clear composio_toolkit_allowlist")
-			return
-		}
-	}
-	if shouldClearComposioAllowlist || params.ComposioToolkitAllowlist != nil {
-		if err := syncAgentAppsFromAllowlist(r.Context(), h.Queries, updated, params.ComposioToolkitAllowlist, parseUUID(requestUserID(r))); err != nil {
-			slog.Warn("update agent: sync agent apps failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
-			writeError(w, http.StatusInternalServerError, "failed to update agent apps")
-			return
-		}
-	}
 
 	// Invocation targets (MUL-3963): replace wholesale when the owner touched
 	// permission. Done after the row update so a permission_mode flip and its
@@ -2617,15 +2534,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
-	// Workspace admins / non-owner members pass canManageAgent for legitimate
-	// admin actions (e.g. bulk reassigning agents off a leaving member's
-	// runtime), but they must not learn the agent owner's composio allowlist
-	// from the mutation response. See ListAgents/GetAgent for the same gate.
-	if !h.composioMCPAppsEnabled(r.Context()) {
-		suppressComposioToolkitAllowlist(&resp)
-	} else if uuidToString(updated.OwnerID) != userID {
-		redactComposioToolkitAllowlist(&resp)
-	}
+	suppressComposioToolkitAllowlist(&resp)
 	writeJSON(w, http.StatusOK, resp)
 }
 

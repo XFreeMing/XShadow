@@ -3087,9 +3087,6 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, priority, dueDate, projectUUID, parentIssueUUID, attachmentIDs)
 	if err != nil {
-		if writeIssueLimitReached(w, err) {
-			return
-		}
 		if errors.Is(err, service.ErrProjectAccessDenied) {
 			h.writeDispatchBlocked(w, http.StatusForbidden, ReasonProjectAccessBlocked)
 			return
@@ -3772,9 +3769,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if writeIssueCreatePropertyError(w, err) {
-		return
-	}
-	if writeIssueLimitReached(w, err) {
 		return
 	}
 	if writeIssueNumberCollision(w, err) {
@@ -5402,4 +5396,21 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+// writeIssueNumberCollision reports a number conflict that automatic repair
+// could not resolve and directs the caller to a workspace administrator.
+func writeIssueNumberCollision(w http.ResponseWriter, err error) bool {
+	var collisionErr *service.IssueNumberCollisionError
+	if !errors.As(err, &collisionErr) {
+		return false
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"code":       "issue_number_collision",
+		"error":      "workspace issue counter is behind its highest issue number, so card creation cannot allocate a free number",
+		"allocated":  collisionErr.Allocated,
+		"constraint": collisionErr.Constraint,
+		"repair":     "Ask a workspace administrator to repair the issue counter, then retry.",
+	})
+	return true
 }

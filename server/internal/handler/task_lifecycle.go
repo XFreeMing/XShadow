@@ -296,9 +296,6 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 	}
 	ctx := r.Context()
 	task, err := h.TaskService.RetrySourceContextQuickCreate(ctx, workspaceID, requesterID, taskID, canInvoke)
-	if writeIssueLimitReached(w, err) {
-		return
-	}
 	if errors.Is(err, service.ErrRerunInvokeNotAllowed) {
 		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
 		return

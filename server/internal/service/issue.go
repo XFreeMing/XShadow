@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
-	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issueparentlink"
@@ -44,9 +43,12 @@ type IssueService struct {
 	// Metrics as "PostHog only", so leaving it unset is safe.
 	Metrics     *obsmetrics.BusinessMetrics
 	TaskService *TaskService
-	// Entitlements supplies Cloud's effective issue-count instruction. Nil is
-	// the self-hosted unlimited path.
-	Entitlements entitlement.Provider
+}
+
+// AllocateIssueNumber serializes issue creation on the workspace row and
+// returns the next workspace issue number.
+func AllocateIssueNumber(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID) (int32, error) {
+	return q.IncrementIssueCounter(ctx, workspaceID)
 }
 
 func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.Client, ts *TaskService) *IssueService {
@@ -293,7 +295,6 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 // Caller-owned validation is limited to transport-shaped checks: title
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
-	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("begin tx: %w", err)
@@ -428,7 +429,7 @@ func (s *IssueService) createOnce(ctx context.Context, p IssueCreateParams, opts
 		return IssueCreateResult{DuplicateIssue: &dup}, ErrActiveDuplicate
 	}
 
-	issueNumber, err := AllocateIssueNumber(ctx, qtx, p.WorkspaceID, issueCountPolicy)
+	issueNumber, err := AllocateIssueNumber(ctx, qtx, p.WorkspaceID)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("allocate issue number: %w", err)
 	}

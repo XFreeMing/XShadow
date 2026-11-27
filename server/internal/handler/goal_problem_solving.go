@@ -243,8 +243,7 @@ func (h *Handler) createGoalValidationIssue(ctx context.Context, tx pgx.Tx, q *d
 	if err := issueworkflow.CheckStatus(workflow, issuestatus.Backlog); err != nil {
 		return empty, fmt.Errorf("%w: %s", goalproblem.ErrConflict, err)
 	}
-	policy := service.ResolveIssueCountPolicy(ctx, h.Entitlements, goal.WorkspaceID)
-	number, err := service.AllocateIssueNumber(ctx, q, goal.WorkspaceID, policy)
+	number, err := service.AllocateIssueNumber(ctx, q, goal.WorkspaceID)
 	if err != nil {
 		return empty, err
 	}

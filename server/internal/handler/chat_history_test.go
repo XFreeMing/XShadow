@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
-	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -207,7 +206,7 @@ func TestGetChatHistory_NoSlackBindingFallsBackToTranscript(t *testing.T) {
 		t.Skip("requires test database")
 	}
 	taskID := newChatHistoryTask(t, true)
-	withSlackHistory(t, &fakeChatHistoryReader{err: slack.ErrNoSlackSession})
+	withSlackHistory(t, &fakeChatHistoryReader{err: errNoChannelSession})
 
 	w := httptest.NewRecorder()
 	testHandler.GetChatChannelHistory(w, taskActorReq("/api/chat/history", taskID))
@@ -234,7 +233,7 @@ func TestGetChatHistory_NoSlackBindingReadsStoredTranscript(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "ChatHistoryTranscriptAgent", []byte("[]"))
 	sessionID := createHandlerTestChatSession(t, agentID)
 	taskID := newChatHistoryTaskForSession(t, sessionID)
-	withSlackHistory(t, &fakeChatHistoryReader{err: slack.ErrNoSlackSession})
+	withSlackHistory(t, &fakeChatHistoryReader{err: errNoChannelSession})
 
 	base := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
 	insertChatVisibilityMessage(t, sessionID, "first user turn", "message", true, base)

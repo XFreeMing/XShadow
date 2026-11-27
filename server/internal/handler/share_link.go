@@ -13,11 +13,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -300,15 +298,6 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var capacityToken uuid.UUID
-	if h.seatCapacityEnabled() {
-		capacityToken, err = h.beginShareJoinCapacity(r.Context(), uuid.UUID(linkPreview.WorkspaceID.Bytes), uuid.UUID(linkPreview.ID.Bytes), uuid.UUID(user.ID.Bytes))
-		if err != nil {
-			writeSeatCapacityError(w, err)
-			return
-		}
-	}
-
 	// Open the transaction first, then atomically claim the link. The claim is
 	// a conditional UPDATE that revalidates active/not-expired/below-max_uses
 	// and increments use_count in one statement, so concurrent joins cannot
@@ -381,7 +370,6 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			h.compensateCapacityIntent(r.Context(), capacityToken)
 			writeError(w, http.StatusConflict, "you are already a member of this workspace")
 			return
 		}
@@ -395,35 +383,10 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to finalize onboarding")
 		return
 	}
-	if capacityToken != uuid.Nil {
-		if err := transitionCapacityIntentToConfirm(r.Context(), qtx, capacityToken, uuid.UUID(member.ID.Bytes), seatcapacity.ActionClaimShareJoin); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to join workspace")
-			return
-		}
-	}
-	if settledInvitationID.Valid && h.seatCapacityEnabled() {
-		// The settled invitation was holding a seat reservation (managed
-		// mode); the share join's own confirmed claim now covers the seat,
-		// so release the invitation's reservation instead of double-charging
-		// the workspace for one joining user.
-		if err := enqueueCapacityRelease(r.Context(), qtx, uuid.UUID(link.WorkspaceID.Bytes), uuid.UUID(settledInvitationID.Bytes)); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to join workspace")
-			return
-		}
-	}
 
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to join workspace")
 		return
-	}
-	if capacityToken != uuid.Nil {
-		h.confirmCapacityIntent(r.Context(), uuid.UUID(link.WorkspaceID.Bytes), capacityToken, uuid.UUID(member.ID.Bytes))
-	}
-	if settledInvitationID.Valid && h.seatCapacityEnabled() {
-		// Best-effort immediate release of the settled invitation's
-		// reservation; if the capacity service is unavailable the enqueued
-		// release above is retried by the outbox worker.
-		h.compensateCapacityIntent(r.Context(), uuid.UUID(settledInvitationID.Bytes))
 	}
 
 	wsID := uuidToString(link.WorkspaceID)

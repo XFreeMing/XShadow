@@ -25,7 +25,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
-	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -2891,10 +2890,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// comment input. Comment tasks replace this with the ids actually embedded
 	// in the capability-aware response built below.
 	deliveredCommentIDs = []pgtype.UUID{}
-	composioMCPEnabled := h.composioMCPAppsEnabled(r.Context())
-	if composioMCPEnabled {
-		resp.ConnectedApps = parseRuntimeConnectedAppsForClaim(task.RuntimeConnectedApps, task.ID)
-	}
 	agent, err := h.Queries.GetAgent(r.Context(), task.AgentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2961,13 +2956,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		)
 	}
 	useSkillRefs := requestHasClientCapability(r, protocol.DaemonCapabilitySkillBundlesV1)
-	// A daemon older than the multica-platform merge assembles a brief that
-	// still names the built-ins this server stopped shipping. It cannot be
-	// fixed from here — the brief lives in the daemon binary — so the missing
-	// capability buys that daemon a redirect stub under the old name instead of
-	// a dangling pointer. Capability, not version: the version string is only
-	// ever shown to humans.
-	legacySkillRedirects := !requestHasClientCapability(r, protocol.DaemonCapabilityPlatformSkillV1)
 	var customEnv map[string]string
 	if agent.CustomEnv != nil {
 		if err := json.Unmarshal(agent.CustomEnv, &customEnv); err != nil {
@@ -3004,29 +2992,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 				"task_id", uuidToString(task.ID), "agent_id", uuidToString(agent.ID), "error", err)
 		} else {
 			mcpConfig = resolved
-		}
-	}
-	// Layer the per-task overlay (set at enqueue from the initiator
-	// user's active integrations — currently Composio) on top of the
-	// agent's saved mcp_config. Overlay wins on server-name collisions
-	// because it carries the live user-scoped session URL. Errors are
-	// logged but never fail the claim: a broken overlay must not prevent
-	// the agent from running with its base config.
-	if composioMCPEnabled && len(task.RuntimeMcpOverlay) > 0 {
-		overlay := json.RawMessage(task.RuntimeMcpOverlay)
-		// The stored overlay names the apps gateway without a credential; the
-		// run's token is minted here, once the task id is final.
-		if h.ConnectedApps != nil {
-			if authorized, err := h.ConnectedApps.AuthorizeOverlay(overlay, task.ID); err != nil {
-				slog.Warn("daemon claim: authorize apps gateway overlay failed", "task_id", uuidToString(task.ID), "error", err)
-			} else {
-				overlay = authorized
-			}
-		}
-		if merged, err := mergeMCPOverlay(mcpConfig, overlay); err != nil {
-			slog.Warn("daemon claim: merge runtime_mcp_overlay failed; falling back to agent mcp_config", "task_id", uuidToString(task.ID), "error", err)
-		} else {
-			mcpConfig = merged
 		}
 	}
 	// runtime_config is stored as JSONB and may legitimately be the
@@ -3069,7 +3034,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.Agent.Instructions = service.ComposeMikaInstructions(agent.Name, agent.Instructions)
 	}
 	if useSkillRefs {
-		_, skillRefs, err := h.TaskService.LoadAgentSkillBundles(r.Context(), task.AgentID, agent.SystemKey.String, legacySkillRedirects)
+		_, skillRefs, err := h.TaskService.LoadAgentSkillBundles(r.Context(), task.AgentID, agent.SystemKey.String)
 		if err != nil {
 			return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, h.rejectClaimSkillLoad(task, err)
 		}
@@ -3081,7 +3046,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, h.rejectClaimSkillLoad(task, err)
 		}
 		agentSkillCount = len(skills)
-		builtinSkills := h.TaskService.BuiltinSkills(agent.SystemKey.String, legacySkillRedirects)
+		builtinSkills := h.TaskService.BuiltinSkills(agent.SystemKey.String)
 		builtinSkillCount = len(builtinSkills)
 		skills = append(skills, builtinSkills...)
 		resp.Agent.Skills = skills
@@ -3690,15 +3655,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			resp.ChatChannelType = delivery.ChannelType
 			resp.ChatType = delivery.ChatType
 			resp.ChatChannelDeliversFiles = h.channelDeliversFiles(delivery.ChannelType)
-			if delivery.ChannelType == string(slack.TypeSlack) {
-				if reader, ok := h.SlackHistory.(slackTaskSourceReader); ok {
-					resp.ChatSource = reader.TaskSource(r.Context(), delivery, cs.WorkspaceID)
-				}
-
-				resp.ChatInThread = delivery.ChannelThreadID.Valid &&
-					delivery.ChannelThreadID.String != "" &&
-					delivery.ChannelThreadID.String != delivery.ChannelMessageID.String
-			}
 			resp.ChatFeishuSource = lark.TaskSource(delivery)
 		} else if !errors.Is(deliveryErr, pgx.ErrNoRows) {
 			return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount,

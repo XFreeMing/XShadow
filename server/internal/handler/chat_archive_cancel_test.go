@@ -37,7 +37,6 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
-	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -542,7 +541,7 @@ func TestNoHistoryNoteNamesTheActualChannel(t *testing.T) {
 	req.Header.Set("X-User-ID", testUserID)
 	req = req.WithContext(cancelledCtx)
 	w := httptest.NewRecorder()
-	testHandler.respondChatHistory(w, req, parseUUID(sessionID), channel.HistoryPage{}, slack.ErrNoSlackSession)
+	testHandler.respondChatHistory(w, req, parseUUID(sessionID), channel.HistoryPage{}, errNoChannelSession)
 	if w.Code == http.StatusOK {
 		t.Fatalf("a failed binding read answered 200 %s — the agent is told it is in a web-only conversation because a query failed", strings.TrimSpace(w.Body.String()))
 	}
@@ -555,7 +554,7 @@ func readNoHistoryResponse(t *testing.T, sessionID string) ChatChannelHistoryRes
 	req := httptest.NewRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/channel-history", nil)
 	req.Header.Set("X-User-ID", testUserID)
 	w := httptest.NewRecorder()
-	testHandler.respondChatHistory(w, req, parseUUID(sessionID), channel.HistoryPage{}, slack.ErrNoSlackSession)
+	testHandler.respondChatHistory(w, req, parseUUID(sessionID), channel.HistoryPage{}, errNoChannelSession)
 
 	var body ChatChannelHistoryResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {

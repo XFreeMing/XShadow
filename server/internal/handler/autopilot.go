@@ -2426,25 +2426,6 @@ func (h *Handler) TriggerAutopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	run, reasonCode, err := h.AutopilotService.DispatchAutopilotManualWithKey(r.Context(), autopilot, pgtype.UUID{}, nil, invokerUserID, idempotencyKey)
 	if err != nil {
-		var quotaErr *service.AutopilotQuotaExceededError
-		if errors.As(err, &quotaErr) {
-			retryAfter := int64(time.Until(quotaErr.ResetAt).Seconds())
-			if retryAfter < 1 {
-				retryAfter = 1
-			}
-			w.Header().Set("Retry-After", strconv.FormatInt(retryAfter, 10))
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{
-				"reason_code": "quota_exceeded", "used": quotaErr.Used,
-				"reserved": quotaErr.Reserved, "limit": quotaErr.Limit,
-				"reset_at": quotaErr.ResetAt.UTC().Format(time.RFC3339),
-			})
-			return
-		}
-		// Everything past the quota branch is an unclassified internal failure
-		// whose chain carries pgx constraint/table names and internal ids. Any
-		// workspace member can reach "run now", so the detail stays in the log
-		// and the response is the same fixed 5xx string the rest of this file
-		// returns (MUL-6472).
 		slog.Error("trigger autopilot failed",
 			"error", err,
 			"autopilot_id", uuidToString(autopilot.ID),
@@ -2460,42 +2441,6 @@ func (h *Handler) TriggerAutopilot(w http.ResponseWriter, r *http.Request) {
 	if reasonCode != "" {
 		c := string(reasonCode)
 		resp.ReasonCode = &c
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// GetAutopilotQuotaUsage exposes Cloud-provided interval facts plus durable
-// server-owned blocked counts. When the gate is off or malformed, the service
-// returns before any quota-table read.
-func (h *Handler) GetAutopilotQuotaUsage(w http.ResponseWriter, r *http.Request) {
-	workspaceID, err := util.ParseUUID(h.resolveWorkspaceID(r))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid workspace")
-		return
-	}
-	usage, err := h.AutopilotService.AutopilotQuotaUsage(r.Context(), workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load autopilot quota usage")
-		return
-	}
-	resp := AutopilotQuotaUsageResponse{Action: "off"}
-	if usage.Enabled {
-		resp.Action = usage.Action
-		resp.Used, resp.Reserved, resp.Total = usage.Used, usage.Reserved, usage.Total
-		resp.Limit, resp.Reached = usage.Limit, usage.Reached
-		resp.BlockedCounts = usage.BlockedCounts
-		if usage.PeriodStart != nil {
-			v := usage.PeriodStart.UTC().Format(time.RFC3339)
-			resp.PeriodStart = &v
-		}
-		if usage.PeriodEnd != nil {
-			v := usage.PeriodEnd.UTC().Format(time.RFC3339)
-			resp.PeriodEnd = &v
-		}
-		if usage.ResetAt != nil {
-			v := usage.ResetAt.UTC().Format(time.RFC3339)
-			resp.ResetAt = &v
-		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

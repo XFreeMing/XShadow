@@ -19,7 +19,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/chattitle"
-	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/inbox"
@@ -50,9 +49,6 @@ type TaskService struct {
 	PRSnapshotsEnabled bool
 	// ProjectIssueFormula reads the canonical, same-issue table projection.
 	ProjectIssueFormula func(context.Context, pgtype.UUID, pgtype.UUID, pgtype.UUID, string) (json.RawMessage, error)
-	// Entitlements supplies Cloud's workspace-scoped issue-count instruction.
-	// Nil keeps self-hosted and isolated test services unlimited.
-	Entitlements entitlement.Provider
 	// SourceContextStorage handles object cleanup for old captures and
 	// native issue deletion. Nil disables cleanup where storage is absent.
 	SourceContextStorage SourceContextObjectStore
@@ -1639,9 +1635,6 @@ func (s *TaskService) EnqueueQuickCreateTaskWithSourceContext(ctx context.Contex
 }
 
 func (s *TaskService) enqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt, priority, dueDate string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID, capture *SourceContextCapture) (db.AgentTaskQueue, error) {
-	if err := CheckIssueCreateCapacity(ctx, s.Queries, s.Entitlements, workspaceID); err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("preflight quick-create issue capacity: %w", err)
-	}
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -1743,9 +1736,6 @@ func (s *TaskService) RetrySourceContextQuickCreate(ctx context.Context, workspa
 	}
 	if canInvoke != nil && !canInvoke(agent) {
 		return nil, ErrRerunInvokeNotAllowed
-	}
-	if err := CheckIssueCreateCapacity(ctx, s.Queries, s.Entitlements, workspaceID); err != nil {
-		return nil, fmt.Errorf("preflight quick-create issue capacity: %w", err)
 	}
 	overlay := s.buildRuntimeMCPOverlay(ctx, requesterID, agent)
 
@@ -7292,12 +7282,12 @@ func (s *TaskService) skillsWithFiles(ctx context.Context, skills []db.Skill) ([
 // It fails closed on a workspace-skill read error for the reason in
 // LoadAgentSkills: a bundle set built from a partial read is indistinguishable
 // from a correct one.
-func (s *TaskService) LoadAgentSkillBundles(ctx context.Context, agentID pgtype.UUID, agentSystemKey string, legacyRedirects bool) ([]AgentSkillData, []AgentSkillRefData, error) {
+func (s *TaskService) LoadAgentSkillBundles(ctx context.Context, agentID pgtype.UUID, agentSystemKey string) ([]AgentSkillData, []AgentSkillRefData, error) {
 	skills, err := s.LoadAgentSkills(ctx, agentID)
 	if err != nil {
 		return nil, nil, err
 	}
-	skills = append(skills, s.BuiltinSkills(agentSystemKey, legacyRedirects)...)
+	skills = append(skills, s.BuiltinSkills(agentSystemKey)...)
 	bundles, refs := BuildAgentSkillBundles(skills)
 	return bundles, refs, nil
 }

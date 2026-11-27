@@ -242,10 +242,6 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 	}
 	cycle, repeated := run.RepeatedRework()
 	repeated = repeated && h.ReworkAnalysisSquadID.Valid && issue.ProjectID.Valid
-	var analysisPolicy service.IssueCountPolicy
-	if repeated {
-		analysisPolicy = service.ResolveIssueCountPolicy(r.Context(), h.Entitlements, issue.WorkspaceID)
-	}
 	ctx := h.withWakeupActor(r).Context()
 	if agentID.Valid {
 		ctx = withWakeupHandedTo(ctx, uuidToString(agentID))
@@ -410,7 +406,7 @@ func (h *Handler) persistMethodTransition(w http.ResponseWriter, r *http.Request
 		analysis, err := tx.Begin(ctx)
 		if err == nil {
 			defer analysis.Rollback(ctx)
-			analysisIssue, analysisTask, err = h.createReworkAnalysis(ctx, analysis, updated, *run, cycle, analysisPolicy, actorKind, parseUUIDOrInvalid(actorID), analysisRequester, analysisSource)
+			analysisIssue, analysisTask, err = h.createReworkAnalysis(ctx, analysis, updated, *run, cycle, actorKind, parseUUIDOrInvalid(actorID), analysisRequester, analysisSource)
 			if err == nil {
 				err = analysis.Commit(ctx)
 			} else {

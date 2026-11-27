@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
-	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -31,6 +30,10 @@ type ChatChannelHistoryReader interface {
 	ChannelOverview(ctx context.Context, chatSessionID pgtype.UUID, opts channel.HistoryOptions) (channel.HistoryPage, error)
 	Thread(ctx context.Context, chatSessionID pgtype.UUID, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error)
 }
+
+// errNoChannelSession signals that a chat session has no external IM channel
+// history to read back and should fall back to stored chat messages.
+var errNoChannelSession = errors.New("no channel session")
 
 type slackTaskSourceReader interface {
 	TaskSource(context.Context, db.ChannelTaskDelivery, pgtype.UUID) *protocol.ChatSource
@@ -77,7 +80,7 @@ func (h *Handler) GetChatChannelHistory(w http.ResponseWriter, r *http.Request) 
 		page, err = h.chatMessageHistory(r, scope)
 	} else {
 		page, err = h.SlackHistory.ChannelOverview(r.Context(), scope.sessionID, scope.historyOptions(r))
-		if errors.Is(err, slack.ErrNoSlackSession) {
+		if errors.Is(err, errNoChannelSession) {
 			// Not Slack-backed: read the session's own stored transcript instead.
 			page, err = h.chatMessageHistory(r, scope)
 		}
@@ -306,7 +309,7 @@ func (h *Handler) chatHistorySession(w http.ResponseWriter, r *http.Request) (ch
 // is not channel-backed, a 502 on a real read failure, the page otherwise.
 func (h *Handler) respondChatHistory(w http.ResponseWriter, r *http.Request, sessionID pgtype.UUID, page channel.HistoryPage, err error) {
 	if err != nil {
-		if errors.Is(err, slack.ErrNoSlackSession) {
+		if errors.Is(err, errNoChannelSession) {
 			// One read of the binding, two derived fields. Reading it twice
 			// lets an archive land between them and produce a response whose
 			// channel_type names a platform while its note says there is no

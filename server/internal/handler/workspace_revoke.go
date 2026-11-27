@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -226,15 +225,6 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 		return empty, err
 	}
 
-	// Member row deletion lives inside the same tx so a successful revoke is
-	// never followed by a failed member-delete (which would leave the user
-	// still a member with a dead runtime), and a failed revoke never leaves
-	// the user out of the workspace with a still-online runtime.
-	if h.seatCapacityEnabled() {
-		if err := enqueueMemberCapacityRelease(ctx, qtx, uuid.UUID(workspaceID.Bytes), uuid.UUID(memberID.Bytes)); err != nil {
-			return empty, err
-		}
-	}
 	sharedRuntimes, err := qtx.ListSharedAgentRuntimesForUpdate(ctx, db.ListSharedAgentRuntimesForUpdateParams{
 		WorkspaceID: workspaceID, UserID: userID,
 	})

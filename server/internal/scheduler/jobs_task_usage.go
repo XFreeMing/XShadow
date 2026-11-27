@@ -8,9 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/multica-ai/multica/server/internal/taskusagebackfill"
 )
+
+const taskUsageAdvisoryLockKey int64 = 4246
 
 // JobNameRollupTaskUsageHourly is the canonical name used in audit
 // rows. Stable across releases — do not rename without a migration.
@@ -85,7 +85,7 @@ func makeTaskUsageHourlyHandler(pool *pgxpool.Pool) Handler {
 		}
 
 		result := map[string]any{
-			"advisory_lock_id": taskusagebackfill.AdvisoryLockKey,
+			"advisory_lock_id": taskUsageAdvisoryLockKey,
 		}
 		if !watermarkBefore.IsZero() {
 			result["watermark_before"] = watermarkBefore.UTC().Format(time.RFC3339)

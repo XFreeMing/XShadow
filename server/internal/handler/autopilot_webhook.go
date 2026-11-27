@@ -24,7 +24,6 @@ import (
 
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
@@ -573,16 +572,6 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 		delivery.ID,
 	)
 	if err != nil {
-		var quotaErr *service.AutopilotQuotaExceededError
-		if errors.As(err, &quotaErr) {
-			respBody := map[string]any{
-				"status": "ignored", "delivery_id": uuidToString(delivery.ID),
-				"reason_code": "quota_exceeded",
-			}
-			h.finaliseDeliveryTerminal(r, delivery.ID, deliveryStatusIgnored, http.StatusOK, respBody, quotaErr.Error(), "quota_exceeded")
-			writeJSON(w, http.StatusOK, respBody)
-			return
-		}
 		slog.Warn("webhook admission failed",
 			"trigger_id", uuidToString(trigRow.ID),
 			"autopilot_id", uuidToString(autopilot.ID),

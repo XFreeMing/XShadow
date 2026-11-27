@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -761,7 +760,6 @@ func (h *Handler) DeleteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Hub.DisconnectMember(uuidToString(target.WorkspaceID), uuidToString(target.UserID), uuidToString(target.ID))
-	h.settleMemberCapacityRelease(r.Context(), uuid.UUID(target.WorkspaceID.Bytes), uuid.UUID(target.ID.Bytes))
 
 	h.MembershipCache.Invalidate(r.Context(), uuidToString(target.UserID), workspaceID)
 
@@ -806,7 +804,6 @@ func (h *Handler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Hub.DisconnectMember(uuidToString(member.WorkspaceID), uuidToString(member.UserID), uuidToString(member.ID))
-	h.settleMemberCapacityRelease(r.Context(), uuid.UUID(member.WorkspaceID.Bytes), uuid.UUID(member.ID.Bytes))
 
 	h.MembershipCache.Invalidate(r.Context(), uuidToString(member.UserID), workspaceID)
 
@@ -1259,27 +1256,6 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		{
 			name: "prepare relationship graph",
 			run:  func() error { return qtx.PrepareWorkspaceDeletionLinks(ctx, requester.WorkspaceID) },
-		},
-		{
-			// These FK-free intents deliberately survive the transaction so the
-			// worker can release every invitation/member seat after local rows
-			// disappear. Skipped for self-hosted/unmanaged deployments.
-			name: "prepare seat capacity release",
-			run: func() error {
-				if !h.seatCapacityEnabled() {
-					return nil
-				}
-				if err := qtx.DeleteSeatCapacityConfirmIntentsForWorkspaceDeletion(ctx, requester.WorkspaceID); err != nil {
-					return err
-				}
-				if err := qtx.PrepareSeatCapacityOperationReleasesForWorkspaceDeletion(ctx, requester.WorkspaceID); err != nil {
-					return err
-				}
-				if err := qtx.PrepareSeatCapacityInvitationReleasesForWorkspaceDeletion(ctx, requester.WorkspaceID); err != nil {
-					return err
-				}
-				return qtx.PrepareSeatCapacityMemberReleasesForWorkspaceDeletion(ctx, requester.WorkspaceID)
-			},
 		},
 		{
 			name: "delete chat pins",

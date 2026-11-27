@@ -4,10 +4,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/mail"
-	"strings"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -16,13 +12,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// Upper bound on free-text fields. `cloudWaitlistReasonMaxLen` is a
-// product cap ("we don't need an essay for a waitlist"); the body-size
-// cap further down is defense in depth against arbitrary storage
-// abuse via the JSON body.
 const (
-	cloudWaitlistReasonMaxLen = 500
-
 	// PatchOnboarding body is a tiny JSON with at most a 3-question
 	// questionnaire. 16 KiB is ~10x the realistic ceiling — it's the
 	// minimum that keeps the door open for future fields without
@@ -305,68 +295,6 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 			after.SourceOther != "",
 		))
 	}
-
-	writeJSON(w, http.StatusOK, h.userToResponse(user))
-}
-
-type joinCloudWaitlistRequest struct {
-	Email  string `json:"email"`
-	Reason string `json:"reason"`
-}
-
-// JoinCloudWaitlist records a user's interest in cloud runtimes.
-// Pure side effect — does NOT complete onboarding. The user still
-// has to pick a real Step 3 path (CLI with a detected runtime) or
-// Skip to move on. Repeating the call overwrites email + reason.
-func (h *Handler) JoinCloudWaitlist(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUserID(w, r)
-	if !ok {
-		return
-	}
-	var req joinCloudWaitlistRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// RFC 5321 caps email at 254 chars; the column is VARCHAR(254) and
-	// the format check below rejects anything net/mail can't parse.
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "email is required")
-		return
-	}
-	if len(email) > 254 {
-		writeError(w, http.StatusBadRequest, "email is too long")
-		return
-	}
-	if _, err := mail.ParseAddress(email); err != nil {
-		writeError(w, http.StatusBadRequest, "email is invalid")
-		return
-	}
-
-	reason := strings.TrimSpace(req.Reason)
-	if len(reason) > cloudWaitlistReasonMaxLen {
-		writeError(w, http.StatusBadRequest, "reason is too long")
-		return
-	}
-
-	reasonParam := pgtype.Text{}
-	if reason != "" {
-		reasonParam = pgtype.Text{String: reason, Valid: true}
-	}
-
-	user, err := h.Queries.JoinCloudWaitlist(r.Context(), db.JoinCloudWaitlistParams{
-		ID:                  parseUUID(userID),
-		CloudWaitlistEmail:  pgtype.Text{String: email, Valid: true},
-		CloudWaitlistReason: reasonParam,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to join waitlist")
-		return
-	}
-
-	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.CloudWaitlistJoined(userID, reason != ""))
 
 	writeJSON(w, http.StatusOK, h.userToResponse(user))
 }

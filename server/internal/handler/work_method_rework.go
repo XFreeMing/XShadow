@@ -17,7 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/workmethod"
 )
 
-func (h *Handler) createReworkAnalysis(ctx context.Context, tx pgx.Tx, parent db.Issue, run workmethod.Run, cycle workmethod.ReworkCycle, policy service.IssueCountPolicy, actorKind string, actorID, requester pgtype.UUID, source *db.AgentTaskQueue) (db.Issue, db.AgentTaskQueue, error) {
+func (h *Handler) createReworkAnalysis(ctx context.Context, tx pgx.Tx, parent db.Issue, run workmethod.Run, cycle workmethod.ReworkCycle, actorKind string, actorID, requester pgtype.UUID, source *db.AgentTaskQueue) (db.Issue, db.AgentTaskQueue, error) {
 	var emptyIssue db.Issue
 	var emptyTask db.AgentTaskQueue
 	q := h.Queries.WithTx(tx)
@@ -54,7 +54,7 @@ func (h *Handler) createReworkAnalysis(ctx context.Context, tx pgx.Tx, parent db
 	if permission != nil && !errors.Is(permission, service.ErrWakeupForbidden) && !errors.Is(permission, service.ErrProjectAccessDenied) {
 		return emptyIssue, emptyTask, permission
 	}
-	number, err := service.AllocateIssueNumber(ctx, q, parent.WorkspaceID, policy)
+	number, err := service.AllocateIssueNumber(ctx, q, parent.WorkspaceID)
 	if err != nil {
 		return emptyIssue, emptyTask, err
 	}

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	"github.com/multica-ai/multica/server/internal/qoderruntime"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -35,8 +34,6 @@ func chatNoticeLocale(ctx context.Context, q chatNoticeUserLookup, reader pgtype
 	// defaults; WeCom's room language is explicitly configurable at deployment.
 	fallback := "en"
 	switch channelType {
-	case "wecom":
-		fallback = string(wecom.DeploymentLocale())
 	case "lark", "dingtalk":
 		fallback = "zh-Hans"
 	}
