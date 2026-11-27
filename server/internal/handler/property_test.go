@@ -2063,7 +2063,6 @@ func TestSetIssuePropertyRecordRelation(t *testing.T) {
 
 	t.Run("set replace and clear via fallback", func(t *testing.T) {
 		h := *testHandler
-		h.IssueReadBridge = nil
 		w := httptest.NewRecorder()
 		req := newRequest("PUT", "/api/issues/"+issueID+"/properties/"+prop.ID, map[string]any{
 			"value": []string{recordID},
@@ -2232,7 +2231,6 @@ func TestIssueRelationRecordRelation(t *testing.T) {
 	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1::uuid`, foreignIssueID) })
 
 	h := *testHandler
-	h.IssueReadBridge = nil
 	setFallback := func(issueID string, value any) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		req := newRequest("PUT", "/api/issues/"+issueID+"/properties/"+issuesProp.ID, map[string]any{"value": value})

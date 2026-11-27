@@ -1,6 +1,0 @@
-{"method":"GET","path":"/health"}
-{"method":"GET","path":"/readyz"}
-{"method":"GET","path":"/healthz"}
-{"method":"GET","path":"/health?probe=workbench"}
-{"method":"HEAD","path":"/health"}
-{"method":"POST","path":"/readyz"}

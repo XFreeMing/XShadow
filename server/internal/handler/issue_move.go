@@ -113,48 +113,6 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expectedRevision, ok := parseMoveExpectedRevision(w, fields)
-	if !ok {
-		return
-	}
-
-	parentIntent, parentOK := decodeIssueMoveParentIntent(w, fields)
-	if !parentOK {
-		return
-	}
-	projectIntent, projectOK := decodeIssueMoveProjectIntent(w, fields)
-	if !projectOK {
-		return
-	}
-
-	if issueMoveRustEligible(fields) {
-		useRust, err := h.issueMoveUsesRust(r, current.WorkspaceID)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue move route")
-			}
-			return
-		}
-		if useRust && projectIntent.touched && !projectIntent.clear {
-			named, err := h.issueMoveTargetProjectNamedWorkflow(r.Context(), current.WorkspaceID, projectIntent.project)
-			if err != nil {
-				writeIssueTableQueryFailure(w, r, "failed to validate move project workflow")
-				return
-			}
-			if !issueMoveProjectRustAllowed(projectIntent, named) {
-				useRust = false
-			}
-		}
-		if useRust {
-			userID, ok := requireUserID(w, r)
-			if !ok {
-				return
-			}
-			h.moveIssueViaRust(w, r, userID, current, parentIntent, projectIntent, beforeID, afterID, expectedRevision)
-			return
-		}
-	}
-
 	// V1 intentionally keeps the canonical write on UpdateIssue so released
 	// clients and the new move endpoint share validation, realtime and task
 	// side effects. That means anchor resolution and the write are not one

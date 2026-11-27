@@ -386,7 +386,6 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("facets must contain between 1 and %d entries", issueTableMaxFacets))
 		return
 	}
-	baseHandler := h
 	r, cancel := withIssueTableQueryTimeout(r)
 	defer cancel()
 	snapshot, tx, err := h.beginIssueTableSnapshot(r.Context())
@@ -423,23 +422,6 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	includeTotal := request.IncludeTotal == nil || *request.IncludeTotal
-	pilot, ok := h.rustIssueTablePilot(w, r, base.workspaceID)
-	if !ok {
-		return
-	}
-	if pilot {
-		query, ok := h.prepareRustIssueTableFacets(w, r, base, request.Query, normalizedFacets, includeTotal)
-		if !ok {
-			return
-		}
-		if err := tx.Commit(r.Context()); err != nil {
-			writeIssueTableQueryFailure(w, r, "failed to finish table query")
-			return
-		}
-		committed = true
-		baseHandler.writeRustIssueTableFacets(w, r, base, query)
-		return
-	}
 	batchFacets := make([]issueTableFacetSpec, 0, len(normalizedFacets))
 	individualIndexes := make([]int, 0, len(normalizedFacets))
 	for index, facet := range normalizedFacets {

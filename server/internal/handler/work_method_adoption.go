@@ -25,69 +25,7 @@ func (h *Handler) adoptIssueMethod(w http.ResponseWriter, r *http.Request, issue
 		writeError(w, 500, "failed to read the issue delivery contract")
 		return
 	}
-	var storedRun workmethod.Run
-	hasStoredRun := len(issue.WorkMethodRun) > 0
-	if hasStoredRun {
-		if err = json.Unmarshal(issue.WorkMethodRun, &storedRun); err != nil {
-			writeError(w, 500, "failed to read the method snapshot")
-			return
-		}
-	}
-	useRust, err := h.ordinaryMethodAdoptUsesRust(r, issue, storedRun, delivery, hasStoredRun)
-	if err != nil {
-		writeError(w, 500, "failed to resolve method adoption route")
-		return
-	}
-	if useRust {
-		h.adoptIssueMethodViaRust(w, r, issue, userID, kind, actor, ws, delivery, storedRun, change)
-		return
-	}
 	h.adoptIssueMethodViaGo(w, r, issue, kind, actor, ws, delivery, change)
-}
-
-func (h *Handler) adoptIssueMethodViaRust(
-	w http.ResponseWriter,
-	r *http.Request,
-	issue db.Issue,
-	userID, kind, actor, ws string,
-	delivery *issuePlanContract,
-	run workmethod.Run,
-	change workmethod.Change,
-) {
-	ctx := r.Context()
-	workspaceTemplates, err := h.Queries.ListWorkMethodTemplates(ctx, issue.WorkspaceID)
-	if err != nil {
-		writeError(w, 500, "failed to read the method catalog")
-		return
-	}
-	catalog, err := service.WorkMethodCatalogFromOverrides(workspaceTemplates)
-	if err != nil {
-		writeError(w, 500, "failed to read the method catalog")
-		return
-	}
-	before := run.Revision
-	if err := run.Adopt(change, catalog, "member/"+actor, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, workmethod.ErrConflict) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err.Error())
-		return
-	}
-	changed := before != run.Revision
-	afterRun, err := json.Marshal(run)
-	if err != nil {
-		writeError(w, 500, "failed to encode the method snapshot")
-		return
-	}
-	locked, ok := h.persistMethodAdoptViaRust(w, r, issue, userID, workspaceTemplates, issue.WorkMethodRun, afterRun, changed)
-	if !ok {
-		return
-	}
-	if changed {
-		h.publish(protocol.EventIssueUpdated, ws, kind, actor, map[string]any{"issue": issueToResponse(locked, h.getIssuePrefix(ctx, issue.WorkspaceID))})
-	}
-	h.writeIssueMethodView(w, r, locked, run, delivery)
 }
 
 func (h *Handler) adoptIssueMethodViaGo(

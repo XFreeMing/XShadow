@@ -38,7 +38,6 @@ type resolvedIssueTableSort struct {
 	idOnlyTie   bool
 	nativeField string
 	statusOrder []string
-	property    *rustIssuePropertySort
 }
 
 func (sort resolvedIssueTableSort) orderBy() string {
@@ -206,10 +205,6 @@ func (h *Handler) issueTableOrderBy(
 			}
 			resolved.nullsLast = true
 			resolved.nativeField = "property"
-			resolved.property = &rustIssuePropertySort{ID: uuidToString(def.ID), Kind: def.Type}
-			if def.Type == "select" {
-				resolved.property.Options = selectPropertySortOptions(parsePropertyConfig(def.Config))
-			}
 		}
 	}
 
@@ -331,8 +326,7 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 	if groupKey != nil {
 		predicateKey = *groupKey
 	}
-	var nativeGroup rustIssueTableGroup
-	groupPredicate, ok := group.rowPredicate(w, predicateKey, addArg, &nativeGroup)
+	groupPredicate, ok := group.predicate(w, predicateKey, addArg)
 	if !ok {
 		return issueTableRowsResponse{}, false
 	}
@@ -347,7 +341,6 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 			}
 		}
 		promotedStatuses = &keys
-		nativeGroup.PromotedParentStatuses = promotedStatuses
 	}
 	branchPredicate := "TRUE"
 	if request.Hierarchy.Enabled {
@@ -369,29 +362,6 @@ func (h *Handler) queryIssueTableRows(w http.ResponseWriter, r *http.Request, re
 	cursorPredicate, ok := resolvedSort.cursorPredicate(w, cursor, addArg)
 	if !ok {
 		return issueTableRowsResponse{}, false
-	}
-	pilot, ok := h.rustIssueTablePilot(w, r, compiled.workspaceID)
-	if !ok {
-		return issueTableRowsResponse{}, false
-	}
-	if pilot {
-		var groupFilter *rustIssueTableGroup
-		if group.kind != "none" {
-			groupFilter = &nativeGroup
-		}
-		query := prepareRustIssueTableQuery(compiled.native, request, resolvedSort, cursor, limit, groupFilter)
-		if resolvedSort.castType == "timestamptz" {
-			if err := tx.QueryRow(r.Context(), "SHOW TimeZone").Scan(&query.CursorTimeZone); err != nil {
-				writeIssueTableQueryFailure(w, r, "failed to resolve table sort")
-				return issueTableRowsResponse{}, false
-			}
-		}
-		if err := tx.Commit(r.Context()); err != nil {
-			writeIssueTableQueryFailure(w, r, "failed to finish table query")
-			return issueTableRowsResponse{}, false
-		}
-		committed = true
-		return baseHandler.queryRustIssueTableRows(w, r, compiled, request, query, groupKey, branchIdentity)
 	}
 	limitRef := addArg(limit + 1)
 

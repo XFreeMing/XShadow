@@ -45,7 +45,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
-	"github.com/multica-ai/multica/server/internal/tablesbridge"
+	"github.com/multica-ai/multica/server/internal/tables"
 	"github.com/multica-ai/multica/server/internal/themestore"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
@@ -2125,8 +2125,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			})
 
 			// Issues
-			h.IssueReadBridge = handler.NewIssueReadBridgeFromEnv(slog.Default())
-			h.TaskService.ProjectIssueFormula = h.IssueReadBridge.ProjectTaskFormula
+			h.TaskService.ProjectIssueFormula = h.ProjectTaskFormula
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)
 				r.Post("/table/groups", h.ListIssueTableGroups)
@@ -2153,7 +2152,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/batch-update", h.BatchUpdateIssues)
 				r.Post("/batch-delete", h.BatchDeleteIssues)
 				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.GetIssueRoute)
+					r.Get("/", h.GetIssue)
 					r.Put("/", h.UpdateIssue)
 					r.Post("/move", h.MoveIssue)
 					r.Delete("/", h.DeleteIssue)
@@ -2330,10 +2329,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
-			// Generic tables live in the Rust service. This route only checks
-			// the member already resolved above and forwards that workspace id.
-			tablesBridge := tablesbridge.FromEnv(slog.Default())
-			tablesBridge.AgentLabel = func(ctx context.Context, workspaceID, agentID string) string {
+			// Generic tables served directly in-process via internal/tables.
+			tablesHandler := tables.NewHandler(pool, func(ctx context.Context, workspaceID, agentID string) string {
 				id, err := util.ParseUUID(agentID)
 				if err != nil {
 					return ""
@@ -2343,7 +2340,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					return ""
 				}
 				return agent.Name
-			}
+			})
 			structuralDeleteRole := middleware.RequireWorkspaceRole(queries, "owner", "admin")
 			structuralDeleteTaskOriginator := requireGenericTableStructuralDeleteAccess(queries)
 			r.Route("/api/tables", func(r chi.Router) {
@@ -2363,8 +2360,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/{attachmentId}", h.GetTableAttachment)
 					r.Get("/{attachmentId}/content", h.DownloadTableAttachmentContent)
 				})
-				r.HandleFunc("/", tablesBridge.ServeHTTP)
-				r.HandleFunc("/*", tablesBridge.ServeHTTP)
+				r.HandleFunc("/", tablesHandler.ServeHTTP)
+				r.HandleFunc("/*", tablesHandler.ServeHTTP)
 			})
 
 			// Projects

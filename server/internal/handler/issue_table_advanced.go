@@ -184,7 +184,6 @@ type issueTableFilterCompiler struct {
 	user       func() (pgtype.UUID, error)
 	today      func() (time.Time, error)
 	conditions int
-	native     rustIssueFilterNode
 }
 
 type issueTableFilterError struct {
@@ -203,22 +202,20 @@ func (c *issueTableFilterCompiler) compile(root issueTableFilterNode) (string, e
 	if !root.isGroup() {
 		return "", invalidIssueTableFilter("invalid filters.advanced: root must be a group")
 	}
-	return c.group(root, 0, &c.native)
+	return c.group(root, 0)
 }
 
-func (c *issueTableFilterCompiler) group(node issueTableFilterNode, depth int, native *rustIssueFilterNode) (string, error) {
+func (c *issueTableFilterCompiler) group(node issueTableFilterNode, depth int) (string, error) {
 	joiner := " AND "
 	switch node.Match {
 	case "", "all":
 	case "any":
 		joiner = " OR "
-		native.MatchAny = true
 	default:
 		return "", invalidIssueTableFilter("invalid filters.advanced.match")
 	}
 	parts := make([]string, 0, len(node.Children))
 	for _, child := range node.Children {
-		normalized := rustIssueFilterNode{}
 		var (
 			predicate string
 			err       error
@@ -227,11 +224,9 @@ func (c *issueTableFilterCompiler) group(node issueTableFilterNode, depth int, n
 			if depth > 0 {
 				return "", invalidIssueTableFilter("invalid filters.advanced: groups nest one level deep")
 			}
-			predicate, err = c.group(child, depth+1, &normalized)
+			predicate, err = c.group(child, depth+1)
 		} else {
-			normalized.Query = &rustIssueListQuery{}
-			normalized.Negate = child.Negate
-			predicate, err = c.condition(child, normalized.Query)
+			predicate, err = c.condition(child)
 		}
 		if err != nil {
 			return "", err
@@ -240,7 +235,6 @@ func (c *issueTableFilterCompiler) group(node issueTableFilterNode, depth int, n
 		// which would make an "any" group match everything.
 		if predicate != "" {
 			parts = append(parts, predicate)
-			native.Children = append(native.Children, normalized)
 		}
 	}
 	switch len(parts) {
@@ -253,7 +247,7 @@ func (c *issueTableFilterCompiler) group(node issueTableFilterNode, depth int, n
 	}
 }
 
-func (c *issueTableFilterCompiler) condition(node issueTableFilterNode, native *rustIssueListQuery) (string, error) {
+func (c *issueTableFilterCompiler) condition(node issueTableFilterNode) (string, error) {
 	propertyID, isProperty := strings.CutPrefix(node.Field, issueTableFilterPropertyPrefix)
 	if !isProperty && !issueTableContainsString(issueTableFilterFields, node.Field) {
 		return "", invalidIssueTableFilter("invalid filters.advanced.field")
@@ -276,7 +270,7 @@ func (c *issueTableFilterCompiler) condition(node issueTableFilterNode, native *
 		err       error
 	)
 	if isProperty {
-		predicate, err = c.propertyPredicate(propertyID, node.Values, native)
+		predicate, err = c.propertyPredicate(propertyID, node.Values)
 	} else {
 		values := make([]string, 0, len(node.Values))
 		for _, raw := range node.Values {
@@ -293,7 +287,7 @@ func (c *issueTableFilterCompiler) condition(node issueTableFilterNode, native *
 		if len(unique) == 0 {
 			return "", nil
 		}
-		predicate, err = c.fieldPredicate(node.Field, unique, native)
+		predicate, err = c.fieldPredicate(node.Field, unique)
 	}
 	if err != nil {
 		return "", err
@@ -306,7 +300,7 @@ func (c *issueTableFilterCompiler) condition(node issueTableFilterNode, native *
 
 // propertyPredicate compiles a property condition exactly like the same
 // members under `filters.properties`.
-func (c *issueTableFilterCompiler) propertyPredicate(propertyID string, values []json.RawMessage, native *rustIssueListQuery) (string, error) {
+func (c *issueTableFilterCompiler) propertyPredicate(propertyID string, values []json.RawMessage) (string, error) {
 	groups, err := compilePropertiesFilter(map[string][]json.RawMessage{propertyID: values})
 	if err != nil {
 		return "", invalidIssueTableFilter("invalid filters.advanced: %s", err.Error())
@@ -314,11 +308,10 @@ func (c *issueTableFilterCompiler) propertyPredicate(propertyID string, values [
 	if len(groups) == 0 {
 		return "", nil
 	}
-	native.Properties = groups
 	return propertiesFilterPredicate(groups, c.addArg), nil
 }
 
-func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string, native *rustIssueListQuery) (string, error) {
+func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string) (string, error) {
 	invalid := invalidIssueTableFilter("invalid filters.advanced values for %s", field)
 	ors := make([]string, 0, len(values))
 	switch field {
@@ -328,7 +321,6 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 				return "", invalid
 			}
 		}
-		native.Statuses = values
 		return fmt.Sprintf("i.status = ANY(%s::text[])", c.addArg(values)), nil
 	case "priorities":
 		for _, priority := range values {
@@ -336,7 +328,6 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 				return "", invalid
 			}
 		}
-		native.Priorities = values
 		return fmt.Sprintf("i.priority = ANY(%s::text[])", c.addArg(values)), nil
 	case "assignees", "creators":
 		column := "assignee"
@@ -346,7 +337,6 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 		for _, value := range values {
 			if value == issueTableFilterNoneValue && field == "assignees" {
 				ors = append(ors, "(i.assignee_type IS NULL AND i.assignee_id IS NULL)")
-				native.IncludeNoAssignee = true
 				continue
 			}
 			actorType, rawID, ok := strings.Cut(value, ":")
@@ -358,19 +348,12 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 				return "", invalid
 			}
 			ors = append(ors, fmt.Sprintf("(i.%[1]s_type = %[2]s::text AND i.%[1]s_id = %[3]s::uuid)", column, c.addArg(actorType), c.addArg(id)))
-			actor := rustIssueActor{Type: actorType, ID: uuidToString(id)}
-			if field == "creators" {
-				native.CreatorFilters = append(native.CreatorFilters, actor)
-			} else {
-				native.AssigneeFilters = append(native.AssigneeFilters, actor)
-			}
 		}
 	case "project_ids":
 		ids := make([]pgtype.UUID, 0, len(values))
 		for _, value := range values {
 			if value == issueTableFilterNoneValue {
 				ors = append(ors, "i.project_id IS NULL")
-				native.IncludeNoProject = true
 				continue
 			}
 			id, err := util.ParseUUID(value)
@@ -382,14 +365,12 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 		if len(ids) > 0 {
 			ors = append(ors, fmt.Sprintf("i.project_id = ANY(%s::uuid[])", c.addArg(ids)))
 		}
-		native.ProjectIDs = ids
 	case "project_statuses":
 		for _, status := range values {
 			if !issueTableContainsString(validProjectStatuses, status) {
 				return "", invalid
 			}
 		}
-		native.ProjectStatuses = values
 		return fmt.Sprintf(
 			"EXISTS (SELECT 1 FROM project p WHERE p.id = i.project_id AND p.workspace_id = i.workspace_id AND p.status = ANY(%s::text[]))",
 			c.addArg(values),
@@ -403,7 +384,6 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 			}
 			ids = append(ids, id)
 		}
-		native.LabelIDs = ids
 		return fmt.Sprintf("EXISTS (SELECT 1 FROM issue_to_label itl WHERE itl.issue_id = i.id AND itl.label_id = ANY(%s::uuid[]))", c.addArg(ids)), nil
 	case "relations":
 		for _, relation := range values {
@@ -416,7 +396,6 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 			return "", err
 		}
 		userRef := c.addArg(user)
-		native.Relations = &rustIssueRelations{UserID: uuidToString(user), Kinds: values}
 		for _, relation := range values {
 			ors = append(ors, issueTableRelationPredicate(relation, userRef))
 		}
@@ -430,7 +409,6 @@ func (c *issueTableFilterCompiler) fieldPredicate(field string, values []string,
 		if err != nil {
 			return "", err
 		}
-		native.DueDates = &rustIssueDueDates{Today: today.Format(time.DateOnly), Kinds: values}
 		for _, bucket := range values {
 			ors = append(ors, issueTableDueDatePredicate(bucket, today, c.addArg))
 		}

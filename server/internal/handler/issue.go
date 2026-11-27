@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1369,10 +1368,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rustPilot, ok := h.isRustIssueListPilot(w, r, workspaceID, wsUUID)
-	if !ok {
-		return
-	}
 
 	// Parse optional filter params. Malformed UUIDs in filters return 400 —
 	// silently coercing them to a zero UUID would mask a client bug and let
@@ -1468,20 +1463,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		terminalStatusKeys, err := h.terminalIssueStatusKeys(ctx, wsUUID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
-			return
-		}
-		if rustPilot {
-			var priorities []string
-			if priorityFilter.Valid {
-				priorities = []string{priorityFilter.String}
-			}
-			h.listIssuesViaRust(w, r, workspaceID, rustIssueListQuery{
-				OpenOnly: true, TerminalStatusKeys: terminalStatusKeys, Priorities: priorities,
-				AssigneeID: uuidToPtr(assigneeFilter), AssigneeIDs: assigneeIdsFilter,
-				CreatorID: uuidToPtr(creatorFilter), ProjectID: uuidToPtr(projectFilter),
-				CreatedByUser: r.URL.Query().Get("created_by_user_id"), CreatedByID: uuidToPtr(createdByUserFilter),
-				InvolvesUserID: uuidToPtr(involvesUserFilter), Metadata: metadataFilter, Properties: propertiesFilter,
-			})
 			return
 		}
 		openHidden, ok := h.requestHiddenProjects(w, r, workspaceID)
@@ -1596,7 +1577,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	sortIsExpr := false
 	sortIsProperty := false
 	sortByStatus := false
-	var rustPropertySort *rustIssuePropertySort
 	if s := r.URL.Query().Get("sort"); s != "" {
 		switch s {
 		case "position", "title", "created_at", "updated_at", "start_date", "due_date":
@@ -1632,12 +1612,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 				sortCol = expr
 				sortIsExpr = true
 				sortIsProperty = true
-				if rustPilot {
-					rustPropertySort = &rustIssuePropertySort{ID: uuidToString(def.ID), Kind: def.Type}
-					if def.Type == "select" {
-						rustPropertySort.Options = selectPropertySortOptions(parsePropertyConfig(def.Config))
-					}
-				}
 			}
 		}
 	}
@@ -1666,17 +1640,13 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		args = append(args, v)
 		return "$" + strconv.Itoa(len(args))
 	}
-	var hidden projectaccess.Hidden
-	if !rustPilot {
-		hidden, ok = h.requestHiddenProjects(w, r, uuidToString(wsUUID))
-		if !ok {
-			return
-		}
-		if ids := hidden.Param(); ids != nil {
-			where = append(where, hiddenProjectPredicate("i.project_id", addArg(ids)))
-		}
+	hidden, ok := h.requestHiddenProjects(w, r, uuidToString(wsUUID))
+	if !ok {
+		return
 	}
-	var categoryStatusKeys *[]string
+	if ids := hidden.Param(); ids != nil {
+		where = append(where, hiddenProjectPredicate("i.project_id", addArg(ids)))
+	}
 	if len(statusCategoriesFilter) > 0 {
 		// Expanded to concrete status keys rather than filtered through
 		// issue_effective_status(): wrapping the column in a function makes the
@@ -1688,8 +1658,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
 			return
 		}
-		expanded := append([]string{}, keys...)
-		categoryStatusKeys = &expanded
 		where = append(where, fmt.Sprintf("i.status = ANY(%s::text[])", addArg(keys)))
 	}
 	if len(statusesFilter) > 0 {
@@ -1786,7 +1754,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	// agents-working facet sends the live running-issue ids). Presence with an
 	// EMPTY list is meaningful — it must yield an empty window, not degrade to
 	// the unrestricted one, so gate on Has() rather than the parsed length.
-	var selectedIDs *[]pgtype.UUID
 	if r.URL.Query().Has("ids") {
 		idsFilter, ok := parseUUIDParamList(w, r.URL.Query().Get("ids"), "ids")
 		if !ok {
@@ -1795,7 +1762,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		if idsFilter == nil {
 			idsFilter = []pgtype.UUID{}
 		}
-		selectedIDs = &idsFilter
 		where = append(where, fmt.Sprintf("i.id = ANY(%s::uuid[])", addArg(idsFilter)))
 	}
 	if r.URL.Query().Get("top_level_only") == "true" {
@@ -1863,35 +1829,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sortCol = issueStatusOrderSQL(addArg(statusOrder))
-	}
-	if rustPilot {
-		sort := sortCol
-		switch {
-		case sortByStatus:
-			sort = "status"
-		case sortIsProperty:
-			sort = "property"
-		case sortIsExpr:
-			sort = "priority"
-		}
-		query := rustIssueListQuery{
-			CreatedByUser: r.URL.Query().Get("created_by_user_id"), CreatedByID: uuidToPtr(createdByUserFilter),
-			Statuses: statusesFilter, CategoryStatusKeys: categoryStatusKeys, Priorities: prioritiesFilter,
-			AssigneeID: uuidToPtr(assigneeFilter), AssigneeIDs: assigneeIdsFilter, AssigneeTypes: assigneeTypesFilter,
-			AssigneeFilters: rustIssueActors(assigneeFilters), IncludeNoAssignee: includeNoAssignee,
-			CreatorID: uuidToPtr(creatorFilter), CreatorFilters: rustIssueActors(creatorFilters),
-			ProjectID: uuidToPtr(projectFilter), ProjectIDs: projectIDs, IncludeNoProject: includeNoProject,
-			LabelIDs: labelIDs, IDs: selectedIDs, TopLevelOnly: r.URL.Query().Get("top_level_only") == "true",
-			Scheduled: scheduledFilter.Valid, Metadata: metadataFilter, Properties: propertiesFilter,
-			InvolvesUserID: uuidToPtr(involvesUserFilter), Sort: sort, PropertySort: rustPropertySort, Descending: sortDir == "DESC",
-			StatusOrder: statusOrder, Limit: limit, Offset: offset,
-		}
-		query.setSearch(r.URL.Query().Get("q"))
-		if dateFilter != nil {
-			query.Date = &rustIssueDate{Column: dateFilter.column, Start: dateFilter.start, End: dateFilter.end}
-		}
-		h.listIssuesViaRust(w, r, workspaceID, query)
-		return
 	}
 	orderBy := sortCol
 	if !sortIsExpr {
@@ -3575,7 +3512,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve project workflow")
 		return
 	}
-	workflowNeedsGo := createWorkflowProject.WorkflowID.Valid
 	// Outside any project the issue takes the Default's statuses. (MUL-8250)
 	if !workflowProjectID.Valid {
 		outside, err := issueworkflow.OutsideProject(r.Context(), h.Queries, wsUUID)
@@ -3596,7 +3532,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.AssigneeType == nil && req.AssigneeID == nil {
 			if step, ok := createWorkflow.Step(status); ok && step.HandsOff() {
-				workflowNeedsGo = true
 				handoffCreatorType, handoffCreatorID := h.resolveActor(r, creatorID, workspaceID)
 				handoff, err := h.createHandoffAssignee(r.Context(), createWorkflowProject, step, req.Title, ptrToTextOrEmpty(req.Description), handoffCreatorType, parseUUID(handoffCreatorID))
 				if err != nil {
@@ -3727,44 +3662,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// response below, so a custom-status create reads the catalog once per
 	// request rather than once per payload. (MUL-6243)
 	fillCreated := h.newStatusCategoryFiller(r.Context(), wsUUID, projectaccess.Hidden{})
-
-	useAttach, attachPlan, attachErr := h.prepareAgentQuickCreateAttachRust(
-		r, wsUUID, creatorType, actualCreatorID, originType, originID, req,
-		parentIssueID, projectID, issueTypeID, assigneeType, attachmentIDs, labelIDs, status, workflowNeedsGo,
-	)
-	if attachErr != nil {
-		if !writeQueryCancellation(w, r, attachErr) {
-			slog.Error("resolve agent quick-create attach route failed", append(logger.RequestAttrs(r), "error", attachErr)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue create route")
-		}
-		return
-	}
-	if useAttach {
-		rustPlan := issueCreateRustPlan{
-			useRust:            true,
-			issueID:            attachPlan.IssueID,
-			pendingAgentAttach: &attachPlan,
-		}
-		h.createIssueViaRust(w, r, workspaceID, wsUUID, creatorID, creatorType, actualCreatorID, req, status, priority,
-			assigneeType, assigneeID, parentIssueID, projectID, startDate, dueDate, issueTypeID, properties, labelIDs, fillCreated, rustPlan)
-		return
-	}
-	rustPlan, err := h.planIssueCreateRust(
-		r, wsUUID, req, creatorType, actualCreatorID, priority,
-		assigneeType, assigneeID, status, originType, attachmentIDs, workflowNeedsGo, workflowProjectID,
-	)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust issue create route failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue create route")
-		}
-		return
-	}
-	if rustPlan.useRust {
-		h.createIssueViaRust(w, r, workspaceID, wsUUID, creatorID, creatorType, actualCreatorID, req, status, priority,
-			assigneeType, assigneeID, parentIssueID, projectID, startDate, dueDate, issueTypeID, properties, labelIDs, fillCreated, rustPlan)
-		return
-	}
 
 	// Analytics agent ID: assignee agent when the issue is being assigned
 	// to an agent, otherwise the creator agent for agent-authored issues.
@@ -4425,197 +4322,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	var issue db.Issue
-	var statusActivityReceipt string
-	var assignActivityReceipt string
-	var queuedTaskReceipt string
 	attachmentsChanged := false
-	rustTerminal := false
-	if req.Status != nil && (statusKeyForGuard == issuestatus.Done || statusKeyForGuard == issuestatus.Cancelled) {
-		rustTerminal, err = h.terminalStatusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve rust issue terminal status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
-			}
-			return
-		}
-	}
-	rustStatus := false
-	if !rustTerminal {
-		rustStatus, err = h.statusIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, statusKeyForGuard, callerRun)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve rust issue status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
-			}
-			return
-		}
-	}
-	var assignPrepared *service.IssuePreparedAgentEnqueue
-	rustAssign := false
-	if !rustStatus && !rustTerminal {
-		rustAssign, err = h.assignIssueEditUsesRust(r, prevIssue.WorkspaceID, prevIssue, rawFields, req, handoff, params)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve rust issue assign pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue assign route")
-			}
-			return
-		}
-	}
-	rustParent := false
-	if !rustTerminal && !rustStatus && !rustAssign {
-		rustParent, err = h.parentIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, handoff)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve rust issue parent pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue parent route")
-			}
-			return
-		}
-	}
-	rustEdit, err := h.ordinaryIssueEditUsesRust(r, prevIssue.WorkspaceID, rawFields, params, attachmentIDs)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust ordinary issue edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
-		}
-		return
-	}
-	var statusPromotionPrepared *service.IssuePreparedAgentEnqueue
-	var workflowHandoffPrepared *service.IssuePreparedWorkflowHandoffEnqueue
-	var workflowHandoffWillRun bool
-	dispatchSensitivePromotion := rustStatus && handoff == nil && statusEditDispatchSensitive(prevIssue, statusKeyForGuard, req) &&
-		(prevIssue.AssigneeType.String == "agent" || prevIssue.AssigneeType.String == "squad")
-	if dispatchSensitivePromotion && !req.SuppressRun {
-		projected := prevIssue
-		projected.Status = statusKeyForGuard
-		_, promotionWillRun := h.IssueService.WillEnqueueRun(r.Context(),
-			service.IssueTriggerInput{
-				Issue:         projected,
-				PrevStatus:    prevIssue.Status,
-				StatusChanged: true,
-			},
-			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
-		)
-		if !promotionWillRun {
-			rustStatus = false
-		} else {
-			prep, prepErr := h.prepareNativeIssueEnqueue(
-				r.Context(), projected, req.HandoffNote, actorType, actorID,
-			)
-			switch {
-			case errors.Is(prepErr, errNativeSquadLeaderGate):
-				rustStatus = false
-			case prepErr != nil:
-				rustStatus = false
-			default:
-				statusPromotionPrepared = prep
-			}
-		}
-	}
-	if rustAssign && !req.SuppressRun && prevIssue.Status != issuestatus.Backlog &&
-		(params.AssigneeType != prevIssue.AssigneeType || params.AssigneeID != prevIssue.AssigneeID) {
-		projected := prevIssue
-		projected.AssigneeType = params.AssigneeType
-		projected.AssigneeID = params.AssigneeID
-		_, assignWillRun := h.IssueService.WillEnqueueRun(r.Context(),
-			service.IssueTriggerInput{
-				Issue:           projected,
-				PrevStatus:      prevIssue.Status,
-				AssigneeChanged: true,
-			},
-			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
-		)
-		if assignWillRun {
-			prep, prepErr := h.prepareNativeIssueEnqueue(
-				r.Context(), projected, req.HandoffNote, actorType, actorID,
-			)
-			if prepErr != nil {
-				rustAssign = false
-			} else {
-				assignPrepared = prep
-			}
-		} else {
-			rustAssign = false
-		}
-	}
-	if rustStatus && handoff != nil {
-		projected := prevIssue
-		projected.Status = statusKeyForGuard
-		projected.AssigneeType = params.AssigneeType
-		projected.AssigneeID = params.AssigneeID
-		_, workflowHandoffWillRun = h.IssueService.WillEnqueueRun(r.Context(),
-			service.IssueTriggerInput{
-				Issue:              projected,
-				PrevStatus:         prevIssue.Status,
-				StatusChanged:      true,
-				AssigneeChanged:    true,
-				EnteredHandoffStep: true,
-			},
-			h.issueTriggerWriteProbe(r, actorType, actorID, projected),
-		)
-		workflowHandoffWillRun = workflowHandoffWillRun && !req.SuppressRun
-		if workflowHandoffWillRun {
-			squad, squadErr := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
-				ID: params.AssigneeID, WorkspaceID: prevIssue.WorkspaceID,
-			})
-			if squadErr != nil {
-				rustStatus = false
-			} else {
-				postRevision := *req.ExpectedRevision + 1
-				prep, prepErr := h.prepareWorkflowSquadHandoffNativeEnqueue(
-					r.Context(), projected, squad, req.HandoffNote, actorType, actorID, postRevision,
-				)
-				if prepErr != nil {
-					rustStatus = false
-				} else {
-					workflowHandoffPrepared = prep
-				}
-			}
-		}
-	}
-	rustWorkflow := rustStatus && handoff != nil
-	if rustWorkflow {
-		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, ok = h.updateIssueWorkflowSquadHandoffViaRust(
-			w, r, userID, prevIssue, params, req, handoff, workflowHandoffPrepared, workflowHandoffWillRun,
-		)
-		if !ok {
-			return
-		}
-	} else if rustTerminal || rustStatus {
-		var cancelledWakeups []db.AgentTaskQueue
-		issue, prevIssue, statusActivityReceipt, queuedTaskReceipt, cancelledWakeups, ok = h.updateIssueStatusViaRust(
-			w, r, userID, prevIssue, params, req, statusPromotionPrepared, rustTerminal,
-		)
-		if !ok {
-			return
-		}
-		if len(cancelledWakeups) > 0 {
-			h.TaskService.CompleteNativeTerminalCloseAfterWrite(
-				r.Context(), uuidToString(prevIssue.WorkspaceID), cancelledWakeups,
-			)
-		}
-	} else if rustAssign {
-		issue, prevIssue, assignActivityReceipt, queuedTaskReceipt, ok = h.updateIssueAssignViaRust(
-			w, r, userID, prevIssue, params, req, assignPrepared,
-		)
-		if !ok {
-			return
-		}
-	} else if rustParent {
-		issue, prevIssue, ok = h.updateIssueParentViaRust(
-			w, r, userID, prevIssue, params, req, rawFields,
-		)
-		if !ok {
-			return
-		}
-	} else if rustEdit {
-		issue, prevIssue, attachmentsChanged, ok = h.updateOrdinaryIssueViaRust(w, r, userID, prevIssue, params, req, rawFields, attachmentIDs)
-		if !ok {
-			return
-		}
-	} else if parentIssueUpdateOnly(rawFields, attachmentIDs) {
+	if parentIssueUpdateOnly(rawFields, attachmentIDs) {
 		var lockedPrev db.Issue
 		issue, lockedPrev, _, err = h.updateIssueAtomically(
 			writeCtx, prevIssue.WorkspaceID, params, rawFields, nil, nil, attachmentIDs, statusKeyForGuard, handoff != nil,
@@ -4703,9 +4411,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 	)
 	willRun = willRun && !req.SuppressRun
-	if rustWorkflow {
-		willRun = workflowHandoffPrepared != nil
-	}
 
 	updatedPayload := map[string]any{
 		"issue":                resp,
@@ -4737,7 +4442,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil {
 		updatedPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 	}
-	h.publishIssueUpdated(workspaceID, actorType, actorID, updatedPayload, cmp.Or(statusActivityReceipt, assignActivityReceipt))
+	h.publishIssueUpdated(workspaceID, actorType, actorID, updatedPayload, "")
 	if attachmentsChanged {
 		// The full owner snapshot must be admitted before an auxiliary event at
 		// the same revision. Otherwise clients advance only the revision here and
@@ -4772,17 +4477,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if handoff != nil && req.StopPreviousAssigneeRuns {
 		h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 	}
-	if willRun && statusPromotionPrepared == nil && !rustAssign && !rustWorkflow {
+	if willRun {
 		h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, handoffNote)
-	} else if queuedTaskReceipt != "" {
-		if taskID, err := util.ParseUUID(queuedTaskReceipt); err == nil {
-			switch {
-			case workflowHandoffPrepared != nil && taskID == workflowHandoffPrepared.Task.ID:
-				h.TaskService.CompleteWorkflowSquadHandoffAfterNativeWrite(r.Context(), taskID)
-			case statusPromotionPrepared != nil || assignPrepared != nil:
-				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
-			}
-		}
 	}
 
 	// Sub-issue rules on the parent (the child_done system rule and sub-issue
@@ -5039,16 +4735,6 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := requestUserID(r)
-	if selection, err := h.selectRustIssueDelete(r, issue); err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust issue delete route failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue delete route")
-		}
-		return
-	} else if selection.UseRust {
-		h.deleteIssueViaRust(w, r, issue, userID, selection)
-		return
-	}
 
 	h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	// Fail any linked autopilot runs before delete (ON DELETE SET NULL clears issue_id).
@@ -5358,79 +5044,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		batchProjectID = projectUUID
 	}
 
-	batchAssignPilot, err := h.batchOwnedDirectAgentAssignPilotActive(r, wsUUID, rawUpdates, req.Updates)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust batch owned-direct assign pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
-		}
-		return
-	}
-	batchStatusPilot := false
-	batchTerminalPilot := false
-	if batchStatusKey != "" {
-		batchStatusPilot, err = h.batchOrdinaryActiveStatusPilotActive(r, wsUUID, rawUpdates, req.Updates, batchStatusKey)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve rust batch ordinary active status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
-			}
-			return
-		}
-		if !batchStatusPilot && isTerminalBuiltInIssueStatus(batchStatusKey) {
-			batchTerminalPilot, err = h.batchOrdinaryTerminalStatusPilotActive(r, wsUUID, rawUpdates, req.Updates, batchStatusKey)
-			if err != nil {
-				if !writeQueryCancellation(w, r, err) {
-					slog.Warn("resolve rust batch ordinary terminal status pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-					writeError(w, http.StatusInternalServerError, "failed to resolve issue status route")
-				}
-				return
-			}
-		}
-	}
-	batchWorkflowPilot := false
-	if batchStatusKey != "" {
-		batchWorkflowPilot, err = h.batchWorkflowSquadHandoffPilotActive(r, wsUUID, rawUpdates, req.Updates)
-		if err != nil {
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve rust batch workflow squad handoff pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to resolve issue workflow route")
-			}
-			return
-		}
-	}
-	batchParentPilot, err := h.batchParentIssueEditUsesRust(r, wsUUID, rawUpdates)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust batch parent edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue parent route")
-		}
-		return
-	}
-
-	rustBatch, err := h.batchOrdinaryIssueEditUsesRust(r, wsUUID, rawUpdates)
-	if err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust batch ordinary issue edit pilot failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue write route")
-		}
-		return
-	}
-	if rustBatch {
-		edit, editOK := h.buildBatchOrdinaryIssueEdit(req.Updates, rawUpdates, h.wakeupSourceTaskID(r))
-		if !editOK {
-			writeJSON(w, http.StatusOK, map[string]any{"updated": 0})
-			return
-		}
-		updated, ok := h.batchUpdateOrdinaryIssuesViaRust(w, r, userID, workspaceID, wsUUID, req.IssueIDs, req.Updates, edit)
-		if !ok {
-			return
-		}
-		slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated)...)
-		writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
-		return
-	}
-
 	updated := 0
 	// One Resolver for the whole batch — a per-issue filler would query the
 	// catalog once per custom-status row. (MUL-6243)
@@ -5593,96 +5206,21 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var issue db.Issue
-		var nativeAssignment rustAssignWriteResult
-		var nativeStatus rustStatusWriteResult
-		var nativeWorkflow rustWorkflowWriteResult
-		var nativeParent rustParentWriteResult
-		if batchParentPilot {
-			outcome, result := h.tryBatchUpdateIssueParentViaRust(
-				w, r, userID, prevIssue, params, rawUpdates,
+		writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
+		if req.Updates.Description != nil {
+			// One batch-level base cannot describe multiple issue documents.
+			// Preserve every marked channel-media block conservatively, matching
+			// legacy single-update clients that omit description_base.
+			var lockedPrev db.Issue
+			issue, lockedPrev, _, err = h.updateIssueAtomically(
+				writeCtx, prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, issueStatusGuard, handoff != nil,
 			)
-			switch outcome {
-			case batchParentRustAbort:
-				return
-			case batchParentRustSkipRow:
-				continue
-			case batchParentRustDone:
-				nativeParent = result
-				prevIssue, issue = result.before, result.after
+			if err == nil {
+				prevIssue = lockedPrev
 			}
-		}
-		if !nativeParent.after.ID.Valid && batchAssignPilot && handoff == nil &&
-			h.batchAssignIssueUsesOwnedNative(r.Context(), userID, prevIssue, params) {
-			actorType, actorID := h.resolveActor(r, userID, workspaceID)
-			outcome, result := h.tryBatchUpdateIssueAssignViaRust(
-				w, r, userID, prevIssue, params, req.Updates.SuppressRun, actorType, actorID,
-			)
-			switch outcome {
-			case batchAssignRustAbort:
-				return
-			case batchAssignRustSkipRow:
-				continue
-			case batchAssignRustDone:
-				nativeAssignment = result
-				prevIssue, issue = result.before, result.after
-			}
-		}
-		if batchWorkflowPilot && batchWorkflowSquadHandoffIssueEligible(
-			prevIssue, issueStatusGuard, handoff, req.Updates.SuppressRun, callerRun,
-		) {
-			actorType, actorID := h.resolveActor(r, userID, workspaceID)
-			outcome, result := h.tryBatchUpdateIssueWorkflowSquadHandoffViaRust(
-				w, r, userID, prevIssue, params, handoff, req.Updates.SuppressRun, actorType, actorID,
-			)
-			switch outcome {
-			case batchWorkflowRustAbort:
-				return
-			case batchWorkflowRustSkipRow:
-				continue
-			case batchWorkflowRustDone:
-				nativeWorkflow = result
-				prevIssue, issue = result.before, result.after
-			}
-		}
-		batchRustTerminal := batchTerminalPilot && h.batchTerminalStatusIssueUsesRust(r.Context(), prevIssue, issueStatusGuard, handoff)
-		batchRustActive := !batchRustTerminal && batchStatusPilot &&
-			h.batchStatusIssueUsesRust(r.Context(), prevIssue, issueStatusGuard, handoff, req.Updates.SuppressRun)
-		if batchRustTerminal || batchRustActive {
-			outcome, result := h.tryBatchUpdateIssueStatusViaRust(
-				w, r, userID, prevIssue, issueStatusGuard, req.Updates.SuppressRun, batchRustTerminal,
-			)
-			switch outcome {
-			case batchStatusRustAbort:
-				return
-			case batchStatusRustSkipRow:
-				continue
-			case batchStatusRustDone:
-				nativeStatus = result
-				prevIssue, issue = result.before, result.after
-				if len(result.cancelledWakeups) > 0 {
-					h.TaskService.CompleteNativeTerminalCloseAfterWrite(
-						r.Context(), uuidToString(prevIssue.WorkspaceID), result.cancelledWakeups,
-					)
-				}
-			}
-		}
-		if !nativeAssignment.after.ID.Valid && !nativeStatus.after.ID.Valid && !nativeWorkflow.after.ID.Valid && !nativeParent.after.ID.Valid {
-			writeCtx := withWakeupHandedTo(r.Context(), h.handedToAgent(r.Context(), prevIssue, params, handoff != nil))
-			if req.Updates.Description != nil {
-				// One batch-level base cannot describe multiple issue documents.
-				// Preserve every marked channel-media block conservatively, matching
-				// legacy single-update clients that omit description_base.
-				var lockedPrev db.Issue
-				issue, lockedPrev, _, err = h.updateIssueAtomically(
-					writeCtx, prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, issueStatusGuard, handoff != nil,
-				)
-				if err == nil {
-					prevIssue = lockedPrev
-				}
-			} else {
-				_, parentTouched := rawUpdates["parent_issue_id"]
-				issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params, parentTouched)
-			}
+		} else {
+			_, parentTouched := rawUpdates["parent_issue_id"]
+			issue, err = h.updateIssueWithStatusGuard(writeCtx, wsUUID, issueStatusGuard, params, parentTouched)
 		}
 
 		if err != nil {
@@ -5723,9 +5261,6 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.issueTriggerWriteProbe(r, actorType, actorID, issue),
 		)
 		willRun = willRun && !req.Updates.SuppressRun
-		if nativeWorkflow.after.ID.Valid {
-			willRun = nativeWorkflow.queuedTaskID != ""
-		}
 		batchPayload := map[string]any{
 			"issue":                      resp,
 			"assignee_changed":           assigneeChanged,
@@ -5743,14 +5278,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if handoff != nil {
 			batchPayload["workflow_handoff"] = workflowHandoffPayload(issue, handoff, h.workflowHandoffBrief(r.Context(), issue, handoff), willRun)
 		}
-		batchActivityReceipt := nativeAssignment.assignActivityID
-		if batchActivityReceipt == "" {
-			batchActivityReceipt = nativeStatus.statusActivityID
-		}
-		if batchActivityReceipt == "" {
-			batchActivityReceipt = nativeWorkflow.statusActivityID
-		}
-		h.publishIssueUpdated(workspaceID, actorType, actorID, batchPayload, batchActivityReceipt)
+		h.publishIssueUpdated(workspaceID, actorType, actorID, batchPayload, "")
 
 		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
 		// mirrors UpdateIssue. See that handler for the rationale.
@@ -5761,15 +5289,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if handoff != nil && req.Updates.StopPreviousAssigneeRuns {
 			h.stopPreviousAssigneeRuns(r.Context(), prevIssue, issue, actorType, actorID)
 		}
-		if nativeWorkflow.after.ID.Valid {
-			if taskID, parseErr := util.ParseUUID(nativeWorkflow.queuedTaskID); parseErr == nil {
-				h.TaskService.CompleteWorkflowSquadHandoffAfterNativeWrite(r.Context(), taskID)
-			}
-		} else if nativeAssignment.after.ID.Valid {
-			if taskID, parseErr := util.ParseUUID(nativeAssignment.queuedTaskID); parseErr == nil {
-				h.TaskService.CompleteIssueStatusPromotionAfterNativeWrite(r.Context(), taskID)
-			}
-		} else if !nativeStatus.after.ID.Valid && willRun {
+		if willRun {
 			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, batchHandoffNote)
 		}
 
@@ -5856,16 +5376,6 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 		excludedIDs = append(excludedIDs, issue.ID)
 	}
 	if !h.requireIssueDeletion(w, r, wsUUID, issues) {
-		return
-	}
-	if useRust, err := h.batchDeleteIssuesUsesRust(r, issues); err != nil {
-		if !writeQueryCancellation(w, r, err) {
-			slog.Warn("resolve rust issue batch delete route failed", append(logger.RequestAttrs(r), "error", err)...)
-			writeError(w, http.StatusInternalServerError, "failed to resolve issue batch delete route")
-		}
-		return
-	} else if useRust {
-		h.batchDeleteIssuesViaRust(w, r, issues, userID, workspaceID)
 		return
 	}
 	for _, issue := range issues {

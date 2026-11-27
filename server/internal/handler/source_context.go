@@ -611,27 +611,6 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	case "agent":
-		selection, err := h.selectRustAgentSourceCommentSubIssue(r, wsUUID, userUUID, build, capture, *preparedAgent)
-		if err != nil {
-			cleanupIfUnpersisted()
-			if !writeQueryCancellation(w, r, err) {
-				slog.Warn("resolve agent source context rust route failed", append(logger.RequestAttrs(r), "error", err)...)
-				writeError(w, http.StatusInternalServerError, "failed to enqueue agent source quick-create")
-			}
-			break
-		}
-		if selection.useRust {
-			if err := h.createAgentCommentSubIssueViaRust(
-				w, r, wsUUID, userUUID, *preparedAgent, capture, build, build.Limits, selection,
-			); err != nil {
-				cleanupIfUnpersisted()
-				slog.Warn("source context capture failed", append(sourceContextAuditAttrs(r, capture.ID, capture.Snapshot.SourceIssue.ID, capture.Snapshot.AnchorCommentID, userUUID, req.Mode, build.Limits, "failed"), "error", err)...)
-				if !errors.Is(err, errSourceContextResponseWritten) {
-					h.writeSourceContextError(w, err, service.SourceContextLimitUsage{})
-				}
-			}
-			break
-		}
 		if err := h.createAgentCommentSubIssue(w, r, wsUUID, userUUID, *preparedAgent, capture, build.Limits); err != nil {
 			cleanupIfUnpersisted()
 			slog.Warn("source context capture failed", append(sourceContextAuditAttrs(r, capture.ID, capture.Snapshot.SourceIssue.ID, capture.Snapshot.AnchorCommentID, userUUID, req.Mode, build.Limits, "failed"), "error", err)...)
@@ -799,33 +778,6 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 			return errSourceContextResponseWritten
 		}
 		stage = pgtype.Int4{Int32: *input.Stage, Valid: true}
-	}
-	workspaceIDStr := util.UUIDToString(workspaceID)
-	rustPlan, planErr := h.manualSourceContextCreateRustEligible(
-		r, workspaceID, input, capture, build, status,
-	)
-	if planErr != nil {
-		if errors.Is(planErr, service.ErrAnchorCommentDeleted) ||
-			errors.Is(planErr, service.ErrSourceIssueDeleted) ||
-			errors.Is(planErr, service.ErrSourceContextChanged) {
-			h.writeSourceContextError(w, planErr, limits)
-			return errSourceContextResponseWritten
-		}
-		return planErr
-	}
-	if rustPlan.useRust {
-		var issueTypeID pgtype.UUID
-		if input.IssueTypeID != nil && strings.TrimSpace(*input.IssueTypeID) != "" {
-			parsed, err := util.ParseUUID(strings.TrimSpace(*input.IssueTypeID))
-			if err != nil {
-				return sourceContextBadRequest("invalid issue_type_id")
-			}
-			issueTypeID = parsed
-		}
-		return h.createManualCommentSubIssueViaRust(
-			w, r, workspaceIDStr, workspaceID, userID, input, capture, build, limits, status, priority,
-			labelIDs, properties, issueTypeID, startDate, dueDate, rustPlan,
-		)
 	}
 
 	prefix := h.getIssuePrefix(r.Context(), workspaceID)

@@ -627,9 +627,9 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 	var property db.IssueProperty
 	var capErr error
 	var compileBlocked bool
-	err = h.withPropertyLock(r, []string{"props:" + workspaceID}, func(_ pgx.Tx, q *db.Queries) error {
+	err = h.withPropertyLock(r, []string{"props:" + workspaceID}, func(tx pgx.Tx, q *db.Queries) error {
 		if propertyTypeIsLookup(req.Type) || propertyTypeIsFormula(req.Type) {
-			compiled, ok := h.compileIssuePropertyConfigViaRust(w, r, workspaceID, userID, req.Type, nil, configJSON)
+			compiled, ok := h.compileIssuePropertyConfig(w, r, tx, workspaceID, req.Type, nil, configJSON)
 			if !ok {
 				compileBlocked = true
 				return errClientRejected
@@ -708,7 +708,7 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 		httpStatus, httpMsg = status, msg
 		return errClientRejected
 	}
-	err := h.withPropertyLock(r, []string{"props:" + workspaceID, "prop:" + uuidToString(idUUID)}, func(_ pgx.Tx, q *db.Queries) error {
+	err := h.withPropertyLock(r, []string{"props:" + workspaceID, "prop:" + uuidToString(idUUID)}, func(tx pgx.Tx, q *db.Queries) error {
 		existing, err := q.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: idUUID, WorkspaceID: wsUUID})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -745,7 +745,7 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 			}
 			if propertyTypeIsLookup(existing.Type) || propertyTypeIsFormula(existing.Type) {
 				idStr := uuidToString(existing.ID)
-				compiled, ok := h.compileIssuePropertyConfigViaRust(w, r, workspaceID, userID, existing.Type, &idStr, configJSON)
+				compiled, ok := h.compileIssuePropertyConfig(w, r, tx, workspaceID, existing.Type, &idStr, configJSON)
 				if !ok {
 					compileBlocked = true
 					return errClientRejected
@@ -922,53 +922,22 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		}
 		return def, value, nil
 	}
-	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
-	if !ok {
-		return
-	}
-	var err error
-	if pilot {
-		for range 3 {
-			var def db.IssueProperty
-			var value json.RawMessage
-			def, value, err = validate(h.Queries, nil)
-			if err != nil {
-				break
-			}
-			var operation rustIssuePropertySet
-			operation.Set.Type, operation.Set.Config, operation.Set.Value = def.Type, def.Config, value
-			changed, retry, ok := h.writeIssuePropertyViaRust(w, r, issue, propertyID, userID, operation)
-			if !retry {
-				if ok {
-					h.writeIssuePropertyChange(w, r, changed, userID)
-				}
-				return
-			}
-		}
-		if err == nil {
-			writeError(w, http.StatusConflict, "property definition changed; retry the edit")
-			return
-		}
-	} else {
-		// Validation and write share the advisory lock across both backends.
-		// Rust checks that the validated config is still current under that lock.
-		err = h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(tx pgx.Tx, q *db.Queries) error {
-			def, value, err := validate(q, tx)
-			if err != nil {
-				return err
-			}
-			updated, err = q.SetIssuePropertyValue(r.Context(), db.SetIssuePropertyValueParams{
-				ID:          issue.ID,
-				WorkspaceID: issue.WorkspaceID,
-				Key:         uuidToString(def.ID),
-				Value:       value,
-			})
-			if isCheckViolation(err) {
-				return fail(http.StatusBadRequest, "issue properties exceed the 16KB size limit")
-			}
+	err := h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(tx pgx.Tx, q *db.Queries) error {
+		def, value, err := validate(q, tx)
+		if err != nil {
 			return err
+		}
+		updated, err = q.SetIssuePropertyValue(r.Context(), db.SetIssuePropertyValueParams{
+			ID:          issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			Key:         uuidToString(def.ID),
+			Value:       value,
 		})
-	}
+		if isCheckViolation(err) {
+			return fail(http.StatusBadRequest, "issue properties exceed the 16KB size limit")
+		}
+		return err
+	})
 	if err != nil {
 		if errors.Is(err, errClientRejected) {
 			writeError(w, httpStatus, httpMsg)
@@ -996,19 +965,6 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
-		return
-	}
-	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
-	if !ok {
-		return
-	}
-	if pilot {
-		updated, retry, ok := h.writeIssuePropertyViaRust(w, r, issue, propertyID, userID, "unset")
-		if retry {
-			writeError(w, http.StatusBadGateway, "invalid rust issue property response")
-		} else if ok {
-			h.writeIssuePropertyChange(w, r, updated, userID)
-		}
 		return
 	}
 

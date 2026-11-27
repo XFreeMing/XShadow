@@ -191,14 +191,6 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("metadata cannot exceed %d keys", maxIssueMetadataKeys))
 		return
 	}
-	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
-	if !ok {
-		return
-	}
-	if pilot {
-		h.writeIssueMetadataViaRust(w, r, issue, issueID, userID, key, req.Value)
-		return
-	}
 
 	queryStarted := time.Now()
 	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.SetIssueMetadataKeyRow, error) {
@@ -265,14 +257,6 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
-		return
-	}
-	pilot, ok := h.rustIssueWritePilot(w, r, issue.WorkspaceID)
-	if !ok {
-		return
-	}
-	if pilot {
-		h.writeIssueMetadataViaRust(w, r, issue, issueID, userID, key, nil)
 		return
 	}
 

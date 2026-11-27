@@ -295,19 +295,7 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 		return h.canInvokeAgent(r.Context(), agent, "member", userID, userID, uuidToString(workspaceID))
 	}
 	ctx := r.Context()
-	var task *db.AgentTaskQueue
-	var err error
-	if useRust, plan, selectErr := h.prepareRustRetryAgentSourceQuickCreate(r, workspaceID, requesterID, taskID); selectErr != nil {
-		err = selectErr
-	} else if useRust {
-		if canInvoke != nil && !canInvoke(plan.Agent) {
-			err = service.ErrRerunInvokeNotAllowed
-		} else {
-			task, err = h.retrySourceContextQuickCreateViaRust(w, r, plan)
-		}
-	} else {
-		task, err = h.TaskService.RetrySourceContextQuickCreate(ctx, workspaceID, requesterID, taskID, canInvoke)
-	}
+	task, err := h.TaskService.RetrySourceContextQuickCreate(ctx, workspaceID, requesterID, taskID, canInvoke)
 	if writeIssueLimitReached(w, err) {
 		return
 	}

@@ -16,11 +16,9 @@ import (
 
 func TestLiveTaskFormulaGatesWorkMethodAndWakesOnce(t *testing.T) {
 	suffix := uuid.NewString()[:8]
-	addr, _ := startRustCandidateForTest(t, "task-formula-"+suffix)
 	h := *testHandler
-	h.IssueReadBridge = &IssueReadBridge{Upstream: addr, Token: "task-formula-" + suffix}
 	tasks := *h.TaskService
-	tasks.ProjectIssueFormula = h.IssueReadBridge.ProjectTaskFormula
+	tasks.ProjectIssueFormula = h.ProjectTaskFormula
 	h.TaskService = &tasks
 	ctx := context.Background()
 
@@ -93,7 +91,7 @@ func TestLiveTaskFormulaGatesWorkMethodAndWakesOnce(t *testing.T) {
 		testutil.Call(t, h.SetIssueProperty, req).Want(http.StatusOK)
 	}
 	assertFormula := func(want string) {
-		value, err := h.IssueReadBridge.ProjectTaskFormula(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID), parseUUID(issue.ID), formula.ID)
+		value, err := h.ProjectTaskFormula(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID), parseUUID(issue.ID), formula.ID)
 		if err != nil || string(value) != want {
 			t.Fatalf("formula = %s, err = %v, want %s", value, err, want)
 		}

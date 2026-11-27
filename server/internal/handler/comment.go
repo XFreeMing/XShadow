@@ -1860,20 +1860,6 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		commentID = requestedCommentID
 	}
 
-	useRust, pilotErr := h.commentCreateUsesRust(r, issue, req, authorType)
-	if pilotErr != nil {
-		if writeQueryCancellation(w, r, pilotErr) {
-			return
-		}
-		slog.Warn("resolve rust comment pilot failed", append(logger.RequestAttrs(r), "error", pilotErr, "issue_id", issueID)...)
-		writeError(w, http.StatusInternalServerError, "failed to resolve comment route")
-		return
-	}
-	if useRust {
-		h.createCommentViaRust(w, r, issue, userID, authorType, authorID, commentID, req)
-		return
-	}
-
 	createParams := db.CreateCommentParams{
 		ID:           commentID,
 		IssueID:      issue.ID,
@@ -3480,49 +3466,11 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	editPlan := commentEditRequest{
-		Content:        req.Content,
-		ContentBase:    req.ContentBase,
-		ReplaceAttach:  replaceAttachments,
-		SuppressAgents: len(suppressAgentIDs) > 0,
-	}
 	if req.ExpectedRevision != nil {
-		editPlan.ExpectedRevision = *req.ExpectedRevision
-	}
-
-	var issue db.Issue
-	var useRustEdit bool
-	if pilotOn, pilotErr := h.commentEditPilotEnabled(r.Context(), existing.WorkspaceID); pilotErr != nil {
-		slog.Warn("comment edit rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(existing.ID))...)
-		writeError(w, http.StatusInternalServerError, "failed to update comment")
-		return
-	} else if pilotOn {
-		loaded, issueErr := h.Queries.GetIssue(r.Context(), existing.IssueID)
-		if issueErr != nil {
-			if errors.Is(issueErr, pgx.ErrNoRows) {
-				writeError(w, http.StatusNotFound, "comment not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "failed to load issue")
-			return
-		}
-		issue = loaded
-		useRustEdit, pilotErr = h.commentEditUsesRust(r, issue, existing, actorType, actorID, editPlan)
-		if pilotErr != nil {
-			slog.Warn("comment edit rust plan failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(existing.ID))...)
-			writeError(w, http.StatusInternalServerError, "failed to update comment")
-			return
-		}
-	}
-	if req.ExpectedRevision != nil && !useRustEdit {
 		if existing.Revision != *req.ExpectedRevision {
 			writeRevisionConflict(w, "comment", existing.ID, *req.ExpectedRevision, existing.Revision)
 			return
 		}
-	}
-	if useRustEdit {
-		h.updateCommentViaRust(w, r, existing, workspaceID, actorType, actorID, editPlan)
-		return
 	}
 
 	issue, issueErr := h.Queries.GetIssue(r.Context(), existing.IssueID)
@@ -3769,92 +3717,6 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 
 	if comment.DeletedAt.Valid {
 		writeError(w, http.StatusNotFound, "comment not found")
-		return
-	}
-
-	var useRustDelete bool
-	var useRustTombstone bool
-	var useRustReply bool
-	var replyBranch commentDeleteReplyBranchScope
-	var attachmentPlan []rustIssueDeleteAttachmentPlanItem
-	var hasReplies bool
-	if pilotOn, pilotErr := h.commentDeletePilotEnabled(r.Context(), comment.WorkspaceID); pilotErr != nil {
-		slog.Warn("comment delete rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
-		writeError(w, http.StatusInternalServerError, "failed to delete comment")
-		return
-	} else if pilotOn && hasIssue && isAuthor && actorType == "member" {
-		hasReplies, pilotErr = h.Queries.CommentHasReplies(r.Context(), db.CommentHasRepliesParams{
-			ID: comment.ID, WorkspaceID: comment.WorkspaceID,
-		})
-		if pilotErr != nil {
-			slog.Warn("comment delete rust reply lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
-			writeError(w, http.StatusInternalServerError, "failed to delete comment")
-			return
-		}
-		if hasReplies {
-			tombstoneOn, tombErr := h.commentDeleteTombstonePilotEnabled(r.Context(), comment.WorkspaceID)
-			if tombErr != nil {
-				slog.Warn("comment delete rust tombstone pilot lookup failed", append(logger.RequestAttrs(r), "error", tombErr, "comment_id", commentId)...)
-				writeError(w, http.StatusInternalServerError, "failed to delete comment")
-				return
-			}
-			if tombstoneOn {
-				tombPlan, tombErr := h.planRustTombstoneCommentDelete(r, issue, comment, actorType, actorID, hasReplies)
-				if tombErr != nil {
-					pilotErr = tombErr
-				} else {
-					useRustDelete = tombPlan.UseRust
-					attachmentPlan = tombPlan.AttachmentPlan
-				}
-			}
-		} else if comment.ParentID.Valid {
-			replyOn, replyErr := h.commentDeleteReplyPilotEnabled(r.Context(), comment.WorkspaceID)
-			if replyErr != nil {
-				slog.Warn("comment delete rust reply pilot lookup failed", append(logger.RequestAttrs(r), "error", replyErr, "comment_id", commentId)...)
-				writeError(w, http.StatusInternalServerError, "failed to delete comment")
-				return
-			}
-			if replyOn {
-				replyPlan, replyErr := h.planRustReplyCommentDelete(r, issue, comment, actorType, actorID, hasReplies)
-				if replyErr != nil {
-					pilotErr = replyErr
-				} else {
-					useRustDelete = replyPlan.UseRust
-					attachmentPlan = replyPlan.AttachmentPlan
-					if useRustDelete {
-						replyBranch, pilotErr = h.commentDeleteReplyBranchScope(r.Context(), comment)
-						if errors.Is(pilotErr, pgx.ErrNoRows) {
-							writeError(w, http.StatusNotFound, "comment not found")
-							return
-						}
-					}
-				}
-				useRustReply = useRustDelete
-			}
-		} else {
-			leafPlan, leafErr := h.planRustTopLevelCommentDelete(r, issue, comment, actorType, actorID, hasReplies)
-			if leafErr != nil {
-				pilotErr = leafErr
-			} else {
-				useRustDelete = leafPlan.UseRust
-				attachmentPlan = leafPlan.AttachmentPlan
-			}
-		}
-		if pilotErr != nil {
-			slog.Warn("comment delete rust plan failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", commentId)...)
-			writeError(w, http.StatusInternalServerError, "failed to delete comment")
-			return
-		}
-		useRustTombstone = useRustDelete && hasReplies
-	}
-	if useRustDelete {
-		route := rustCommentDeleteRouteLeaf
-		if useRustTombstone {
-			route = rustCommentDeleteRouteTombstone
-		} else if useRustReply {
-			route = rustCommentDeleteRouteReplyLeaf
-		}
-		h.deleteCommentViaRust(w, r, comment, issue.Revision, workspaceID, actorType, actorID, route, replyBranch, attachmentPlan)
 		return
 	}
 
@@ -4276,21 +4138,6 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "comment not found")
-		return
-	}
-	useRust, pilotErr := h.commentResolutionUsesRust(r, issue, actorType)
-	if pilotErr != nil {
-		slog.Warn("comment resolution rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(comment.ID))...)
-		writeError(w, http.StatusInternalServerError, "failed to resolve comment")
-		return
-	}
-	if useRust {
-		h.resolveCommentViaRust(w, r, comment, workspaceID, actorType, actorID)
-		return
-	}
 
 	actorUUID, err := util.ParseUUID(actorID)
 	if err != nil {
@@ -4363,21 +4210,6 @@ func (h *Handler) UnresolveComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	issue, err := h.Queries.GetIssue(r.Context(), comment.IssueID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "comment not found")
-		return
-	}
-	useRust, pilotErr := h.commentResolutionUsesRust(r, issue, actorType)
-	if pilotErr != nil {
-		slog.Warn("comment resolution rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "comment_id", uuidToString(comment.ID))...)
-		writeError(w, http.StatusInternalServerError, "failed to unresolve comment")
-		return
-	}
-	if useRust {
-		h.unresolveCommentViaRust(w, r, comment, workspaceID, actorType, actorID)
-		return
-	}
 
 	tx, err := h.beginWakeupWrite(r.Context())
 	if err != nil {
@@ -4411,4 +4243,49 @@ func (h *Handler) UnresolveComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.finishCommentResolution(w, r, workspaceID, actorType, actorID, wasResolvedBefore, false, nil, updated)
+}
+
+func (h *Handler) publishCommentCreatedEvent(issue db.Issue, resp CommentResponse, issueRevision int64, authorType, authorID string) {
+	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), authorType, authorID, map[string]any{
+		"comment":             resp,
+		"issue_title":         issue.Title,
+		"issue_assignee_type": textToPtr(issue.AssigneeType),
+		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
+		"issue_status":        issue.Status,
+		"issue_revision":      issueRevision,
+	})
+}
+
+func (h *Handler) finishCommentResolution(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID, actorType, actorID string,
+	wasResolvedBefore, resolve bool,
+	cleared []db.Comment,
+	updated db.Comment,
+) {
+	for _, c := range cleared {
+		clearedID := uuidToString(c.ID)
+		clearedReactions := h.groupReactions(r, []pgtype.UUID{c.ID})
+		clearedAtt := h.groupAttachments(r, []pgtype.UUID{c.ID})
+		clearedResp := commentToResponse(c, clearedReactions[clearedID], clearedAtt[clearedID])
+		slog.Info("comment unresolved (replaced)", append(logger.RequestAttrs(r), "comment_id", clearedID)...)
+		h.publish(protocol.EventCommentUnresolved, workspaceID, actorType, actorID, map[string]any{"comment": clearedResp})
+	}
+
+	grouped := h.groupReactions(r, []pgtype.UUID{updated.ID})
+	groupedAtt := h.groupAttachments(r, []pgtype.UUID{updated.ID})
+	cid := uuidToString(updated.ID)
+	resp := commentToResponse(updated, grouped[cid], groupedAtt[cid])
+
+	if resolve {
+		if !wasResolvedBefore {
+			slog.Info("comment resolved", append(logger.RequestAttrs(r), "comment_id", cid)...)
+			h.publish(protocol.EventCommentResolved, workspaceID, actorType, actorID, map[string]any{"comment": resp})
+		}
+	} else if wasResolvedBefore {
+		slog.Info("comment unresolved", append(logger.RequestAttrs(r), "comment_id", cid)...)
+		h.publish(protocol.EventCommentUnresolved, workspaceID, actorType, actorID, map[string]any{"comment": resp})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

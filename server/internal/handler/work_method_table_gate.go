@@ -40,7 +40,7 @@ func (h *Handler) requireWorkMethodTableGate(w http.ResponseWriter, r *http.Requ
 		writeErrorCode(w, http.StatusConflict, "work_method_formula_unavailable", "当前步骤引用的公式属性不可用，请检查任务表格。")
 		return false
 	}
-	value, err := h.IssueReadBridge.ProjectTaskFormula(ctx, issue.WorkspaceID, parseUUIDOrInvalid(userID), issue.ID, gate.PropertyID)
+	value, err := h.ProjectTaskFormula(ctx, issue.WorkspaceID, parseUUIDOrInvalid(userID), issue.ID, gate.PropertyID)
 	var ready *bool
 	if err != nil || json.Unmarshal(value, &ready) != nil || ready == nil {
 		writeErrorCode(w, http.StatusServiceUnavailable, "work_method_formula_unavailable", "无法计算当前步骤的证据公式，请重试。")

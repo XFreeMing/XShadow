@@ -11,7 +11,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestStatusPropertyUsesCatalogAndPreservesArchivedValues(t *testing.T) {
@@ -82,50 +81,4 @@ func TestStatusPropertyUsesCatalogAndPreservesArchivedValues(t *testing.T) {
 	if runs := wakeupRunsOf(t, rule); runs != 1 {
 		t.Fatalf("status field produced %d wakeups, want 1", runs)
 	}
-}
-
-func TestLiveRustStatusPropertyChecksCatalogOnWrite(t *testing.T) {
-	token := "status-property-" + uuid.NewString()
-	addr, hits := startRustCandidateForTest(t, token)
-	h := *testHandler
-	h.IssueReadBridge = &IssueReadBridge{
-		Upstream: addr, Token: token,
-		CreatePilotScopes: []string{testWorkspaceID},
-		WritePilotScopes:  []string{testWorkspaceID},
-	}
-	seedTestCatalog(t)
-	property := createTestProperty(t, map[string]any{"name": "Pilot status", "type": "status"})
-	var issue IssueResponse
-	testutil.Call(t, h.CreateIssue, newRequest("POST", "/api/issues", map[string]any{
-		"title": "Typed status via Rust", "status": "todo", "properties": map[string]any{property.ID: "in_review"},
-	})).Want(http.StatusCreated).JSON(&issue)
-	t.Cleanup(func() { dbfx.Exec(t, "DELETE FROM issue WHERE id=$1", issue.ID) })
-	if issue.Status != "todo" || issue.Properties[property.ID] != "in_review" {
-		t.Fatalf("Rust created the wrong state: status=%s, property=%v", issue.Status, issue.Properties[property.ID])
-	}
-	beforeWrite := hits.Load()
-	req := withIssuePropertyParams(newRequest("PUT", "/api/issues/"+issue.ID, map[string]any{"value": "blocked"}), issue.ID, property.ID)
-	testutil.Call(t, h.SetIssueProperty, req).Want(http.StatusOK)
-	if hits.Load() == beforeWrite {
-		t.Fatal("expected to exercise Rust property writer")
-	}
-
-	// An internal request carrying a previously accepted payload must still
-	// fail when the status has been archived before the Rust write.
-	entry := createTestCustomStatus(t, "stale_"+uuid.NewString()[:8], issuestatus.CategoryStarted)
-	if status := archiveStatusVia(t, entry); status != http.StatusOK {
-		t.Fatalf("archive unused status = %d", status)
-	}
-	current, err := h.Queries.GetIssueInWorkspace(context.Background(), db.GetIssueInWorkspaceParams{
-		ID: parseUUID(issue.ID), WorkspaceID: parseUUID(testWorkspaceID),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, _ := json.Marshal(entry.Key)
-	var op rustIssuePropertySet
-	op.Set.Type, op.Set.Config, op.Set.Value = "status", json.RawMessage("{}"), value
-	testutil.Call(t, func(w http.ResponseWriter, r *http.Request) {
-		h.writeIssuePropertyViaRust(w, r, current, parseUUID(property.ID), testUserID, op)
-	}, req).Want(http.StatusBadRequest)
 }

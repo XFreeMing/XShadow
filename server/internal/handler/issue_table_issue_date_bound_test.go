@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"sort"
 	"testing"
 	"time"
@@ -58,52 +56,4 @@ func TestIssueTableRowsIssueDateBound(t *testing.T) {
 		},
 		Group: issueTableGroupSpec{Kind: "none"},
 	})).Want(http.StatusBadRequest)
-}
-
-func TestIssueTableIssueDateBoundNativeRoundTrip(t *testing.T) {
-	rec := httptest.NewRecorder()
-	spec := issueTableQuerySpec{
-		Scope: issueTableScope{Kind: "workspace"},
-		Filters: issueTableFiltersRequest{
-			IssueDateBound: &issueTableIssueDateBoundRequest{
-				Field: "due_date",
-				Start: "2026-11-01",
-				End:   "2026-12-01",
-			},
-		},
-		Sort: issueTableSortRequest{Field: "due_date", Direction: "asc"},
-	}
-	compiled, ok := testHandler.compileIssueTableQuery(rec, newRequest(http.MethodPost, "/", nil), spec)
-	if !ok {
-		t.Fatalf("compile failed: %s", rec.Body.String())
-	}
-	if compiled.native.IssueDateBound == nil {
-		t.Fatal("native issue_date_bound missing")
-	}
-	if compiled.native.IssueDateBound.Field != "due_date" ||
-		compiled.native.IssueDateBound.Start != "2026-11-01" ||
-		compiled.native.IssueDateBound.End != "2026-12-01" {
-		t.Fatalf("native=%+v", compiled.native.IssueDateBound)
-	}
-	body, err := json.Marshal(compiled.native)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(body)
-	for _, part := range []string{`"issue_date_bound"`, `"due_date"`, `"2026-11-01"`, `"2026-12-01"`} {
-		if !containsSubstr(text, part) {
-			t.Fatalf("rust payload missing %q in %s", part, text)
-		}
-	}
-}
-
-func containsSubstr(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	}())
 }

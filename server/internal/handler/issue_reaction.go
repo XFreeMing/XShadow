@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type IssueReactionResponse struct {
@@ -74,17 +75,6 @@ func (h *Handler) AddIssueReaction(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
-	useRust, pilotErr := h.issueReactionUsesRust(r, issue, actorType)
-	if pilotErr != nil {
-		slog.Warn("issue reaction rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "issue_id", issueID)...)
-		writeError(w, http.StatusInternalServerError, "failed to add reaction")
-		return
-	}
-	if useRust {
-		h.addIssueReactionViaRust(w, r, issue, userID, actorType, actorID, req.Emoji)
-		return
-	}
-
 	reaction, err := wakeupWrite(h, r, func(q *db.Queries) (db.AddIssueReactionRow, error) {
 		return q.AddIssueReaction(r.Context(), db.AddIssueReactionParams{
 			IssueID:     issue.ID,
@@ -135,17 +125,6 @@ func (h *Handler) RemoveIssueReaction(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
-	useRust, pilotErr := h.issueReactionUsesRust(r, issue, actorType)
-	if pilotErr != nil {
-		slog.Warn("issue reaction rust pilot lookup failed", append(logger.RequestAttrs(r), "error", pilotErr, "issue_id", issueID)...)
-		writeError(w, http.StatusInternalServerError, "failed to remove reaction")
-		return
-	}
-	if useRust {
-		h.removeIssueReactionViaRust(w, r, issue, userID, actorType, actorID, req.Emoji)
-		return
-	}
-
 	removed, err := wakeupWrite(h, r, func(q *db.Queries) (db.RemoveIssueReactionRow, error) {
 		return q.RemoveIssueReaction(r.Context(), db.RemoveIssueReactionParams{
 			IssueID:   issue.ID,
@@ -164,4 +143,35 @@ func (h *Handler) RemoveIssueReaction(w http.ResponseWriter, r *http.Request) {
 		h.publishIssueReactionRemovedEvent(issue, workspaceID, actorType, actorID, req.Emoji, removed.IssueRevision)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) publishIssueReactionAddedEvent(
+	issue db.Issue,
+	workspaceID, actorType, actorID string,
+	respReaction IssueReactionResponse,
+	issueRevision int64,
+) {
+	h.publish(protocol.EventIssueReactionAdded, workspaceID, actorType, actorID, map[string]any{
+		"reaction":       respReaction,
+		"issue_id":       uuidToString(issue.ID),
+		"issue_title":    issue.Title,
+		"issue_status":   issue.Status,
+		"creator_type":   issue.CreatorType,
+		"creator_id":     uuidToString(issue.CreatorID),
+		"issue_revision": issueRevision,
+	})
+}
+
+func (h *Handler) publishIssueReactionRemovedEvent(
+	issue db.Issue,
+	workspaceID, actorType, actorID, emoji string,
+	issueRevision int64,
+) {
+	h.publish(protocol.EventIssueReactionRemoved, workspaceID, actorType, actorID, map[string]any{
+		"issue_id":       uuidToString(issue.ID),
+		"emoji":          emoji,
+		"actor_type":     actorType,
+		"actor_id":       actorID,
+		"issue_revision": issueRevision,
+	})
 }
